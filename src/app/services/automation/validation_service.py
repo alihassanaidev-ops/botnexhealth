@@ -38,7 +38,10 @@ from src.app.services.automation.definition_schema import (
     SendVoiceNode,
     WorkflowDefinition,
 )
-from src.app.services.automation.merge_field_catalog import MERGE_FIELD_CATALOG, MergeFieldSpec
+from src.app.services.automation.merge_field_catalog import (
+    MERGE_FIELD_CATALOG,
+    MergeFieldSpec,
+)
 from src.app.services.automation.node_registry import (
     capability_for,
     node_id,
@@ -51,7 +54,9 @@ logger = logging.getLogger(__name__)
 _SEND_NODE_TYPES = (SendSmsNode, SendVoiceNode, SendEmailNode)
 _MARKETING_CLASSES = {"sales", "marketing"}
 _TOKEN_RE = re.compile(r"\{\{\s*([a-zA-Z0-9_]+)\s*\}\}")
-_CATALOG_BY_NAME: dict[str, MergeFieldSpec] = {field.name: field for field in MERGE_FIELD_CATALOG}
+_CATALOG_BY_NAME: dict[str, MergeFieldSpec] = {
+    field.name: field for field in MERGE_FIELD_CATALOG
+}
 
 
 @dataclass
@@ -425,7 +430,11 @@ class WorkflowValidationService:
                     code="content_class_unset",
                 )
             )
-        if comp and comp.content_class in _MARKETING_CLASSES and not comp.consent_required:
+        if (
+            comp
+            and comp.content_class in _MARKETING_CLASSES
+            and not comp.consent_required
+        ):
             # The structural "no send step without a consent path" guardrail.
             issues.append(
                 ValidationIssue(
@@ -455,7 +464,16 @@ class WorkflowValidationService:
         already treats it that way, and guessing in the clinic's favour is how a
         campaign gets published that silently does nothing.
         """
-        requirements = list(definition.pms_capability_requirements or [])
+        from src.app.services.patient_communication import pms_context_requirements
+
+        requirements = list(
+            dict.fromkeys(
+                [
+                    *(definition.pms_capability_requirements or []),
+                    *pms_context_requirements(definition.pms_context_fields),
+                ]
+            )
+        )
         if not requirements or location_id is None or self.session is None:
             return []
 
@@ -530,7 +548,9 @@ class WorkflowValidationService:
         return issues
 
     @staticmethod
-    def _registration_link_issues(definition: WorkflowDefinition) -> list[ValidationIssue]:
+    def _registration_link_issues(
+        definition: WorkflowDefinition,
+    ) -> list[ValidationIssue]:
         """{{registration_link}} only resolves if a step actually issues one.
 
         Unlike the booking placeholders, this link is not generated for every
@@ -683,7 +703,7 @@ def _reachable_cycle_nodes(
             if colors.get(target_id, 0) == 0:
                 visit(target_id)
             elif colors.get(target_id) == 1:
-                cycle_nodes.update(active[active.index(target_id):])
+                cycle_nodes.update(active[active.index(target_id) :])
         active.pop()
         colors[current_id] = 2
 

@@ -1332,8 +1332,29 @@ class WorkflowDefinition(BaseModel):
     # can change practice software, and a workflow not built from a template
     # would otherwise never be checked at all.
     pms_capability_requirements: list[str] = Field(default_factory=list)
+    # Flat PMS-derived context fields this workflow may receive. Runtime strips
+    # undeclared fields before evaluating trigger filters or creating a run.
+    pms_context_fields: list[str] = Field(default_factory=list)
     # node_id -> {x, y}; presentational only, ignored by the runtime.
     layout: dict[str, NodeLayout] | None = None
+
+    @field_validator("pms_context_fields")
+    @classmethod
+    def normalize_pms_context_fields(cls, values: list[str]) -> list[str]:
+        from src.app.services.patient_communication import (
+            PATIENT_COMMUNICATION_CONTEXT_FIELDS,
+        )
+
+        normalized: list[str] = []
+        seen: set[str] = set()
+        for value in values:
+            cleaned = value.strip()
+            if cleaned and cleaned not in PATIENT_COMMUNICATION_CONTEXT_FIELDS:
+                raise ValueError(f"Unsupported PMS context field: {cleaned}")
+            if cleaned and cleaned not in seen:
+                normalized.append(cleaned)
+                seen.add(cleaned)
+        return normalized
 
     @model_validator(mode="after")
     def validate_graph_structure(self) -> "WorkflowDefinition":

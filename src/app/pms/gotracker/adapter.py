@@ -620,12 +620,15 @@ class GoTrackerAdapter(
         return data if item_id == raw_id else None
 
     async def list_patient_recalls(
-        self, *, max_items: int = 500
+        self, *, patient_id: str | None = None, max_items: int = 500
     ) -> list[dict[str, Any]]:
+        params: dict[str, Any] = {"overdue_only": "true"}
+        if patient_id:
+            params["patient_id"] = mappers.strip(patient_id)
         return await self._fetch_all(
             "GET",
             "/api/patients/recalls",
-            params={"overdue_only": "true"},
+            params=params,
             max_items=max_items,
         )
 

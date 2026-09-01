@@ -19,7 +19,9 @@ from src.app.models.nexhealth_webhook_subscription import (
 )
 from src.app.services.automation.launch_checklist_service import (
     CampaignLaunchChecklistService,
+    _pms_capability_requirements,
 )
+from src.app.services.automation.definition_schema import WorkflowDefinition
 
 _NOW = datetime(2026, 7, 18, 12, 0, tzinfo=timezone.utc)
 
@@ -40,9 +42,7 @@ def _result(value):
 
 
 def _run(service: CampaignLaunchChecklistService, workflow, **kwargs):
-    return asyncio.run(
-        service.build(workflow, institution_id="inst-1", **kwargs)
-    )
+    return asyncio.run(service.build(workflow, institution_id="inst-1", **kwargs))
 
 
 def test_manual_campaign_surfaces_unknown_audience_and_volume() -> None:
@@ -50,7 +50,12 @@ def test_manual_campaign_surfaces_unknown_audience_and_volume() -> None:
         "trigger": {"type": "manual"},
         "entry_node_id": "s1",
         "nodes": [
-            {"type": "send_sms", "id": "s1", "body_template": "Hi", "next_node_id": "x1"},
+            {
+                "type": "send_sms",
+                "id": "s1",
+                "body_template": "Hi",
+                "next_node_id": "x1",
+            },
             {"type": "exit", "id": "x1", "outcome": "done"},
         ],
         "compliance": {"content_class": "transactional_care", "consent_required": True},
@@ -69,15 +74,23 @@ def test_manual_campaign_surfaces_unknown_audience_and_volume() -> None:
     assert "spend" not in volume_item.message.lower()
 
 
-@pytest.mark.xfail(strict=True, reason=(
-    "Compliance enforcement is disabled in validation_service.validate() — the `issues += self._consent_and_content(definition)` line is commented out with 'managed by Retell for now'. The rule itself still exists and is correct. strict=True so that re-enabling it turns this into a failure and forces a deliberate revisit rather than leaving a silently-skipped compliance test."
-))
+@pytest.mark.xfail(
+    strict=True,
+    reason=(
+        "Compliance enforcement is disabled in validation_service.validate() — the `issues += self._consent_and_content(definition)` line is commented out with 'managed by Retell for now'. The rule itself still exists and is correct. strict=True so that re-enabling it turns this into a failure and forces a deliberate revisit rather than leaving a silently-skipped compliance test."
+    ),
+)
 def test_marketing_without_consent_blocks_launch_checklist() -> None:
     definition = {
         "trigger": {"type": "manual"},
         "entry_node_id": "s1",
         "nodes": [
-            {"type": "send_sms", "id": "s1", "body_template": "Hi", "next_node_id": "x1"},
+            {
+                "type": "send_sms",
+                "id": "s1",
+                "body_template": "Hi",
+                "next_node_id": "x1",
+            },
             {"type": "exit", "id": "x1", "outcome": "done"},
         ],
         "compliance": {"content_class": "marketing", "consent_required": False},
@@ -217,6 +230,21 @@ def test_treatment_campaign_blocks_when_pms_lacks_treatment_plans() -> None:
     item = _item(checklist, "pms_capability")
     assert item.status == "blocked"
     assert item.metadata["missing"] == ["treatment_plans"]
+
+
+def test_checklist_derives_pms_requirements_from_context_fields() -> None:
+    definition = WorkflowDefinition.model_validate(
+        {
+            "trigger": {"type": "manual"},
+            "entry_node_id": "x1",
+            "nodes": [{"type": "exit", "id": "x1", "outcome": "done"}],
+            "pms_context_fields": ["has_active_treatment_plan"],
+        }
+    )
+
+    assert _pms_capability_requirements(_workflow({}), definition) == [
+        "treatment_plans"
+    ]
 
 
 def test_callback_campaign_surfaces_voice_outcome_and_handoff_readiness() -> None:

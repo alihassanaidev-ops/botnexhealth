@@ -533,6 +533,8 @@ export interface WorkflowDefinition {
     nodes: WorkflowNode[]
     /** Optional compliance classification (content class + consent basis). */
     compliance?: ComplianceMetadata | null
+    /** Flat PMS-derived context fields allowed into runtime trigger context. */
+    pms_context_fields?: string[]
     /**
      * Optional presentational layout — manual canvas positions keyed by node id
      * (the synthetic trigger uses `TRIGGER_NODE_ID`). Purely visual: the runtime

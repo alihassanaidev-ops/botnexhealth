@@ -18,8 +18,10 @@ from src.app.models.institution_appointment_type import InstitutionAppointmentTy
 from src.app.services.automation.definition_schema import (
     AppointmentOffsetTrigger,
     AppointmentStateChangedTrigger,
+    RecallScanTrigger,
     WorkflowDefinition,
 )
+from src.app.services.automation.trigger_filter import trigger_filter_matches
 from src.app.services.automation.trigger_lookup import find_active_workflows
 
 
@@ -73,7 +75,9 @@ class AppointmentTriggerService:
         return {
             "appointment_id": appt.nexhealth_appointment_id,
             "appointment_at": appt.start_time.isoformat() if appt.start_time else None,
-            "appointment_start_time": appt.start_time.isoformat() if appt.start_time else None,
+            "appointment_start_time": appt.start_time.isoformat()
+            if appt.start_time
+            else None,
             "appointment_status": appt.status,
             "appointment_reason": appt.appointment_reason,
             "appointment_type_id": appt.appointment_type_id,
@@ -209,6 +213,31 @@ def workflow_matches_appointment_state(
     return True
 
 
+def workflow_matches_recall(
+    workflow: AutomationWorkflow,
+    context: dict,
+    *,
+    location_timezone: str = "UTC",
+) -> bool:
+    """Return whether a recall_scan workflow should receive this recall row."""
+    if not workflow.definition:
+        return False
+
+    try:
+        defn = WorkflowDefinition.model_validate(workflow.definition)
+    except Exception:
+        return False
+
+    if not isinstance(defn.trigger, RecallScanTrigger):
+        return False
+
+    return trigger_filter_matches(
+        workflow,
+        context,
+        location_timezone=location_timezone,
+    )
+
+
 def make_appointment_state_idempotency_key(
     workflow_version_id: str,
     appointment_id: str,
@@ -256,7 +285,9 @@ def _parse_instant(value: str) -> datetime | None:
         dt = datetime.fromisoformat(value.replace("Z", "+00:00"))
     except (ValueError, TypeError):
         return None
-    return (dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc)).astimezone(timezone.utc)
+    return (dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc)).astimezone(
+        timezone.utc
+    )
 
 
 def make_recall_idempotency_key(

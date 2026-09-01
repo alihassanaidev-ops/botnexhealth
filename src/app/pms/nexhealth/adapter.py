@@ -36,12 +36,17 @@ from src.app.pms.models import (
     SetupStep,
     SlotSearchResult,
     UniversalAppointmentType,
+    UniversalClinicalNote,
+    UniversalDocumentType,
     UniversalLocation,
     UniversalOperatory,
     UniversalPatient,
+    UniversalPatientDocument,
     UniversalPatientPage,
     UniversalProvider,
+    UniversalRecallType,
     UniversalSlot,
+    UniversalTreatmentPlan,
 )
 from src.app.pms.nexhealth import mappers
 from src.app.services.sms_privacy import safe_error_summary
@@ -862,7 +867,7 @@ class NexHealthAdapter(
         return all_rows
 
     async def list_patient_recalls(
-        self, *, max_items: int = 500
+        self, *, patient_id: str | None = None, max_items: int = 500
     ) -> list[dict[str, Any]]:
         """List patient recall records for this location from NexHealth.
 
@@ -873,6 +878,8 @@ class NexHealthAdapter(
         shared API key's rate limiter/pacing wrapper still governs the pull.
         """
         params = self._default_params()
+        if patient_id:
+            params["patient_id"] = _strip(patient_id)
 
         async def fetch(page_params: dict[str, Any]) -> dict[str, Any]:
             p = {**params, **page_params}
@@ -893,6 +900,130 @@ class NexHealthAdapter(
             per_page=50,
             max_items=max_items,
         )
+
+    async def list_clinical_notes(
+        self, patient_id: str, *, max_items: int = 500
+    ) -> list[UniversalClinicalNote]:
+        """List PHI-minimized clinical-note metadata for one patient."""
+        params = {**self._default_params(), "patient_id": _strip(patient_id)}
+
+        async def fetch(page_params: dict[str, Any]) -> dict[str, Any]:
+            p = {**params, **page_params}
+            return await handle_nexhealth_request(
+                self._client,
+                "GET",
+                "/clinical_notes",
+                params=p,
+            )
+
+        rows = await fetch_all_pages(
+            fetch,
+            api_contract=self._api_contract,
+            collection_key="clinical_notes",
+            per_page=50,
+            max_items=max_items,
+        )
+        return [mappers.to_clinical_note(row) for row in rows]
+
+    async def list_document_types(
+        self, *, active: bool | None = None, max_items: int = 500
+    ) -> list[UniversalDocumentType]:
+        """List the location's document type catalog from NexHealth."""
+        params = self._default_params()
+        if active is not None:
+            params["active"] = active
+
+        async def fetch(page_params: dict[str, Any]) -> dict[str, Any]:
+            p = {**params, **page_params}
+            return await handle_nexhealth_request(
+                self._client,
+                "GET",
+                "/document_types",
+                params=p,
+            )
+
+        rows = await fetch_all_pages(
+            fetch,
+            api_contract=self._api_contract,
+            collection_key="document_types",
+            per_page=50,
+            max_items=max_items,
+        )
+        return [mappers.to_document_type(row) for row in rows]
+
+    async def list_patient_documents(
+        self, patient_id: str, *, max_items: int = 500
+    ) -> list[UniversalPatientDocument]:
+        """List PHI-minimized document metadata for one patient."""
+        params: dict[str, Any] = {}
+        if self._subdomain:
+            params["subdomain"] = self._subdomain
+
+        raw_patient_id = _strip(patient_id)
+        raw = await handle_nexhealth_request(
+            self._client,
+            "GET",
+            f"/patients/{raw_patient_id}/documents",
+            params=params,
+        )
+        rows = extract_list_items(raw, collection_key="documents")[:max_items]
+        return [
+            mappers.to_patient_document(row, patient_id=raw_patient_id) for row in rows
+        ]
+
+    async def list_recall_types(
+        self, *, max_items: int = 500
+    ) -> list[UniversalRecallType]:
+        """List the location's recall type catalog from NexHealth."""
+        params = self._default_params()
+
+        async def fetch(page_params: dict[str, Any]) -> dict[str, Any]:
+            p = {**params, **page_params}
+            return await handle_nexhealth_request(
+                self._client,
+                "GET",
+                "/recall_types",
+                params=p,
+            )
+
+        rows = await fetch_all_pages(
+            fetch,
+            api_contract=self._api_contract,
+            collection_key="recall_types",
+            per_page=50,
+            max_items=max_items,
+        )
+        return [mappers.to_recall_type(row) for row in rows]
+
+    async def list_treatment_plans(
+        self,
+        patient_id: str,
+        *,
+        status: str | None = None,
+        max_items: int = 500,
+    ) -> list[UniversalTreatmentPlan]:
+        """List PHI-minimized treatment-plan metadata for one patient."""
+        params = {**self._default_params(), "patient_id": _strip(patient_id)}
+        if status:
+            params["status"] = status
+
+        async def fetch(page_params: dict[str, Any]) -> dict[str, Any]:
+            p = {**params, **page_params}
+            return await handle_nexhealth_request(
+                self._client,
+                "GET",
+                "/treatment_plans",
+                params=p,
+            )
+
+        rows = await fetch_all_pages(
+            fetch,
+            api_contract=self._api_contract,
+            collection_key="treatment_plans",
+            per_page=50,
+            max_items=max_items,
+        )
+        return [mappers.to_treatment_plan(row) for row in rows]
 
     # ── Operatories ──────────────────────────────────────────────────────
 

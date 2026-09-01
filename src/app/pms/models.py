@@ -40,6 +40,103 @@ class UniversalPatientPage(BaseModel):
     has_previous_page: bool = False
 
 
+class UniversalClinicalNote(BaseModel):
+    """PHI-minimized clinical-note metadata from the practice software.
+
+    The note body is deliberately excluded. Clinical free text is not required
+    for current workflow eligibility and should not enter generic automation
+    context.
+    """
+
+    id: str
+    source: str
+    patient_id: str
+    provider_id: str | None = None
+    procedure_id: str | None = None
+    note_type: str | None = None
+    title: str | None = None
+    entered_at: str | None = None
+    created_at: str | None = None
+    updated_at: str | None = None
+
+
+class UniversalDocumentType(BaseModel):
+    id: str
+    source: str
+    name: str
+    active: bool | None = None
+    created_at: str | None = None
+    updated_at: str | None = None
+
+
+class UniversalPatientDocument(BaseModel):
+    """Patient document metadata without file contents or download URLs."""
+
+    id: str
+    source: str
+    patient_id: str
+    document_type_id: str | None = None
+    document_type_name: str | None = None
+    name: str | None = None
+    mime_type: str | None = None
+    created_at: str | None = None
+    updated_at: str | None = None
+    uploaded_at: str | None = None
+
+
+class UniversalPatientRecall(BaseModel):
+    id: str
+    source: str
+    patient_id: str
+    recall_type_id: str | None = None
+    recall_type_name: str | None = None
+    due_date: str | None = None
+    last_visit_date: str | None = None
+    created_at: str | None = None
+    updated_at: str | None = None
+
+
+class UniversalRecallType(BaseModel):
+    id: str
+    source: str
+    name: str
+    interval_months: int | None = None
+    active: bool | None = None
+    created_at: str | None = None
+    updated_at: str | None = None
+
+
+class UniversalTreatmentPlan(BaseModel):
+    """Treatment-plan routing metadata without procedure details or fees."""
+
+    id: str
+    source: str
+    patient_id: str
+    status: str | None = None
+    name: str | None = None
+    provider_id: str | None = None
+    created_at: str | None = None
+    updated_at: str | None = None
+    accepted_at: str | None = None
+    completed_at: str | None = None
+
+
+class PatientCommunicationSnapshot(BaseModel):
+    """Bounded read model for Item 25 patient-communication data."""
+
+    source: str
+    patient_id: str
+    fetched_at: str
+    clinical_notes: list[UniversalClinicalNote] = Field(default_factory=list)
+    document_types: list[UniversalDocumentType] = Field(default_factory=list)
+    patient_documents: list[UniversalPatientDocument] = Field(default_factory=list)
+    patient_recalls: list[UniversalPatientRecall] = Field(default_factory=list)
+    recall_types: list[UniversalRecallType] = Field(default_factory=list)
+    treatment_plans: list[UniversalTreatmentPlan] = Field(default_factory=list)
+    patient_alerts_included: bool = False
+    patient_alerts_policy: str
+
+
 class UniversalProvider(BaseModel):
     id: str
     source: str

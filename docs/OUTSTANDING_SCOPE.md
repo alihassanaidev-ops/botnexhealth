@@ -1448,8 +1448,11 @@ also blocked by Item 11, since qualification with no ability to book has no usef
 # Part 4 · Expanded NexHealth integration — the six data families
 
 The platform reads a limited set of information from NexHealth today: patients, providers,
-appointments, appointment types, rooms, working hours, and recall records. The agreed scope covers a
-substantially wider set, organised as **six named API families**. Two are complete; four are not.
+appointments, appointment types, rooms, working hours, recall records, recall types, clinical-note
+metadata, document metadata and treatment-plan metadata. The agreed scope covers a substantially
+wider set, organised as **six named API families**. Patient Communication is now wired; Procedures,
+Insurance and Financials remain the larger unbuilt families, and Working Hours still has
+reconciliation work outstanding.
 
 This table maps every contracted family to its item below, so nothing appears to be missing. The
 family names are the ones used in the agreed scope — use them when discussing status with anyone
@@ -1459,7 +1462,7 @@ outside the dev team.
 |---|---|---|
 | **Working Hours** | Built and in use. The reconciliation half is outstanding | Item 31 |
 | **NexHealth Operations** | Built — sync statuses, webhook endpoints and subscriptions, staged v3 cutover. Only the onboarding interfaces remain | Item 29 |
-| **Patient Communication** | **1 of 7 record types built.** Six outstanding | **Item 25** |
+| **Patient Communication** | Built for Item 25: clinical-note metadata, document types, patient-document metadata, patient recall records, recall types and treatment-plan metadata. Patient alerts are explicitly out by Decision G | **Item 25** |
 | **Procedures** | **Barely started** — capped extract on a legacy path | **Item 26** |
 | **Insurance** | **Not built** | **Item 27** |
 | **Financials** | **Not built — the largest family in the scope** | **Item 28** |
@@ -1505,11 +1508,14 @@ outreach from someone who simply has not been in for a while.
 
 ### Current implementation status
 
-**Partially implemented — one of seven.** Patient recall records are integrated and working,
-including a fix to read the practice software's actual recall due-date field.
+Implemented for the supported Item 25 surface. Patient recall records remain integrated and working,
+including the fix to read the practice software's actual recall due-date field. The platform now also
+reads clinical-note metadata, document types, patient-document metadata, recall types and
+treatment-plan metadata through the PMS adapter layer.
 
-Missing: clinical notes, document types, patient documents, recall types, and treatment plans.
-Patient alerts were started and then abandoned; a disabled placeholder for them remains in the code.
+Patient alerts are excluded by **Decision G**. The abandoned placeholder has been removed rather than
+implemented because NexHealth's patient-alert read only covers alerts created through the NexHealth
+API, not a complete view of staff-created PMS chart alerts.
 
 ### Why this is the highest-value item in Part 4
 
@@ -1518,19 +1524,26 @@ recall records, recall types, treatment plan context and visit history — rathe
 last-visit dates. Item 22 cannot be finished properly until this is in place. Build this family
 first.
 
-### Remaining work
+### Implementation notes
 
-- Integrate the six missing record types.
-- Make recall types and treatment plans available to the Recall campaign's audience rules.
-- Resolve the abandoned patient alerts placeholder — either implement it or remove it, recording the
-  decision (see **Decision G**).
-- Apply all five requirements from the section above to each type.
+- `GET /api/v1/pms/patients/{patient_id}/communication` returns a bounded,
+  role-gated and audited communication snapshot.
+- The snapshot deliberately omits clinical note bodies, document download URLs, treatment procedure
+  details and fee-like fields.
+- Workflows declare `pms_context_fields`; undeclared PMS-derived fields are stripped before trigger
+  filters or run metadata are built.
+- Recall audience rules can use `recall_due_date`, `recall_type_id`, `recall_type_name`,
+  `recall_interval_months`, `last_visit_date`, `treatment_plan_statuses`,
+  `active_treatment_plan_count` and `has_active_treatment_plan`.
+- Publishing/readiness derives required PMS capabilities from those declared fields, including
+  `patient_recalls`, `recall_types` and `treatment_plans`.
 
 ### Acceptance criteria
 
-- All seven record types can be retrieved for a patient.
+- The six supported record types can be retrieved for a patient; patient alerts remain excluded by
+  Decision G with an explicit policy reason in the response.
 - Recall types and treatment plans are usable in Recall's audience rules.
-- The abandoned alerts placeholder is resolved one way or the other, with the decision recorded.
+- The abandoned alerts placeholder is resolved by removal, with the decision recorded.
 - All five Part 4 requirements are satisfied for each type, verified by test.
 
 ---

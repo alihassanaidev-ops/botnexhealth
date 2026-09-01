@@ -104,9 +104,7 @@ ROUTES_BY_BOUNDARY: dict[str, tuple[str, ...]] = {
         "POST /api/v1/gotracker/webhooks/{location_id}",
         "POST /api/email/webhooks/resend",
     ),
-    TICKET_AUTH: (
-        "GET /api/institution/events",
-    ),
+    TICKET_AUTH: ("GET /api/institution/events",),
     ACTIVE_USER: (
         # The inbox serves five roles from one set of endpoints; the narrowing
         # is enforced in InboxService, not per-handler, so a new endpoint cannot
@@ -428,6 +426,7 @@ ROUTES_BY_BOUNDARY: dict[str, tuple[str, ...]] = {
         "GET /api/outbound-voice/profiles/{profile_id}",
         "GET /api/outbound-voice/attempts",
         "GET /api/v1/pms/patients",
+        "GET /api/v1/pms/patients/{patient_id}/communication",
         "GET /api/v1/pms/patients/page",
         "POST /api/v1/pms/patients",
         "GET /api/v1/pms/slots",
@@ -631,11 +630,11 @@ def _auth_dependency(boundary: str) -> Callable:
 
 def test_route_matrix_has_no_duplicate_expectations():
     expected_routes = [
-        route
-        for routes in ROUTES_BY_BOUNDARY.values()
-        for route in routes
+        route for routes in ROUTES_BY_BOUNDARY.values() for route in routes
     ]
-    duplicates = sorted(route for route, count in Counter(expected_routes).items() if count > 1)
+    duplicates = sorted(
+        route for route, count in Counter(expected_routes).items() if count > 1
+    )
 
     assert duplicates == []
 
@@ -693,7 +692,9 @@ async def test_endpoint_rbac_role_matrix(route_key: str):
         auth_deps.get_current_location_staff_or_admin,
     ),
 )
-async def test_location_scoped_boundaries_require_location_assignment(dependency: Callable):
+async def test_location_scoped_boundaries_require_location_assignment(
+    dependency: Callable,
+):
     for role in (UserRole.LOCATION_ADMIN, UserRole.STAFF):
         user = _user(role, location_id=None)
         with pytest.raises(HTTPException) as exc:
@@ -713,12 +714,14 @@ async def test_active_user_boundary_rejects_inactive_accounts():
 def test_internal_admin_surfaces_remain_super_admin_only():
     for route_key, boundary in EXPECTED_ROUTE_BOUNDARIES.items():
         _method, path = route_key.split(" ", 1)
-        if path.startswith((
-            "/api/admin/",
-            "/api/auth/admin/",
-            "/api/v1/nexhealth/",
-            "/api/v1/gotracker/",
-        )) and not path.startswith("/api/v1/nexhealth/webhooks/"):
+        if path.startswith(
+            (
+                "/api/admin/",
+                "/api/auth/admin/",
+                "/api/v1/nexhealth/",
+                "/api/v1/gotracker/",
+            )
+        ) and not path.startswith("/api/v1/nexhealth/webhooks/"):
             if path.startswith("/api/v1/gotracker/webhooks/"):
                 continue
             # Webhook endpoints are externally called with signature verification,
@@ -774,7 +777,9 @@ def test_institution_admin_may_name_their_own_institution():
 def test_institution_admin_cannot_name_another_institution():
     user = _user(UserRole.INSTITUTION_ADMIN)
     with pytest.raises(HTTPException) as exc:
-        auth_deps.resolve_target_institution(user, "cccccccc-cccc-cccc-cccc-cccccccccccc")
+        auth_deps.resolve_target_institution(
+            user, "cccccccc-cccc-cccc-cccc-cccccccccccc"
+        )
     assert exc.value.status_code == 403
 
 

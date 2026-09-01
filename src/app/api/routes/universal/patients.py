@@ -17,9 +17,14 @@ from src.app.models.contact_location_access import ContactLocationAccess
 from src.app.models.user import User, UserRole
 from src.app.pms.base import PMSAdapter
 from src.app.pms.factory import get_institution_pms
-from src.app.pms.models import PatientCreateRequest, UniversalPatient
+from src.app.pms.models import (
+    PatientCommunicationSnapshot,
+    PatientCreateRequest,
+    UniversalPatient,
+)
 from src.app.services.audit_decorator import audit
-from src.app.services.sms_privacy import mask_phone
+from src.app.services.patient_communication import fetch_patient_communication
+from src.app.services.sms_privacy import mask_phone, safe_error_summary
 
 router = APIRouter(prefix="/patients", tags=["Patients"])
 logger = logging.getLogger(__name__)
@@ -90,6 +95,11 @@ def _patient_directory_resource(*_args, **kwargs) -> str:
     patient_status = kwargs.get("patient_status") or "active"
     operation = "reveal" if kwargs.get("reveal_patient_id") else "list"
     return f"patient_directory:{patient_status}:{operation}"
+
+
+def _patient_communication_resource(*_args, **kwargs) -> str:
+    patient_id = kwargs.get("patient_id") or "unknown"
+    return f"patient_communication:{patient_id}"
 
 
 @router.get("/page", response_model=PatientDirectoryPage)
@@ -197,6 +207,58 @@ async def browse_patients(
         except Exception as exc:  # noqa: BLE001 - cleanup must not replace the response.
             logger.warning(
                 "PMS patient page adapter cleanup failed source=%s type=%s",
+                getattr(pms, "source", "unknown"),
+                type(exc).__name__,
+            )
+
+
+@router.get(
+    "/{patient_id}/communication",
+    response_model=PatientCommunicationSnapshot,
+)
+@limiter.limit(RATE_READ)
+@audit(
+    AuditAction.READ_PATIENT_COMMUNICATION,
+    resource=_patient_communication_resource,
+    actor=AuditActor.ADMIN,
+)
+async def get_patient_communication(
+    request: Request,
+    current_user: Annotated[User, Depends(get_current_institution_or_location_user)],
+    patient_id: str,
+    max_items: int = Query(100, ge=1, le=500),
+    pms: PMSAdapter = Depends(get_institution_pms),
+) -> PatientCommunicationSnapshot:
+    """Return a bounded, PHI-minimized Item 25 communication snapshot."""
+    _ = current_user
+    try:
+        return await fetch_patient_communication(
+            pms,
+            patient_id,
+            max_items=max_items,
+        )
+    except HTTPException:
+        raise
+    except Exception as exc:  # noqa: BLE001 - provider failures become a stable API response.
+        location = getattr(request.state, "location", None)
+        logger.warning(
+            "PMS patient communication failed source=%s location=%s patient=%s type=%s summary=%s",
+            getattr(pms, "source", "unknown"),
+            getattr(location, "id", None),
+            patient_id,
+            type(exc).__name__,
+            safe_error_summary(exc),
+        )
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="The practice system is temporarily unavailable. Try again shortly.",
+        ) from exc
+    finally:
+        try:
+            await pms.close()
+        except Exception as exc:  # noqa: BLE001 - cleanup must not replace the response.
+            logger.warning(
+                "PMS patient communication adapter cleanup failed source=%s type=%s",
                 getattr(pms, "source", "unknown"),
                 type(exc).__name__,
             )

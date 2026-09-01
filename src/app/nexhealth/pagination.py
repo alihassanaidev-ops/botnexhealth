@@ -30,8 +30,14 @@ _COMMON_COLLECTION_KEYS = (
     "operatories",
     "availabilities",
     "working_hours",
+    "clinical_notes",
+    "document_types",
+    "patient_documents",
     "patient_recalls",
     "recalls",
+    "recall_types",
+    "documents",
+    "treatment_plans",
     "items",
 )
 
@@ -57,9 +63,10 @@ def extract_list_items(
     if isinstance(data, dict):
         keys = _COMMON_COLLECTION_KEYS
         if collection_key:
-            keys = (collection_key, *(
-                key for key in _COMMON_COLLECTION_KEYS if key != collection_key
-            ))
+            keys = (
+                collection_key,
+                *(key for key in _COMMON_COLLECTION_KEYS if key != collection_key),
+            )
         for key in keys:
             nested = data.get(key)
             if isinstance(nested, list):

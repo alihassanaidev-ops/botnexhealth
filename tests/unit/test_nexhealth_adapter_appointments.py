@@ -193,6 +193,148 @@ async def test_list_patients_uses_cursor_pagination_for_stable_v3(
 
 
 @pytest.mark.asyncio
+async def test_item25_patient_communication_reads_use_minimized_models(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    adapter = _make_adapter()
+    calls: list[dict] = []
+
+    async def fake_request(client, method, path, params=None, json=None):
+        calls.append(
+            {
+                "method": method,
+                "path": path,
+                "params": params or {},
+                "json": json,
+            }
+        )
+        if path == "/clinical_notes":
+            return {
+                "data": {
+                    "clinical_notes": [
+                        {
+                            "id": 1,
+                            "patient_id": 115,
+                            "note": "sensitive note body",
+                            "note_type": "progress",
+                            "entered_at": "2026-08-01T10:00:00Z",
+                        }
+                    ]
+                },
+                "count": 1,
+            }
+        if path == "/document_types":
+            return {
+                "data": {
+                    "document_types": [
+                        {"id": 2, "name": "Medical history", "active": True}
+                    ]
+                },
+                "count": 1,
+            }
+        if path == "/patients/115/documents":
+            return {
+                "data": {
+                    "documents": [
+                        {
+                            "id": 3,
+                            "patient_id": 115,
+                            "document_type": {"id": 2, "name": "Medical history"},
+                            "file_name": "history.pdf",
+                            "download_url": "https://example.invalid/secret.pdf",
+                        }
+                    ]
+                },
+                "count": 1,
+            }
+        if path == "/patient_recalls":
+            return {
+                "data": {"patient_recalls": [{"id": 4, "patient_id": 115}]},
+                "count": 1,
+            }
+        if path == "/recall_types":
+            return {
+                "data": {
+                    "recall_types": [{"id": 7, "name": "Hygiene", "interval_months": 6}]
+                },
+                "count": 1,
+            }
+        if path == "/treatment_plans":
+            return {
+                "data": {
+                    "treatment_plans": [
+                        {
+                            "id": 8,
+                            "patient_id": 115,
+                            "status": "accepted",
+                            "fee": "900.00",
+                        }
+                    ]
+                },
+                "count": 1,
+            }
+        raise AssertionError(f"unexpected path {path}")
+
+    monkeypatch.setattr(adapter_module, "handle_nexhealth_request", fake_request)
+
+    notes = await adapter.list_clinical_notes("nh-115", max_items=10)
+    document_types = await adapter.list_document_types(active=True, max_items=10)
+    documents = await adapter.list_patient_documents("nh-115", max_items=10)
+    recalls = await adapter.list_patient_recalls(patient_id="nh-115", max_items=10)
+    recall_types = await adapter.list_recall_types(max_items=10)
+    treatment_plans = await adapter.list_treatment_plans("nh-115", max_items=10)
+
+    assert notes[0].id == "nh-1"
+    assert notes[0].patient_id == "nh-115"
+    assert notes[0].note_type == "progress"
+    assert "sensitive note body" not in notes[0].model_dump_json()
+    assert document_types[0].name == "Medical history"
+    assert documents[0].document_type_id == "nh-2"
+    assert "download_url" not in documents[0].model_dump_json()
+    assert recalls == [{"id": 4, "patient_id": 115}]
+    assert recall_types[0].interval_months == 6
+    assert treatment_plans[0].status == "accepted"
+    assert "900.00" not in treatment_plans[0].model_dump_json()
+
+    params_by_path = {call["path"]: call["params"] for call in calls}
+    assert params_by_path["/clinical_notes"] == {
+        "subdomain": "test-subdomain",
+        "location_id": "test-location",
+        "patient_id": "115",
+        "page": 1,
+        "per_page": 50,
+    }
+    assert params_by_path["/document_types"] == {
+        "subdomain": "test-subdomain",
+        "location_id": "test-location",
+        "active": True,
+        "page": 1,
+        "per_page": 50,
+    }
+    assert params_by_path["/patients/115/documents"] == {"subdomain": "test-subdomain"}
+    assert params_by_path["/patient_recalls"] == {
+        "subdomain": "test-subdomain",
+        "location_id": "test-location",
+        "patient_id": "115",
+        "page": 1,
+        "per_page": 50,
+    }
+    assert params_by_path["/recall_types"] == {
+        "subdomain": "test-subdomain",
+        "location_id": "test-location",
+        "page": 1,
+        "per_page": 50,
+    }
+    assert params_by_path["/treatment_plans"] == {
+        "subdomain": "test-subdomain",
+        "location_id": "test-location",
+        "patient_id": "115",
+        "page": 1,
+        "per_page": 50,
+    }
+
+
+@pytest.mark.asyncio
 async def test_browse_patients_fetches_only_one_strict_location_page(
     monkeypatch: pytest.MonkeyPatch,
 ):

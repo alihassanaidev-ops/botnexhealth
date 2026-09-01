@@ -103,6 +103,30 @@ def test_minimal_sms_to_exit() -> None:
     assert d.nodes[0].response_mappings == []
 
 
+def test_pms_context_fields_are_trimmed_and_deduped() -> None:
+    definition = _sms_to_exit()
+    definition["pms_context_fields"] = [
+        " recall_type_name ",
+        "has_active_treatment_plan",
+        "recall_type_name",
+    ]
+
+    parsed = WorkflowDefinition.model_validate(definition)
+
+    assert parsed.pms_context_fields == [
+        "recall_type_name",
+        "has_active_treatment_plan",
+    ]
+
+
+def test_pms_context_fields_reject_unknown_fields() -> None:
+    definition = _sms_to_exit()
+    definition["pms_context_fields"] = ["clinical_note_body"]
+
+    with pytest.raises(ValidationError):
+        WorkflowDefinition.model_validate(definition)
+
+
 def test_sms_node_can_disable_automatic_opt_out_footer() -> None:
     definition = _sms_to_exit()
     definition["nodes"][0]["include_opt_out_footer"] = False

@@ -32,6 +32,7 @@ from src.app.services.automation.appointment_trigger_service import (
     make_recall_idempotency_key,
     workflow_matches_appointment,
     workflow_matches_appointment_state,
+    workflow_matches_recall,
 )
 from src.app.services.automation.callback_trigger_service import (
     CallbackTriggerService,
@@ -71,6 +72,7 @@ from src.app.services.automation.patient_status_trigger_service import (
     patient_status_idempotency_key,
 )
 from src.app.pms.gotracker.statuses import is_non_attending_status
+from src.app.pms.models import PatientCommunicationSnapshot, UniversalRecallType
 from src.app.services.automation.revalidation import PmsLiveRevalidationService
 from src.app.services.automation.scheduler_service import (
     AutomationWorkflowSchedulerService,
@@ -80,6 +82,12 @@ from src.app.services.automation.voice_attempt_recorder import stamp_attempt_out
 from src.app.services.dead_letter import (
     capture_dead_letter,
     resolve_workflow_timer_dead_letters,
+)
+from src.app.services.patient_communication import (
+    TREATMENT_PLAN_CONTEXT_FIELDS,
+    patient_communication_workflow_context,
+    patient_recall_from_raw,
+    pms_context_requirements,
 )
 from src.app.worker import celery_app
 
@@ -109,6 +117,7 @@ def _outbound_limits():
             },
         )
     return _OUTBOUND_LIMITS
+
 
 # The Chair Flow label GoTracker emits when a visit finishes, and which the
 # shipped post-op template triggers on. NexHealth has no completion event, so the
@@ -543,11 +552,7 @@ async def _sweep_nexhealth_completed_visits_async() -> dict:
 
     async with get_system_db_session("celery") as session:
         rows = (
-            (
-                await session.execute(
-                    completed_visit_candidates_query(window_start, now)
-                )
-            )
+            (await session.execute(completed_visit_candidates_query(window_start, now)))
             .unique()
             .all()
         )
@@ -1593,7 +1598,9 @@ async def _trigger_appointment_state_async(
             campaign_goal = getattr(trigger, "campaign_goal", None)
             if campaign_goal:
                 workflow_metadata["campaign_goal"] = campaign_goal
-            max_followup_delay_hours = getattr(trigger, "max_followup_delay_hours", None)
+            max_followup_delay_hours = getattr(
+                trigger, "max_followup_delay_hours", None
+            )
             if max_followup_delay_hours is not None and flow_changed_at:
                 try:
                     flow_changed = datetime.fromisoformat(
@@ -1703,7 +1710,9 @@ def ensure_nexhealth_shadow_webhook_subscriptions(self) -> dict:
     try:
         return asyncio.run(_ensure_nexhealth_shadow_webhook_subscriptions_async())
     except Exception as exc:
-        logger.exception("ensure_nexhealth_shadow_webhook_subscriptions failed: %s", exc)
+        logger.exception(
+            "ensure_nexhealth_shadow_webhook_subscriptions failed: %s", exc
+        )
         raise self.retry(exc=exc, countdown=_retry_countdown(self.request.retries))
 
 
@@ -2060,7 +2069,8 @@ async def _trigger_callback_async(
         svc = CallbackTriggerService(session)
         workflows = await svc.find_active_callback_workflows(
             institution_id,
-            location_id=location_id or (str(call.location_id) if call.location_id else None),
+            location_id=location_id
+            or (str(call.location_id) if call.location_id else None),
         )
 
         # Consent capture (XC-6 / CB-3): a patient's inbound request to be called back is
@@ -2858,7 +2868,9 @@ async def _resume_mapped_sms_response(
             "resumed": 0,
             "matched": 1,
             "outcomes": {},
-            "reason": "mapping_created_handoff" if mapping.handoff_reason else "mapping_no_context_updates",
+            "reason": "mapping_created_handoff"
+            if mapping.handoff_reason
+            else "mapping_no_context_updates",
         }
 
     result = await _resume_waiting_run_with_context_updates(
@@ -3043,7 +3055,7 @@ async def _resume_waiting_runs_for_context_field(
     )
     if workflow_run_id:
         stmt = stmt.where(AutomationWorkflowRun.id == workflow_run_id)
-    rows = ((await session.execute(stmt)).scalars().all())
+    rows = (await session.execute(stmt)).scalars().all()
 
     scheduler = AutomationWorkflowSchedulerService(session)
     matched = 0
@@ -3298,6 +3310,7 @@ async def _scan_recall_async() -> dict:
                     "location_id": (
                         str(wf.location_id) if wf.location_id is not None else None
                     ),
+                    "workflow": wf,
                 }
             )
 
@@ -3368,6 +3381,14 @@ async def _enroll_recalls_for_institution(
         locations = list(loc_result.scalars().all())
 
         for location in locations:
+            location_workflows = [
+                wf
+                for wf in workflows
+                if wf["location_id"] is None or wf["location_id"] == str(location.id)
+            ]
+            if not location_workflows:
+                continue
+
             try:
                 adapter = await NexHealthAdapter.create(institution, location)
             except Exception as exc:  # noqa: BLE001
@@ -3380,6 +3401,7 @@ async def _enroll_recalls_for_institution(
                 continue
             try:
                 recalls = await adapter.list_patient_recalls()
+                recall_types = await _list_recall_types_safe(adapter)
             except Exception as exc:  # noqa: BLE001
                 logger.warning(
                     "recall_scan: recall pull failed inst=%s loc=%s: %s",
@@ -3387,53 +3409,184 @@ async def _enroll_recalls_for_institution(
                     location.id,
                     exc,
                 )
+                await _close_adapter_safe(adapter)
                 continue
+            try:
+                treatment_plan_cache: dict[str, list[Any] | None] = {}
+                location_timezone = _location_timezone(location)
+
+                for recall in recalls:
+                    patient_id = _recall_patient_id(recall)
+                    if not patient_id or not _recall_is_due(recall, now=now):
+                        continue
+
+                    adapter_source = _adapter_source(adapter)
+                    recall_model = patient_recall_from_raw(
+                        recall, source=adapter_source
+                    )
+                    base_metadata = {
+                        "nexhealth_patient_id": patient_id,
+                        "recall_due_date": recall.get("date_due")
+                        or recall.get("due_date"),
+                        "recall_period": period,
+                    }
+
+                    matched_workflows: list[tuple[dict, dict[str, Any]]] = []
+                    for wf in location_workflows:
+                        allowed_fields = _workflow_pms_context_fields(wf)
+                        treatment_plans: list[Any] = []
+                        if _needs_treatment_context(allowed_fields):
+                            if patient_id not in treatment_plan_cache:
+                                treatment_plan_cache[
+                                    patient_id
+                                ] = await _list_treatment_plans_safe(
+                                    adapter,
+                                    patient_id,
+                                )
+                            if treatment_plan_cache[patient_id] is None:
+                                continue
+                            treatment_plans = treatment_plan_cache[patient_id]
+
+                        snapshot = PatientCommunicationSnapshot(
+                            source=adapter_source,
+                            patient_id=recall_model.patient_id,
+                            fetched_at=now.isoformat(),
+                            patient_recalls=[recall_model],
+                            recall_types=recall_types,
+                            treatment_plans=treatment_plans,
+                            patient_alerts_included=False,
+                            patient_alerts_policy="Excluded by Decision G.",
+                        )
+                        trigger_metadata = {
+                            **base_metadata,
+                            **patient_communication_workflow_context(
+                                snapshot,
+                                allowed_fields,
+                            ),
+                        }
+                        if not workflow_matches_recall(
+                            wf["workflow"],
+                            trigger_metadata,
+                            location_timezone=location_timezone,
+                        ):
+                            continue
+
+                        matched_workflows.append((wf, trigger_metadata))
+
+                    if not matched_workflows:
+                        continue
+
+                    contact_row = await session.execute(
+                        sa_select(Contact).where(
+                            Contact.institution_id == institution_id,
+                            Contact.nexhealth_patient_id == patient_id,
+                        )
+                    )
+                    contact = contact_row.scalar_one_or_none()
+                    contact_id = str(contact.id) if contact else None
+
+                    for wf, trigger_metadata in matched_workflows:
+                        key = make_recall_idempotency_key(
+                            wf["version_id"], patient_id, period
+                        )
+                        enroll_and_start_workflow_run.apply_async(
+                            kwargs={
+                                "institution_id": institution_id,
+                                "workflow_id": wf["workflow_id"],
+                                "workflow_version_id": wf["version_id"],
+                                "contact_id": contact_id,
+                                "location_id": str(location.id),
+                                "trigger_type": "recall_scan",
+                                "trigger_ref_type": "recall",
+                                "trigger_ref_id": patient_id,
+                                "idempotency_key": key,
+                                "trigger_metadata": trigger_metadata,
+                            },
+                            queue="workflow",
+                        )
+                        enrolled += 1
             finally:
                 await adapter.close()
 
-            for recall in recalls:
-                patient_id = _recall_patient_id(recall)
-                if not patient_id or not _recall_is_due(recall, now=now):
-                    continue
-
-                contact_row = await session.execute(
-                    sa_select(Contact).where(
-                        Contact.institution_id == institution_id,
-                        Contact.nexhealth_patient_id == patient_id,
-                    )
-                )
-                contact = contact_row.scalar_one_or_none()
-                contact_id = str(contact.id) if contact else None
-
-                for wf in workflows:
-                    if (
-                        wf["location_id"] is not None
-                        and wf["location_id"] != str(location.id)
-                    ):
-                        continue
-                    key = make_recall_idempotency_key(
-                        wf["version_id"], patient_id, period
-                    )
-                    enroll_and_start_workflow_run.apply_async(
-                        kwargs={
-                            "institution_id": institution_id,
-                            "workflow_id": wf["workflow_id"],
-                            "workflow_version_id": wf["version_id"],
-                            "contact_id": contact_id,
-                            "location_id": str(location.id),
-                            "trigger_type": "recall_scan",
-                            "trigger_ref_type": "recall",
-                            "trigger_ref_id": patient_id,
-                            "idempotency_key": key,
-                            "trigger_metadata": {
-                                "nexhealth_patient_id": patient_id,
-                                "recall_due_date": recall.get("date_due")
-                                or recall.get("due_date"),
-                                "recall_period": period,
-                            },
-                        },
-                        queue="workflow",
-                    )
-                    enrolled += 1
-
     return enrolled
+
+
+async def _list_recall_types_safe(adapter: Any) -> list[UniversalRecallType]:
+    try:
+        rows = await adapter.list_recall_types(max_items=500)
+    except (AttributeError, NotImplementedError):
+        return []
+    except Exception as exc:  # noqa: BLE001 - recall rows remain usable without names.
+        logger.warning(
+            "recall_scan: recall type pull failed source=%s type=%s",
+            _adapter_source(adapter),
+            type(exc).__name__,
+        )
+        return []
+    if not isinstance(rows, list):
+        return []
+    return [row for row in rows if isinstance(row, UniversalRecallType)]
+
+
+async def _list_treatment_plans_safe(adapter: Any, patient_id: str) -> list[Any] | None:
+    try:
+        rows = await adapter.list_treatment_plans(patient_id=patient_id, max_items=100)
+    except (AttributeError, NotImplementedError):
+        return None
+    except Exception as exc:  # noqa: BLE001 - fail closed for treatment filters.
+        logger.warning(
+            "recall_scan: treatment plan pull failed source=%s patient=%s type=%s",
+            _adapter_source(adapter),
+            patient_id,
+            type(exc).__name__,
+        )
+        return None
+    return rows if isinstance(rows, list) else None
+
+
+async def _close_adapter_safe(adapter: Any) -> None:
+    try:
+        await adapter.close()
+    except Exception as exc:  # noqa: BLE001
+        logger.warning(
+            "recall_scan: adapter cleanup failed source=%s type=%s",
+            _adapter_source(adapter),
+            type(exc).__name__,
+        )
+
+
+def _workflow_pms_context_fields(candidate: dict) -> list[str]:
+    workflow = candidate.get("workflow")
+    if workflow is None or not getattr(workflow, "definition", None):
+        return ["recall_due_date"]
+    try:
+        definition = WorkflowDefinition.model_validate(workflow.definition)
+    except Exception:
+        return ["recall_due_date"]
+
+    fields = list(definition.pms_context_fields)
+    # The recall scanner has always supplied the due date; keep that intrinsic
+    # trigger field available while Item 25's extra PMS facts remain explicit.
+    if definition.trigger.type == "recall_scan" and "recall_due_date" not in fields:
+        fields.append("recall_due_date")
+    return fields
+
+
+def _needs_treatment_context(fields: list[str]) -> bool:
+    return "treatment_plans" in pms_context_requirements(fields) or bool(
+        set(fields) & TREATMENT_PLAN_CONTEXT_FIELDS
+    )
+
+
+def _location_timezone(location: Any) -> str:
+    timezone_name = getattr(location, "timezone", None)
+    if isinstance(timezone_name, str) and timezone_name.strip():
+        return timezone_name.strip()
+    return "UTC"
+
+
+def _adapter_source(adapter: Any) -> str:
+    source = getattr(adapter, "source", None)
+    if isinstance(source, str) and source.strip():
+        return source.strip()
+    return "nexhealth"

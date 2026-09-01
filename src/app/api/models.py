@@ -388,19 +388,6 @@ class InsuranceCoverage(BaseModel):
     model_config = {"extra": "allow"}
 
 
-class PatientAlert(BaseModel):
-    """Patient Alert model."""
-
-    id: int
-    patient_id: int | None = None
-    note: str | None = None
-    disabled_at: datetime | None = None
-    created_at: datetime | None = None
-    updated_at: datetime | None = None
-
-    model_config = {"extra": "allow"}
-
-
 class PatientAddress(BaseModel):
     """Patient Address model."""
 
@@ -440,7 +427,6 @@ class Patient(BaseModel):
     upcoming_appts: list[dict[str, Any]] = Field(default_factory=list)
     procedures: list[dict[str, Any]] = Field(default_factory=list)
     insurance_coverages: list[InsuranceCoverage] = Field(default_factory=list)
-    # patient_alerts: list[PatientAlert] = Field(default_factory=list)
     address: PatientAddress | None = None
     provider: Provider | None = None
     # Use generic list for children/guarantor to avoid complex recursive typing issues in this snippet

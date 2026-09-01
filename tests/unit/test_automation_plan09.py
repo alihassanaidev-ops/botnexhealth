@@ -8,6 +8,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+from src.app.pms.models import UniversalRecallType, UniversalTreatmentPlan
 from src.app.services.automation.appointment_trigger_service import (
     AppointmentTriggerService,
     compute_enrollment_eta,
@@ -44,6 +45,8 @@ def _make_workflow(
     offset_hours=-24,
     appointment_type_ids=None,
     location_id=None,
+    trigger_filter=None,
+    pms_context_fields=None,
 ):
     wf = MagicMock()
     wf.id = "wf-1"
@@ -52,7 +55,12 @@ def _make_workflow(
     wf.status = AutomationWorkflowStatus.ACTIVE.value
     wf.trigger_type = trigger_type
     wf.current_version_id = version_id
-    trigger = {"type": trigger_type, "offset_hours": offset_hours}
+    if trigger_type == "recall_scan":
+        trigger = {"type": trigger_type, "recall_interval_months": 6}
+    else:
+        trigger = {"type": trigger_type, "offset_hours": offset_hours}
+    if trigger_filter is not None:
+        trigger["filter"] = trigger_filter
     if appointment_type_ids is not None:
         trigger["appointment_type_ids"] = appointment_type_ids
     wf.definition = {
@@ -60,6 +68,8 @@ def _make_workflow(
         "entry_node_id": "exit-1",
         "nodes": [{"type": "exit", "id": "exit-1", "outcome": "done"}],
     }
+    if pms_context_fields is not None:
+        wf.definition["pms_context_fields"] = pms_context_fields
     return wf
 
 
@@ -134,11 +144,14 @@ def test_workflow_matches_selected_appointment_type_id():
 
 def test_workflow_ignores_legacy_appointment_type_name_filter():
     wf = _make_workflow(appointment_type_ids=["Implant Surgery"])
-    assert workflow_matches_appointment(
-        wf,
-        appointment_type_id=None,
-        appointment_type_name="Cleaning",
-    ) is True
+    assert (
+        workflow_matches_appointment(
+            wf,
+            appointment_type_id=None,
+            appointment_type_name="Cleaning",
+        )
+        is True
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -196,12 +209,13 @@ def test_find_active_recall_workflows_queries_db():
 async def test_trigger_appointment_no_workflows():
     mock_session = _make_session(workflows=[])
 
-    with patch(
-        "src.app.tasks.automation_workflow.get_system_db_session",
-        return_value=mock_session,
-    ), patch(
-        "src.app.tasks.automation_workflow.AppointmentTriggerService"
-    ) as MockSvc:
+    with (
+        patch(
+            "src.app.tasks.automation_workflow.get_system_db_session",
+            return_value=mock_session,
+        ),
+        patch("src.app.tasks.automation_workflow.AppointmentTriggerService") as MockSvc,
+    ):
         instance = AsyncMock()
         instance.find_active_appointment_workflows = AsyncMock(return_value=[])
         instance.get_appointment_context = AsyncMock(return_value={})
@@ -312,15 +326,19 @@ async def test_scan_recall_async_enrolls_due_patients():
     adapter.list_patient_recalls = AsyncMock(return_value=recalls)
     adapter.close = AsyncMock()
 
-    with patch(
-        "src.app.tasks.automation_workflow.get_system_db_session",
-        side_effect=[_cm(scan_session), _cm(inst_session)],
-    ), patch(
-        "src.app.pms.nexhealth.adapter.NexHealthAdapter.create",
-        AsyncMock(return_value=adapter),
-    ), patch(
-        "src.app.tasks.automation_workflow.enroll_and_start_workflow_run"
-    ) as mock_task:
+    with (
+        patch(
+            "src.app.tasks.automation_workflow.get_system_db_session",
+            side_effect=[_cm(scan_session), _cm(inst_session)],
+        ),
+        patch(
+            "src.app.pms.nexhealth.adapter.NexHealthAdapter.create",
+            AsyncMock(return_value=adapter),
+        ),
+        patch(
+            "src.app.tasks.automation_workflow.enroll_and_start_workflow_run"
+        ) as mock_task,
+    ):
         mock_task.apply_async = MagicMock()
         result = await _scan_recall_async()
 
@@ -330,13 +348,183 @@ async def test_scan_recall_async_enrolls_due_patients():
     assert mock_task.apply_async.call_count == 3
 
     # Idempotency keys follow recall:{version}:{patient}:{period}.
-    keys = {c.kwargs["kwargs"]["idempotency_key"] for c in mock_task.apply_async.call_args_list}
+    keys = {
+        c.kwargs["kwargs"]["idempotency_key"]
+        for c in mock_task.apply_async.call_args_list
+    }
     assert all(k.startswith("recall:ver-1:") for k in keys)
     assert len(keys) == 3  # distinct per patient
     # Recall runs carry the recall trigger ref type.
     assert all(
         c.kwargs["kwargs"]["trigger_ref_type"] == "recall"
         for c in mock_task.apply_async.call_args_list
+    )
+
+
+@pytest.mark.asyncio
+async def test_scan_recall_applies_declared_patient_communication_context_filter():
+    wf = _make_workflow(
+        trigger_type="recall_scan",
+        version_id="ver-1",
+        trigger_filter={
+            "kind": "group",
+            "op": "and",
+            "children": [
+                {
+                    "kind": "rule",
+                    "field": "recall_type_name",
+                    "op": "eq",
+                    "value": "Hygiene",
+                },
+                {
+                    "kind": "rule",
+                    "field": "has_active_treatment_plan",
+                    "op": "eq",
+                    "value": False,
+                },
+            ],
+        },
+        pms_context_fields=[
+            "recall_type_name",
+            "has_active_treatment_plan",
+            "treatment_plan_statuses",
+        ],
+    )
+    scan_session = _make_session(workflows=[wf])
+
+    inst_session = AsyncMock()
+    inst_session.get = AsyncMock(return_value=MagicMock())
+    location = MagicMock()
+    location.id = "loc-1"
+    location.timezone = "America/New_York"
+    location.nexhealth_subdomain = "sub"
+    location.nexhealth_location_id = "nexloc-1"
+    loc_result = MagicMock()
+    loc_result.scalars.return_value.all.return_value = [location]
+    contact_result = MagicMock()
+    contact_result.scalar_one_or_none.return_value = None
+    inst_session.execute = AsyncMock(side_effect=[loc_result, contact_result])
+
+    adapter = AsyncMock()
+    adapter.source = "nexhealth"
+    adapter.list_patient_recalls = AsyncMock(
+        return_value=[
+            {"patient_id": "p1", "recall_id": 7, "date_due": "2020-01-01"},
+            {"patient_id": "p2", "recall_id": 7, "date_due": "2020-01-01"},
+        ]
+    )
+    adapter.list_recall_types = AsyncMock(
+        return_value=[
+            UniversalRecallType(
+                id="nh-7",
+                source="nexhealth",
+                name="Hygiene",
+                interval_months=6,
+            )
+        ]
+    )
+    adapter.list_treatment_plans = AsyncMock(
+        side_effect=[
+            [],
+            [
+                UniversalTreatmentPlan(
+                    id="nh-8",
+                    source="nexhealth",
+                    patient_id="nh-p2",
+                    status="accepted",
+                )
+            ],
+        ]
+    )
+    adapter.close = AsyncMock()
+
+    with (
+        patch(
+            "src.app.tasks.automation_workflow.get_system_db_session",
+            side_effect=[_cm(scan_session), _cm(inst_session)],
+        ),
+        patch(
+            "src.app.pms.nexhealth.adapter.NexHealthAdapter.create",
+            AsyncMock(return_value=adapter),
+        ),
+        patch(
+            "src.app.tasks.automation_workflow.enroll_and_start_workflow_run"
+        ) as mock_task,
+    ):
+        mock_task.apply_async = MagicMock()
+        result = await _scan_recall_async()
+
+    assert result["enrolled"] == 1
+    adapter.list_treatment_plans.assert_any_await(patient_id="p1", max_items=100)
+    adapter.list_treatment_plans.assert_any_await(patient_id="p2", max_items=100)
+    kwargs = mock_task.apply_async.call_args.kwargs["kwargs"]
+    period = datetime.now(tz=timezone.utc).strftime("%Y-%m")
+    assert kwargs["trigger_ref_id"] == "p1"
+    assert kwargs["trigger_metadata"] == {
+        "nexhealth_patient_id": "p1",
+        "recall_due_date": "2020-01-01",
+        "recall_period": period,
+        "recall_type_name": "Hygiene",
+        "treatment_plan_statuses": [],
+        "has_active_treatment_plan": False,
+    }
+    assert "treatment_plans" not in kwargs["trigger_metadata"]
+
+
+@pytest.mark.asyncio
+async def test_scan_recall_skips_when_declared_treatment_context_cannot_be_read():
+    wf = _make_workflow(
+        trigger_type="recall_scan",
+        version_id="ver-1",
+        trigger_filter={
+            "kind": "rule",
+            "field": "has_active_treatment_plan",
+            "op": "eq",
+            "value": False,
+        },
+        pms_context_fields=["has_active_treatment_plan"],
+    )
+    scan_session = _make_session(workflows=[wf])
+
+    inst_session = AsyncMock()
+    inst_session.get = AsyncMock(return_value=MagicMock())
+    location = MagicMock()
+    location.id = "loc-1"
+    location.nexhealth_subdomain = "sub"
+    location.nexhealth_location_id = "nexloc-1"
+    loc_result = MagicMock()
+    loc_result.scalars.return_value.all.return_value = [location]
+    inst_session.execute = AsyncMock(return_value=loc_result)
+
+    adapter = AsyncMock()
+    adapter.source = "nexhealth"
+    adapter.list_patient_recalls = AsyncMock(
+        return_value=[{"patient_id": "p1", "recall_id": 7, "date_due": "2020-01-01"}]
+    )
+    adapter.list_recall_types = AsyncMock(return_value=[])
+    adapter.list_treatment_plans = AsyncMock(side_effect=RuntimeError("PMS down"))
+    adapter.close = AsyncMock()
+
+    with (
+        patch(
+            "src.app.tasks.automation_workflow.get_system_db_session",
+            side_effect=[_cm(scan_session), _cm(inst_session)],
+        ),
+        patch(
+            "src.app.pms.nexhealth.adapter.NexHealthAdapter.create",
+            AsyncMock(return_value=adapter),
+        ),
+        patch(
+            "src.app.tasks.automation_workflow.enroll_and_start_workflow_run"
+        ) as mock_task,
+    ):
+        mock_task.apply_async = MagicMock()
+        result = await _scan_recall_async()
+
+    assert result["enrolled"] == 0
+    mock_task.apply_async.assert_not_called()
+    adapter.list_treatment_plans.assert_awaited_once_with(
+        patient_id="p1", max_items=100
     )
 
 
@@ -366,15 +554,19 @@ async def test_scan_recall_skips_workflows_bound_to_another_location():
     )
     adapter.close = AsyncMock()
 
-    with patch(
-        "src.app.tasks.automation_workflow.get_system_db_session",
-        side_effect=[_cm(scan_session), _cm(inst_session)],
-    ), patch(
-        "src.app.pms.nexhealth.adapter.NexHealthAdapter.create",
-        AsyncMock(return_value=adapter),
-    ), patch(
-        "src.app.tasks.automation_workflow.enroll_and_start_workflow_run"
-    ) as mock_task:
+    with (
+        patch(
+            "src.app.tasks.automation_workflow.get_system_db_session",
+            side_effect=[_cm(scan_session), _cm(inst_session)],
+        ),
+        patch(
+            "src.app.pms.nexhealth.adapter.NexHealthAdapter.create",
+            AsyncMock(return_value=adapter),
+        ),
+        patch(
+            "src.app.tasks.automation_workflow.enroll_and_start_workflow_run"
+        ) as mock_task,
+    ):
         mock_task.apply_async = MagicMock()
         result = await _scan_recall_async()
 
@@ -397,12 +589,15 @@ async def test_enroll_and_start_duplicate_key_skips():
 
     mock_session = _make_session()
 
-    with patch(
-        "src.app.tasks.automation_workflow.get_system_db_session",
-        return_value=mock_session,
-    ), patch(
-        "src.app.tasks.automation_workflow.AutomationWorkflowEnrollmentService",
-        return_value=mock_enroll_svc,
+    with (
+        patch(
+            "src.app.tasks.automation_workflow.get_system_db_session",
+            return_value=mock_session,
+        ),
+        patch(
+            "src.app.tasks.automation_workflow.AutomationWorkflowEnrollmentService",
+            return_value=mock_enroll_svc,
+        ),
     ):
         result = await _enroll_and_start_async(
             institution_id="inst-1",
@@ -441,20 +636,26 @@ def test_bulk_enroll_enqueues_tasks():
     mock_svc.get_workflow = AsyncMock(return_value=wf)
     mock_session = _make_session()
 
-    data = BulkEnrollRequest(items=[
-        BulkEnrollItem(contact_id="c-1", idempotency_key="k-1"),
-        BulkEnrollItem(contact_id="c-2", idempotency_key="k-2"),
-    ])
+    data = BulkEnrollRequest(
+        items=[
+            BulkEnrollItem(contact_id="c-1", idempotency_key="k-1"),
+            BulkEnrollItem(contact_id="c-2", idempotency_key="k-2"),
+        ]
+    )
 
-    with patch(
-        "src.app.api.routes.automation_workflows.get_db_session",
-        return_value=mock_session,
-    ), patch(
-        "src.app.api.routes.automation_workflows.AutomationWorkflowDefinitionService",
-        return_value=mock_svc,
-    ), patch(
-        "src.app.tasks.automation_workflow.enroll_and_start_workflow_run"
-    ) as mock_task:
+    with (
+        patch(
+            "src.app.api.routes.automation_workflows.get_db_session",
+            return_value=mock_session,
+        ),
+        patch(
+            "src.app.api.routes.automation_workflows.AutomationWorkflowDefinitionService",
+            return_value=mock_svc,
+        ),
+        patch(
+            "src.app.tasks.automation_workflow.enroll_and_start_workflow_run"
+        ) as mock_task,
+    ):
         mock_task.apply_async = MagicMock()
         result = asyncio.run(bulk_enroll("wf-1", data, user))
 
@@ -476,14 +677,19 @@ def test_bulk_enroll_rejects_inactive_workflow():
     mock_svc.get_workflow = AsyncMock(return_value=wf)
     mock_session = _make_session()
 
-    data = BulkEnrollRequest(items=[BulkEnrollItem(contact_id="c-1", idempotency_key="k-1")])
+    data = BulkEnrollRequest(
+        items=[BulkEnrollItem(contact_id="c-1", idempotency_key="k-1")]
+    )
 
-    with patch(
-        "src.app.api.routes.automation_workflows.get_db_session",
-        return_value=mock_session,
-    ), patch(
-        "src.app.api.routes.automation_workflows.AutomationWorkflowDefinitionService",
-        return_value=mock_svc,
+    with (
+        patch(
+            "src.app.api.routes.automation_workflows.get_db_session",
+            return_value=mock_session,
+        ),
+        patch(
+            "src.app.api.routes.automation_workflows.AutomationWorkflowDefinitionService",
+            return_value=mock_svc,
+        ),
     ):
         with pytest.raises(HTTPException) as exc_info:
             asyncio.run(bulk_enroll("wf-1", data, user))

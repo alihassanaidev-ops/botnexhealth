@@ -102,7 +102,9 @@ class CampaignLaunchChecklistService:
         location_id: str | None = None,
     ) -> CampaignLaunchChecklist:
         effective_definition = definition_dict or workflow.definition
-        effective_location_id = location_id if location_id is not None else workflow.location_id
+        effective_location_id = (
+            location_id if location_id is not None else workflow.location_id
+        )
         location_id_text = str(effective_location_id) if effective_location_id else None
 
         items: list[CampaignLaunchChecklistItem] = []
@@ -189,22 +191,34 @@ class CampaignLaunchChecklistService:
                 metadata={
                     "trigger_type": definition.trigger.type,
                     "preview_id": str(latest_preview.id) if latest_preview else None,
-                    "included_count": latest_preview.included_count if latest_preview else None,
-                    "excluded_count": latest_preview.excluded_count if latest_preview else None,
-                    "counts_by_reason": latest_preview.counts_by_reason if latest_preview else {},
-                    "expires_at": latest_preview.expires_at.isoformat() if latest_preview else None,
+                    "included_count": latest_preview.included_count
+                    if latest_preview
+                    else None,
+                    "excluded_count": latest_preview.excluded_count
+                    if latest_preview
+                    else None,
+                    "counts_by_reason": latest_preview.counts_by_reason
+                    if latest_preview
+                    else {},
+                    "expires_at": latest_preview.expires_at.isoformat()
+                    if latest_preview
+                    else None,
                 },
             )
         )
 
         per_contact = _planned_sends_per_contact(send_nodes)
         estimated_send_volume: dict[str, int] | None = (
-            {channel: count * estimated_audience for channel, count in per_contact.items()}
+            {
+                channel: count * estimated_audience
+                for channel, count in per_contact.items()
+            }
             if estimated_audience is not None
             else None
         )
         estimated_cost_cents: int | None = None
-        estimate_basis = ("Audience preview provides the current count."
+        estimate_basis = (
+            "Audience preview provides the current count."
             if estimated_audience is not None
             else "Audience preview is not available yet; showing planned sends per enrolled contact."
         )
@@ -262,7 +276,9 @@ class CampaignLaunchChecklistService:
         return CampaignLaunchChecklist(
             workflow_id=str(workflow.id),
             workflow_version_id=(
-                str(workflow.current_version_id) if workflow.current_version_id else None
+                str(workflow.current_version_id)
+                if workflow.current_version_id
+                else None
             ),
             location_id=location_id,
             overall_status=overall,
@@ -279,7 +295,9 @@ class CampaignLaunchChecklistService:
 
     @staticmethod
     def _merge_field_items(warnings: list[Any]) -> list[CampaignLaunchChecklistItem]:
-        merge_warnings = [i for i in warnings if (i.code or "").startswith("merge_field_")]
+        merge_warnings = [
+            i for i in warnings if (i.code or "").startswith("merge_field_")
+        ]
         if not merge_warnings:
             return [
                 CampaignLaunchChecklistItem(
@@ -373,7 +391,9 @@ class CampaignLaunchChecklistService:
         errors: list[Any],
         warnings: list[Any],
     ) -> list[CampaignLaunchChecklistItem]:
-        content_class = definition.compliance.content_class if definition.compliance else None
+        content_class = (
+            definition.compliance.content_class if definition.compliance else None
+        )
         consent_required = (
             definition.compliance.consent_required if definition.compliance else None
         )
@@ -397,16 +417,22 @@ class CampaignLaunchChecklistService:
 
         if compliance_errors:
             classification_status: ChecklistStatus = "blocked"
-            classification_msg = f"{len(compliance_errors)} compliance issue(s) block launch."
+            classification_msg = (
+                f"{len(compliance_errors)} compliance issue(s) block launch."
+            )
         elif compliance_warnings:
             classification_status = "warning"
-            classification_msg = f"{len(compliance_warnings)} compliance warning(s) need review."
+            classification_msg = (
+                f"{len(compliance_warnings)} compliance warning(s) need review."
+            )
         elif send_nodes:
             classification_status = "pass"
             classification_msg = f"Content class is {content_class}; consent_required={consent_required}."
         else:
             classification_status = "pass"
-            classification_msg = "No outbound send steps require content classification."
+            classification_msg = (
+                "No outbound send steps require content classification."
+            )
 
         suppression_status: ChecklistStatus = "pass"
         suppression_msg = "Send-time DNC, opt-out suppression, and channel consent gates are enforced."
@@ -467,9 +493,7 @@ class CampaignLaunchChecklistService:
     @staticmethod
     def _quiet_hours_item(send_nodes: list[Any]) -> list[CampaignLaunchChecklistItem]:
         quiet_off = [
-            n.id
-            for n in send_nodes
-            if getattr(n, "respect_quiet_hours", True) is False
+            n.id for n in send_nodes if getattr(n, "respect_quiet_hours", True) is False
         ]
         if quiet_off:
             return [
@@ -610,7 +634,11 @@ class CampaignLaunchChecklistService:
                 location_id=location_id,
                 location=location,
             )
-        if not location or not location.nexhealth_subdomain or not location.nexhealth_location_id:
+        if (
+            not location
+            or not location.nexhealth_subdomain
+            or not location.nexhealth_location_id
+        ):
             return [
                 CampaignLaunchChecklistItem(
                     id="nexhealth_readiness",
@@ -633,7 +661,7 @@ class CampaignLaunchChecklistService:
                     status="warning",
                     message="No local NexHealth appointment webhook subscription row exists for this location.",
                     fix_href="/institution-admin/settings",
-                )
+                ),
             ]
         if subscription.status != NexHealthWebhookSubscriptionStatus.ACTIVE.value:
             return [
@@ -646,7 +674,7 @@ class CampaignLaunchChecklistService:
                     message=f"NexHealth webhook subscription is {subscription.status}.",
                     fix_href="/institution-admin/settings",
                     metadata={"subscription_id": str(subscription.id)},
-                )
+                ),
             ]
 
         newest = await self._newest_projection_sync(institution_id, location_id)
@@ -661,7 +689,7 @@ class CampaignLaunchChecklistService:
                     message="Webhook subscription is active, but no appointment projection rows are available yet.",
                     fix_href="/institution-admin/settings",
                     metadata={"subscription_id": str(subscription.id)},
-                )
+                ),
             ]
         newest = _as_utc(newest)
         age = datetime.now(timezone.utc) - newest
@@ -681,9 +709,11 @@ class CampaignLaunchChecklistService:
                 metadata={
                     "subscription_id": str(subscription.id),
                     "last_synced_at": newest.isoformat(),
-                    "freshness_window_hours": int(_FRESHNESS_WINDOW.total_seconds() / 3600),
+                    "freshness_window_hours": int(
+                        _FRESHNESS_WINDOW.total_seconds() / 3600
+                    ),
                 },
-            )
+            ),
         ]
 
     async def _gotracker_items(
@@ -771,7 +801,9 @@ class CampaignLaunchChecklistService:
                     "last_event_at": last_event,
                     "last_synced_at": newest.isoformat(),
                     "event_types": subscription.event_types,
-                    "freshness_window_hours": int(_FRESHNESS_WINDOW.total_seconds() / 3600),
+                    "freshness_window_hours": int(
+                        _FRESHNESS_WINDOW.total_seconds() / 3600
+                    ),
                 },
             )
         ]
@@ -851,7 +883,9 @@ class CampaignLaunchChecklistService:
             metadata=metadata,
         )
 
-    def _handoff_items(self, definition: WorkflowDefinition) -> list[CampaignLaunchChecklistItem]:
+    def _handoff_items(
+        self, definition: WorkflowDefinition
+    ) -> list[CampaignLaunchChecklistItem]:
         voice_nodes = [n for n in definition.nodes if isinstance(n, SendVoiceNode)]
         waits_for_outcome = [n.id for n in voice_nodes if n.wait_for_outcome]
         if not voice_nodes:
@@ -890,7 +924,9 @@ class CampaignLaunchChecklistService:
         ]
 
     @staticmethod
-    def _callback_items(definition: WorkflowDefinition) -> list[CampaignLaunchChecklistItem]:
+    def _callback_items(
+        definition: WorkflowDefinition,
+    ) -> list[CampaignLaunchChecklistItem]:
         if definition.trigger.type != "callback_requested":
             return []
 
@@ -984,7 +1020,9 @@ class CampaignLaunchChecklistService:
             None,
         )
 
-    async def _latest_audience_preview(self, workflow_id: str) -> CampaignAudiencePreview | None:
+    async def _latest_audience_preview(
+        self, workflow_id: str
+    ) -> CampaignAudiencePreview | None:
         try:
             result = await self.session.execute(
                 select(CampaignAudiencePreview)
@@ -1080,9 +1118,7 @@ def _channels_used(definition: WorkflowDefinition) -> set[str]:
 
 def _has_staff_handoff_exit(definition: WorkflowDefinition) -> bool:
     exits_by_id = {
-        node.id: node
-        for node in definition.nodes
-        if isinstance(node, ExitNode)
+        node.id: node for node in definition.nodes if isinstance(node, ExitNode)
     }
     handoff_outcomes = {"handoff", "staff_handoff"}
     for exit_node in exits_by_id.values():
@@ -1111,11 +1147,14 @@ def _pms_capability_requirements(
     workflow: AutomationWorkflow,
     definition: WorkflowDefinition,
 ) -> list[str]:
+    from src.app.services.patient_communication import pms_context_requirements
+
     requirements: list[str] = []
     if definition.trigger.type == "recall_scan":
         requirements.append("patient_recalls")
     if getattr(workflow, "category", None) == "treatment":
         requirements.append("treatment_plans")
+    requirements.extend(pms_context_requirements(definition.pms_context_fields))
     return list(dict.fromkeys(requirements))
 
 

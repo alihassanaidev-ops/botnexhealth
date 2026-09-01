@@ -17,12 +17,18 @@ from src.app.pms.models import (
     SetupStep,
     SlotSearchResult,
     UniversalAppointmentType,
+    UniversalClinicalNote,
+    UniversalDocumentType,
     UniversalLocation,
     UniversalOperatory,
     UniversalPatient,
+    UniversalPatientDocument,
     UniversalPatientPage,
+    UniversalPatientRecall,
     UniversalProvider,
+    UniversalRecallType,
     UniversalSlot,
+    UniversalTreatmentPlan,
 )
 
 
@@ -51,6 +57,46 @@ class PMSAdapter(ABC):
 
     @abstractmethod
     async def create_patient(self, req: PatientCreateRequest) -> dict[str, Any]: ...
+
+    async def list_clinical_notes(
+        self, patient_id: str, *, max_items: int = 500
+    ) -> list[UniversalClinicalNote]:
+        """Optional: bounded clinical-note metadata for one patient."""
+        raise NotImplementedError("This PMS does not support clinical-note reads")
+
+    async def list_document_types(
+        self, *, active: bool | None = None, max_items: int = 500
+    ) -> list[UniversalDocumentType]:
+        """Optional: document type catalog for this location."""
+        raise NotImplementedError("This PMS does not support document-type reads")
+
+    async def list_patient_documents(
+        self, patient_id: str, *, max_items: int = 500
+    ) -> list[UniversalPatientDocument]:
+        """Optional: bounded document metadata for one patient."""
+        raise NotImplementedError("This PMS does not support patient-document reads")
+
+    async def list_patient_recalls(
+        self, *, patient_id: str | None = None, max_items: int = 500
+    ) -> list[UniversalPatientRecall] | list[dict[str, Any]]:
+        """Optional: recall records, optionally scoped to one patient."""
+        raise NotImplementedError("This PMS does not support patient-recall reads")
+
+    async def list_recall_types(
+        self, *, max_items: int = 500
+    ) -> list[UniversalRecallType]:
+        """Optional: recall type catalog for this location."""
+        raise NotImplementedError("This PMS does not support recall-type reads")
+
+    async def list_treatment_plans(
+        self,
+        patient_id: str,
+        *,
+        status: str | None = None,
+        max_items: int = 500,
+    ) -> list[UniversalTreatmentPlan]:
+        """Optional: bounded treatment-plan metadata for one patient."""
+        raise NotImplementedError("This PMS does not support treatment-plan reads")
 
     # --- Appointment Types ---
 

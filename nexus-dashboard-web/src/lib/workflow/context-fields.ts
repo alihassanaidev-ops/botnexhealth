@@ -14,12 +14,22 @@ export const APPOINTMENT_CONTEXT_TRIGGERS: TriggerType[] = [
     "patient_status_changed",
 ]
 const SMS_REPLY_CONTEXT_TRIGGERS: TriggerType[] = ["sms_reply"]
+const RECALL_CONTEXT_TRIGGERS: TriggerType[] = ["recall_scan"]
 
 export const WORKFLOW_CONTEXT_FIELDS: WorkflowContextField[] = [
     field("sms_reply_body", "SMS reply body", "I need to reschedule", "payload", SMS_REPLY_CONTEXT_TRIGGERS),
     field("sms_reply_intent", "SMS reply intent", "free_text", "payload", SMS_REPLY_CONTEXT_TRIGGERS),
     field("sms_reply_message_sid", "SMS message SID", "SM123", "payload", SMS_REPLY_CONTEXT_TRIGGERS),
     field("inbound_sms_message_id", "Inbound SMS message ID", "inbound-1", "payload", SMS_REPLY_CONTEXT_TRIGGERS),
+    field("recall_due_date", "Recall due date", "2026-08-15", "payload", RECALL_CONTEXT_TRIGGERS),
+    field("recall_type_id", "Recall type ID", "nh-7", "payload", RECALL_CONTEXT_TRIGGERS),
+    field("recall_type_name", "Recall type name", "Hygiene", "payload", RECALL_CONTEXT_TRIGGERS),
+    field("recall_type", "Recall type", "Hygiene", "payload", RECALL_CONTEXT_TRIGGERS),
+    field("recall_interval_months", "Recall interval months", 6, "payload", RECALL_CONTEXT_TRIGGERS),
+    field("last_visit_date", "Last visit date", "2026-02-12", "payload", RECALL_CONTEXT_TRIGGERS),
+    field("treatment_plan_statuses", "Treatment plan statuses", ["accepted"], "payload", RECALL_CONTEXT_TRIGGERS),
+    field("active_treatment_plan_count", "Active treatment plan count", 1, "payload", RECALL_CONTEXT_TRIGGERS),
+    field("has_active_treatment_plan", "Has active treatment plan", true, "payload", RECALL_CONTEXT_TRIGGERS),
     field("gotracker_appointment_id", "AppointmentId", "1343", "payload", APPOINTMENT_CONTEXT_TRIGGERS),
     field("gotracker_contact_id", "ContactId", "583", "payload", APPOINTMENT_CONTEXT_TRIGGERS),
     field("gotracker_provider_id", "ProviderId", "2", "payload", APPOINTMENT_CONTEXT_TRIGGERS),
@@ -122,6 +132,15 @@ export const SAMPLE_WORKFLOW_CONTEXT: Record<string, unknown> = {
     sms_reply_message_sid: "SM123",
     sms_reply_body: "I need to reschedule",
     sms_reply_intent: "free_text",
+    recall_due_date: "2026-08-15",
+    recall_type_id: "nh-7",
+    recall_type_name: "Hygiene",
+    recall_type: "Hygiene",
+    recall_interval_months: 6,
+    last_visit_date: "2026-02-12",
+    treatment_plan_statuses: ["accepted"],
+    active_treatment_plan_count: 1,
+    has_active_treatment_plan: true,
     gotracker_appointment_id: "1343",
     gotracker_contact_id: "583",
     contact_id: "gt-583",

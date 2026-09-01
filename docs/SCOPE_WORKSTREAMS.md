@@ -391,13 +391,12 @@ cooldown and history-sync guards are ready).
 
 Everything below is Platform-side, in this repo, and in dependency order.
 
-1. **Item 25 — Patient Communication family.** This is the best next move because Item 22's overdue
-   recall quality depends on better patient communication / recall history.
-2. **Item 22 — finish Overdue Recall.** Appointment Reminder is done; build Recall after Item 25 so
-   targeting, treatment-plan exclusion and re-enrolment cooldown are based on real data.
-3. **Item 23 — Run Overdue Recall for GoTracker clinics.** Do this after Item 22, with a hard refusal
+1. **Item 22 — finish Overdue Recall.** Appointment Reminder is done, and Item 25 now supplies the
+   recall-type and treatment-plan context needed for real targeting, treatment-plan exclusion and the
+   decided 90-day re-enrolment cooldown.
+2. **Item 23 — Run Overdue Recall for GoTracker clinics.** Do this after Item 22, with a hard refusal
    when history sync is incomplete.
-4. **Item 37 — outcome reporting.** Ship enquiries-qualified first from the Item 24 path; add
+3. **Item 37 — outcome reporting.** Ship enquiries-qualified first from the Item 24 path; add
    recalls-booked after Recall, and leave revenue out until Decision A is answered.
-5. **Item 15 — delivery-failure branching.** The receipt ingestion is done; the remaining work is
+4. **Item 15 — delivery-failure branching.** The receipt ingestion is done; the remaining work is
    run-state support for branching after a hard delivery failure.

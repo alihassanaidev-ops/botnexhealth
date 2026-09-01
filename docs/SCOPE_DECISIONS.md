@@ -123,11 +123,11 @@ failure — can be built either way, so this does not block starting.
 
 ## G · Patient alerts — DECIDED
 
-**Answer: out.** `PatientAlert` at `src/app/api/models.py:391` is `id`, `patient_id`,
-`note`, `disabled_at` — a **free-text note**, and the field on `Patient` is commented out at line
-443. Free text cannot safely gate outreach; you cannot reliably parse "do not call" out of a note,
-and it is clinical content. Remove the placeholder and record why. If staff want alerts visible,
-that is a read-only dashboard field later, not an automation input.
+**Answer: out.** The abandoned `PatientAlert` placeholder has been removed. Free-text alert notes
+cannot safely gate outreach; you cannot reliably parse "do not call" out of a note, and it is
+clinical content. NexHealth's patient-alert read API only returns alerts created through that API, so
+it is not a complete view of staff-created PMS chart alerts. If staff want alerts visible, that is a
+read-only dashboard field later, not an automation input.
 
 ---
 

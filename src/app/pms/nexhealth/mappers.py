@@ -9,11 +9,17 @@ from src.app.pms.models import (
     BookingResult,
     BookingWriteStatus,
     UniversalAppointmentType,
+    UniversalClinicalNote,
+    UniversalDocumentType,
     UniversalLocation,
     UniversalOperatory,
     UniversalPatient,
+    UniversalPatientDocument,
+    UniversalPatientRecall,
     UniversalProvider,
+    UniversalRecallType,
     UniversalSlot,
+    UniversalTreatmentPlan,
 )
 
 PREFIX = "nh"
@@ -21,6 +27,34 @@ PREFIX = "nh"
 
 def _pid(raw_id: Any) -> str:
     return f"{PREFIX}-{raw_id}"
+
+
+def _prefixed(raw_id: Any) -> str | None:
+    if raw_id in (None, ""):
+        return None
+    return _pid(raw_id)
+
+
+def _string(value: Any) -> str | None:
+    if value in (None, ""):
+        return None
+    return str(value)
+
+
+def _nested_id(raw: dict, key: str) -> Any:
+    value = raw.get(key)
+    if isinstance(value, dict):
+        return value.get("id")
+    return value
+
+
+def _int_or_none(value: Any) -> int | None:
+    if value in (None, ""):
+        return None
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
 
 
 def to_patient(raw: dict) -> UniversalPatient:
@@ -95,6 +129,161 @@ def to_patient(raw: dict) -> UniversalPatient:
         phone=raw.get("phone_number") or bio.get("phone_number"),
         date_of_birth=raw.get("date_of_birth") or bio.get("date_of_birth"),
         extra=extra,
+    )
+
+
+def to_clinical_note(raw: dict) -> UniversalClinicalNote:
+    patient_id = (
+        raw.get("patient_id")
+        or _nested_id(raw, "patient")
+        or raw.get("pid")
+        or raw.get("patient")
+    )
+    return UniversalClinicalNote(
+        id=_prefixed(raw.get("id")) or "",
+        source="nexhealth",
+        patient_id=_prefixed(patient_id) or "",
+        provider_id=_prefixed(raw.get("provider_id") or _nested_id(raw, "provider")),
+        procedure_id=_prefixed(raw.get("procedure_id") or _nested_id(raw, "procedure")),
+        note_type=_string(
+            raw.get("note_type") or raw.get("type") or raw.get("category")
+        ),
+        title=_string(raw.get("title") or raw.get("name")),
+        entered_at=_string(
+            raw.get("entered_at")
+            or raw.get("entered_on")
+            or raw.get("entry_date")
+            or raw.get("date")
+        ),
+        created_at=_string(raw.get("created_at")),
+        updated_at=_string(raw.get("updated_at")),
+    )
+
+
+def to_document_type(raw: dict) -> UniversalDocumentType:
+    return UniversalDocumentType(
+        id=_prefixed(raw.get("id")) or "",
+        source="nexhealth",
+        name=_string(raw.get("name") or raw.get("title")) or "",
+        active=raw.get("active") if isinstance(raw.get("active"), bool) else None,
+        created_at=_string(raw.get("created_at")),
+        updated_at=_string(raw.get("updated_at")),
+    )
+
+
+def to_patient_document(
+    raw: dict, *, patient_id: str | None = None
+) -> UniversalPatientDocument:
+    raw_patient_id = (
+        raw.get("patient_id")
+        or _nested_id(raw, "patient")
+        or raw.get("pid")
+        or patient_id
+    )
+    document_type = raw.get("document_type")
+    return UniversalPatientDocument(
+        id=_prefixed(raw.get("id")) or "",
+        source="nexhealth",
+        patient_id=_prefixed(raw_patient_id) or "",
+        document_type_id=_prefixed(
+            raw.get("document_type_id")
+            or raw.get("type_id")
+            or (document_type.get("id") if isinstance(document_type, dict) else None)
+        ),
+        document_type_name=_string(
+            raw.get("document_type_name")
+            or raw.get("type_name")
+            or (document_type.get("name") if isinstance(document_type, dict) else None)
+        ),
+        name=_string(raw.get("name") or raw.get("title") or raw.get("file_name")),
+        mime_type=_string(raw.get("mime_type") or raw.get("content_type")),
+        created_at=_string(raw.get("created_at")),
+        updated_at=_string(raw.get("updated_at")),
+        uploaded_at=_string(raw.get("uploaded_at") or raw.get("created_at")),
+    )
+
+
+def to_patient_recall(raw: dict) -> UniversalPatientRecall:
+    patient_id = (
+        raw.get("patient_id")
+        or _nested_id(raw, "patient")
+        or raw.get("pid")
+        or raw.get("patient")
+    )
+    recall_type = raw.get("recall_type") or raw.get("recall")
+    recall_type_name = None
+    if isinstance(recall_type, dict):
+        recall_type_name = recall_type.get("name")
+    elif isinstance(recall_type, str):
+        recall_type_name = recall_type
+    recall_type_id = (
+        raw.get("recall_type_id")
+        or raw.get("recall_id")
+        or (recall_type.get("id") if isinstance(recall_type, dict) else None)
+    )
+    fallback_id = (
+        f"{patient_id}:{recall_type_id}"
+        if patient_id not in (None, "") and recall_type_id not in (None, "")
+        else None
+    )
+    return UniversalPatientRecall(
+        id=_prefixed(raw.get("id") or fallback_id) or "",
+        source="nexhealth",
+        patient_id=_prefixed(patient_id) or "",
+        recall_type_id=_prefixed(recall_type_id),
+        recall_type_name=_string(
+            raw.get("recall_type_name") or raw.get("type") or recall_type_name
+        ),
+        due_date=_string(
+            raw.get("date_due")
+            or raw.get("due_date")
+            or raw.get("due")
+            or raw.get("next_visit_date")
+        ),
+        last_visit_date=_string(
+            raw.get("last_visit_date")
+            or raw.get("last_visit_at")
+            or raw.get("last_visited_at")
+        ),
+        created_at=_string(raw.get("created_at")),
+        updated_at=_string(raw.get("updated_at")),
+    )
+
+
+def to_recall_type(raw: dict) -> UniversalRecallType:
+    return UniversalRecallType(
+        id=_prefixed(raw.get("id")) or "",
+        source="nexhealth",
+        name=_string(raw.get("name") or raw.get("type")) or "",
+        interval_months=_int_or_none(
+            raw.get("interval_months")
+            or raw.get("months")
+            or raw.get("default_interval_months")
+        ),
+        active=raw.get("active") if isinstance(raw.get("active"), bool) else None,
+        created_at=_string(raw.get("created_at")),
+        updated_at=_string(raw.get("updated_at")),
+    )
+
+
+def to_treatment_plan(raw: dict) -> UniversalTreatmentPlan:
+    patient_id = (
+        raw.get("patient_id")
+        or _nested_id(raw, "patient")
+        or raw.get("pid")
+        or raw.get("patient")
+    )
+    return UniversalTreatmentPlan(
+        id=_prefixed(raw.get("id")) or "",
+        source="nexhealth",
+        patient_id=_prefixed(patient_id) or "",
+        status=_string(raw.get("status") or raw.get("state")),
+        name=_string(raw.get("name") or raw.get("title")),
+        provider_id=_prefixed(raw.get("provider_id") or _nested_id(raw, "provider")),
+        created_at=_string(raw.get("created_at")),
+        updated_at=_string(raw.get("updated_at")),
+        accepted_at=_string(raw.get("accepted_at") or raw.get("accepted_on")),
+        completed_at=_string(raw.get("completed_at") or raw.get("completed_on")),
     )
 
 

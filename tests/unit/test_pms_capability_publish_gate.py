@@ -11,13 +11,15 @@ from __future__ import annotations
 import asyncio
 from unittest.mock import AsyncMock, MagicMock, patch
 
-import pytest
-
 from src.app.services.automation.definition_schema import WorkflowDefinition
 from src.app.services.automation.validation_service import WorkflowValidationService
 
 
-def _definition(requirements: list[str] | None = None) -> WorkflowDefinition:
+def _definition(
+    requirements: list[str] | None = None,
+    *,
+    context_fields: list[str] | None = None,
+) -> WorkflowDefinition:
     raw = {
         "entry_node_id": "done",
         "trigger": {"type": "manual"},
@@ -25,6 +27,8 @@ def _definition(requirements: list[str] | None = None) -> WorkflowDefinition:
     }
     if requirements is not None:
         raw["pms_capability_requirements"] = requirements
+    if context_fields is not None:
+        raw["pms_context_fields"] = context_fields
     return WorkflowDefinition.model_validate(raw)
 
 
@@ -43,7 +47,9 @@ def _issues(definition, evaluation, *, location_id="loc-1"):
         )
 
 
-def _evaluation(*, supported, missing=(), partial=(), unknown=(), message="") -> MagicMock:
+def _evaluation(
+    *, supported, missing=(), partial=(), unknown=(), message=""
+) -> MagicMock:
     return MagicMock(
         supported=supported,
         missing=list(missing),
@@ -98,6 +104,14 @@ class TestPublishGate:
         )
         assert issues and issues[0].severity == "error"
 
+    def test_pms_context_fields_derive_publish_requirements(self):
+        issues = _issues(
+            _definition(context_fields=["has_active_treatment_plan"]),
+            _evaluation(supported=False, missing=["treatment_plans"]),
+        )
+        assert issues and issues[0].severity == "error"
+        assert "treatment_plans" in issues[0].message
+
     def test_the_failure_names_the_capability_and_what_to_do(self):
         issues = _issues(
             _definition(["treatment_plans"]),
@@ -107,9 +121,9 @@ class TestPublishGate:
         assert issues[0].fix
 
     def test_a_supported_clinic_publishes_unchanged(self):
-        assert _issues(
-            _definition(["patient_recalls"]), _evaluation(supported=True)
-        ) == []
+        assert (
+            _issues(_definition(["patient_recalls"]), _evaluation(supported=True)) == []
+        )
 
 
 class TestScopeOfTheCheck:
@@ -118,8 +132,11 @@ class TestScopeOfTheCheck:
 
     def test_template_level_validation_has_no_location_to_check(self):
         """Institution/template context: no location, so nothing to evaluate."""
-        assert _issues(
-            _definition(["treatment_plans"]),
-            _evaluation(supported=False, missing=["treatment_plans"]),
-            location_id=None,
-        ) == []
+        assert (
+            _issues(
+                _definition(["treatment_plans"]),
+                _evaluation(supported=False, missing=["treatment_plans"]),
+                location_id=None,
+            )
+            == []
+        )

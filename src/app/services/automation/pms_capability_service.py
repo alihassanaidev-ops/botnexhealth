@@ -19,7 +19,9 @@ from src.app.models.nexhealth_sync_status import NexHealthSyncStatus
 CapabilityStatus = Literal["supported", "partial", "unsupported", "unknown"]
 
 
-_MATRIX_DIR = Path(__file__).resolve().parents[4] / "docs" / "Supported_API_Per_PMS_Nexhealth"
+_MATRIX_DIR = (
+    Path(__file__).resolve().parents[4] / "docs" / "Supported_API_Per_PMS_Nexhealth"
+)
 _SUPPORTED_VALUES = {"yes", "true", "supported"}
 _PARTIAL_VALUES = {"partial", "limited", "read only", "read-only"}
 _UNSUPPORTED_VALUES = {"no", "false", "unsupported", "not supported"}
@@ -27,7 +29,11 @@ _UNSUPPORTED_VALUES = {"no", "false", "unsupported", "not supported"}
 _CAPABILITY_API_LABELS: dict[str, tuple[str, ...]] = {
     "appointments": ("View appointments", "View appointment"),
     "patients": ("View patients", "View patient"),
+    "clinical_notes": ("View clinical notes", "View clinical note"),
+    "document_types": ("View document types", "View document type"),
+    "patient_documents": ("View patient documents", "View patient document"),
     "patient_recalls": ("View patient recalls", "View patient recall"),
+    "recall_types": ("View recall types", "View recall type"),
     "procedures": ("View Procedures", "View Procedure"),
     "treatment_plans": ("View treatment plans", "View treatment plan"),
     "insurance": ("View patient insurance coverages", "View insurance plans"),
@@ -36,7 +42,10 @@ _CAPABILITY_API_LABELS: dict[str, tuple[str, ...]] = {
     "appointment_writeback": ("Edit Appointment",),
     "appointment_booking": ("Create appointment", "View appointment slots"),
     "sync_status": ("View sync statuses",),
-    "webhook_subscriptions": ("Create webhook subscription", "View webhook subscriptions"),
+    "webhook_subscriptions": (
+        "Create webhook subscription",
+        "View webhook subscriptions",
+    ),
 }
 
 
@@ -124,7 +133,9 @@ class PmsCapabilityService:
                 message="This institution is not connected to a PMS.",
             )
 
-        pms_name = await self._resolve_pms_name(institution_id=str(institution.id), location_id=str(location.id))
+        pms_name = await self._resolve_pms_name(
+            institution_id=str(institution.id), location_id=str(location.id)
+        )
         matrix = _matrix_for_pms(pms_name)
         if matrix is None:
             return _unknown_evaluation(
@@ -139,7 +150,9 @@ class PmsCapabilityService:
         for requirement in normalized_requirements:
             details[requirement] = _evaluate_requirement(matrix, requirement)
 
-        missing = [key for key, value in details.items() if value.status == "unsupported"]
+        missing = [
+            key for key, value in details.items() if value.status == "unsupported"
+        ]
         partial = [key for key, value in details.items() if value.status == "partial"]
         unknown = [key for key, value in details.items() if value.status == "unknown"]
         supported = not missing and not partial and not unknown
@@ -152,7 +165,9 @@ class PmsCapabilityService:
             message = f"{matrix.pms_name} does not support: {', '.join(missing)}."
         elif partial:
             status = "partial"
-            message = f"{matrix.pms_name} only partially supports: {', '.join(partial)}."
+            message = (
+                f"{matrix.pms_name} only partially supports: {', '.join(partial)}."
+            )
         else:
             status = "unknown"
             message = f"{matrix.pms_name} capability support could not be verified."
@@ -169,7 +184,9 @@ class PmsCapabilityService:
             message=message,
         )
 
-    async def _resolve_pms_name(self, *, institution_id: str, location_id: str) -> str | None:
+    async def _resolve_pms_name(
+        self, *, institution_id: str, location_id: str
+    ) -> str | None:
         sync_status = (
             await self.session.execute(
                 select(NexHealthSyncStatus).where(
@@ -185,7 +202,9 @@ class PmsCapabilityService:
             sync_status.sync_source_name,
             sync_status.sync_source_type,
         ]
-        payload = sync_status.emr_payload if isinstance(sync_status.emr_payload, dict) else {}
+        payload = (
+            sync_status.emr_payload if isinstance(sync_status.emr_payload, dict) else {}
+        )
         for key in ("display_name", "name", "type", "vendor", "pms", "software"):
             value = payload.get(key)
             if isinstance(value, str):
@@ -198,7 +217,9 @@ class PmsCapabilityService:
 
 
 def _normalize_requirements(requirements: list[str]) -> list[str]:
-    return list(dict.fromkeys(req.strip() for req in requirements if req and req.strip()))
+    return list(
+        dict.fromkeys(req.strip() for req in requirements if req and req.strip())
+    )
 
 
 def _unsupported_evaluation(
@@ -255,7 +276,9 @@ def _unknown_evaluation(
     )
 
 
-def _evaluate_requirement(matrix: _CapabilityMatrix, requirement: str) -> CapabilityDetail:
+def _evaluate_requirement(
+    matrix: _CapabilityMatrix, requirement: str
+) -> CapabilityDetail:
     labels = _CAPABILITY_API_LABELS.get(requirement)
     if labels is None:
         return CapabilityDetail(
@@ -323,7 +346,9 @@ def _capability_matrices() -> dict[str, _CapabilityMatrix]:
         apis = data.get("APIs") if isinstance(data.get("APIs"), dict) else {}
         matrices[_normalize_pms_name(pms_name)] = _CapabilityMatrix(
             pms_name=pms_name,
-            apis={_normalize_label(str(key)): str(value) for key, value in apis.items()},
+            apis={
+                _normalize_label(str(key)): str(value) for key, value in apis.items()
+            },
         )
     return matrices
 

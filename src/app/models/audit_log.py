@@ -26,10 +26,11 @@ class AuditActor(str, Enum):
 
     Extensible: Add new actors without modifying existing code (OCP).
     """
-    RETELL_AGENT = "RETELL_AGENT"   # Retell Voice Agent
-    ADMIN = "ADMIN"                 # Admin API user
-    SYSTEM = "SYSTEM"               # Internal system operations
-    API_CLIENT = "API_CLIENT"       # External API client
+
+    RETELL_AGENT = "RETELL_AGENT"  # Retell Voice Agent
+    ADMIN = "ADMIN"  # Admin API user
+    SYSTEM = "SYSTEM"  # Internal system operations
+    API_CLIENT = "API_CLIENT"  # External API client
 
 
 class AuditAction(str, Enum):
@@ -38,8 +39,10 @@ class AuditAction(str, Enum):
 
     Extensible: Add new actions without modifying existing code (OCP).
     """
+
     # Patient operations
     READ_PATIENT = "READ_PATIENT"
+    READ_PATIENT_COMMUNICATION = "READ_PATIENT_COMMUNICATION"
     CREATE_PATIENT = "CREATE_PATIENT"
     UPDATE_PATIENT = "UPDATE_PATIENT"
     SEARCH_PATIENTS = "SEARCH_PATIENTS"
@@ -104,7 +107,6 @@ class AuditAction(str, Enum):
     # Reserved for Item 20 (quiet-hours exceptions); no endpoint owns it yet.
     CAMPAIGN_COMPLIANCE_UPDATE = "CAMPAIGN_COMPLIANCE_UPDATE"
 
-
     # Admin operations
     INSTITUTION_CREATE = "INSTITUTION_CREATE"
     INSTITUTION_UPDATE = "INSTITUTION_UPDATE"
@@ -157,6 +159,7 @@ class AuditOutcome(str, Enum):
 
     Extensible: Add new outcomes without modifying existing code (OCP).
     """
+
     INITIATED = "INITIATED"
     SUCCESS = "SUCCESS"
     FAILURE_UNAUTHORIZED = "FAILURE_UNAUTHORIZED"
@@ -188,9 +191,7 @@ class AuditLog(Base):
 
     # Primary key - UUID for distributed systems compatibility
     id: Mapped[str] = mapped_column(
-        UUID(as_uuid=False),
-        primary_key=True,
-        default=lambda: str(uuid4())
+        UUID(as_uuid=False), primary_key=True, default=lambda: str(uuid4())
     )
 
     # When the action occurred (UTC, immutable)
@@ -198,48 +199,42 @@ class AuditLog(Base):
         DateTime(timezone=True),
         default=lambda: datetime.now(timezone.utc),
         nullable=False,
-        index=True  # For time-range queries
+        index=True,  # For time-range queries
     )
 
     # Who performed the action
     actor: Mapped[str] = mapped_column(
         String(50),
         nullable=False,
-        index=True  # For filtering by actor
+        index=True,  # For filtering by actor
     )
 
     # What action was performed
     action: Mapped[str] = mapped_column(
         String(50),
         nullable=False,
-        index=True  # For filtering by action type
+        index=True,  # For filtering by action type
     )
 
     # What resource was accessed (e.g., "patient:123", "appointment:456")
-    target_resource: Mapped[str] = mapped_column(
-        String(255),
-        nullable=False
-    )
+    target_resource: Mapped[str] = mapped_column(String(255), nullable=False)
 
     # Result of the action
     outcome: Mapped[str] = mapped_column(
         String(50),
         nullable=False,
-        index=True  # For finding failures
+        index=True,  # For finding failures
     )
 
     # Additional context (NO PHI should be stored here)
     # Example: {"request_id": "...", "ip_address": "...", "institution_id": "..."}
-    audit_metadata: Mapped[dict[str, Any] | None] = mapped_column(
-        JSONB,
-        nullable=True
-    )
+    audit_metadata: Mapped[dict[str, Any] | None] = mapped_column(JSONB, nullable=True)
 
     # Optional: Institution association for multi-institution filtering
     institution_id: Mapped[str | None] = mapped_column(
         UUID(as_uuid=False),
         nullable=True,
-        index=True  # For institution-scoped queries
+        index=True,  # For institution-scoped queries
     )
 
     # Optional: Acting user and location for direct filtering without JSON metadata scans.
