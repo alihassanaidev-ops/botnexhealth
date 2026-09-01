@@ -48,7 +48,12 @@ import {
     GOTRACKER_APPOINTMENT_WEBHOOK_SAMPLE,
     SAMPLE_WORKFLOW_CONTEXT,
 } from "@/lib/workflow/context-fields"
-import type { OutboundVoiceProfile, RetellSmsChatProfile } from "@/types"
+import type {
+    CachedAppointmentType,
+    CachedProvider,
+    OutboundVoiceProfile,
+    RetellSmsChatProfile,
+} from "@/types"
 import type {
     BookingLinkNode,
     ConditionNode,
@@ -119,6 +124,8 @@ export interface StepConfigPanelProps {
     onSetEntry: (id: string) => void
     locationId?: string | null
     voiceProfiles?: OutboundVoiceProfile[]
+    appointmentTypes?: CachedAppointmentType[]
+    providers?: CachedProvider[]
     retellSmsProfiles?: RetellSmsChatProfile[]
     readOnly?: boolean
 }
@@ -397,6 +404,8 @@ function NodeForm({
     onDeleteNode,
     onSetEntry,
     voiceProfiles,
+    appointmentTypes,
+    providers,
     retellSmsProfiles,
     readOnly,
 }: StepConfigPanelProps & { node: WorkflowNode }) {
@@ -445,10 +454,21 @@ function NodeForm({
                     <UpdateGoTrackerAppointmentFields node={node} def={def} onChange={onNodeChange} readOnly={readOnly} />
                 )}
                 {node.type === "booking_link" && (
-                    <BookingLinkFields node={node} onChange={onNodeChange} readOnly={readOnly} />
+                    <BookingLinkFields
+                        node={node}
+                        appointmentTypes={appointmentTypes ?? []}
+                        providers={providers ?? []}
+                        onChange={onNodeChange}
+                        readOnly={readOnly}
+                    />
                 )}
                 {node.type === "patient_registration" && (
-                    <PatientRegistrationFields node={node} onChange={onNodeChange} readOnly={readOnly} />
+                    <PatientRegistrationFields
+                        node={node}
+                        providers={providers ?? []}
+                        onChange={onNodeChange}
+                        readOnly={readOnly}
+                    />
                 )}
                 {node.type === "json_mapper" && (
                     <JsonMapperFields node={node} onChange={onNodeChange} readOnly={readOnly} />
@@ -1643,12 +1663,24 @@ function UpdatePatientStatusFields({
 
 const LINK_ACTIONS = ["book", "confirm", "reschedule", "cancel"] as const
 
+function providerLabel(p: CachedProvider): string {
+    return (
+        p.name?.trim() ||
+        [p.first_name, p.last_name].filter(Boolean).join(" ").trim() ||
+        p.source_id
+    )
+}
+
 function BookingLinkFields({
     node,
+    appointmentTypes,
+    providers,
     onChange,
     readOnly,
 }: {
     node: BookingLinkNode
+    appointmentTypes: CachedAppointmentType[]
+    providers: CachedProvider[]
     onChange: (n: WorkflowNode) => void
     readOnly?: boolean
 }) {
@@ -1685,23 +1717,62 @@ function BookingLinkFields({
             </Field>
 
             <Field label="Appointment types the patient may choose">
-                <Input
-                    value={node.appointment_type_ids.join(", ")}
-                    disabled={readOnly}
-                    placeholder="Leave empty for any type"
-                    onChange={(e) =>
-                        update({
-                            appointment_type_ids: e.target.value
-                                .split(",")
-                                .map((v) => v.trim())
-                                .filter(Boolean),
-                        })
-                    }
-                />
+                {appointmentTypes.length > 0 ? (
+                    <div className="max-h-48 space-y-1 overflow-y-auto rounded-md border p-2">
+                        {appointmentTypes.map((t) => {
+                            const id = t.source_id
+                            const checked = node.appointment_type_ids.includes(id)
+                            return (
+                                <label
+                                    key={id}
+                                    className="flex items-center gap-2 text-sm cursor-pointer"
+                                >
+                                    <input
+                                        type="checkbox"
+                                        checked={checked}
+                                        disabled={readOnly}
+                                        onChange={() =>
+                                            update({
+                                                appointment_type_ids: checked
+                                                    ? node.appointment_type_ids.filter(
+                                                          (v) => v !== id,
+                                                      )
+                                                    : [...node.appointment_type_ids, id],
+                                            })
+                                        }
+                                    />
+                                    <span>{t.name}</span>
+                                    {t.duration_minutes ? (
+                                        <span className="text-xs text-muted-foreground">
+                                            {t.duration_minutes} min
+                                        </span>
+                                    ) : null}
+                                </label>
+                            )
+                        })}
+                    </div>
+                ) : (
+                    // The cache is empty or could not be read. Falling back to
+                    // ids keeps the step configurable rather than blocking on a
+                    // list that may never arrive.
+                    <Input
+                        value={node.appointment_type_ids.join(", ")}
+                        disabled={readOnly}
+                        placeholder="Leave empty for any type"
+                        onChange={(e) =>
+                            update({
+                                appointment_type_ids: e.target.value
+                                    .split(",")
+                                    .map((v) => v.trim())
+                                    .filter(Boolean),
+                            })
+                        }
+                    />
+                )}
                 <p className="text-xs text-muted-foreground mt-1">
-                    Comma-separated PMS appointment type ids. This is the link's version
-                    of the restriction the voice agent follows for new patients — unlike
-                    the agent's, it is enforced by the server, so a booking naming a type
+                    Select none to offer every type. This is the link's version of the
+                    restriction the voice agent follows for new patients — unlike the
+                    agent's, it is enforced by the server, so a booking naming a type
                     outside the list is refused.
                 </p>
             </Field>
@@ -1720,12 +1791,36 @@ function BookingLinkFields({
             </Field>
 
             <Field label="Provider (optional)">
-                <Input
-                    value={node.provider_id ?? ""}
-                    disabled={readOnly}
-                    placeholder="Any provider"
-                    onChange={(e) => update({ provider_id: e.target.value || null })}
-                />
+                {providers.length > 0 ? (
+                    <Select
+                        value={node.provider_id ?? "__any__"}
+                        disabled={readOnly}
+                        onValueChange={(value) =>
+                            update({ provider_id: value === "__any__" ? null : value })
+                        }
+                    >
+                        <SelectTrigger><SelectValue /></SelectTrigger>
+                        <SelectContent>
+                            <SelectItem value="__any__">Any provider</SelectItem>
+                            {providers
+                                // A provider hidden from the voice agent should
+                                // not be offered by the link either.
+                                .filter((p) => !p.is_hidden)
+                                .map((p) => (
+                                    <SelectItem key={p.source_id} value={p.source_id}>
+                                        {providerLabel(p)}
+                                    </SelectItem>
+                                ))}
+                        </SelectContent>
+                    </Select>
+                ) : (
+                    <Input
+                        value={node.provider_id ?? ""}
+                        disabled={readOnly}
+                        placeholder="Any provider"
+                        onChange={(e) => update({ provider_id: e.target.value || null })}
+                    />
+                )}
             </Field>
         </>
     )
@@ -1733,10 +1828,12 @@ function BookingLinkFields({
 
 function PatientRegistrationFields({
     node,
+    providers,
     onChange,
     readOnly,
 }: {
     node: PatientRegistrationNode
+    providers: CachedProvider[]
     onChange: (n: WorkflowNode) => void
     readOnly?: boolean
 }) {
@@ -1745,16 +1842,39 @@ function PatientRegistrationFields({
     return (
         <>
             <Field label="Provider new patients are filed under">
-                <Input
-                    value={node.provider_id}
-                    disabled={readOnly}
-                    placeholder="PMS provider id"
-                    onChange={(e) => update({ provider_id: e.target.value })}
-                />
+                {providers.length > 0 ? (
+                    <Select
+                        value={node.provider_id || undefined}
+                        disabled={readOnly}
+                        onValueChange={(value) => update({ provider_id: value })}
+                    >
+                        <SelectTrigger>
+                            <SelectValue placeholder="Choose a provider" />
+                        </SelectTrigger>
+                        <SelectContent>
+                            {providers
+                                .filter((p) => !p.is_hidden)
+                                .map((p) => (
+                                    <SelectItem key={p.source_id} value={p.source_id}>
+                                        {providerLabel(p)}
+                                    </SelectItem>
+                                ))}
+                        </SelectContent>
+                    </Select>
+                ) : (
+                    <Input
+                        value={node.provider_id}
+                        disabled={readOnly}
+                        placeholder="PMS provider id"
+                        onChange={(e) => update({ provider_id: e.target.value })}
+                    />
+                )}
                 <p className="text-xs text-muted-foreground mt-1">
                     Required. The practice software will not create a patient without
                     one, and it is a clinic decision rather than something the patient
-                    can be asked for.
+                    can be asked for. Choosing from the list also supplies the id in the
+                    form the PMS expects — NexHealth refuses a provider id that is not
+                    numeric, and every registration would fail.
                 </p>
             </Field>
             <p className="text-xs text-muted-foreground">

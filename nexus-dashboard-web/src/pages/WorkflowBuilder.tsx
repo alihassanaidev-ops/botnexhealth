@@ -26,6 +26,7 @@ import {
 } from "@/lib/workflow-api"
 import { listOutboundVoiceProfiles } from "@/lib/outbound-voice-api"
 import { listRetellSmsChatProfiles } from "@/lib/retell-sms-api"
+import { listAppointmentTypes, listProviders } from "@/lib/tenant-api"
 import {
     addNode,
     blankDefinition,
@@ -52,6 +53,7 @@ import WorkflowExecutionsView from "@/components/workflow/WorkflowExecutionsView
 import TestRunDialog from "@/components/workflow/TestRunDialog"
 import type { AutomationWorkflow, RetellSmsChatProfile } from "@/types"
 import type { OutboundVoiceProfile } from "@/types"
+import type { CachedAppointmentType, CachedProvider } from "@/types"
 import type {
     NodeType,
     ValidationIssue,
@@ -88,6 +90,11 @@ export default function WorkflowBuilder() {
     const [backendValidating, setBackendValidating] = useState(false)
     const [supportedNodeTypes, setSupportedNodeTypes] = useState<Set<string> | undefined>()
     const [voiceProfiles, setVoiceProfiles] = useState<OutboundVoiceProfile[]>([])
+    // Booking Link and Register Patient are configured with PMS ids. Typing
+    // those by hand is how a clinic ends up with a step that fails every run —
+    // NexHealth types provider_id as an integer, so free text is refused.
+    const [appointmentTypes, setAppointmentTypes] = useState<CachedAppointmentType[]>([])
+    const [providers, setProviders] = useState<CachedProvider[]>([])
     const [retellSmsProfiles, setRetellSmsProfiles] = useState<RetellSmsChatProfile[]>([])
     const serverDef = useRef<WorkflowDefinition | null>(null)
     const validationRequest = useRef(0)
@@ -168,11 +175,15 @@ export default function WorkflowBuilder() {
         if (!locationId) {
             setVoiceProfiles([])
             setRetellSmsProfiles([])
+            setAppointmentTypes([])
+            setProviders([])
             return
         }
         let cancelled = false
         setVoiceProfiles([])
         setRetellSmsProfiles([])
+        setAppointmentTypes([])
+        setProviders([])
 
         void listOutboundVoiceProfiles({ locationId, isActive: true })
             .then((profiles) => {
@@ -187,6 +198,22 @@ export default function WorkflowBuilder() {
             })
             .catch(() => {
                 if (!cancelled) setRetellSmsProfiles([])
+            })
+        void listAppointmentTypes(locationId)
+            .then((types) => {
+                if (!cancelled) setAppointmentTypes(Array.isArray(types) ? types : [])
+            })
+            .catch(() => {
+                // Falls back to typing ids by hand rather than leaving the step
+                // unconfigurable when the cache is unavailable.
+                if (!cancelled) setAppointmentTypes([])
+            })
+        void listProviders(locationId)
+            .then((rows) => {
+                if (!cancelled) setProviders(Array.isArray(rows) ? rows : [])
+            })
+            .catch(() => {
+                if (!cancelled) setProviders([])
             })
         return () => {
             cancelled = true
@@ -546,6 +573,8 @@ export default function WorkflowBuilder() {
                 onSetEntry={onSetEntry}
                 locationId={locationId}
                 voiceProfiles={voiceProfiles}
+                appointmentTypes={appointmentTypes}
+                providers={providers}
                 retellSmsProfiles={retellSmsProfiles}
                 readOnly={readOnly}
             />}
