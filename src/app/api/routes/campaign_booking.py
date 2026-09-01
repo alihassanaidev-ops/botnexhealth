@@ -41,6 +41,7 @@ from src.app.models.institution import Institution
 from src.app.models.institution_location import InstitutionLocation
 from src.app.pms.factory import get_adapter_for_institution_location
 from src.app.pms.models import BookingRequest, BookingWriteStatus
+from src.app.services.write_provenance import WriteProvenance
 from src.app.security import get_client_ip
 from src.app.services.audit import log_audit_background
 from src.app.services.automation.campaign_action_links import (
@@ -835,6 +836,13 @@ async def book_slot(
                 getattr(chosen, "appointment_type_id", None)
                 or body.appointment_type_id
             ),
+            # Item 34. Recorded as PATIENT_LINK rather than CAMPAIGN even though
+            # a run id is present: the campaign sent the link, the patient chose
+            # the slot, and an investigation into an unexpected booking needs to
+            # know which of those to look at.
+            provenance=WriteProvenance.for_patient_link(
+                workflow_run_id=str(run.id)
+            ).as_payload(),
         )
 
         try:

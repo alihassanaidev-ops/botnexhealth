@@ -9,10 +9,16 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel
 from sqlalchemy import desc, func, nullslast, or_, select
 
-from src.app.api.deps import get_current_institution_or_location_user
+from src.app.api.deps import get_current_institution_or_location_admin
+from src.app.api.permissions import Permission, require_permission
+from src.app.models.audit_log import AuditAction, AuditActor
+from src.app.services.audit_decorator import audit
 from src.app.api.routes.calls import _location_scope_id
 from src.app.database import get_db_session
 from src.app.models.appointment_working_set import AppointmentWorkingSet
+from src.app.models.gotracker_appointment_writeback import (
+    GoTrackerAppointmentWriteback,
+)
 from src.app.models.contact import Contact
 from src.app.models.user import User
 
@@ -40,6 +46,14 @@ class AppointmentSyncItem(BaseModel):
     last_event: str | None = None
     last_synced_at: str
     updated_at: str
+    # Item 34: why the last write to this appointment happened. This is the
+    # screen an operator is already on when they ask "why did this change?",
+    # so the answer belongs here rather than in a log they would have to know
+    # to go and read.
+    last_write_actor: str | None = None
+    last_write_trace_id: str | None = None
+    last_write_run_id: str | None = None
+    last_write_reason: str | None = None
 
 
 class AppointmentSyncListResponse(BaseModel):
@@ -49,9 +63,27 @@ class AppointmentSyncListResponse(BaseModel):
     items: list[AppointmentSyncItem]
 
 
-@router.get("", response_model=AppointmentSyncListResponse)
+@router.get(
+    "",
+    response_model=AppointmentSyncListResponse,
+    dependencies=[Depends(require_permission(Permission.SYNC_READ))],
+)
+@audit(
+    # Item 33's last criterion: each of the four actions is audited. This one is
+    # a read rather than a state change, and it returns patient names alongside
+    # the sync state, so it is a PHI read and belongs in the log for the same
+    # reason the call and transcript views do.
+    AuditAction.READ_APPOINTMENT,
+    resource=lambda *args, **kwargs: (
+        f"appointment_sync:list:{kwargs.get('location_id') or 'all'}"
+    ),
+    actor=AuditActor.ADMIN,
+)
 async def list_appointment_sync_status(
-    current_user: Annotated[User, Depends(get_current_institution_or_location_user)],
+    # Narrowed from any institution-scoped role (Item 33). A practice's
+    # integration state is operational detail, not something a front desk needs,
+    # and STAFF could read it until now.
+    current_user: Annotated[User, Depends(get_current_institution_or_location_admin)],
     limit: Annotated[int, Query(ge=1, le=100)] = 50,
     offset: Annotated[int, Query(ge=0)] = 0,
     search: str | None = Query(default=None, max_length=120),
@@ -95,7 +127,11 @@ async def list_appointment_sync_status(
 
         rows = (
             await session.execute(
-                select(AppointmentWorkingSet, Contact.full_name)
+                # The most recent write we queued for each appointment, so the
+                # list can say what caused its current state. A lateral join
+                # rather than a plain one: an appointment may have many
+                # writebacks and only the newest is the answer.
+                select(AppointmentWorkingSet, Contact.full_name, _latest_writeback())
                 .outerjoin(Contact, AppointmentWorkingSet.contact_id == Contact.id)
                 .where(*conditions)
                 .order_by(
@@ -112,8 +148,8 @@ async def list_appointment_sync_status(
         limit=limit,
         offset=offset,
         items=[
-            _appointment_sync_item(row, patient_name)
-            for row, patient_name in rows
+            _appointment_sync_item(row, patient_name, writeback)
+            for row, patient_name, writeback in rows
         ],
     )
 
@@ -122,9 +158,39 @@ def _iso(value: datetime | None) -> str | None:
     return value.isoformat() if value else None
 
 
+def _latest_writeback():
+    """Correlated subquery for the newest writeback per appointment.
+
+    Returned as a JSON object so one subquery carries all four provenance
+    fields; four scalar subqueries would mean four passes over the same rows to
+    answer one question.
+    """
+    return (
+        select(
+            func.json_build_object(
+                "actor", GoTrackerAppointmentWriteback.actor,
+                "trace_id", GoTrackerAppointmentWriteback.trace_id,
+                "run_id", GoTrackerAppointmentWriteback.workflow_run_id,
+                "reason", GoTrackerAppointmentWriteback.reason,
+            )
+        )
+        .where(
+            GoTrackerAppointmentWriteback.institution_id
+            == AppointmentWorkingSet.institution_id,
+            GoTrackerAppointmentWriteback.appointment_id
+            == AppointmentWorkingSet.nexhealth_appointment_id,
+        )
+        .order_by(desc(GoTrackerAppointmentWriteback.created_at))
+        .limit(1)
+        .correlate(AppointmentWorkingSet)
+        .scalar_subquery()
+    )
+
+
 def _appointment_sync_item(
     row: AppointmentWorkingSet,
     patient_name: str | None,
+    writeback: dict | None = None,
 ) -> AppointmentSyncItem:
     return AppointmentSyncItem(
         id=str(row.id),
@@ -147,4 +213,8 @@ def _appointment_sync_item(
         last_event=row.last_event,
         last_synced_at=_iso(row.last_synced_at) or "",
         updated_at=_iso(row.updated_at) or "",
+        last_write_actor=(writeback or {}).get("actor"),
+        last_write_trace_id=(writeback or {}).get("trace_id"),
+        last_write_run_id=(writeback or {}).get("run_id"),
+        last_write_reason=(writeback or {}).get("reason"),
     )

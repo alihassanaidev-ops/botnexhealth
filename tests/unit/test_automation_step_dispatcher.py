@@ -50,6 +50,7 @@ from src.app.services.automation.llm_node_executor import execute_llm_node
 from src.app.services.automation.campaign_templates import TEMPLATES, instantiate_definition
 from src.app.services.circuit_breaker import BreakerDecision, BreakerState
 from src.app.services.outbound_limits import LimitDecision
+from src.app.services.write_provenance import WriteActor
 
 _NOW = datetime(2026, 7, 2, 14, 0, 0, tzinfo=timezone.utc)
 
@@ -301,20 +302,27 @@ def test_advance_gotracker_writeback_records_pending_reschedule() -> None:
         reason=None,
     )
     adapter.close.assert_awaited_once()
-    writeback_svc.record_request.assert_awaited_once_with(
-        institution_id="inst-1",
-        appointment_id="gt-1343",
-        location_id="loc-1",
-        contact_id=None,
-        workflow_run_id="run-1",
-        step_id="gt-write",
-        action="reschedule",
-        requested_start_time="2026-08-12T14:30:00+00:00",
-        provider_id="gt-2",
-        status_id=None,
-        confirmed=None,
-        preconfirmed=None,
-    )
+    writeback_svc.record_request.assert_awaited_once()
+    recorded = writeback_svc.record_request.await_args.kwargs
+    assert recorded["institution_id"] == "inst-1"
+    assert recorded["appointment_id"] == "gt-1343"
+    assert recorded["location_id"] == "loc-1"
+    assert recorded["contact_id"] is None
+    assert recorded["workflow_run_id"] == "run-1"
+    assert recorded["step_id"] == "gt-write"
+    assert recorded["action"] == "reschedule"
+    assert recorded["requested_start_time"] == "2026-08-12T14:30:00+00:00"
+    assert recorded["provider_id"] == "gt-2"
+    assert recorded["status_id"] is None
+    assert recorded["confirmed"] is None
+    assert recorded["preconfirmed"] is None
+    # Item 34: the write records what caused it. The trace id is generated per
+    # interaction, so it is asserted as present rather than pinned to a value.
+    provenance = recorded["provenance"]
+    assert provenance.actor is WriteActor.CAMPAIGN
+    assert provenance.workflow_run_id == "run-1"
+    assert provenance.step_id == "gt-write"
+    assert provenance.trace_id
     assert mock_audit.await_count == 1
 
 
@@ -390,20 +398,27 @@ def test_advance_gotracker_writeback_strips_slot_offset_without_converting() -> 
         patient_id=None,
         reason=None,
     )
-    writeback_svc.record_request.assert_awaited_once_with(
-        institution_id="inst-1",
-        appointment_id="gt-1343",
-        location_id="loc-1",
-        contact_id=None,
-        workflow_run_id="run-1",
-        step_id="gt-write",
-        action="reschedule",
-        requested_start_time="2026-08-13T13:30:00+00:00",
-        provider_id="gt-2",
-        status_id=None,
-        confirmed=None,
-        preconfirmed=None,
-    )
+    writeback_svc.record_request.assert_awaited_once()
+    recorded = writeback_svc.record_request.await_args.kwargs
+    assert recorded["institution_id"] == "inst-1"
+    assert recorded["appointment_id"] == "gt-1343"
+    assert recorded["location_id"] == "loc-1"
+    assert recorded["contact_id"] is None
+    assert recorded["workflow_run_id"] == "run-1"
+    assert recorded["step_id"] == "gt-write"
+    assert recorded["action"] == "reschedule"
+    assert recorded["requested_start_time"] == "2026-08-13T13:30:00+00:00"
+    assert recorded["provider_id"] == "gt-2"
+    assert recorded["status_id"] is None
+    assert recorded["confirmed"] is None
+    assert recorded["preconfirmed"] is None
+    # Item 34: the write records what caused it. The trace id is generated per
+    # interaction, so it is asserted as present rather than pinned to a value.
+    provenance = recorded["provenance"]
+    assert provenance.actor is WriteActor.CAMPAIGN
+    assert provenance.workflow_run_id == "run-1"
+    assert provenance.step_id == "gt-write"
+    assert provenance.trace_id
 
 
 def test_advance_gotracker_writeback_blocks_when_same_appointment_pending() -> None:

@@ -32,6 +32,7 @@ from src.app.services.invite_cooldown import apply_invite_cooldown, ensure_invit
 from src.app.services.user_invite_service import UserInviteService
 from src.app.services.audit import log_audit, log_audit_background
 from src.app.models.audit_log import AuditAction, AuditActor, AuditOutcome
+from src.app.services.audit_decorator import audit
 
 router = APIRouter(prefix="/institution", tags=["Institution Portal"])
 
@@ -358,6 +359,16 @@ async def get_location_operating_hours(
     response_model=list[OperatingHoursResponse],
     dependencies=[Depends(require_location_scope())],
 )
+@audit(
+    AuditAction.LOCATION_UPDATE,
+    # Item 39: operating hours and breaks decide when a patient may be
+    # contacted at all — they are the source quiet hours is derived from — so
+    # changing them is the same class of act as changing a campaign.
+    resource=lambda *args, **kwargs: (
+        f"location:{kwargs.get('loc_slug') or 'unknown'}:operating_hours"
+    ),
+    actor=AuditActor.ADMIN,
+)
 async def set_location_operating_hours(
     loc_slug: str,
     data: BulkOperatingHoursRequest,
@@ -465,6 +476,16 @@ async def get_location_breaks(
     status_code=status.HTTP_201_CREATED,
     dependencies=[Depends(require_location_scope())],
 )
+@audit(
+    AuditAction.LOCATION_UPDATE,
+    # Item 39: operating hours and breaks decide when a patient may be
+    # contacted at all — they are the source quiet hours is derived from — so
+    # changing them is the same class of act as changing a campaign.
+    resource=lambda *args, **kwargs: (
+        f"location:{kwargs.get('loc_slug') or 'unknown'}:break_create"
+    ),
+    actor=AuditActor.ADMIN,
+)
 async def create_location_break(
     loc_slug: str,
     data: BreakCreateRequest,
@@ -500,6 +521,16 @@ async def create_location_break(
     "/locations/{loc_slug}/breaks/{break_id}",
     status_code=status.HTTP_204_NO_CONTENT,
     dependencies=[Depends(require_location_scope())],
+)
+@audit(
+    AuditAction.LOCATION_UPDATE,
+    # Item 39: operating hours and breaks decide when a patient may be
+    # contacted at all — they are the source quiet hours is derived from — so
+    # changing them is the same class of act as changing a campaign.
+    resource=lambda *args, **kwargs: (
+        f"location:{kwargs.get('loc_slug') or 'unknown'}:break_delete"
+    ),
+    actor=AuditActor.ADMIN,
 )
 async def delete_location_break(
     loc_slug: str,

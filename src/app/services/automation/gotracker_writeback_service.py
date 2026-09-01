@@ -16,6 +16,7 @@ from src.app.models.gotracker_appointment_writeback import (
     GoTrackerAppointmentWritebackStatus,
 )
 from src.app.services.sms_privacy import sanitize_provider_error
+from src.app.services.write_provenance import WriteProvenance
 
 WritebackAction = Literal["reschedule", "cancel", "confirm", "status"]
 
@@ -49,13 +50,22 @@ class GoTrackerAppointmentWritebackService:
         status_id: int | None = None,
         confirmed: bool | None = None,
         preconfirmed: bool | None = None,
+        provenance: WriteProvenance | None = None,
     ) -> GoTrackerAppointmentWriteback:
         """Persist the mutation we asked GoTracker to apply.
 
         The writeback completion webhook currently only says "appointment N
         completed/failed", not which action or time. This row supplies that missing
         action context.
+
+        ``provenance`` records *why* (Item 34). Defaulted rather than required so
+        an unconverted caller still writes a row — a write with weak provenance
+        is recoverable, a write with no row at all is not. Callers that omit it
+        are recorded as SYSTEM, which is honest: nobody said who.
         """
+        provenance = provenance or WriteProvenance.for_system(
+            reason="caller did not record a cause"
+        )
         previous_start_time = await self._current_start_time(
             institution_id=institution_id,
             appointment_id=appointment_id,
@@ -76,6 +86,9 @@ class GoTrackerAppointmentWritebackService:
             status_id=status_id,
             confirmed=confirmed,
             preconfirmed=preconfirmed,
+            actor=provenance.actor.value,
+            trace_id=provenance.trace_id,
+            reason=provenance.reason,
             updated_at=datetime.now(timezone.utc),
         )
         self.session.add(row)

@@ -61,6 +61,7 @@ from src.app.services.automation.definition_schema import (
     sms_reply_wait_spec,
 )
 from src.app.services.automation.action_registry import get_action_executor
+from src.app.services.write_provenance import WriteProvenance
 from src.app.services.circuit_breaker import (
     NoOpCircuitBreaker,
     ServiceBreaker,
@@ -1592,6 +1593,11 @@ class WorkflowStepDispatcher:
                     contact_id=str(run.contact_id) if run.contact_id else None,
                     workflow_run_id=str(run.id),
                     step_id=node.id,
+                    # Item 34: a campaign step decided this, and the trace id
+                    # ties it to the interaction that led here.
+                    provenance=WriteProvenance.for_campaign(
+                        workflow_run_id=str(run.id), step_id=node.id
+                    ),
                     action="cancel",
                     status_id=node.status_id,
                     confirmed=node.confirmed,
@@ -1605,6 +1611,11 @@ class WorkflowStepDispatcher:
                     contact_id=str(run.contact_id) if run.contact_id else None,
                     workflow_run_id=str(run.id),
                     step_id=node.id,
+                    # Item 34: a campaign step decided this, and the trace id
+                    # ties it to the interaction that led here.
+                    provenance=WriteProvenance.for_campaign(
+                        workflow_run_id=str(run.id), step_id=node.id
+                    ),
                     action="reschedule",
                     requested_start_time=normalized_start_time,
                     provider_id=update_payload.get("provider_id")
@@ -1622,6 +1633,11 @@ class WorkflowStepDispatcher:
                     contact_id=str(run.contact_id) if run.contact_id else None,
                     workflow_run_id=str(run.id),
                     step_id=node.id,
+                    # Item 34: a campaign step decided this, and the trace id
+                    # ties it to the interaction that led here.
+                    provenance=WriteProvenance.for_campaign(
+                        workflow_run_id=str(run.id), step_id=node.id
+                    ),
                     action=writeback_action,
                     status_id=node.status_id,
                     confirmed=node.confirmed,

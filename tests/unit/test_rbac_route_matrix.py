@@ -341,6 +341,10 @@ ROUTES_BY_BOUNDARY: dict[str, tuple[str, ...]] = {
         "GET /api/institution/location/audit-logs",
     ),
     INSTITUTION_OR_LOCATION_ADMIN: (
+        # Narrowed from any institution-scoped role by Item 33: a practice's
+        # integration state is operational detail, and STAFF could read it until
+        # then. Also carries the sync:read permission.
+        "GET /api/institution/appointment-sync",
         "GET /api/automation/workflows/merge-fields",
         "GET /api/automation/workflows/llm-models",
         "GET /api/automation/workflows/{workflow_id}/launch-checklist",
@@ -425,7 +429,6 @@ ROUTES_BY_BOUNDARY: dict[str, tuple[str, ...]] = {
         "GET /api/institution/sms/logs/{sms_id}",
         "POST /api/institution/sms/logs/{sms_id}/reveal-phone",
         "POST /api/institution/sms/logs/{sms_id}/reveal-body",
-        "GET /api/institution/appointment-sync",
     ),
     GROUP: (
         "GET /api/group/me",

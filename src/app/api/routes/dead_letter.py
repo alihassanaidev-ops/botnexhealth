@@ -11,6 +11,7 @@ from pydantic import BaseModel
 from sqlalchemy import func, select
 
 from src.app.api.deps import get_current_admin
+from src.app.api.permissions import Permission, require_permission
 from src.app.database import get_db_session
 from src.app.models.audit_log import AuditAction, AuditActor, AuditOutcome
 from src.app.models.dead_letter_event import DeadLetterEvent, DeadLetterStatus
@@ -106,7 +107,14 @@ async def discard_dead_letter_event(
         return _response(row)
 
 
-@router.post("/{event_id}/replay", response_model=DeadLetterResponse)
+@router.post(
+    "/{event_id}/replay",
+    response_model=DeadLetterResponse,
+    # Already super-admin only. The permission makes the *reason* explicit and
+    # testable: a replay re-runs a write that can reach a practice's records,
+    # which is a different kind of risk from ordinary administration.
+    dependencies=[Depends(require_permission(Permission.WRITE_REPLAY))],
+)
 async def replay_dead_letter_event(
     event_id: str,
     current_admin: Annotated[User, Depends(get_current_admin)],

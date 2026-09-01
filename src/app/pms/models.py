@@ -102,6 +102,11 @@ class BookingRequest(BaseModel):
     operatory_id: str | None = None
     descriptor_ids: list[str] = []  # NexHealth: EHR procedure codes
     note: str | None = None
+    #: Why this booking is happening (Item 34): actor, trace id, and the
+    #: campaign run and step where there is one. Optional so an unconverted
+    #: caller still books rather than failing, and flat because the adapter
+    #: forwards it verbatim into another team's record of the write.
+    provenance: dict[str, str] | None = None
 
 
 class BookingWriteStatus(str, Enum):
