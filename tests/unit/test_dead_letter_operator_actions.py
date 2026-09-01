@@ -109,6 +109,53 @@ async def test_two_replay_requests_enqueue_only_once(monkeypatch) -> None:
 
 
 @pytest.mark.asyncio
+async def test_discard_records_note_without_copying_phi_to_audit(monkeypatch) -> None:
+    row = _row()
+    session = AsyncMock()
+
+    class FakeService:
+        def __init__(self, _session):
+            pass
+
+        async def get_for_update(self, _event_id):
+            return row
+
+        async def mark_discarded(self, event, *, user_id, reason, note=None):
+            event.status = DeadLetterStatus.DISCARDED.value
+            event.resolved_by_user_id = user_id
+            event.resolution_reason = reason
+            event.resolution_note = note
+            event.resolved_at = datetime.now(timezone.utc)
+
+    @asynccontextmanager
+    async def fake_session():
+        yield session
+
+    audit = AsyncMock()
+    monkeypatch.setattr(route, "get_db_session", fake_session)
+    monkeypatch.setattr(route, "DeadLetterService", FakeService)
+    monkeypatch.setattr(route, "log_audit", audit)
+
+    response = await route._discard_dead_letter_event(
+        event_id=str(row.id),
+        current_user=_user(),
+        request=route.DiscardDeadLetterRequest(
+            reason=route.DismissalReason.OTHER,
+            note="Patient asked us to handle this manually",
+        ),
+        include_resolution_note=True,
+    )
+
+    assert response.status == DeadLetterStatus.DISCARDED.value
+    assert response.resolution_reason == route.DismissalReason.OTHER.value
+    assert response.resolution_note == "Patient asked us to handle this manually"
+    metadata = audit.await_args.kwargs["metadata"]
+    assert metadata["note_recorded"] is True
+    assert "Patient asked" not in str(metadata)
+    session.commit.assert_awaited_once()
+
+
+@pytest.mark.asyncio
 async def test_capture_resolves_institution_from_location(monkeypatch) -> None:
     session = AsyncMock()
     owner_result = MagicMock()

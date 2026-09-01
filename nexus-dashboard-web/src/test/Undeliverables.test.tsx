@@ -3,7 +3,7 @@ import { fireEvent, render, screen, waitFor } from "@testing-library/react"
 
 import Undeliverables from "@/pages/Undeliverables"
 import { useAuth } from "@/context/AuthContext"
-import { listUndeliverables, retryUndeliverable } from "@/lib/undeliverables-api"
+import { dismissUndeliverable, listUndeliverables, retryUndeliverable } from "@/lib/undeliverables-api"
 
 vi.mock("@/context/AuthContext", () => ({ useAuth: vi.fn() }))
 vi.mock("@/lib/undeliverables-api", () => ({
@@ -18,6 +18,7 @@ vi.mock("sonner", () => ({
 const auth = useAuth as ReturnType<typeof vi.fn>
 const list = listUndeliverables as ReturnType<typeof vi.fn>
 const retry = retryUndeliverable as ReturnType<typeof vi.fn>
+const dismiss = dismissUndeliverable as ReturnType<typeof vi.fn>
 
 const event = {
     id: "event-1",
@@ -43,6 +44,7 @@ beforeEach(() => {
     auth.mockReset()
     list.mockReset()
     retry.mockReset()
+    dismiss.mockReset()
     auth.mockReturnValue({ user: { role: "INSTITUTION_ADMIN" } })
     list.mockResolvedValue({ items: [event], total: 1, page: 1, size: 50, pages: 1 })
 })
@@ -78,5 +80,34 @@ describe("Undeliverable work", () => {
         const button = await screen.findByRole("button", { name: "Retry" })
         expect(button).toBeDisabled()
         expect(button).toHaveAttribute("title", "An institution administrator is required to retry")
+    })
+
+    it("routes super-admin actions to the platform queue", async () => {
+        auth.mockReturnValue({ user: { role: "SUPER_ADMIN" } })
+        render(<Undeliverables />)
+
+        await screen.findByText("Provider unavailable")
+        expect(list).toHaveBeenCalledWith("platform", { page: 1, size: 50, status: "open" })
+
+        fireEvent.click(screen.getByRole("button", { name: "Retry" }))
+
+        await waitFor(() => expect(retry).toHaveBeenCalledWith("platform", "event-1"))
+    })
+
+    it("dismisses with a bounded reason and optional note", async () => {
+        dismiss.mockResolvedValue({ ...event, status: "discarded" })
+        render(<Undeliverables />)
+
+        fireEvent.click(await screen.findByRole("button", { name: "Dismiss" }))
+        fireEvent.change(screen.getByLabelText("Note (optional)"), {
+            target: { value: "Handled directly in the PMS" },
+        })
+        fireEvent.click(screen.getByRole("button", { name: "Dismiss event" }))
+
+        await waitFor(() => expect(dismiss).toHaveBeenCalledWith("institution", "event-1", {
+            reason: "resolved_elsewhere",
+            note: "Handled directly in the PMS",
+        }))
+        await waitFor(() => expect(list).toHaveBeenCalledTimes(2))
     })
 })

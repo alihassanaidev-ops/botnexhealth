@@ -21,8 +21,8 @@ No new roles. The five that exist are unchanged; this only records which of them
 carry which key.
 
 
-Scope note — two of the four are not enforced here
---------------------------------------------------
+Scope note — Cloud Service parity
+---------------------------------
 
 ``WRITE_REPLAY`` and ``WRITE_RESOLVE_CONFLICT`` are the dangerous pair, and the
 buttons that perform them for a GoTracker practice live in the **Cloud Service /
@@ -30,7 +30,7 @@ Ops UI**, not this repo. They shipped there with Item 2.
 
 They are still defined here, deliberately. Item 33's requirement is that the
 distinction exists and is enforced wherever the action is reachable, and this
-repo does expose one replay path — the platform dead-letter replay. Naming both
+repo now exposes platform and tenant undeliverable replay paths. Naming both
 also gives the Cloud Service a vocabulary to mirror rather than invent, which is
 what went wrong the first time: the same idea named differently on each side of
 the boundary is the same as not having it.
