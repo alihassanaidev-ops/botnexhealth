@@ -711,6 +711,18 @@ reads on every dispatch:
   writes per appointment with an advisory lock because GoTracker has one pending
   write slot per appointment.
 
+The clinic-facing **Patients** directory has a different read requirement from
+campaign dispatch. It proxies exactly one current page from the selected
+location's NexHealth or GoTracker adapter through
+`GET /api/v1/pms/patients/page`; credentials stay server-side, active status is
+explicit, directory PHI is masked, and upstream errors become a stable 503. The
+page never loads the full patient roster. NexHealth uses stable-v3 cursors;
+GoTracker requests one fixed Synchronizer page. Existing local Contact links are
+attached to returned rows only to open call/history detail. **Contacts** remains
+the local non-PMS relationship directory, while local patient projections remain
+the workflow/webhook working set rather than the Patients page's completeness
+boundary.
+
 GoTracker's **on-site synchronizer, local SQL agent, installer, offline queue,
 and stored-procedure implementation remain outside this repo**. This repo owns
 the PMS adapter contract, the cloud-facing GoTracker adapter/webhooks, and

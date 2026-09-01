@@ -11,6 +11,7 @@ vi.mock("@/lib/contacts-api", async () => {
     return {
         ...actual,
         listContacts: vi.fn(),
+        listLivePatients: vi.fn(),
         getContact: vi.fn(),
         createContact: vi.fn(),
         updateContact: vi.fn(),
@@ -67,6 +68,29 @@ describe("Contacts and Patients directories", () => {
             offset: 0,
             items: [CONTACT],
         })
+        vi.mocked(api.listLivePatients).mockResolvedValue({
+            source: "nexhealth",
+            fetched_at: "2026-09-01T10:00:00Z",
+            total: 1,
+            returned: 1,
+            items: [{
+                pms_patient_id: "nh-42",
+                source: "nexhealth",
+                first_name: "Dana",
+                last_name: "Reyes",
+                full_name: "Dana Reyes",
+                inactive: false,
+                email_masked: "d***@example.com",
+                phone_masked: "+*******1234",
+                pms_updated_at: "2026-09-01T09:55:00Z",
+                pms_last_sync_time: "2026-09-01T09:55:00Z",
+                contact_id: "contact-1",
+            }],
+            next_cursor: null,
+            previous_cursor: null,
+            has_next_page: false,
+            has_previous_page: false,
+        })
         vi.mocked(api.getContact).mockResolvedValue(DETAIL)
         vi.mocked(api.createContact).mockResolvedValue({
             contact: DETAIL,
@@ -84,13 +108,18 @@ describe("Contacts and Patients directories", () => {
         expect(screen.getByText("Lead")).toBeInTheDocument()
     })
 
-    it("uses only synchronized PMS-linked people for Patients", async () => {
+    it("reads the Patients directory directly from the selected PMS location", async () => {
         render(<Patients />)
         await screen.findByText("Dana Reyes")
-        await waitFor(() => expect(api.listContacts).toHaveBeenCalledWith(
-            expect.objectContaining({ directory: "patients" }),
+        await waitFor(() => expect(api.listLivePatients).toHaveBeenCalledWith(
+            expect.objectContaining({
+                locationId: "loc-1",
+                pageSize: 25,
+                patientStatus: "active",
+            }),
         ))
-        expect(screen.getByText(/latest synchronized data/i)).toBeInTheDocument()
+        expect(screen.getByText(/read securely from nexhealth/i)).toBeInTheDocument()
+        expect(screen.getAllByText("Active")).toHaveLength(2)
         expect(screen.queryByRole("button", { name: /add contact/i })).not.toBeInTheDocument()
     })
 

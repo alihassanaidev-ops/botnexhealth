@@ -27,13 +27,31 @@ def strip(value: str | None) -> str | None:
         return None
     raw = str(value)
     prefix = f"{PREFIX}-"
-    return raw[len(prefix):] if raw.startswith(prefix) else raw
+    return raw[len(prefix) :] if raw.startswith(prefix) else raw
 
 
 def to_patient(raw: dict[str, Any]) -> UniversalPatient:
     raw_id = _first(raw, "ContactId", "contact_id", "id", "patient_id")
     first_name = _first(raw, "FirstName", "first_name", "firstName") or ""
     last_name = _first(raw, "LastName", "last_name", "lastName") or ""
+    minimum_extra = _minimum_extra(raw)
+    extra: dict[str, Any] = {"raw": minimum_extra}
+    is_active = _first(raw, "IsActive", "is_active", "active")
+    inactive = _first(raw, "Inactive", "inactive", "IsInactive")
+    inactive_flag = _bool_or_none(inactive)
+    active_flag = _bool_or_none(is_active)
+    if inactive_flag is None and active_flag is not None:
+        inactive_flag = not active_flag
+    extra["inactive"] = bool(inactive_flag)
+    updated_at = _first(
+        raw,
+        "ModifiedTimeStamp",
+        "modified_timestamp",
+        "updated_at",
+        "UpdatedAt",
+    )
+    if updated_at not in (None, ""):
+        extra["updated_at"] = str(updated_at)
     return UniversalPatient(
         id=pid(raw_id),
         source="gotracker",
@@ -41,10 +59,8 @@ def to_patient(raw: dict[str, Any]) -> UniversalPatient:
         last_name=str(last_name),
         email=_first(raw, "Email", "email"),
         phone=_first(raw, "Phone", "phone", "PhoneNumber", "phone_number", "CellPhone"),
-        date_of_birth=_first(
-            raw, "BirthDate", "DateOfBirth", "DOB", "date_of_birth"
-        ),
-        extra={"raw": _minimum_extra(raw)},
+        date_of_birth=_first(raw, "BirthDate", "DateOfBirth", "DOB", "date_of_birth"),
+        extra=extra,
     )
 
 
@@ -134,7 +150,9 @@ def to_appointment_type(raw: dict[str, Any]) -> UniversalAppointmentType:
                 for item in raw.get("reason_ids") or raw.get("ReasonIds") or []
                 if item is not None
             ],
-            "bookable_online": _first(raw, "bookable_online", "BookableOnline", default=True),
+            "bookable_online": _first(
+                raw, "bookable_online", "BookableOnline", default=True
+            ),
         },
     )
 
@@ -157,7 +175,9 @@ def to_slot(
     appointment_type_id: str | None = None,
 ) -> UniversalSlot:
     raw_provider_id = _first(raw, "provider_id", "ProviderId", default=provider_id)
-    raw_location_id = _first(raw, "lid", "LocationId", "location_id", default=location_id)
+    raw_location_id = _first(
+        raw, "lid", "LocationId", "location_id", default=location_id
+    )
     raw_operatory_id = _first(raw, "operatory_id", "OperatoryId")
     return UniversalSlot(
         start=str(_first(raw, "time", "start_time", "StartTime") or ""),
@@ -187,9 +207,7 @@ def to_location(raw: dict[str, Any]) -> UniversalLocation:
 
 
 #: What we tell a caller when the booking has not yet reached the practice.
-PENDING_WRITE_MESSAGE = (
-    "We're confirming this with the practice and will let you know."
-)
+PENDING_WRITE_MESSAGE = "We're confirming this with the practice and will let you know."
 CONFIRMED_WRITE_MESSAGE = "Appointment booked successfully."
 
 
@@ -228,8 +246,10 @@ def to_booking_result(raw: dict[str, Any], *, success: bool = True) -> BookingRe
         # An explicit appointment status from the practice wins; otherwise the
         # booking is only as real as the write behind it.
         reported = _first(data, "status", "Status")
-        status = str(reported) if reported is not None else (
-            BookingWriteStatus.PENDING.value if is_pending else "scheduled"
+        status = (
+            str(reported)
+            if reported is not None
+            else (BookingWriteStatus.PENDING.value if is_pending else "scheduled")
         )
         message = PENDING_WRITE_MESSAGE if is_pending else CONFIRMED_WRITE_MESSAGE
     else:
@@ -246,7 +266,9 @@ def to_booking_result(raw: dict[str, Any], *, success: bool = True) -> BookingRe
         end=end,
         patient_id=_maybe_pid(data, "patient_id", "PatientId", "ContactId"),
         provider_id=_maybe_pid(data, "provider_id", "ProviderId"),
-        appointment_type_id=_maybe_pid(data, "appointment_type_id", "AppointmentTypeId"),
+        appointment_type_id=_maybe_pid(
+            data, "appointment_type_id", "AppointmentTypeId"
+        ),
         message=message,
     )
 
@@ -291,3 +313,17 @@ def _minimum_extra(raw: dict[str, Any]) -> dict[str, Any]:
         "UpdatedAt",
     )
     return {key: raw[key] for key in keep if key in raw}
+
+
+def _bool_or_none(value: Any) -> bool | None:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return bool(value)
+    if isinstance(value, str):
+        normalized = value.strip().lower()
+        if normalized in {"true", "1", "yes"}:
+            return True
+        if normalized in {"false", "0", "no"}:
+            return False
+    return None

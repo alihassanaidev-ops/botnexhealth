@@ -43,6 +43,7 @@ import { useSelectedLocationId } from "@/context/LocationContext"
 import {
     createContact,
     listContacts,
+    listLivePatients,
     getContact,
     revealContactPhone,
     mergeContact,
@@ -51,6 +52,7 @@ import {
     type ContactListItem,
     type ContactsListResponse,
     type ContactDetail,
+    type LivePatientPage,
 } from "@/lib/contacts-api"
 
 const PAGE_SIZE = 25
@@ -550,6 +552,244 @@ function PersonDetail({ contactId, mode, onClose, onChanged }: PersonDetailProps
     )
 }
 
+// ── Live PMS patient directory ────────────────────────────────────────────────
+
+function LivePatientsDirectory() {
+    const locationId = useSelectedLocationId()
+    const { pmsType } = useInstitution()
+    const [data, setData] = useState<LivePatientPage | null>(null)
+    const [loading, setLoading] = useState(false)
+    const [search, setSearch] = useState("")
+    const [debouncedSearch, setDebouncedSearch] = useState("")
+    const [patientStatus, setPatientStatus] = useState<"active" | "inactive" | "all">("active")
+    const [cursor, setCursor] = useState<string | null>(null)
+    const [pageNumber, setPageNumber] = useState(1)
+    const [selected, setSelected] = useState<string | null>(null)
+    const requestVersion = useRef(0)
+
+    useEffect(() => {
+        const timer = setTimeout(() => setDebouncedSearch(search.trim()), 400)
+        return () => clearTimeout(timer)
+    }, [search])
+
+    useEffect(() => {
+        setCursor(null)
+        setPageNumber(1)
+    }, [debouncedSearch, patientStatus, locationId])
+
+    const fetchPatients = useCallback(async () => {
+        const version = ++requestVersion.current
+        if (!locationId) {
+            setData(null)
+            return
+        }
+        setLoading(true)
+        try {
+            const next = await listLivePatients({
+                locationId,
+                cursor,
+                pageSize: PAGE_SIZE,
+                search: debouncedSearch.length >= 2 ? debouncedSearch : undefined,
+                patientStatus,
+            })
+            if (requestVersion.current === version) setData(next)
+        } catch (error) {
+            if (requestVersion.current === version) {
+                setData(null)
+                toast.error(error instanceof Error ? error.message : "Failed to load patients")
+            }
+        } finally {
+            if (requestVersion.current === version) setLoading(false)
+        }
+    }, [locationId, cursor, debouncedSearch, patientStatus])
+
+    useEffect(() => { void fetchPatients() }, [fetchPatients])
+
+    const providerName = pmsType === "gotracker" ? "GoTracker" : "NexHealth"
+    const totalLabel = data?.total === null || data?.total === undefined
+        ? `${data?.returned ?? 0} on this page`
+        : data.total.toLocaleString()
+
+    return (
+        <div className="relative flex-1 space-y-6 bg-background p-8 pt-6">
+            <PageHeader
+                icon={Users}
+                title="Patients"
+                description={`Current patient records read securely from ${providerName}. Active patients are shown by default.`}
+                actions={
+                    <>
+                        {!loading && data && (
+                            <div className="text-right">
+                                <p className="text-2xl font-bold tabular-nums">{totalLabel}</p>
+                                <p className="text-xs text-muted-foreground">
+                                    Live · {formatDateTime(data.fetched_at)}
+                                </p>
+                            </div>
+                        )}
+                        <Button variant="outline" size="sm" onClick={() => void fetchPatients()} disabled={loading || !locationId} className="gap-1.5">
+                            <RefreshCcw className={`h-3.5 w-3.5 ${loading ? "animate-spin" : ""}`} />
+                            Refresh
+                        </Button>
+                    </>
+                }
+            />
+
+            <div className="flex flex-wrap items-center gap-2">
+                {([
+                    ["active", "Active"],
+                    ["inactive", "Inactive"],
+                    ["all", "All patients"],
+                ] as const).map(([value, label]) => (
+                    <Button
+                        key={value}
+                        size="sm"
+                        variant={patientStatus === value ? "default" : "outline"}
+                        onClick={() => setPatientStatus(value)}
+                    >
+                        {label}
+                    </Button>
+                ))}
+            </div>
+
+            <div className="flex flex-wrap items-center gap-2">
+                <div className="relative">
+                    <Search className="pointer-events-none absolute left-2.5 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+                    <Input
+                        placeholder="Search patients by name…"
+                        value={search}
+                        onChange={(event) => setSearch(event.target.value)}
+                        className="h-8 w-[220px] pl-8 lg:w-[320px]"
+                    />
+                </div>
+                {search && (
+                    <Button variant="ghost" onClick={() => setSearch("")} className="h-8 px-2 text-muted-foreground">
+                        Reset <X className="ml-2 h-4 w-4" />
+                    </Button>
+                )}
+                {search.trim().length === 1 && (
+                    <span className="text-xs text-muted-foreground">Enter at least 2 characters.</span>
+                )}
+            </div>
+
+            {!locationId ? (
+                <Card>
+                    <CardContent className="p-10 text-center text-sm text-muted-foreground">
+                        Select a location to read its patient directory.
+                    </CardContent>
+                </Card>
+            ) : (
+                <Card>
+                    <CardContent className="p-0">
+                        <div className="overflow-x-auto">
+                            <Table className="w-full text-sm">
+                                <TableHeader className="border-b border-border bg-muted">
+                                    <TableRow>
+                                        <TableHead className="px-4 py-3 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">Patient</TableHead>
+                                        <TableHead className="px-4 py-3 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">Status</TableHead>
+                                        <TableHead className="px-4 py-3 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">Phone</TableHead>
+                                        <TableHead className="px-4 py-3 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">Email</TableHead>
+                                        <TableHead className="px-4 py-3 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">PMS updated</TableHead>
+                                        <TableHead className="px-4 py-3 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">History</TableHead>
+                                    </TableRow>
+                                </TableHeader>
+                                <TableBody>
+                                    {loading ? (
+                                        Array.from({ length: 8 }).map((_, index) => (
+                                            <TableRow key={index}>
+                                                {Array.from({ length: 6 }).map((__, cell) => (
+                                                    <TableCell key={cell} className="px-4 py-3"><Skeleton className="h-5 w-24" /></TableCell>
+                                                ))}
+                                            </TableRow>
+                                        ))
+                                    ) : !data || data.items.length === 0 ? (
+                                        <TableRow>
+                                            <TableCell colSpan={6} className="px-4 py-16 text-center text-sm text-muted-foreground">
+                                                No {patientStatus === "all" ? "" : `${patientStatus} `}patients found in {providerName}.
+                                            </TableCell>
+                                        </TableRow>
+                                    ) : data.items.map((patient) => (
+                                        <TableRow
+                                            key={patient.pms_patient_id}
+                                            className={patient.contact_id ? "cursor-pointer hover:bg-muted" : undefined}
+                                            onClick={() => patient.contact_id && setSelected(patient.contact_id)}
+                                        >
+                                            <TableCell className="px-4">
+                                                <div className="flex items-center gap-3">
+                                                    <span className="flex h-8 w-8 items-center justify-center rounded-full bg-foreground text-xs font-semibold text-background">
+                                                        {initials(patient.full_name)}
+                                                    </span>
+                                                    <div>
+                                                        <p className="font-medium">{patient.full_name}</p>
+                                                        <p className="text-xs text-muted-foreground">{providerName} ID {patient.pms_patient_id.replace(/^\w+-/, "")}</p>
+                                                    </div>
+                                                </div>
+                                            </TableCell>
+                                            <TableCell className="px-4">
+                                                <Badge variant={patient.inactive ? "secondary" : "default"}>
+                                                    {patient.inactive ? "Inactive" : "Active"}
+                                                </Badge>
+                                            </TableCell>
+                                            <TableCell className="whitespace-nowrap px-4">{patient.phone_masked ?? "—"}</TableCell>
+                                            <TableCell className="whitespace-nowrap px-4">{patient.email_masked ?? "—"}</TableCell>
+                                            <TableCell className="whitespace-nowrap px-4 text-muted-foreground">
+                                                {formatDateTime(patient.pms_last_sync_time ?? patient.pms_updated_at)}
+                                            </TableCell>
+                                            <TableCell className="px-4 text-muted-foreground">
+                                                {patient.contact_id ? "Available" : "Not yet linked locally"}
+                                            </TableCell>
+                                        </TableRow>
+                                    ))}
+                                </TableBody>
+                            </Table>
+                        </div>
+
+                        {!loading && data && data.items.length > 0 && (
+                            <div className="flex flex-col gap-3 border-t border-border px-4 py-3 sm:flex-row sm:items-center sm:justify-between">
+                                <p className="text-sm text-muted-foreground">
+                                    Page {pageNumber} · {data.returned} record{data.returned === 1 ? "" : "s"} received from {providerName}
+                                </p>
+                                <div className="flex items-center gap-2">
+                                    <Button
+                                        variant="outline"
+                                        size="sm"
+                                        disabled={!data.has_previous_page || !data.previous_cursor}
+                                        onClick={() => {
+                                            setCursor(data.previous_cursor)
+                                            setPageNumber((value) => Math.max(1, value - 1))
+                                        }}
+                                        className="gap-1"
+                                    >
+                                        <ChevronLeft className="h-4 w-4" /> Previous
+                                    </Button>
+                                    <Button
+                                        variant="outline"
+                                        size="sm"
+                                        disabled={!data.has_next_page || !data.next_cursor}
+                                        onClick={() => {
+                                            setCursor(data.next_cursor)
+                                            setPageNumber((value) => value + 1)
+                                        }}
+                                        className="gap-1"
+                                    >
+                                        Next <ChevronRight className="h-4 w-4" />
+                                    </Button>
+                                </div>
+                            </div>
+                        )}
+                    </CardContent>
+                </Card>
+            )}
+
+            <PersonDetail
+                contactId={selected}
+                mode="patients"
+                onClose={() => setSelected(null)}
+                onChanged={() => void fetchPatients()}
+            />
+        </div>
+    )
+}
+
 // ── Skeleton rows ───────────────────────────────────────────────────────────────
 
 function SkeletonRows() {
@@ -570,7 +810,7 @@ function SkeletonRows() {
 
 // ── Main page ───────────────────────────────────────────────────────────────────
 
-export function PeopleDirectory({ mode }: { mode: DirectoryMode }) {
+function LocalPeopleDirectory({ mode }: { mode: DirectoryMode }) {
     const { user } = useAuth()
     const { hasPms, pmsType } = useInstitution()
     const canManage = user?.role === "INSTITUTION_ADMIN" || user?.role === "LOCATION_ADMIN"
@@ -823,6 +1063,12 @@ export function PeopleDirectory({ mode }: { mode: DirectoryMode }) {
             )}
         </div>
     )
+}
+
+export function PeopleDirectory({ mode }: { mode: DirectoryMode }) {
+    return mode === "patients"
+        ? <LivePatientsDirectory />
+        : <LocalPeopleDirectory mode={mode} />
 }
 
 export default function Patients() {
