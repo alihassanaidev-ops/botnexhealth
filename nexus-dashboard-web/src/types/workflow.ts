@@ -193,6 +193,7 @@ export type NodeType =
     | "send_email"
     | "update_patient_status"
     | "update_appointment"
+    | "book_appointment"
     | "update_gotracker_appointment"
     | "booking_link"
     | "patient_registration"
@@ -343,6 +344,25 @@ export interface UpdateAppointmentNode {
     reason?: string | null
 }
 /**
+ * Book a campaign-selected slot in the clinic's PMS. Patient identity is
+ * resolved from the run contact on the backend; authors provide only the
+ * scheduling fields and the three outcome branches.
+ */
+export interface BookAppointmentNode {
+    type: "book_appointment"
+    id: string
+    appointment_type_id: string
+    provider_id: string
+    start_time: string
+    end_time?: string | null
+    duration_min?: number | null
+    operatory_id?: string | null
+    note_template?: string | null
+    booked_next_node_id: string
+    could_not_book_next_node_id: string
+    pending_next_node_id: string
+}
+/**
  * Configures the patient action link this run offers. Sends nothing — the link
  * still travels inside a later message that renders {{booking_link}}. What this
  * carries is the rules the link obeys, which the public booking API enforces
@@ -471,6 +491,7 @@ export type WorkflowNode =
     | SendEmailNode
     | UpdatePatientStatusNode
     | UpdateAppointmentNode
+    | BookAppointmentNode
     | UpdateGoTrackerAppointmentNode
     | BookingLinkNode
     | PatientRegistrationNode

@@ -48,7 +48,9 @@ def _with_condition() -> dict:
                 "type": "condition",
                 "id": "cond-1",
                 "logic": "AND",
-                "rules": [{"field": "appointment_status", "op": "eq", "value": "confirmed"}],
+                "rules": [
+                    {"field": "appointment_status", "op": "eq", "value": "confirmed"}
+                ],
                 "true_next_node_id": "exit-confirmed",
                 "false_next_node_id": "exit-unconfirmed",
             },
@@ -67,7 +69,11 @@ def _with_wait() -> dict:
             {
                 "type": "wait",
                 "id": "wait-1",
-                "delay": {"delay_type": "calendar", "offset_days": 0, "time_of_day": "09:00"},
+                "delay": {
+                    "delay_type": "calendar",
+                    "offset_days": 0,
+                    "time_of_day": "09:00",
+                },
                 "next_node_id": "sms-1",
             },
             {
@@ -217,12 +223,15 @@ def test_calendar_wait_definition() -> None:
 def test_legacy_duration_wait_is_upgraded() -> None:
     defn = _sms_to_exit()
     defn["entry_node_id"] = "wait-1"
-    defn["nodes"].insert(0, {
-        "type": "wait",
-        "id": "wait-1",
-        "delay": {"delay_type": "duration", "duration_seconds": 3600},
-        "next_node_id": "sms-1",
-    })
+    defn["nodes"].insert(
+        0,
+        {
+            "type": "wait",
+            "id": "wait-1",
+            "delay": {"delay_type": "duration", "duration_seconds": 3600},
+            "next_node_id": "sms-1",
+        },
+    )
     d = WorkflowDefinition.model_validate(defn)
     assert d.nodes[0].wait_for.type == "time"
     assert d.nodes[0].wait_for.delay.duration_seconds == 3600
@@ -367,7 +376,9 @@ def test_json_mapper_and_llm_nodes() -> None:
                 "output_field": "appointment_category",
                 "prompt_template": "Classify the appointment reason.",
                 "labels": ["implant", "hygiene"],
-                "label_rules": [{"label": "implant", "keywords": ["implant", "surgery"]}],
+                "label_rules": [
+                    {"label": "implant", "keywords": ["implant", "surgery"]}
+                ],
                 "fallback_label": "other",
                 "next_node_id": "exit-1",
             },
@@ -408,6 +419,34 @@ def test_patient_status_changed_trigger() -> None:
     assert d.trigger.campaign_goal == "post_op_followup"
 
 
+def test_book_appointment_node_validates_three_outcome_branches() -> None:
+    definition = {
+        "trigger": {"type": "manual"},
+        "entry_node_id": "book-1",
+        "nodes": [
+            {
+                "type": "book_appointment",
+                "id": "book-1",
+                "appointment_type_id": "{{appointment_type_id}}",
+                "provider_id": "{{provider_id}}",
+                "start_time": "{{booking_start_time}}",
+                "booked_next_node_id": "booked",
+                "could_not_book_next_node_id": "could-not-book",
+                "pending_next_node_id": "pending",
+            },
+            {"type": "exit", "id": "booked", "outcome": "booked"},
+            {"type": "exit", "id": "could-not-book", "outcome": "could_not_book"},
+            {"type": "exit", "id": "pending", "outcome": "pending"},
+        ],
+    }
+
+    parsed = WorkflowDefinition.model_validate(definition)
+
+    node = parsed.nodes[0]
+    assert node.type == "book_appointment"
+    assert node.pending_next_node_id == "pending"
+
+
 # ---------------------------------------------------------------------------
 # Invalid definitions
 # ---------------------------------------------------------------------------
@@ -443,6 +482,33 @@ def test_update_appointment_next_node_is_validated_by_registry() -> None:
     }
 
     with pytest.raises(ValidationError, match="update-1.*next_node_id.*ghost-node"):
+        WorkflowDefinition.model_validate(definition)
+
+
+def test_book_appointment_branches_are_validated_by_registry() -> None:
+    definition = {
+        "trigger": {"type": "manual"},
+        "entry_node_id": "book-1",
+        "nodes": [
+            {
+                "type": "book_appointment",
+                "id": "book-1",
+                "appointment_type_id": "type-1",
+                "provider_id": "provider-1",
+                "start_time": "2026-09-02T14:30:00+00:00",
+                "booked_next_node_id": "booked",
+                "could_not_book_next_node_id": "ghost-node",
+                "pending_next_node_id": "pending",
+            },
+            {"type": "exit", "id": "booked", "outcome": "booked"},
+            {"type": "exit", "id": "pending", "outcome": "pending"},
+        ],
+    }
+
+    with pytest.raises(
+        ValidationError,
+        match="book-1.*could_not_book_next_node_id.*ghost-node",
+    ):
         WorkflowDefinition.model_validate(definition)
 
 
@@ -489,7 +555,9 @@ def test_unknown_trigger_type_raises() -> None:
         WorkflowDefinition.model_validate(defn)
 
 
-def test_gotracker_appointment_update_node_accepts_status_and_reschedule_fields() -> None:
+def test_gotracker_appointment_update_node_accepts_status_and_reschedule_fields() -> (
+    None
+):
     defn = _sms_to_exit()
     defn["entry_node_id"] = "gt-write"
     defn["nodes"] = [

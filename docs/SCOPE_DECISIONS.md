@@ -9,7 +9,7 @@ Last updated 2026-09-01.
 | # | Subject | Status | Blocks |
 |---|---|---|---|
 | A | Revenue attribution rule | **Deferred** | Item 37 (partially — see below) |
-| B | Pending GoTracker booking: pause or hand off | **Open · client · urgent** | Items 4, 11 |
+| B | Pending GoTracker booking: pause or hand off | **Open · client · urgent** | Item 4, WS4 template copy/path |
 | C | Permitted sales-enquiry sources | **Decided** | Item 24 |
 | D | Recall re-enrolment cooldown | **Decided** | Item 22 |
 | E | What happens when a patient declines | **Decided** | Campaign 1 completeness |
@@ -108,8 +108,9 @@ requirement stands: **display the rule alongside the figure.**
 
 The one to chase. When a booking is accepted for a GoTracker clinic but not yet written to the
 practice software, does the campaign pause and wait for confirmation, or exit and hand the patient
-to staff? It changes campaign design and what the patient is told, and it gates **Item 4** (first
-stage of the build order) and **Item 11** (third stage).
+to staff? It changes campaign design and what the patient is told. The Item 11 engine node now
+exposes a separate `pending_next_node_id`, so this decision no longer blocks the booking capability
+itself; it still controls the WS4 templates' pending branch and copy.
 
 **Recommendation to put to the client:** exit the campaign with a pending outcome, but send the
 patient their confirmation off the write-back event rather than holding the run open. Short runs,

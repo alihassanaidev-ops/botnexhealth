@@ -85,6 +85,7 @@ import type {
 } from "@/types"
 import type {
     BookingLinkNode,
+    BookAppointmentNode,
     ConditionNode,
     ConditionOp,
     ConditionRule,
@@ -588,6 +589,16 @@ function NodeForm({
                 {node.type === "update_appointment" && (
                     <UpdateAppointmentFields node={node} onChange={onNodeChange} readOnly={readOnly} />
                 )}
+                {node.type === "book_appointment" && (
+                    <BookAppointmentFields
+                        node={node}
+                        def={def}
+                        appointmentTypes={appointmentTypes ?? []}
+                        providers={providers ?? []}
+                        onChange={onNodeChange}
+                        readOnly={readOnly}
+                    />
+                )}
                 {node.type === "update_gotracker_appointment" && (
                     <UpdateGoTrackerAppointmentFields node={node} def={def} onChange={onNodeChange} readOnly={readOnly} />
                 )}
@@ -632,7 +643,7 @@ function NodeForm({
                 )}
 
                 {/* Next-step selector(s) — how edges are authored. */}
-                {node.type !== "exit" && node.type !== "condition" && (
+                {node.type !== "exit" && node.type !== "condition" && node.type !== "book_appointment" && (
                     <NextStepField
                         label="Next step"
                         def={def}
@@ -1837,6 +1848,201 @@ function providerLabel(p: CachedProvider): string {
         p.name?.trim() ||
         [p.first_name, p.last_name].filter(Boolean).join(" ").trim() ||
         p.source_id
+    )
+}
+
+function appointmentTypeValue(t: CachedAppointmentType): string {
+    return t.source_id || t.id
+}
+
+function BookAppointmentFields({
+    node,
+    def,
+    appointmentTypes,
+    providers,
+    onChange,
+    readOnly,
+}: {
+    node: BookAppointmentNode
+    def: WorkflowDefinition
+    appointmentTypes: CachedAppointmentType[]
+    providers: CachedProvider[]
+    onChange: (n: WorkflowNode) => void
+    readOnly?: boolean
+}) {
+    const update = (patch: Partial<BookAppointmentNode>) => onChange({ ...node, ...patch })
+    const visibleProviders = providers.filter((p) => p.is_active !== false && !p.is_hidden)
+    const activeAppointmentTypes = appointmentTypes.filter((t) => t.is_active !== false)
+
+    return (
+        <>
+            <p className="rounded-md border border-border bg-muted/40 p-3 text-xs text-muted-foreground">
+                Books the slot already selected by this campaign. The patient id is
+                resolved from the enrolled contact at runtime; only scheduling fields
+                are configured here.
+            </p>
+
+            <Field label="Appointment type">
+                {activeAppointmentTypes.length > 0 ? (
+                    <Select
+                        value={node.appointment_type_id || NONE}
+                        disabled={readOnly}
+                        onValueChange={(value) =>
+                            update({ appointment_type_id: value === NONE ? "" : value })
+                        }
+                    >
+                        <SelectTrigger>
+                            <SelectValue placeholder="Choose an appointment type" />
+                        </SelectTrigger>
+                        <SelectContent>
+                            <SelectItem value={NONE} disabled>
+                                Choose an appointment type
+                            </SelectItem>
+                            {activeAppointmentTypes.map((type) => {
+                                const value = appointmentTypeValue(type)
+                                return (
+                                    <SelectItem key={value} value={value}>
+                                        {type.name}
+                                        {type.duration_minutes ? ` · ${type.duration_minutes} min` : ""}
+                                    </SelectItem>
+                                )
+                            })}
+                        </SelectContent>
+                    </Select>
+                ) : (
+                    <Input
+                        value={node.appointment_type_id}
+                        disabled={readOnly}
+                        placeholder="PMS appointment type id or {{field}}"
+                        onChange={(e) => update({ appointment_type_id: e.target.value })}
+                    />
+                )}
+            </Field>
+
+            <Field label="Provider">
+                {visibleProviders.length > 0 ? (
+                    <Select
+                        value={node.provider_id || NONE}
+                        disabled={readOnly}
+                        onValueChange={(value) =>
+                            update({ provider_id: value === NONE ? "" : value })
+                        }
+                    >
+                        <SelectTrigger>
+                            <SelectValue placeholder="Choose a provider" />
+                        </SelectTrigger>
+                        <SelectContent>
+                            <SelectItem value={NONE} disabled>
+                                Choose a provider
+                            </SelectItem>
+                            {visibleProviders.map((provider) => (
+                                <SelectItem key={provider.source_id} value={provider.source_id}>
+                                    {providerLabel(provider)}
+                                </SelectItem>
+                            ))}
+                        </SelectContent>
+                    </Select>
+                ) : (
+                    <Input
+                        value={node.provider_id}
+                        disabled={readOnly}
+                        placeholder="PMS provider id or {{field}}"
+                        onChange={(e) => update({ provider_id: e.target.value })}
+                    />
+                )}
+            </Field>
+
+            <Field
+                label="Start time"
+                hint="ISO datetime or merge field, for example {{booking_start_time}}."
+            >
+                <Input
+                    value={node.start_time}
+                    disabled={readOnly}
+                    placeholder="{{booking_start_time}}"
+                    onChange={(e) => update({ start_time: e.target.value })}
+                />
+            </Field>
+
+            <div className="grid gap-3 sm:grid-cols-2">
+                <Field label="End time" hint="Optional when the PMS slot has an end.">
+                    <Input
+                        value={node.end_time ?? ""}
+                        disabled={readOnly}
+                        placeholder="{{booking_end_time}}"
+                        onChange={(e) => update({ end_time: e.target.value || null })}
+                    />
+                </Field>
+                <Field label="Duration minutes" hint="Optional fallback for PMSes that need duration.">
+                    <Input
+                        type="number"
+                        min={1}
+                        value={node.duration_min ?? ""}
+                        disabled={readOnly}
+                        placeholder="30"
+                        onChange={(e) =>
+                            update({
+                                duration_min: e.target.value === ""
+                                    ? null
+                                    : Math.max(1, toInt(e.target.value, 1)),
+                            })
+                        }
+                    />
+                </Field>
+            </div>
+
+            <Field label="Operatory" hint="Optional PMS operatory id or merge field.">
+                <Input
+                    value={node.operatory_id ?? ""}
+                    disabled={readOnly}
+                    placeholder="{{operatory_id}}"
+                    onChange={(e) => update({ operatory_id: e.target.value || null })}
+                />
+            </Field>
+
+            <Field label="Booking note" hint="Optional note sent with the appointment write.">
+                <Textarea
+                    value={node.note_template ?? ""}
+                    disabled={readOnly}
+                    placeholder="Booked from campaign {{campaign_goal}}."
+                    onChange={(e) => update({ note_template: e.target.value || null })}
+                />
+            </Field>
+
+            <div className="space-y-3 rounded-md border border-border p-3">
+                <div>
+                    <Label className="text-sm">Outcome branches</Label>
+                    <p className="text-xs text-muted-foreground">
+                        Pending is separate because GoTracker may accept a queued write
+                        before the clinic machine confirms it.
+                    </p>
+                </div>
+                <NextStepField
+                    label="Booked"
+                    def={def}
+                    currentId={node.id}
+                    value={node.booked_next_node_id}
+                    onChange={(value) => update({ booked_next_node_id: value })}
+                    readOnly={readOnly}
+                />
+                <NextStepField
+                    label="Could not book"
+                    def={def}
+                    currentId={node.id}
+                    value={node.could_not_book_next_node_id}
+                    onChange={(value) => update({ could_not_book_next_node_id: value })}
+                    readOnly={readOnly}
+                />
+                <NextStepField
+                    label="Pending"
+                    def={def}
+                    currentId={node.id}
+                    value={node.pending_next_node_id}
+                    onChange={(value) => update({ pending_next_node_id: value })}
+                    readOnly={readOnly}
+                />
+            </div>
+        </>
     )
 }
 

@@ -411,8 +411,15 @@ Current schema version `1.0` supports triggers such as `appointment_offset`,
 `callback_requested`, `patient_status_changed`, `sms_reply`, and `email_reply`;
 node types include `wait`, `drip`, `send_sms`, `send_voice`, `send_email`,
 `retell_sms_conversation`, `update_patient_status`, `update_appointment`,
-`update_gotracker_appointment`, `json_mapper`, `llm`, `condition`, `switch`, and
-`exit`.
+`book_appointment`, `update_gotracker_appointment`, `booking_link`,
+`patient_registration`, `json_mapper`, `llm`, `condition`, `switch`, and `exit`.
+
+`book_appointment` is the campaign-controlled booking action: it resolves the
+patient from the run contact, renders provider/type/time from context, re-checks
+live PMS availability immediately before writing, books through the shared PMS
+adapter, and branches to `booked`, `could_not_book`, or `pending`. `booking_link`
+is separate: it configures what a patient-facing link may do later, but does not
+itself write an appointment.
 
 Two of those triggers are accepted by the schema but are **not offered in the
 builder**, because nothing enrols from them yet: `bulk_import` has no import

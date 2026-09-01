@@ -727,18 +727,19 @@ appointment type and provider to book, and which works identically on both kinds
 
 ### Current implementation status
 
-**Not implemented.** The underlying ability to book exists and works — it is used by the AI voice
-agent during live calls, on both NexHealth and GoTracker clinics. It is simply not exposed as a step
-that a campaign can use.
+**Implemented as an engine/builder capability.** Campaign definitions can now include a
+PMS-neutral `book_appointment` node. It resolves the patient from the enrolled contact, renders
+provider/type/time from campaign context, re-checks live PMS availability immediately before writing,
+books through the shared `PMSAdapter.book_appointment` contract, records campaign write provenance,
+updates the run's appointment reference, and emits workflow-channel reporting events.
+
+The node exposes three required branches: booked, could not book, and **pending** — the GoTracker
+case where the Cloud Service accepted the booking before the clinic machine has confirmed write-back.
 
 ### Remaining work
 
-- Add a booking step to the set of steps a campaign can contain.
-- Route it through the same booking mechanism the voice agent already uses, so it works on both kinds
-  of clinic without special-casing either.
-- Make it configurable and validated in the campaign builder interface.
-- Handle three outcomes as separate branches: booked, could not book, and **pending** — the GoTracker
-  case from Item 4 where the booking is accepted but not yet in the practice software.
+- Use the node in the Overdue Recall and Sales Qualification campaign templates.
+- Decide the exact pending-branch campaign policy/copy for those templates under Decision B.
 
 ### Watch out for
 
@@ -752,7 +753,8 @@ in the engine must apply here:
   sending. Booking must do the same — the slot may have gone while the patient was deciding.
 
 Whether a pending booking should pause the campaign and wait for confirmation, or exit and hand the
-patient to staff, is an open decision — see **Decision B** in Part 7.
+patient to staff, is still an open campaign-design decision — see **Decision B** in Part 7. The node
+does not bake that policy into runtime; it routes to the authored `pending_next_node_id`.
 
 ### Acceptance criteria
 

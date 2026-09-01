@@ -65,6 +65,37 @@ describe("dry-run simulation", () => {
         expect(result.steps[0].detail).toContain("25 contact(s)")
     })
 
+    it("describes campaign booking and follows the booked preview branch", () => {
+        const booking: WorkflowDefinition = {
+            schema_version: "1.0",
+            trigger: { type: "manual" },
+            entry_node_id: "book-1",
+            nodes: [
+                {
+                    type: "book_appointment",
+                    id: "book-1",
+                    appointment_type_id: "type-1",
+                    provider_id: "provider-1",
+                    start_time: "{{booking_start_time}}",
+                    booked_next_node_id: "booked",
+                    could_not_book_next_node_id: "no-slot",
+                    pending_next_node_id: "pending",
+                },
+                { type: "exit", id: "booked", outcome: "booked" },
+                { type: "exit", id: "no-slot", outcome: "could_not_book" },
+                { type: "exit", id: "pending", outcome: "pending" },
+            ],
+        }
+
+        const result = simulateRun(booking, {
+            data: { booking_start_time: "2026-09-02T14:30:00-04:00" },
+        })
+
+        expect(result.steps.map((s) => s.node_type)).toEqual(["book_appointment", "exit"])
+        expect(result.steps[0].summary).toBe("Book appointment in PMS")
+        expect(result.outcome).toBe("booked")
+    })
+
     it("honors an explicit false branch choice", () => {
         const result = simulateRun(BRANCHED, { conditionChoices: { "cond-1": false } })
         expect(result.steps.map((s) => s.node_id)).toEqual(["cond-1", "sms-1", "exit-no"])

@@ -156,6 +156,16 @@ function describe(
                 },
                 next: node.next_node_id,
             }
+        case "book_appointment":
+            return {
+                step: {
+                    node_id: node.id,
+                    node_type: "book_appointment",
+                    summary: "Book appointment in PMS",
+                    detail: `${node.appointment_type_id} with ${node.provider_id} at ${renderTemplate(node.start_time, data)}`,
+                },
+                next: node.booked_next_node_id,
+            }
         case "update_gotracker_appointment":
             return {
                 step: {

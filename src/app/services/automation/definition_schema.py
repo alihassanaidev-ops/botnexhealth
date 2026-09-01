@@ -4,8 +4,9 @@ Definitions are immutable once published. Schema version "1.0" supports:
   Triggers: appointment_offset, appointment_state_changed, recall_scan, manual,
             bulk_import, callback_requested, patient_status_changed, sms_reply
   Nodes:    wait, drip, send_sms, retell_sms_conversation, send_voice, send_email,
-            update_patient_status, update_appointment,
-            update_gotracker_appointment, json_mapper, llm, condition, exit
+            update_patient_status, update_appointment, book_appointment,
+            update_gotracker_appointment, booking_link, patient_registration,
+            json_mapper, llm, condition, exit
 
 ``update_appointment`` is the PMS-neutral appointment write-back and should be
 preferred; ``update_gotracker_appointment`` only runs on GoTracker locations and
@@ -214,7 +215,9 @@ class SmsReplyTrigger(BaseModel):
         normalized: list[str] = []
         for value in values:
             token = value.strip()
-            if token and token.casefold() not in {item.casefold() for item in normalized}:
+            if token and token.casefold() not in {
+                item.casefold() for item in normalized
+            }:
                 normalized.append(token)
         return normalized
 
@@ -251,7 +254,9 @@ class EmailReplyTrigger(BaseModel):
         normalized: list[str] = []
         for value in values:
             token = value.strip()
-            if token and token.casefold() not in {item.casefold() for item in normalized}:
+            if token and token.casefold() not in {
+                item.casefold() for item in normalized
+            }:
                 normalized.append(token)
         return normalized
 
@@ -288,7 +293,9 @@ class CalendarDelay(BaseModel):
 
     delay_type: Literal["calendar"] = "calendar"
     offset_days: int
-    time_of_day: str = Field(pattern=r"^\d{2}:\d{2}$", description="HH:MM in location timezone")
+    time_of_day: str = Field(
+        pattern=r"^\d{2}:\d{2}$", description="HH:MM in location timezone"
+    )
 
 
 class AppointmentRelativeDelay(BaseModel):
@@ -354,7 +361,9 @@ class SmsResponseMapping(BaseModel):
         normalized: list[str] = []
         for value in values:
             token = value.strip()
-            if token and token.casefold() not in {item.casefold() for item in normalized}:
+            if token and token.casefold() not in {
+                item.casefold() for item in normalized
+            }:
                 normalized.append(token)
         return normalized
 
@@ -497,7 +506,9 @@ class EmailReplyWaitSpec(BaseModel):
 
 
 def email_reply_wait_spec(node: object) -> EmailReplyWaitSpec | None:
-    if not isinstance(node, WaitNode) or not isinstance(node.wait_for, EmailReplyWaitConfig):
+    if not isinstance(node, WaitNode) or not isinstance(
+        node.wait_for, EmailReplyWaitConfig
+    ):
         return None
     return EmailReplyWaitSpec(
         node_id=node.id,
@@ -575,6 +586,7 @@ class RetellSmsConversationNode(BaseModel):
     type: Literal["retell_sms_conversation"] = "retell_sms_conversation"
     chat_profile_id: str = Field(min_length=1)
     next_node_id: str
+
     @model_validator(mode="before")
     @classmethod
     def discard_legacy_author_policy(cls, value: Any) -> Any:
@@ -668,13 +680,17 @@ class SendVoiceNode(BaseModel):
     @classmethod
     def validate_phone_country_region(cls, value: str | None) -> str | None:
         if value is not None and value not in PHONE_COUNTRY_REGIONS:
-            raise ValueError("phone_country_region must be a supported ISO country region")
+            raise ValueError(
+                "phone_country_region must be a supported ISO country region"
+            )
         return value
 
     @model_validator(mode="after")
     def require_phone_country_when_enabled(self) -> "SendVoiceNode":
         if self.phone_country_code_enabled and not self.phone_country_region:
-            raise ValueError("phone_country_region is required when phone country code is enabled")
+            raise ValueError(
+                "phone_country_region is required when phone country code is enabled"
+            )
         return self
 
 
@@ -855,7 +871,9 @@ class UpdateGoTrackerAppointmentNode(BaseModel):
             and self.patient_id is None
             and self.reason is None
         ):
-            raise ValueError("at least one GoTracker appointment update field is required")
+            raise ValueError(
+                "at least one GoTracker appointment update field is required"
+            )
         return self
 
 
@@ -966,6 +984,62 @@ class BookingLinkNode(BaseModel):
         if len(set(self.actions)) != len(self.actions):
             raise ValueError("booking_link actions must be unique")
         return self
+
+
+class BookAppointmentNode(BaseModel):
+    """Book a campaign-selected appointment slot in the practice software.
+
+    This is the unattended booking action for recall and sales campaigns. It is
+    intentionally separate from ``booking_link``: a booking link lets the patient
+    pick later, while this node books the slot the campaign has already selected
+    from prior context (for example an SMS conversation classification or a JSON
+    mapper).
+
+    The patient id is not authored here. Runtime resolves it from the run's
+    contact so a campaign author cannot accidentally book against the wrong
+    practice-software patient record.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    id: str = Field(min_length=1)
+    type: Literal["book_appointment"] = "book_appointment"
+
+    appointment_type_id: str = Field(min_length=1)
+    provider_id: str = Field(min_length=1)
+    start_time: str = Field(min_length=1)
+    end_time: str | None = None
+    duration_min: int | None = Field(default=None, ge=1)
+    operatory_id: str | None = None
+    note_template: str | None = None
+
+    booked_next_node_id: str = Field(min_length=1)
+    could_not_book_next_node_id: str = Field(min_length=1)
+    pending_next_node_id: str = Field(min_length=1)
+
+    @field_validator(
+        "appointment_type_id",
+        "provider_id",
+        "start_time",
+        "booked_next_node_id",
+        "could_not_book_next_node_id",
+        "pending_next_node_id",
+        mode="before",
+    )
+    @classmethod
+    def normalize_required_text(cls, value: str) -> str:
+        normalized = str(value).strip() if value is not None else ""
+        if not normalized:
+            raise ValueError("field must include a non-empty value")
+        return normalized
+
+    @field_validator("end_time", "operatory_id", "note_template")
+    @classmethod
+    def normalize_optional_text(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        normalized = value.strip()
+        return normalized or None
 
 
 class PatientRegistrationNode(BaseModel):
@@ -1176,6 +1250,7 @@ WorkflowNode = Annotated[
         UpdatePatientStatusNode,
         UpdateGoTrackerAppointmentNode,
         UpdateAppointmentNode,
+        BookAppointmentNode,
         BookingLinkNode,
         PatientRegistrationNode,
         JsonMapperNode,
@@ -1201,7 +1276,9 @@ class ComplianceMetadata(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     # exempt-care/recall vs. marketing drives the consent basis and content rules.
-    content_class: Literal["transactional_care", "recall", "sales", "marketing"] | None = None
+    content_class: (
+        Literal["transactional_care", "recall", "sales", "marketing"] | None
+    ) = None
     # Whether send steps require a recorded consent record on the channel.
     consent_required: bool = True
 
@@ -1244,9 +1321,7 @@ class WorkflowDefinition(BaseModel):
         node_ids = {n.id for n in self.nodes}
 
         if self.entry_node_id not in node_ids:
-            raise ValueError(
-                f"entry_node_id '{self.entry_node_id}' not found in nodes"
-            )
+            raise ValueError(f"entry_node_id '{self.entry_node_id}' not found in nodes")
 
         for node in self.nodes:
             for ref_name, ref_id in outgoing_references(node):

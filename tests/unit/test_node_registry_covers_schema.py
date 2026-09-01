@@ -53,7 +53,7 @@ def test_the_registry_does_not_invent_types_the_schema_lacks() -> None:
     )
 
 
-def test_the_two_link_nodes_are_runtime_supported() -> None:
+def test_booking_related_nodes_are_runtime_supported() -> None:
     """Guards the specific bug: registered, but flagged unsupported, is the
     same failure with an extra step."""
     for node_type in ("booking_link", "patient_registration"):
@@ -61,3 +61,11 @@ def test_the_two_link_nodes_are_runtime_supported() -> None:
         assert capability.runtime_supported, f"{node_type} would fail at dispatch"
         assert capability.authorable, f"{node_type} would not appear in the palette"
         assert capability.outgoing_fields == ("next_node_id",)
+    booking = NODE_CAPABILITIES["book_appointment"]
+    assert booking.runtime_supported
+    assert booking.authorable
+    assert booking.outgoing_fields == (
+        "booked_next_node_id",
+        "could_not_book_next_node_id",
+        "pending_next_node_id",
+    )

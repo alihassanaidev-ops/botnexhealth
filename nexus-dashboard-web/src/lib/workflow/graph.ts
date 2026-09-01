@@ -118,13 +118,22 @@ function smartEdge(edge: Omit<FlowEdge, "type"> & { type?: FlowEdge["type"] }): 
     const handle = edge.sourceHandle
     const isFalse = handle === "false"
     const isTrue = handle === "true"
+    const isBookingOutcome = handle === "booked" || handle === "could_not_book" || handle === "pending"
     const caseIndex = switchCaseIndex(handle ?? undefined)
     const isDefault = handle === SWITCH_DEFAULT_HANDLE
-    const isBranch = isFalse || isTrue || caseIndex !== null || isDefault
+    const isBranch = isFalse || isTrue || isBookingOutcome || caseIndex !== null || isDefault
     // Stagger branch offsets so a switch with several ports does not draw its
     // edges on top of one another.
     const branchOffset =
-        caseIndex !== null ? 20 + caseIndex * 6 : isDefault ? 34 : isFalse ? 30 : 22
+        caseIndex !== null
+            ? 20 + caseIndex * 6
+            : isDefault
+              ? 34
+              : isFalse || handle === "could_not_book"
+                ? 30
+                : handle === "pending"
+                  ? 26
+                  : 22
     return {
         type: "step",
         pathOptions: {
@@ -189,6 +198,12 @@ export function outgoing(node: WorkflowNode): Outgoing[] {
             return [
                 { targetId: node.true_next_node_id, handle: "true", label: "Yes" },
                 { targetId: node.false_next_node_id, handle: "false", label: "No" },
+            ]
+        case "book_appointment":
+            return [
+                { targetId: node.booked_next_node_id, handle: "booked", label: "Booked" },
+                { targetId: node.could_not_book_next_node_id, handle: "could_not_book", label: "Could not book" },
+                { targetId: node.pending_next_node_id, handle: "pending", label: "Pending" },
             ]
         case "switch":
             return [
@@ -387,6 +402,9 @@ function incomingRefs(def: WorkflowDefinition): Map<string, ParentRef[]> {
 function branchBias(refs: ParentRef[]): number {
     if (refs.some((r) => r.handle === "true")) return -0.28
     if (refs.some((r) => r.handle === "false")) return 0.28
+    if (refs.some((r) => r.handle === "booked")) return -0.32
+    if (refs.some((r) => r.handle === "pending")) return 0
+    if (refs.some((r) => r.handle === "could_not_book")) return 0.32
     return 0
 }
 
@@ -590,6 +608,21 @@ export function createNode(type: NodeType, id: string): WorkflowNode {
                 provider_id: null,
                 operatory_id: null,
                 reason: null,
+            }
+        case "book_appointment":
+            return {
+                type,
+                id,
+                appointment_type_id: "",
+                provider_id: "",
+                start_time: "{{booking_start_time}}",
+                end_time: null,
+                duration_min: null,
+                operatory_id: null,
+                note_template: "",
+                booked_next_node_id: "",
+                could_not_book_next_node_id: "",
+                pending_next_node_id: "",
             }
         case "update_gotracker_appointment":
             return {
@@ -835,6 +868,13 @@ export function removeNode(def: WorkflowDefinition, id: string): WorkflowDefinit
                         true_next_node_id: repoint(n.true_next_node_id),
                         false_next_node_id: repoint(n.false_next_node_id),
                     }
+                case "book_appointment":
+                    return {
+                        ...n,
+                        booked_next_node_id: repoint(n.booked_next_node_id),
+                        could_not_book_next_node_id: repoint(n.could_not_book_next_node_id),
+                        pending_next_node_id: repoint(n.pending_next_node_id),
+                    }
                 case "exit":
                     return n
             }
@@ -882,6 +922,16 @@ export function connectNodes(
                     : { ...node, default_next_node_id: targetId }
             return { ...def, nodes: def.nodes.map((n) => (n.id === sourceId ? updated : n)) }
         }
+        case "book_appointment":
+            return updateNode(
+                def,
+                sourceId,
+                handle === "could_not_book"
+                    ? { ...node, could_not_book_next_node_id: targetId }
+                    : handle === "pending"
+                      ? { ...node, pending_next_node_id: targetId }
+                      : { ...node, booked_next_node_id: targetId },
+            )
         case "wait":
         case "drip":
         case "send_sms":
@@ -1042,6 +1092,13 @@ export function cloneNodes(
                     cases: next.cases.map((c) => ({ ...c, next_node_id: repoint(c.next_node_id) })),
                     default_next_node_id: repoint(next.default_next_node_id),
                 }
+            case "book_appointment":
+                return {
+                    ...next,
+                    booked_next_node_id: repoint(next.booked_next_node_id),
+                    could_not_book_next_node_id: repoint(next.could_not_book_next_node_id),
+                    pending_next_node_id: repoint(next.pending_next_node_id),
+                }
             case "patient_registration":
                 return {
                     ...next,
@@ -1160,6 +1217,8 @@ function searchableText(node: WorkflowNode): string {
             return `${node.status} ${node.note_template ?? ""}`
         case "update_appointment":
             return `${node.operation} ${node.reason ?? ""}`
+        case "book_appointment":
+            return `${node.appointment_type_id} ${node.provider_id} ${node.start_time} ${node.note_template ?? ""}`
         case "update_gotracker_appointment":
             return node.reason ?? ""
         case "booking_link":

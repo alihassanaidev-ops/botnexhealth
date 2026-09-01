@@ -81,6 +81,35 @@ describe("workflow validation", () => {
         expect(issues.some((i) => i.node_id === "sms-1" && i.message.includes("missing"))).toBe(true)
     })
 
+    it("validates book appointment scheduling fields and three branches", () => {
+        const def: WorkflowDefinition = {
+            schema_version: "1.0",
+            trigger: { type: "manual" },
+            entry_node_id: "book-1",
+            nodes: [
+                {
+                    type: "book_appointment",
+                    id: "book-1",
+                    appointment_type_id: "",
+                    provider_id: "",
+                    start_time: "",
+                    booked_next_node_id: "booked",
+                    could_not_book_next_node_id: "",
+                    pending_next_node_id: "pending",
+                },
+                { type: "exit", id: "booked", outcome: "booked" },
+                { type: "exit", id: "pending", outcome: "pending" },
+            ],
+        }
+
+        const issues = validateDefinition(def)
+
+        expect(issues.some((i) => i.node_id === "book-1" && i.message.includes("appointment type"))).toBe(true)
+        expect(issues.some((i) => i.node_id === "book-1" && i.message.includes("provider"))).toBe(true)
+        expect(issues.some((i) => i.node_id === "book-1" && i.message.includes("start time"))).toBe(true)
+        expect(issues.some((i) => i.node_id === "book-1" && i.message.includes("Could not book"))).toBe(true)
+    })
+
     it("flags an empty SMS body", () => {
         const def = base()
         ;(def.nodes[0] as { body_template: string }).body_template = "   "
