@@ -4,22 +4,22 @@ import { ArrowLeft, Loader2, MailPlus, Pencil, Trash2 } from "lucide-react";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import * as z from "zod";
-import { Button } from "@/components/ui/button";
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { Button } from "@/components/foundation/compat/button";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/foundation/compat/tabs";
 import {
     Card,
     CardContent,
     CardDescription,
     CardHeader,
     CardTitle,
-} from "@/components/ui/card";
+} from "@/components/foundation/compat/card";
 import {
     Sheet,
     SheetContent,
     SheetDescription,
     SheetHeader,
     SheetTitle,
-} from "@/components/ui/sheet";
+} from "@/components/foundation/compat/sheet";
 import {
     Form,
     FormControl,
@@ -27,8 +27,8 @@ import {
     FormItem,
     FormLabel,
     FormMessage,
-} from "@/components/ui/form";
-import { Input } from "@/components/ui/input";
+} from "@/components/foundation/compat/form";
+import { Input } from "@/components/foundation/compat/input";
 import {
     Dialog,
     DialogContent,
@@ -36,8 +36,8 @@ import {
     DialogFooter,
     DialogHeader,
     DialogTitle,
-} from "@/components/ui/dialog";
-import { Switch } from "@/components/ui/switch";
+} from "@/components/foundation/compat/dialog";
+import { Switch } from "@/components/foundation/compat/switch";
 import { TenantCredentialsForm } from "@/components/tenants/TenantCredentialsForm";
 import { LocationList } from "@/components/tenants/LocationList";
 import { toast } from "sonner";
@@ -45,6 +45,8 @@ import api from "@/lib/api";
 import type { InstitutionDetail } from "@/types";
 import { formatRoleLabel } from "@/lib/utils";
 import { useCooldown } from "@/hooks/use-cooldown";
+import { PageHeader } from "@/components/PageHeader";
+import adminIcon from "@/assets/icons/presentation/admin.png";
 
 const overviewSchema = z.object({
     name: z.string().min(2, "Name must be at least 2 characters"),
@@ -255,7 +257,7 @@ export default function InstitutionDetailPage() {
         }
 
         return (
-            <div className="group flex items-center justify-between rounded-xl border border-border bg-gradient-to-br from-card to-accent/20 p-4 transition-all hover:-translate-y-0.5 hover:border-border hover:shadow-md hover:shadow-primary/10">
+            <div className="flex items-center justify-between rounded-xl border border-border bg-card p-4 transition-colors hover:border-foreground/15">
                 <div className="flex flex-col gap-1">
                     <div className="flex items-center gap-2">
                         <span className="font-semibold">{name}</span>
@@ -265,7 +267,7 @@ export default function InstitutionDetailPage() {
                         <div
                             className={`h-1.5 w-1.5 rounded-full ${statusColor}`}
                         />
-                        <span className="text-[10px] font-medium uppercase tracking-wider text-muted-foreground">
+                        <span className="text-2xs font-medium uppercase tracking-wider text-muted-foreground">
                             {statusText}
                         </span>
                     </div>
@@ -273,7 +275,7 @@ export default function InstitutionDetailPage() {
                 <Button
                     variant="ghost"
                     size="icon"
-                    className="h-8 w-8 text-muted-foreground opacity-0 transition-opacity group-hover:opacity-100 hover:bg-primary/10 hover:text-primary"
+                    className="w-8 text-muted-foreground opacity-0 transition-opacity group-hover:opacity-100 hover:bg-primary/10 hover:text-primary"
                     onClick={onConfigure}
                 >
                     <Pencil className="h-4 w-4" />
@@ -300,31 +302,29 @@ export default function InstitutionDetailPage() {
     }
 
     return (
-        <div className="relative flex-1 space-y-6 bg-background p-8 pt-6">
-            <div className="fixed inset-0 overflow-hidden pointer-events-none"><div className="absolute -top-32 -right-32 w-[420px] h-[420px] bg-transparent dark:bg-violet-700/20 rounded-full blur-[100px]" /></div>
+        <div className="ui-page ui-page-stack">
             {/* Header */}
-            <div className="flex flex-wrap items-start gap-4">
+            <div className="flex items-start gap-3">
                 <Button variant="ghost" size="icon" onClick={() => navigate("/institutions")} className="mt-1">
                     <ArrowLeft className="h-4 w-4" />
                 </Button>
-                <div className="flex-1">
-                    <div className="flex items-center gap-3">
-                        <h2 className="bg-gradient-to-r from-foreground to-primary2 bg-clip-text text-3xl font-bold tracking-tight text-transparent">
-                            {institution.name}
-                        </h2>
-                    </div>
-                    <p className="text-sm text-muted-foreground font-mono">{institution.slug}</p>
-                </div>
-                <Button
-                    variant="destructive"
-                    size="sm"
-                    onClick={() => setDeleteOpen(true)}
-                    disabled={isDeleting}
-                    className="mt-1 shrink-0"
-                >
-                    <Trash2 className="mr-2 h-4 w-4" />
-                    Delete Institution
-                </Button>
+                <PageHeader
+                    className="flex-1"
+                    art={adminIcon}
+                    title={institution.name}
+                    description={<span className="font-mono">{institution.slug}</span>}
+                    actions={
+                        <Button
+                            variant="destructive"
+                            size="sm"
+                            onClick={() => setDeleteOpen(true)}
+                            disabled={isDeleting}
+                        >
+                            <Trash2 className="mr-2 h-4 w-4" />
+                            Delete Institution
+                        </Button>
+                    }
+                />
             </div>
 
             <Dialog
@@ -367,7 +367,7 @@ export default function InstitutionDetailPage() {
 
             {/* Tabs */}
             <Tabs value={activeTab} onValueChange={setActiveTab}>
-                <TabsList className="border border-border bg-gradient-to-r from-secondary/70 to-accent/70">
+                <TabsList>
                     <TabsTrigger value="overview">Overview</TabsTrigger>
                     <TabsTrigger value="credentials">Credentials</TabsTrigger>
                     <TabsTrigger value="locations">Locations</TabsTrigger>
@@ -377,7 +377,7 @@ export default function InstitutionDetailPage() {
                 <TabsContent value="overview" className="space-y-6">
                     <div className="grid gap-6">
                         {/* Institution Details */}
-                        <Card className="border-border shadow-sm">
+                        <Card>
                             <CardHeader className="flex flex-row items-center justify-between space-y-0">
                                 <div>
                                     <CardTitle>Institution Details</CardTitle>
@@ -386,7 +386,7 @@ export default function InstitutionDetailPage() {
                                 <Button
                                     variant="ghost"
                                     size="icon"
-                                    className="h-8 w-8 text-muted-foreground hover:text-foreground"
+                                    className="w-8 text-muted-foreground hover:text-foreground"
                                     onClick={() => setEditSheetOpen(true)}
                                 >
                                     <Pencil className="h-4 w-4" />
@@ -426,7 +426,7 @@ export default function InstitutionDetailPage() {
 
                         {/* Admin User */}
                         {institution.user && (
-                            <Card className="border-border shadow-sm">
+                            <Card>
                                 <CardHeader className="flex flex-row items-center justify-between space-y-0">
                                     <div>
                                         <CardTitle>Admin User</CardTitle>
@@ -549,7 +549,7 @@ export default function InstitutionDetailPage() {
                             </DialogContent>
                         </Dialog>
 
-                        <Card className="border-border bg-gradient-to-br from-card to-accent/25 shadow-sm">
+                        <Card>
                             <CardHeader>
                                 <CardTitle>Email Notification Test</CardTitle>
                                 <CardDescription>
@@ -635,7 +635,7 @@ export default function InstitutionDetailPage() {
 
             {/* Edit Overview Sheet */}
             <Sheet open={editSheetOpen} onOpenChange={setEditSheetOpen}>
-                <SheetContent className="border-border bg-gradient-to-b from-background to-accent/30">
+                <SheetContent>
                     <SheetHeader>
                         <SheetTitle>Edit Institution</SheetTitle>
                         <SheetDescription>

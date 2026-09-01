@@ -1,0 +1,105 @@
+.page-header {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: space-between;
+    gap: var(--space-4);
+}
+
+.page-header-leading {
+    display: flex;
+    min-width: 0;
+    align-items: center;
+    gap: var(--space-4);
+}
+
+/* The icon PNGs are trimmed flush to their artwork, so the inset lives here
+   rather than being baked into each export at whatever margin it happened to
+   ship with. Symmetric on all four sides. */
+.page-header-icon {
+    display: grid;
+    width: clamp(3.15rem, calc(2.85rem + 0.35vw), 3.8rem);
+    height: clamp(3.15rem, calc(2.85rem + 0.35vw), 3.8rem);
+    flex: 0 0 auto;
+    padding: 0.3rem;
+    place-items: center;
+    overflow: hidden;
+    border: 1px solid var(--artwork-border);
+    border-radius: var(--radius-lg);
+    background: var(--artwork-surface);
+    box-shadow: var(--artwork-shadow);
+}
+
+.page-header-icon img {
+    width: 100%;
+    height: 100%;
+    min-width: 0;
+    min-height: 0;
+    object-fit: contain;
+    filter: var(--artwork-filter);
+}
+
+.page-header-icon svg {
+    width: 1.15rem;
+    height: 1.15rem;
+}
+
+.page-header-copy {
+    min-width: 0;
+}
+
+.page-header-copy h1 {
+    color: hsl(var(--foreground));
+    font-size: clamp(var(--text-xl), 2vw, var(--text-2xl));
+    font-weight: 760;
+    line-height: 1.12;
+    letter-spacing: -0.035em;
+}
+
+/* Row count beside the title. De-emphasised so it reads as a detail of the
+   heading rather than a second heading. */
+.page-header-count {
+    margin-left: 0.4rem;
+    color: hsl(var(--muted-foreground));
+    font-size: 0.62em;
+    font-weight: 620;
+    letter-spacing: -0.01em;
+    font-variant-numeric: tabular-nums;
+}
+
+.page-header-description {
+    max-width: clamp(44rem, 48vw, 62rem);
+    margin-top: 0.3rem;
+    color: hsl(var(--muted-foreground));
+    font-size: var(--text-sm);
+    line-height: 1.45;
+}
+
+.page-header-actions {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: flex-end;
+    gap: var(--space-2);
+}
+
+@media (max-width: 700px) {
+    .page-header {
+        align-items: flex-start;
+    }
+
+    .page-header-actions {
+        width: 100%;
+        justify-content: flex-start;
+    }
+}
+
+@media (min-width: 1800px) {
+    .page-header {
+        gap: var(--space-6);
+    }
+
+    .page-header-leading {
+        gap: var(--space-5);
+    }
+}

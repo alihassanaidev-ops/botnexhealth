@@ -1,8 +1,9 @@
 import { useEffect, useMemo, useRef, useState } from "react"
 import { ChevronLeft, ChevronRight, AlertTriangle, Globe, Clock, LayoutGrid, Users, AlertCircle } from "lucide-react"
 import { toast } from "sonner"
-import { Button } from "@/components/ui/button"
-import { Checkbox } from "@/components/ui/checkbox"
+import { Button } from "@/components/foundation/compat/button"
+import { Checkbox } from "@/components/foundation/compat/checkbox"
+import { UiSelect } from "@/components/foundation/Primitives"
 import { getInitials } from "@/components/calls/format"
 import { listAvailabilities, updateAvailability } from "@/lib/tenant-api"
 import type { CachedAvailability, CachedOperatory, CachedAppointmentType } from "@/types"
@@ -330,10 +331,10 @@ export default function SchedulerCalendar({
                             ? `${new Date(`${weekDays[0]}T12:00:00`).toLocaleDateString("en-US", { month: "short", day: "numeric" })} – ${new Date(`${weekDays[6]}T12:00:00`).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" })}`
                             : new Date(`${date}T12:00:00`).toLocaleDateString("en-US", { weekday: "long", month: "long", day: "numeric", year: "numeric" })}
                     </div>
-                    <Button variant="outline" size="sm" className="h-9 rounded-lg" onClick={() => goToDate(todayIn(tz))}>Today</Button>
+                    <Button variant="outline" size="sm" className="rounded-lg" onClick={() => goToDate(todayIn(tz))}>Today</Button>
                     <div className="flex items-center gap-1">
-                        <Button variant="outline" size="icon" className="h-9 w-9 rounded-lg" onClick={() => goToDate(addDays(date, viewMode === "week" ? -7 : -1))} aria-label="Previous"><ChevronLeft className="h-4 w-4" /></Button>
-                        <Button variant="outline" size="icon" className="h-9 w-9 rounded-lg" onClick={() => goToDate(addDays(date, viewMode === "week" ? 7 : 1))} aria-label="Next"><ChevronRight className="h-4 w-4" /></Button>
+                        <Button variant="outline" size="icon-sm" className="rounded-lg" onClick={() => goToDate(addDays(date, viewMode === "week" ? -7 : -1))} aria-label="Previous"><ChevronLeft className="h-4 w-4" /></Button>
+                        <Button variant="outline" size="icon-sm" className="rounded-lg" onClick={() => goToDate(addDays(date, viewMode === "week" ? 7 : 1))} aria-label="Next"><ChevronRight className="h-4 w-4" /></Button>
                     </div>
                     <div className="ml-auto flex items-center gap-2">
                         <div className="inline-flex rounded-lg border p-0.5">
@@ -342,7 +343,7 @@ export default function SchedulerCalendar({
                                     className={`rounded-md px-3.5 py-1.5 text-xs font-medium capitalize transition-colors ${viewMode === v ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:text-foreground"}`}>{v}</button>
                             ))}
                         </div>
-                        <div className="flex items-center gap-1 text-[11px] text-muted-foreground" title="Grid is shown in the clinic's local time">
+                        <div className="flex items-center gap-1 text-xs text-muted-foreground" title="Grid is shown in the clinic's local time">
                             <Globe className="h-3.5 w-3.5" /><span>{tz.replace(/_/g, " ")}</span>
                         </div>
                     </div>
@@ -353,9 +354,9 @@ export default function SchedulerCalendar({
                     {viewMode === "week" && (
                         <label className="flex items-center gap-1.5">
                             <span className="text-muted-foreground">{effectiveGroupBy === "operatory" ? "Operatory" : "Provider"}</span>
-                            <select value={weekResource} onChange={(e) => setWeekResource(e.target.value)} className="h-8 rounded-md border bg-background px-2 text-xs">
+                            <UiSelect value={weekResource} onChange={(e) => setWeekResource(e.target.value)} uiSize="sm">
                                 {resources.map((r) => <option key={r.key} value={r.key}>{r.name}{r.sub ? ` (${r.sub})` : ""}</option>)}
-                            </select>
+                            </UiSelect>
                         </label>
                     )}
                     {hasOperatories && (
@@ -390,14 +391,14 @@ export default function SchedulerCalendar({
                                     return (
                                         <div key={c.key} className={`flex items-center gap-2 border-l px-3 py-2.5 ${c.isToday && viewMode === "week" ? "bg-primary/5" : ""}`} style={gridTemplate ? undefined : { width: COL_W }}>
                                             {viewMode === "day" && (
-                                                <span className="grid size-8 shrink-0 place-items-center rounded-full text-[11px] font-semibold"
+                                                <span className="grid size-8 shrink-0 place-items-center rounded-full text-xs font-semibold"
                                                     style={{ background: `color-mix(in srgb, ${hue} 20%, hsl(var(--card)))`, color: `color-mix(in srgb, ${hue} 70%, hsl(var(--foreground)))` }}>
                                                     {getInitials(c.name)}
                                                 </span>
                                             )}
                                             <div className="min-w-0">
-                                                <div className={`truncate text-[13px] font-semibold ${c.isToday && viewMode === "week" ? "text-primary" : ""}`} title={c.name}>{c.name}</div>
-                                                {c.sub && <div className={`font-mono text-[10px] ${c.dup ? "text-amber-600 dark:text-amber-500" : "text-muted-foreground"}`}>{c.sub}</div>}
+                                                <div className={`truncate text-sm font-semibold ${c.isToday && viewMode === "week" ? "text-primary" : ""}`} title={c.name}>{c.name}</div>
+                                                {c.sub && <div className={`font-mono text-2xs ${c.dup ? "text-amber-600 dark:text-amber-500" : "text-muted-foreground"}`}>{c.sub}</div>}
                                             </div>
                                         </div>
                                     )
@@ -437,7 +438,7 @@ export default function SchedulerCalendar({
                                                 </div>
                                             )}
                                             {items.length === 0 && (
-                                                <div className="absolute inset-0 flex items-start justify-center pt-6 text-[11px] text-muted-foreground/40">—</div>
+                                                <div className="absolute inset-0 flex items-start justify-center pt-6 text-xs text-muted-foreground">—</div>
                                             )}
                                             {closedPeriods.map((period) => {
                                                 const start = toMin(period.begin_time)!
@@ -445,13 +446,13 @@ export default function SchedulerCalendar({
                                                 return (
                                                     <div
                                                         key={period.id}
-                                                        className="pointer-events-none absolute z-0 overflow-hidden rounded-[10px] border border-dashed border-slate-500/35 bg-slate-500/[0.08] px-2 py-1.5 text-left text-slate-500 dark:text-slate-400"
+                                                        className="pointer-events-none absolute z-0 overflow-hidden rounded-md border border-dashed border-slate-500/35 bg-slate-500/[0.08] px-2 py-1.5 text-left text-slate-500 dark:text-slate-400"
                                                         style={{ top: (start - minMin) * PX_MIN + 1, height: (end - start) * PX_MIN - 3, left: 4, right: 4 }}
                                                         title="Closed period derived from the gaps between PMS working windows — read-only"
                                                     >
                                                         <div className="font-mono text-[10.5px] font-semibold">{to12(period.begin_time!)} – {to12(period.end_time!)}</div>
-                                                        <div className="truncate text-[12px] font-medium">Closed</div>
-                                                        <div className="truncate text-[11px]">Read-only</div>
+                                                        <div className="truncate text-xs font-medium">Closed</div>
+                                                        <div className="truncate text-xs">Read-only</div>
                                                     </div>
                                                 )
                                             })}
@@ -467,16 +468,16 @@ export default function SchedulerCalendar({
                                                     }
                                                     return (
                                                         <button key={i} onClick={() => single ? openWindow(single) : setSelected({ ...b.members[0], __band: b } as never)}
-                                                            className="absolute z-10 overflow-hidden rounded-[10px] px-2 py-1.5 text-left shadow-sm transition-shadow hover:shadow-md"
+                                                            className="absolute z-10 overflow-hidden rounded-md px-2 py-1.5 text-left shadow-sm transition-shadow hover:shadow-md"
                                                             style={{ top: (b.sMin - minMin) * PX_MIN + 1, height: (b.eMin - b.sMin) * PX_MIN - 3, left: 4, right: 4, ...linkedStyle }}>
                                                             <div className="font-mono text-[10.5px] font-semibold" style={{ color: single ? timeColor(single) : (has ? "hsl(var(--muted-foreground))" : "color-mix(in srgb, hsl(var(--primary)) 62%, hsl(var(--foreground)))") }}>
                                                                 {to12(fromMin(b.sMin))} – {to12(fromMin(b.eMin))}
                                                             </div>
-                                                            <div className="truncate text-[12px] font-medium text-foreground">{single ? "Working Window" : `${b.members.length} windows open`}</div>
-                                                            <div className="truncate text-[11px] text-muted-foreground">
+                                                            <div className="truncate text-xs font-medium text-foreground">{single ? "Working Window" : `${b.members.length} windows open`}</div>
+                                                            <div className="truncate text-xs text-muted-foreground">
                                                                 {single ? (isLinked(single) ? (single.appointment_type_names || []).join(", ") : "No types linked") : (has ? `${unlinkedN} unlinked` : "all linked")}
                                                             </div>
-                                                            {(single ? !isLinked(single) : has) && <span className="absolute right-1.5 top-1 text-[11px] font-bold text-amber-600 dark:text-amber-500">!</span>}
+                                                            {(single ? !isLinked(single) : has) && <span className="absolute right-1.5 top-1 text-xs font-bold text-amber-600 dark:text-amber-500">!</span>}
                                                             <span className="absolute bottom-1 right-1.5 h-1.5 w-1.5 rounded-full" style={{ background: hue }} />
                                                         </button>
                                                     )
@@ -486,12 +487,12 @@ export default function SchedulerCalendar({
                                                     const short = (w._e - w._s) * PX_MIN < 34
                                                     return (
                                                         <button key={w.id + w._lane} onClick={() => openWindow(w)}
-                                                            className="absolute z-10 overflow-hidden rounded-[10px] px-2 py-1 text-left shadow-sm transition-shadow hover:shadow-md"
+                                                            className="absolute z-10 overflow-hidden rounded-md px-2 py-1 text-left shadow-sm transition-shadow hover:shadow-md"
                                                             style={{ top: (w._s - minMin) * PX_MIN + 1, height: (w._e - w._s) * PX_MIN - 3, left: `calc(${w._lane * wPct}% + 3px)`, width: `calc(${wPct}% - 6px)`, ...tileStyle(w) }}>
-                                                            <div className="truncate font-mono text-[10px] font-semibold" style={{ color: timeColor(w) }}>{to12(w.begin_time!)}</div>
+                                                            <div className="truncate font-mono text-2xs font-semibold" style={{ color: timeColor(w) }}>{to12(w.begin_time!)}</div>
                                                             {!short && <div className="truncate text-[11.5px] font-medium text-foreground">{labelFor(w)}</div>}
                                                             {!short && <div className="truncate text-[10.5px] text-muted-foreground">{isLinked(w) ? (w.appointment_type_names || []).join(", ") : "No types"}</div>}
-                                                            {!isLinked(w) && <span className="absolute right-1 top-0.5 text-[11px] font-bold text-amber-600 dark:text-amber-500">!</span>}
+                                                            {!isLinked(w) && <span className="absolute right-1 top-0.5 text-xs font-bold text-amber-600 dark:text-amber-500">!</span>}
                                                         </button>
                                                     )
                                                 })}
@@ -503,7 +504,7 @@ export default function SchedulerCalendar({
                     </div>
                 )}
 
-                <div className="text-[11px] text-muted-foreground">
+                <div className="text-xs text-muted-foreground">
                     Times in clinic time ({tz.replace(/_/g, " ")}).{!hasOperatories && " This PMS exposes no operatories — showing provider columns."}
                 </div>
             </div>
@@ -519,7 +520,7 @@ export default function SchedulerCalendar({
                             <button onClick={() => shiftMonth(1)} className="grid size-6 place-items-center rounded-md text-muted-foreground hover:bg-muted" aria-label="Next month"><ChevronRight className="h-4 w-4" /></button>
                         </div>
                     </div>
-                    <div className="grid grid-cols-7 gap-y-1 text-center text-[10px] text-muted-foreground">
+                    <div className="grid grid-cols-7 gap-y-1 text-center text-2xs text-muted-foreground">
                         {["S", "M", "T", "W", "T", "F", "S"].map((d, i) => <div key={i}>{d}</div>)}
                     </div>
                     <div className="mt-1 grid grid-cols-7 gap-y-1 text-center text-xs">
@@ -547,18 +548,18 @@ export default function SchedulerCalendar({
                     <div className="space-y-3">
                         <div className="space-y-1">
                             <label className="text-xs text-muted-foreground">Providers</label>
-                            <select value={filterProvider} onChange={(e) => setFilterProvider(e.target.value)} className="h-9 w-full rounded-md border bg-background px-2 text-sm">
+                            <UiSelect value={filterProvider} onChange={(e) => setFilterProvider(e.target.value)}>
                                 <option value="all">All Providers</option>
                                 {providerOptions.map((p) => <option key={p.key} value={p.key}>{p.name}</option>)}
-                            </select>
+                            </UiSelect>
                         </div>
                         {hasOperatories && (
                             <div className="space-y-1">
                                 <label className="text-xs text-muted-foreground">Operatories</label>
-                                <select value={filterOperatory} onChange={(e) => setFilterOperatory(e.target.value)} className="h-9 w-full rounded-md border bg-background px-2 text-sm">
+                                <UiSelect value={filterOperatory} onChange={(e) => setFilterOperatory(e.target.value)}>
                                     <option value="all">All Operatories</option>
                                     {operatoryOptions.map((o) => <option key={o.key} value={o.key}>{o.name} ({o.key})</option>)}
-                                </select>
+                                </UiSelect>
                             </div>
                         )}
                         {viewMode === "day" && (
@@ -586,7 +587,7 @@ export default function SchedulerCalendar({
             {selected && (
                 <>
                     <div className="fixed inset-0 z-40 bg-black/40" onClick={() => setSelected(null)} />
-                    <aside className="fixed right-0 top-0 z-50 flex h-full w-[340px] max-w-[90vw] flex-col border-l bg-card shadow-2xl">
+                    <aside className="fixed right-0 top-0 z-50 flex h-full w-[21rem] max-w-[90vw] flex-col border-l bg-card shadow-2xl">
                         <div className="flex items-start justify-between border-b p-4">
                             <h2 className="text-sm font-semibold">{(selected as never as { __band?: Band }).__band ? "Open-hours band" : "Working window"}</h2>
                             <button onClick={() => setSelected(null)} className="text-xl leading-none text-muted-foreground hover:text-foreground" aria-label="Close">×</button>
@@ -600,7 +601,7 @@ export default function SchedulerCalendar({
                                             <Field k="Room" v={effectiveGroupBy === "operatory" ? (operatoryName.get(selected.operatory_source_id || "") || "") : (selected.provider_name || "")} sub={effectiveGroupBy === "operatory" ? (selected.operatory_source_id || undefined) : undefined} />
                                             <Field k="Open" v={`${to12(fromMin(band.sMin))} – ${to12(fromMin(band.eMin))}`} mono />
                                             <div>
-                                                <div className="mb-1 text-[11px] uppercase tracking-wide text-muted-foreground">{band.members.length} underlying window{band.members.length > 1 ? "s" : ""}</div>
+                                                <div className="mb-1 text-xs uppercase tracking-wide text-muted-foreground">{band.members.length} underlying window{band.members.length > 1 ? "s" : ""}</div>
                                                 <ul className="space-y-1.5">
                                                     {[...band.members].sort((a, b) => toMin(a.begin_time)! - toMin(b.begin_time)!).map((m) => (
                                                         <li key={m.id} className="flex items-center gap-2 rounded-md border px-2 py-1.5 text-xs">
@@ -623,7 +624,7 @@ export default function SchedulerCalendar({
                                         <Field k="Operatory" v={operatoryName.get(selected.operatory_source_id || "") || "—"} sub={selected.operatory_source_id || undefined} />
                                         <Field k="Provider" v={selected.provider_name || "Unassigned"} />
                                         <div>
-                                            <div className="mb-1.5 text-[11px] uppercase tracking-wide text-muted-foreground">Appointment types</div>
+                                            <div className="mb-1.5 text-xs uppercase tracking-wide text-muted-foreground">Appointment types</div>
                                             {canManage ? (
                                                 <>
                                                     {appointmentTypes.length === 0
@@ -677,7 +678,7 @@ function OverviewRow({ icon, label, value, accent }: { icon: React.ReactNode; la
 function Field({ k, v, sub, mono }: { k: string; v: string; sub?: string; mono?: boolean }) {
     return (
         <div>
-            <div className="mb-0.5 text-[11px] uppercase tracking-wide text-muted-foreground">{k}</div>
+            <div className="mb-0.5 text-xs uppercase tracking-wide text-muted-foreground">{k}</div>
             <div className={`text-sm ${mono ? "font-mono" : ""}`}>{v} {sub && <span className="font-mono text-xs text-muted-foreground">{sub}</span>}</div>
         </div>
     )

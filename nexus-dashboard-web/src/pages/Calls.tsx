@@ -1,10 +1,9 @@
-import { useState, useCallback, useEffect, useRef } from "react"
+import { useState, useCallback, useEffect, useRef, type ComponentProps } from "react"
 import { useSearchParams } from "react-router-dom"
 import {
     Phone,
     PhoneIncoming,
     PhoneOutgoing,
-    CalendarIcon,
     Search,
     ChevronLeft,
     ChevronRight,
@@ -13,50 +12,26 @@ import {
     CheckCircle2,
     RefreshCcw,
     PlusCircle,
-    LayoutList,
-    MessagesSquare,
 } from "lucide-react"
+import callsArt from "@/assets/icons/presentation/calls.png"
 import { PageHeader } from "@/components/PageHeader"
-import { format } from "date-fns"
-import type { DateRange } from "react-day-picker"
-import { Card, CardContent } from "@/components/ui/card"
 import { RevealablePhone } from "@/components/RevealablePhone"
-import { Button } from "@/components/ui/button"
-import { Input } from "@/components/ui/input"
-import { Badge } from "@/components/ui/badge"
-import { Skeleton } from "@/components/ui/skeleton"
-import { Separator } from "@/components/ui/separator"
-import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover"
-import { Calendar } from "@/components/ui/calendar"
+import { DateRangeFilter } from "@/components/DateRangeFilter"
+import { UiBadge, UiButton, UiInput, UiSelect, UiSkeleton } from "@/components/foundation/Primitives"
 import {
-    Select,
-    SelectContent,
-    SelectItem,
-    SelectTrigger,
-    SelectValue,
-} from "@/components/ui/select"
+    UiTable as Table,
+    UiTableBody as TableBody,
+    UiTableCell as TableCell,
+    UiTableHead as TableHead,
+    UiTableHeader as TableHeader,
+    UiTableRow as TableRow,
+} from "@/components/foundation/DataTable"
 import {
-    DropdownMenu,
-    DropdownMenuCheckboxItem,
-    DropdownMenuContent,
-    DropdownMenuLabel,
-    DropdownMenuSeparator,
-    DropdownMenuTrigger,
-} from "@/components/ui/dropdown-menu"
-import {
-    Table,
-    TableBody,
-    TableCell,
-    TableHead,
-    TableHeader,
-    TableRow,
-} from "@/components/ui/table"
-import {
-    Dialog,
-    DialogContent,
-    DialogHeader,
-    DialogTitle,
-} from "@/components/ui/dialog"
+    UiDialog as Dialog,
+    UiDialogContent as DialogContent,
+    UiDialogHeader as DialogHeader,
+    UiDialogTitle as DialogTitle,
+} from "@/components/foundation/Overlay"
 import { toast } from "sonner"
 import { useSSE } from "@/hooks/useSSE"
 import { getCall, listCalls, resolveCallback } from "@/lib/calls-api"
@@ -69,18 +44,54 @@ import {
     SentimentBadge,
     StatusBadge,
     StatusSelect,
+    ViewSwitch,
 } from "@/components/calls/shared"
 import { formatDateTime, formatDuration, getInitials } from "@/components/calls/format"
 import { listWorkflowStatuses, assignCallStatus } from "@/lib/workflow-status-api"
 import { STATUS_OPTIONS, DIRECTION_OPTIONS } from "@/lib/constants"
-import { cn } from "@/lib/utils"
 import type { CallRecord, CallDetail, CallsListResponse, WorkflowStatus } from "@/types"
+import "./calls.css"
 
 // ── Constants ────────────────────────────────────────────────────────────────
 
 const PAGE_SIZE = 25
 
 type ViewMode = "table" | "conversation"
+
+function Button({ variant = "default", ...props }: Omit<ComponentProps<typeof UiButton>, "variant"> & {
+    variant?: "default" | "outline" | "ghost" | "secondary"
+}) {
+    const mappedVariant = variant === "default"
+        ? "primary"
+        : variant === "outline" || variant === "secondary"
+            ? "secondary"
+            : "quiet"
+    return <UiButton variant={mappedVariant} {...props} />
+}
+
+function Badge({ variant = "secondary", ...props }: Omit<ComponentProps<typeof UiBadge>, "tone"> & {
+    variant?: "secondary" | "destructive" | "outline"
+}) {
+    return <UiBadge tone={variant === "destructive" ? "danger" : "neutral"} {...props} />
+}
+
+const Input = UiInput
+const Skeleton = UiSkeleton
+
+function Separator({ orientation = "horizontal", className = "" }: {
+    orientation?: "horizontal" | "vertical"
+    className?: string
+}) {
+    return <span aria-hidden="true" className={`${orientation === "vertical" ? "inline-block w-px bg-border" : "block h-px bg-border"} ${className}`.trim()} />
+}
+
+function Card({ className = "", ...props }: ComponentProps<"section">) {
+    return <section className={`calls-surface ${className}`.trim()} {...props} />
+}
+
+function CardContent({ className = "", ...props }: ComponentProps<"div">) {
+    return <div className={className} {...props} />
+}
 
 // ── Tag filter toggle ─────────────────────────────────────────────────────────
 
@@ -98,9 +109,8 @@ function CallsFacetedFilter({
     onSelectedChange,
 }: CallsFacetedFilterProps) {
     return (
-        <DropdownMenu>
-            <DropdownMenuTrigger asChild>
-                <Button variant="outline" size="sm" className="h-8">
+        <details className="calls-filter group">
+            <summary className="calls-filter-trigger ui-button ui-button-secondary ui-button-sm">
                     <PlusCircle className="mr-2 h-4 w-4" />
                     {title}
                     {selectedValues.size > 0 && (
@@ -136,117 +146,48 @@ function CallsFacetedFilter({
                             </div>
                         </>
                     )}
-                </Button>
-            </DropdownMenuTrigger>
-            <DropdownMenuContent className="w-[200px]" align="start">
-                <DropdownMenuLabel>Filter by status</DropdownMenuLabel>
-                <DropdownMenuSeparator />
+            </summary>
+            <div className="calls-filter-menu">
+                <p className="px-2 py-1.5 text-xs font-semibold">Filter by status</p>
+                <div className="my-1 h-px bg-border" />
                 {options.map((option) => {
                     const isSelected = selectedValues.has(option.value)
                     return (
-                        <DropdownMenuCheckboxItem
+                        <label
                             key={option.value}
-                            checked={isSelected}
-                            onCheckedChange={(checked) => {
+                            className="calls-filter-option"
+                        >
+                            <input
+                                type="checkbox"
+                                checked={isSelected}
+                                className="size-3.5 accent-primary"
+                                onChange={(event) => {
                                 const next = new Set(selectedValues)
-                                if (checked) {
+                                if (event.target.checked) {
                                     next.add(option.value)
                                 } else {
                                     next.delete(option.value)
                                 }
                                 onSelectedChange(next)
                             }}
-                        >
+                            />
                             {option.label}
-                        </DropdownMenuCheckboxItem>
+                        </label>
                     )
                 })}
                 {selectedValues.size > 0 && (
-                    <>
-                        <DropdownMenuSeparator />
-                        <DropdownMenuCheckboxItem
-                            className="justify-center text-center font-medium"
-                            onCheckedChange={() => onSelectedChange(new Set())}
-                            checked={false}
+                    <div className="mt-1 border-t border-border pt-1">
+                        <button
+                            type="button"
+                            className="calls-filter-clear"
+                            onClick={() => onSelectedChange(new Set())}
                         >
                             Clear filters
-                        </DropdownMenuCheckboxItem>
-                    </>
-                )}
-            </DropdownMenuContent>
-        </DropdownMenu>
-    )
-}
-
-function parseDateString(value: string): Date | undefined {
-    if (!value) return undefined
-    const [year, month, day] = value.split("-").map(Number)
-    if (!year || !month || !day) return undefined
-    const parsed = new Date(year, month - 1, day)
-    return Number.isNaN(parsed.getTime()) ? undefined : parsed
-}
-
-function formatDateParam(value: Date): string {
-    return format(value, "yyyy-MM-dd")
-}
-
-interface CallsDateRangeFilterProps {
-    from: string
-    to: string
-    onChange: (next: { from: string; to: string }) => void
-}
-
-function CallsDateRangeFilter({ from, to, onChange }: CallsDateRangeFilterProps) {
-    const fromDate = parseDateString(from)
-    const toDate = parseDateString(to)
-    const selectedRange: DateRange | undefined = (fromDate || toDate)
-        ? { from: fromDate, to: toDate }
-        : undefined
-
-    const label = selectedRange?.from
-        ? selectedRange.to
-            ? `${format(selectedRange.from, "MMM d, yyyy")} - ${format(selectedRange.to, "MMM d, yyyy")}`
-            : format(selectedRange.from, "MMM d, yyyy")
-        : "Date range"
-
-    return (
-        <Popover>
-            <PopoverTrigger asChild>
-                <Button
-                    variant="outline"
-                    size="sm"
-                    className="h-8 w-[215px] justify-start text-left font-normal"
-                >
-                    <CalendarIcon className="mr-2 h-4 w-4" />
-                    <span className={cn(!selectedRange?.from && "text-muted-foreground")}>{label}</span>
-                </Button>
-            </PopoverTrigger>
-            <PopoverContent className="w-auto p-0" align="start">
-                <Calendar
-                    mode="range"
-                    numberOfMonths={2}
-                    selected={selectedRange}
-                    onSelect={(range) => onChange({
-                        from: range?.from ? formatDateParam(range.from) : "",
-                        to: range?.to ? formatDateParam(range.to) : "",
-                    })}
-                    initialFocus
-                />
-                {selectedRange?.from && (
-                    <div className="border-t p-2">
-                        <Button
-                            type="button"
-                            variant="ghost"
-                            size="sm"
-                            className="h-7 px-2 text-xs"
-                            onClick={() => onChange({ from: "", to: "" })}
-                        >
-                            Clear
-                        </Button>
+                        </button>
                     </div>
                 )}
-            </PopoverContent>
-        </Popover>
+            </div>
+        </details>
     )
 }
 
@@ -310,7 +251,7 @@ function CallDetailDialog({ callId, statuses, onClose, onResolved }: CallDetailP
 
     return (
         <Dialog open={!!callId} onOpenChange={(o) => !o && onClose()}>
-            <DialogContent className="max-w-2xl max-h-[85vh] overflow-y-auto">
+            <DialogContent className="calls-detail-dialog max-w-2xl">
                 <DialogHeader>
                     <DialogTitle className="flex items-center gap-2">
                         {detail?.call_direction === "inbound" ? (
@@ -583,68 +524,37 @@ export default function Calls() {
     const to = Math.min((page + 1) * PAGE_SIZE, total)
 
     return (
-        <div className="relative flex-1 space-y-6 bg-background p-8 pt-6">
-            <div className="fixed inset-0 overflow-hidden pointer-events-none"><div className="absolute -top-32 -right-32 w-[420px] h-[420px] bg-transparent dark:bg-violet-700/20 rounded-full blur-[100px]" /></div>
+        <div className="ui-page ui-page-stack">
             <PageHeader
                 icon={Phone}
-                title="Calls"
+                art={callsArt}
+                title={
+                    <>
+                        Calls
+                        {!loading && data && (
+                            <span className="page-header-count">({total.toLocaleString()})</span>
+                        )}
+                    </>
+                }
                 description="Browse and review all patient calls handled by your voice agent."
                 actions={
-                    <>
-                        {!loading && data && (
-                            <div className="text-right">
-                                <p className="text-2xl font-bold tabular-nums">{total.toLocaleString()}</p>
-                                <p className="text-xs text-muted-foreground">total calls</p>
-                            </div>
-                        )}
-                        <div className="flex items-center rounded-lg border bg-muted/40 p-0.5">
-                            <button
-                                type="button"
-                                onClick={() => changeView("table")}
-                                aria-pressed={viewMode === "table"}
-                                className={cn(
-                                    "inline-flex items-center gap-1.5 rounded-md px-2.5 py-1 text-xs font-medium transition-colors",
-                                    viewMode === "table"
-                                        ? "bg-background text-foreground shadow-sm"
-                                        : "text-muted-foreground hover:text-foreground",
-                                )}
-                            >
-                                <LayoutList className="h-3.5 w-3.5" />
-                                <span className="hidden sm:inline">Table</span>
-                            </button>
-                            <button
-                                type="button"
-                                onClick={() => changeView("conversation")}
-                                aria-pressed={viewMode === "conversation"}
-                                className={cn(
-                                    "inline-flex items-center gap-1.5 rounded-md px-2.5 py-1 text-xs font-medium transition-colors",
-                                    viewMode === "conversation"
-                                        ? "bg-background text-foreground shadow-sm"
-                                        : "text-muted-foreground hover:text-foreground",
-                                )}
-                            >
-                                <MessagesSquare className="h-3.5 w-3.5" />
-                                <span className="hidden sm:inline">Conversations</span>
-                            </button>
-                        </div>
-                        <Button variant="outline" size="sm" onClick={fetchCalls} disabled={loading} className="gap-1.5">
-                            <RefreshCcw className={`h-3.5 w-3.5 ${loading ? "animate-spin" : ""}`} />
-                            Refresh
-                        </Button>
-                    </>
+                    <Button variant="outline" size="sm" onClick={fetchCalls} disabled={loading} className="gap-1.5">
+                        <RefreshCcw className={`h-3.5 w-3.5 ${loading ? "animate-spin" : ""}`} />
+                        Refresh
+                    </Button>
                 }
             />
 
             {/* Filters */}
-            <div className="flex items-center justify-between">
-                <div className="flex flex-1 items-center space-x-2 overflow-x-auto pb-2 -mb-2">
-                    <div className="relative">
+            <div className="calls-toolbar">
+                <div className="calls-toolbar-controls">
+                    <div className="calls-search">
                         <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground pointer-events-none" />
                         <Input
                             placeholder="Search by patient name..."
                             value={search}
                             onChange={(e) => setSearch(e.target.value)}
-                            className="h-8 pl-8 w-[150px] lg:w-[250px]"
+                            className="w-full pl-8"
                         />
                     </div>
                     <CallsFacetedFilter
@@ -661,19 +571,20 @@ export default function Calls() {
                             onSelectedChange={(s) => setSelectedStatusIds(Array.from(s))}
                         />
                     )}
-                    <Select value={directionFilter || "all"} onValueChange={(v) => setDirectionFilter(v === "all" ? "" : v)}>
-                        <SelectTrigger className="h-8 w-[150px]">
-                            <SelectValue placeholder="Direction" />
-                        </SelectTrigger>
-                        <SelectContent>
-                            <SelectItem value="all">Direction</SelectItem>
+                    <div className="calls-direction-filter">
+                        <UiSelect
+                            aria-label="Direction"
+                            value={directionFilter || "all"}
+                            onChange={(event) => setDirectionFilter(event.target.value === "all" ? "" : event.target.value)}
+                        >
+                            <option value="all">Direction</option>
                             {DIRECTION_OPTIONS.map((o) => (
-                                <SelectItem key={o.value} value={o.value}>{o.label}</SelectItem>
+                                <option key={o.value} value={o.value}>{o.label}</option>
                             ))}
-                        </SelectContent>
-                    </Select>
+                        </UiSelect>
+                    </div>
                     <Separator orientation="vertical" className="mx-1 h-6 hidden sm:block" />
-                    <CallsDateRangeFilter
+                    <DateRangeFilter
                         from={dateFrom}
                         to={dateTo}
                         onChange={({ from, to }) => {
@@ -686,7 +597,7 @@ export default function Calls() {
                         <Button
                             variant="ghost"
                             onClick={clearFilters}
-                            className="h-8 px-2 lg:px-3 text-muted-foreground hidden sm:flex"
+                            className="calls-reset hidden text-muted-foreground sm:flex"
                         >
                             Reset
                             <X className="ml-2 h-4 w-4" />
@@ -698,11 +609,12 @@ export default function Calls() {
                     <Button
                         variant="ghost"
                         onClick={clearFilters}
-                        className="h-8 px-2 sm:hidden text-muted-foreground ml-2"
+                        className="calls-reset ml-2 text-muted-foreground sm:hidden"
                     >
                         <X className="h-4 w-4" />
                     </Button>
                 )}
+                <ViewSwitch value={viewMode} onChange={changeView} />
             </div>
 
             {/* Conversation (inbox) view */}
@@ -737,16 +649,16 @@ export default function Calls() {
             /* Table */
             <Card>
                 <CardContent className="p-0">
-                    <div className="overflow-x-auto">
-                        <Table className="w-full text-sm">
-                            <TableHeader className="border-b border-border bg-muted">
+                    <div className="calls-table-scroll">
+                        <Table className="calls-table">
+                            <TableHeader>
                                 <TableRow>
-                                    <TableHead className="px-4 py-3 text-left text-[11px] font-semibold text-muted-foreground uppercase tracking-wide">Patient</TableHead>
-                                    <TableHead className="px-4 py-3 text-left text-[11px] font-semibold text-muted-foreground uppercase tracking-wide">Direction</TableHead>
-                                    <TableHead className="px-4 py-3 text-left text-[11px] font-semibold text-muted-foreground uppercase tracking-wide">Tags</TableHead>
-                                    <TableHead className="px-4 py-3 text-left text-[11px] font-semibold text-muted-foreground uppercase tracking-wide">Sentiment</TableHead>
-                                    <TableHead className="px-4 py-3 text-left text-[11px] font-semibold text-muted-foreground uppercase tracking-wide whitespace-nowrap">Duration</TableHead>
-                                    <TableHead className="px-4 py-3 text-left text-[11px] font-semibold text-muted-foreground uppercase tracking-wide">Summary</TableHead>
+                                    <TableHead>Patient</TableHead>
+                                    <TableHead>Direction</TableHead>
+                                    <TableHead>Tags</TableHead>
+                                    <TableHead>Sentiment</TableHead>
+                                    <TableHead className="whitespace-nowrap">Duration</TableHead>
+                                    <TableHead>Summary</TableHead>
                                 </TableRow>
                             </TableHeader>
                             <TableBody>
@@ -785,7 +697,7 @@ export default function Calls() {
 
                     {/* Footer: result count (left) + pagination (right) */}
                     {!loading && total > 0 && (
-                        <div className="flex flex-col gap-3 border-t border-border px-4 py-3 sm:flex-row sm:items-center sm:justify-between">
+                        <div className="calls-pagination">
                             <p className="text-sm text-muted-foreground">
                                 Showing <span className="font-medium text-foreground">{from}–{to}</span> of{" "}
                                 <span className="font-medium text-foreground">{total.toLocaleString()}</span> calls
@@ -837,7 +749,7 @@ function CallRow({ call, onClick }: CallRowProps) {
             <TableCell>
                 <div className="flex items-center gap-3">
                     {name ? (
-                        <div className="grid size-8 shrink-0 place-items-center rounded-full bg-gradient-to-br from-violet-500 to-purple-600 text-[11px] font-semibold text-white">
+                        <div className="grid size-8 shrink-0 place-items-center rounded-full bg-primary text-xs font-semibold text-primary-foreground">
                             {getInitials(name)}
                         </div>
                     ) : (
@@ -858,7 +770,7 @@ function CallRow({ call, onClick }: CallRowProps) {
                             {formatDateTime(call.call_date, call.call_time)}
                         </p>
                         {call.booked_appointment_type_name && (
-                            <span className="mt-1 inline-flex items-center gap-1 rounded-full bg-emerald-500/10 px-2 py-0.5 text-[10px] font-medium text-emerald-600 dark:text-emerald-400">
+                            <span className="mt-1 inline-flex items-center gap-1 rounded-full bg-emerald-500/10 px-2 py-0.5 text-2xs font-medium text-emerald-600 dark:text-emerald-400">
                                 Booked: {call.booked_appointment_type_name}
                             </span>
                         )}
@@ -868,7 +780,7 @@ function CallRow({ call, onClick }: CallRowProps) {
 
             <TableCell>
                 {call.call_direction === "inbound" ? (
-                    <span className="inline-flex items-center gap-1 text-xs text-blue-600 font-medium bg-blue-500/10 px-2 py-0.5 rounded-full">
+                    <span className="inline-flex items-center gap-1 text-xs text-blue-600 dark:text-blue-400 font-medium bg-blue-500/10 px-2 py-0.5 rounded-full">
                         <PhoneIncoming className="h-3.5 w-3.5" /> Inbound
                     </span>
                 ) : call.call_direction === "outbound" ? (
@@ -888,7 +800,7 @@ function CallRow({ call, onClick }: CallRowProps) {
                         : (!call.workflow_status && <span className="text-xs text-muted-foreground">—</span>)
                     }
                     {call.call_tags.length > 3 && (
-                        <Badge variant="secondary" className="text-[10px]">+{call.call_tags.length - 3}</Badge>
+                        <Badge variant="secondary" className="text-2xs">+{call.call_tags.length - 3}</Badge>
                     )}
                 </div>
             </TableCell>

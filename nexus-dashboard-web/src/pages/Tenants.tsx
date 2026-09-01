@@ -2,7 +2,7 @@ import { useState, useEffect } from "react";
 import { useNavigate } from "react-router-dom";
 import { Building2, Plus, RefreshCcw } from "lucide-react";
 import { PageHeader } from "@/components/PageHeader";
-import { Button } from "@/components/ui/button";
+import { Button } from "@/components/foundation/compat/button";
 import {
     Table,
     TableBody,
@@ -10,7 +10,7 @@ import {
     TableHead,
     TableHeader,
     TableRow,
-} from "@/components/ui/table";
+} from "@/components/foundation/compat/table";
 import {
     Sheet,
     SheetContent,
@@ -18,12 +18,12 @@ import {
     SheetHeader,
     SheetTitle,
     SheetTrigger,
-} from "@/components/ui/sheet";
+} from "@/components/foundation/compat/sheet";
 import { TenantForm } from "@/components/tenants/TenantForm";
 import { InstitutionDetail } from "@/types";
 import api from "@/lib/api";
 import { toast } from "sonner";
-import { Badge } from "@/components/ui/badge";
+import { Badge } from "@/components/foundation/compat/badge";
 
 export default function Institutions() {
     const navigate = useNavigate();
@@ -53,8 +53,7 @@ export default function Institutions() {
     };
 
     return (
-        <div className="relative flex-1 space-y-4 bg-background p-8 pt-6">
-            <div className="fixed inset-0 overflow-hidden pointer-events-none"><div className="absolute -top-32 -right-32 w-[420px] h-[420px] bg-transparent dark:bg-violet-700/20 rounded-full blur-[100px]" /></div>
+        <div className="ui-page ui-page-stack">
             <PageHeader
                 icon={Building2}
                 title="Institutions"

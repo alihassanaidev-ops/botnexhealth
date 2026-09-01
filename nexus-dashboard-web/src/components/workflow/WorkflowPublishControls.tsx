@@ -7,7 +7,7 @@
  */
 import { useState } from "react"
 import { Loader2, Pause, Play, Trash2, UploadCloud, FlaskConical, RotateCcw, AlertTriangle } from "lucide-react"
-import { Button } from "@/components/ui/button"
+import { Button } from "@/components/foundation/compat/button"
 import {
     Dialog,
     DialogContent,
@@ -15,7 +15,7 @@ import {
     DialogFooter,
     DialogHeader,
     DialogTitle,
-} from "@/components/ui/dialog"
+} from "@/components/foundation/compat/dialog"
 import LaunchChecklistPanel from "@/components/workflow/LaunchChecklistPanel"
 import type { LaunchChecklist } from "@/types/workflow"
 

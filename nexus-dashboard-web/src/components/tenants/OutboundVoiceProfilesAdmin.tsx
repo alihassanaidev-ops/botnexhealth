@@ -1,12 +1,12 @@
 import { useCallback, useEffect, useMemo, useState } from "react"
 import { Check, CheckCircle2, ChevronsUpDown, Loader2, Pencil, Plus, Search, Trash2, X, XCircle } from "lucide-react"
 import { toast } from "sonner"
-import { Badge } from "@/components/ui/badge"
-import { Button } from "@/components/ui/button"
-import { Checkbox } from "@/components/ui/checkbox"
-import { Input } from "@/components/ui/input"
-import { Label } from "@/components/ui/label"
-import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover"
+import { Badge } from "@/components/foundation/compat/badge"
+import { Button } from "@/components/foundation/compat/button"
+import { Checkbox } from "@/components/foundation/compat/checkbox"
+import { Input } from "@/components/foundation/compat/input"
+import { Label } from "@/components/foundation/compat/label"
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/foundation/compat/popover"
 import {
     createAdminOutboundVoiceProfile,
     deleteAdminOutboundVoiceProfile,
@@ -378,13 +378,14 @@ export function OutboundVoiceProfilesAdmin({
                                     <PopoverTrigger asChild>
                                         <Button
                                             type="button"
+                                            size="lg"
                                             variant="outline"
                                             className={
                                                 agentVerificationStatus === "success"
-                                                    ? "h-11 min-w-0 flex-1 justify-between border-green-500/50 px-4 text-left font-normal ring-2 ring-green-500/50"
+                                                    ? " min-w-0 flex-1 justify-between border-green-500/50 px-4 text-left font-normal ring-2 ring-green-500/50"
                                                     : agentVerificationStatus === "error"
-                                                        ? "h-11 min-w-0 flex-1 justify-between border-destructive/50 px-4 text-left font-normal ring-2 ring-destructive/50"
-                                                        : "h-11 min-w-0 flex-1 justify-between px-4 text-left font-normal"
+                                                        ? " min-w-0 flex-1 justify-between border-destructive/50 px-4 text-left font-normal ring-2 ring-destructive/50"
+                                                        : " min-w-0 flex-1 justify-between px-4 text-left font-normal"
                                             }
                                             disabled={loadingAgents || isVerifyingAgent}
                                         >
@@ -496,7 +497,7 @@ export function OutboundVoiceProfilesAdmin({
                                 </p>
                             )}
                             {agentVerificationStatus === "success" && (
-                                <p className="flex items-center gap-1.5 text-sm font-medium text-green-600">
+                                <p className="flex items-center gap-1.5 text-sm font-medium text-green-600 dark:text-green-400">
                                     <CheckCircle2 className="h-4 w-4 shrink-0" />
                                     Agent verified - this ID is active in Retell
                                 </p>
@@ -515,7 +516,8 @@ export function OutboundVoiceProfilesAdmin({
                                     <Button
                                         type="button"
                                         variant="outline"
-                                        className="h-11 w-full justify-between px-4 text-left font-normal"
+                                        size="lg"
+                                        className="w-full justify-between px-4 text-left font-normal"
                                         disabled={loadingNumbers}
                                     >
                                         <span className="min-w-0 truncate">

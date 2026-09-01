@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from "react"
 import { formatDistanceToNow } from "date-fns"
 import { AlertCircle, CheckCircle2, ChevronDown, Clock3, Copy, Loader2, RefreshCw, XCircle } from "lucide-react"
-import { Button } from "@/components/ui/button"
+import { Button } from "@/components/foundation/compat/button"
 import WorkflowCanvas from "@/components/workflow/WorkflowCanvas"
 import { getRunTimeline, listCampaignRuns } from "@/lib/automation-api"
 import { cn } from "@/lib/utils"
@@ -274,7 +274,7 @@ export default function WorkflowExecutionsView({
                             {value}
                         </button>
                     ))}
-                    <Button variant="ghost" size="icon" className="ml-auto h-7 w-7" onClick={refresh} title="Refresh executions">
+                    <Button variant="ghost" size="icon" className="ml-auto w-7" onClick={refresh} title="Refresh executions">
                         <RefreshCw className="h-3.5 w-3.5" />
                     </Button>
                 </div>
@@ -327,7 +327,7 @@ export default function WorkflowExecutionsView({
                 {timeline && (
                     <div className="absolute left-3 top-3 rounded-md border bg-background/95 px-3 py-2 shadow-sm">
                         <div className="text-xs font-medium">Version {timeline.workflow_version.version_number}</div>
-                        <div className="text-[11px] text-muted-foreground">Run {timeline.run.id.slice(0, 8)}</div>
+                        <div className="text-xs text-muted-foreground">Run {timeline.run.id.slice(0, 8)}</div>
                     </div>
                 )}
             </div>
@@ -459,7 +459,7 @@ export default function WorkflowExecutionsView({
                                         <Button
                                             variant="ghost"
                                             size="icon"
-                                            className="ml-auto h-7 w-7"
+                                            className="ml-auto w-7"
                                             aria-label="Copy technical JSON"
                                             title="Copy technical JSON"
                                             onClick={() => void navigator.clipboard?.writeText(formatJson(technicalTab === "input" ? selectedAttempt.input : selectedAttempt.output))}
@@ -467,7 +467,7 @@ export default function WorkflowExecutionsView({
                                             <Copy className="h-3.5 w-3.5" />
                                         </Button>
                                     </div>
-                                    <pre className="max-h-96 overflow-auto whitespace-pre-wrap break-words border-t border-border p-4 text-[11px] leading-5 text-muted-foreground">{formatJson(technicalTab === "input" ? selectedAttempt.input : selectedAttempt.output)}</pre>
+                                    <pre className="max-h-96 overflow-auto whitespace-pre-wrap break-words border-t border-border p-4 text-xs leading-5 text-muted-foreground">{formatJson(technicalTab === "input" ? selectedAttempt.input : selectedAttempt.output)}</pre>
                                 </div>
                             )}
                         </div>

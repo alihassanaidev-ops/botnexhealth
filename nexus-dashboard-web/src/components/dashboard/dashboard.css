@@ -1,0 +1,287 @@
+/* Sibling cards are peers, so they get identical treatment. What separates
+   them is the artwork and the number, not a per-card accent colour. */
+.metric-card {
+    overflow: hidden;
+    min-height: 10.25rem;
+    padding: clamp(1.15rem, calc(1rem + 0.25vw), 1.5rem);
+    border: 1px solid hsl(var(--border) / 0.82);
+    border-radius: var(--surface-radius);
+    background: hsl(var(--card));
+    box-shadow: var(--surface-shadow);
+}
+
+.metric-card-head {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 0.75rem;
+}
+
+/* Label is secondary: lighter and muted, so the number carries the card
+   on weight and colour as well as size. */
+.metric-card-label {
+    max-width: 13rem;
+    color: hsl(var(--muted-foreground));
+    font-size: 0.8rem;
+    font-weight: 580;
+    line-height: 1.35;
+}
+
+/* Icons are trimmed flush to their artwork; the inset is CSS's job. */
+.metric-card-icon {
+    display: grid;
+    width: 3rem;
+    height: 3rem;
+    flex: 0 0 auto;
+    padding: 0.25rem;
+    place-items: center;
+    border-radius: var(--radius-lg);
+}
+
+.metric-card-icon img {
+    width: 100%;
+    height: 100%;
+    min-width: 0;
+    min-height: 0;
+    object-fit: contain;
+}
+
+.metric-card-value {
+    margin-top: 1rem;
+    color: hsl(var(--foreground));
+    font-size: clamp(2.25rem, 2.6vw, 3rem);
+    font-weight: 720;
+    line-height: 1;
+    letter-spacing: -0.055em;
+    font-variant-numeric: tabular-nums;
+}
+
+/* Small uppercase needs more contrast, not less — the old 70% alpha on an
+   already-muted token put this caption under 4:1 against the card. */
+.metric-card-meta {
+    margin-top: 0.45rem;
+    color: hsl(var(--muted-foreground));
+    font-size: 0.68rem;
+    font-weight: 700;
+    letter-spacing: 0.07em;
+    text-transform: uppercase;
+}
+
+/* Loading placeholders mirror the real card so nothing shifts on load. */
+.metric-card-label-ghost {
+    width: 6rem;
+    height: 0.8rem;
+}
+
+.metric-card-value-ghost {
+    width: 7rem;
+    height: clamp(2.25rem, 2.6vw, 3rem);
+    margin-top: 1rem;
+    border-radius: var(--radius-md);
+}
+
+.metric-card-meta-ghost {
+    width: 4.5rem;
+    height: 0.68rem;
+    margin-top: 0.45rem;
+    border-radius: var(--radius-xs);
+}
+
+.metric-card[data-emphasis="secondary"] {
+    min-height: 8.4rem;
+    padding: 1rem 1.1rem;
+    box-shadow: 0 1px 2px hsl(230 40% 10% / 0.04);
+}
+
+.metric-card[data-emphasis="secondary"] .metric-card-icon {
+    width: 2.45rem;
+    height: 2.45rem;
+    padding: 0.2rem;
+}
+
+.metric-card[data-emphasis="secondary"] .metric-card-label {
+    font-size: 0.73rem;
+}
+
+.metric-card[data-emphasis="secondary"] .metric-card-value {
+    margin-top: 0.65rem;
+    font-size: clamp(1.8rem, 2vw, 2.25rem);
+}
+
+.metric-card[data-emphasis="secondary"] .metric-card-value-ghost {
+    margin-top: 0.65rem;
+    height: clamp(1.8rem, 2vw, 2.25rem);
+}
+
+.dashboard-location-control {
+    position: relative;
+    width: clamp(12rem, 14vw, 16rem);
+}
+
+.dashboard-metric-grid {
+    display: grid;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+
+.dashboard-metric-grid-primary {
+    gap: clamp(0.85rem, 1vw, 1.4rem);
+}
+
+.dashboard-metric-grid-secondary {
+    gap: clamp(0.7rem, 0.8vw, 1.1rem);
+}
+
+.dashboard-section-label {
+    margin-bottom: var(--space-3);
+}
+
+.dashboard-panel {
+    overflow: hidden;
+    border: 1px solid hsl(var(--border) / 0.82);
+    border-radius: var(--surface-radius);
+    background: hsl(var(--card));
+    box-shadow: var(--surface-shadow);
+}
+
+.dashboard-detail-grid {
+    display: grid;
+    grid-template-columns: minmax(0, 1.08fr) minmax(21rem, 0.92fr);
+    gap: clamp(1rem, 1.25vw, 1.75rem);
+    align-items: start;
+}
+
+.dashboard-panel-header {
+    padding: clamp(1.15rem, calc(1rem + 0.35vw), 1.55rem);
+    border-bottom: 1px solid hsl(var(--border) / 0.7);
+}
+
+.dashboard-panel-header h3 {
+    color: hsl(var(--foreground));
+    font-size: 0.95rem;
+    font-weight: 700;
+    line-height: 1.3;
+}
+
+.dashboard-panel-header p {
+    margin-top: 0.25rem;
+    color: hsl(var(--muted-foreground));
+    font-size: 0.76rem;
+    line-height: 1.45;
+}
+
+.dashboard-panel-body {
+    padding: clamp(1.15rem, calc(1rem + 0.35vw), 1.55rem);
+}
+
+.dashboard-panel-footer {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--space-2);
+    margin-top: var(--space-5);
+    padding-top: var(--space-4);
+    border-top: 1px solid hsl(var(--border) / 0.7);
+}
+
+.dashboard-queue-item {
+    /* Avatar column width, so the rows below line up under the caller name
+       instead of hanging off an arbitrary indent. */
+    --queue-indent: calc(2rem + 0.625rem);
+    display: grid;
+    gap: 0.5rem;
+    padding: 0.9rem;
+    border: 1px solid hsl(var(--border) / 0.72);
+    border-radius: var(--radius-lg);
+    background: hsl(var(--card));
+    transition: border-color 150ms ease, background 150ms ease;
+}
+
+.dashboard-queue-item:hover {
+    border-color: hsl(var(--border));
+    background: hsl(var(--accent) / 0.32);
+}
+
+.dashboard-queue-indent {
+    padding-left: var(--queue-indent);
+}
+
+.dashboard-tag-row {
+    display: grid;
+    grid-template-columns: minmax(8rem, 10rem) minmax(5rem, 1fr) 4.5rem;
+    align-items: center;
+    gap: 0.85rem;
+}
+
+.dashboard-tag-label {
+    display: inline-flex;
+    min-width: 0;
+    align-items: center;
+    overflow: hidden;
+    padding: 0.35rem 0.6rem;
+    border: 1px solid;
+    border-radius: var(--radius-md);
+    font-size: 0.7rem;
+    font-weight: 650;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    transition: border-color 150ms ease, background 150ms ease;
+}
+
+.dashboard-tag-track {
+    overflow: hidden;
+    height: 0.55rem;
+    border-radius: var(--radius-pill);
+    background: hsl(var(--muted) / 0.72);
+}
+
+.dashboard-tag-fill {
+    height: 100%;
+    border-radius: inherit;
+    transition: width 700ms ease-out;
+}
+
+.dashboard-tag-count {
+    display: flex;
+    flex: 0 0 auto;
+    align-items: center;
+    justify-content: flex-end;
+    gap: 0.3rem;
+}
+
+@media (max-width: 1100px) {
+    .dashboard-metric-grid {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+
+    .dashboard-detail-grid {
+        grid-template-columns: minmax(0, 1fr);
+    }
+}
+
+@media (max-width: 640px) {
+    .metric-card {
+        min-height: 8.9rem;
+    }
+
+    .dashboard-location-control {
+        width: 100%;
+    }
+
+    .dashboard-metric-grid {
+        grid-template-columns: minmax(0, 1fr);
+    }
+
+    .dashboard-tag-row {
+        grid-template-columns: minmax(0, 1fr) auto;
+        gap: 0.55rem 0.75rem;
+    }
+
+    .dashboard-tag-track {
+        grid-column: 1 / -1;
+        grid-row: 2;
+    }
+
+    .dashboard-tag-count {
+        grid-column: 2;
+        grid-row: 1;
+    }
+}

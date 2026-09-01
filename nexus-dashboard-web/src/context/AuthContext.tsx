@@ -2,7 +2,7 @@ import React, { createContext, useCallback, useContext, useEffect, useRef, useSt
 import axios from "axios";
 import api from "@/lib/api";
 import { User } from "@/types";
-import { Button } from "@/components/ui/button";
+import { Button } from "@/components/foundation/compat/button";
 import {
     Dialog,
     DialogContent,
@@ -10,7 +10,7 @@ import {
     DialogFooter,
     DialogHeader,
     DialogTitle,
-} from "@/components/ui/dialog";
+} from "@/components/foundation/compat/dialog";
 import {
     clearAccessToken,
     getAccessToken,

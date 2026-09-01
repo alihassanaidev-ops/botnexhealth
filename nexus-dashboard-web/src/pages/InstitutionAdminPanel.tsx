@@ -23,14 +23,17 @@ import { lastNDaysRange, type DateRangeValue } from "@/lib/date-range"
 
 import { toast } from "sonner"
 
-import { Button } from "@/components/ui/button"
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
-import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog"
-import { Input } from "@/components/ui/input"
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
-import { Switch } from "@/components/ui/switch"
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
-import { FormSkeleton } from "@/components/ui/skeletons"
+import { Badge } from "@/components/foundation/compat/badge"
+import { Button } from "@/components/foundation/compat/button"
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/foundation/compat/card"
+import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/foundation/compat/dialog"
+import { Input } from "@/components/foundation/compat/input"
+import { Label } from "@/components/foundation/compat/label"
+import { UiSelect } from "@/components/foundation/Primitives"
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/foundation/compat/select"
+import { Switch } from "@/components/foundation/compat/switch"
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/foundation/compat/table"
+import { FormSkeleton } from "@/components/foundation/compat/skeletons"
 import {
     calculateROI,
     createLocationBreak,
@@ -193,7 +196,7 @@ function HoursDialog({ location, onClose }: HoursDialogProps) {
 
     return (
         <Dialog open={!!location} onOpenChange={(open) => !open && onClose()}>
-            <DialogContent className="max-w-2xl border-border bg-card max-h-[85vh] overflow-y-auto">
+            <DialogContent className="max-w-2xl max-h-[85vh] overflow-y-auto">
                 <DialogHeader>
                     <DialogTitle>Operating Hours: {location.name}</DialogTitle>
                 </DialogHeader>
@@ -201,9 +204,12 @@ function HoursDialog({ location, onClose }: HoursDialogProps) {
                     <FormSkeleton rows={5} />
                 ) : (
                     <div className="space-y-3">
+                        {/* Rows wrap and the day label flexes: the old fixed
+                            w-40 + w-36 + w-36 needed 28rem of the dialog's
+                            31rem, so a 13" screen scrolled sideways. */}
                         {hours.map((hour) => (
-                            <div key={hour.day_of_week} className="flex items-center gap-3 rounded-lg border border-border bg-muted p-3">
-                                <div className="flex w-40 items-center gap-2">
+                            <div key={hour.day_of_week} className="flex flex-wrap items-center gap-x-3 gap-y-2 rounded-lg border border-border bg-muted p-3">
+                                <div className="flex min-w-[8rem] flex-1 items-center gap-2">
                                     <Switch
                                         checked={hour.is_open}
                                         onCheckedChange={(value) => setHour(hour.day_of_week, { is_open: value })}
@@ -212,21 +218,23 @@ function HoursDialog({ location, onClose }: HoursDialogProps) {
                                         {DAYS.find((d) => d.value === hour.day_of_week)?.label}
                                     </span>
                                 </div>
-                                <Input
-                                    type="time"
-                                    className="w-36"
-                                    disabled={!hour.is_open}
-                                    value={hour.open_time || "09:00"}
-                                    onChange={(e) => setHour(hour.day_of_week, { open_time: e.target.value })}
-                                />
-                                <span className="text-muted-foreground">to</span>
-                                <Input
-                                    type="time"
-                                    className="w-36"
-                                    disabled={!hour.is_open}
-                                    value={hour.close_time || "17:00"}
-                                    onChange={(e) => setHour(hour.day_of_week, { close_time: e.target.value })}
-                                />
+                                <div className="flex flex-none items-center gap-2">
+                                    <Input
+                                        type="time"
+                                        className="w-[7.5rem]"
+                                        disabled={!hour.is_open}
+                                        value={hour.open_time || "09:00"}
+                                        onChange={(e) => setHour(hour.day_of_week, { open_time: e.target.value })}
+                                    />
+                                    <span className="text-muted-foreground">to</span>
+                                    <Input
+                                        type="time"
+                                        className="w-[7.5rem]"
+                                        disabled={!hour.is_open}
+                                        value={hour.close_time || "17:00"}
+                                        onChange={(e) => setHour(hour.day_of_week, { close_time: e.target.value })}
+                                    />
+                                </div>
                                 {!hour.is_open && <span className="text-xs text-muted-foreground">Closed</span>}
                             </div>
                         ))}
@@ -267,7 +275,7 @@ function HoursDialog({ location, onClose }: HoursDialogProps) {
                                             <Button
                                                 variant="ghost"
                                                 size="icon"
-                                                className="h-7 w-7 text-muted-foreground hover:text-destructive"
+                                                className="w-7 text-muted-foreground hover:text-destructive"
                                                 onClick={() => removeBreak(b.id)}
                                             >
                                                 <Trash2 className="h-4 w-4" />
@@ -278,20 +286,22 @@ function HoursDialog({ location, onClose }: HoursDialogProps) {
                                 </div>
                             )}
 
-                            <div className="flex flex-wrap items-end gap-2 rounded-lg border border-dashed border-border p-3">
+                            {/* Two columns, not a wrapping flex row. The five
+                                fixed-width controls needed ~37rem; this dialog is
+                                34rem wide until the viewport passes ~1900px, so
+                                they used to wrap into ragged rows. */}
+                            <div className="grid grid-cols-2 items-end gap-2 rounded-lg border border-dashed border-border p-3">
                                 <div className="space-y-1">
-                                    <label className="text-xs text-muted-foreground">Name</label>
+                                    <Label className="text-xs">Name</Label>
                                     <Input
-                                        className="w-32"
                                         value={breakName}
                                         onChange={(e) => setBreakName(e.target.value)}
                                         placeholder="Lunch"
                                     />
                                 </div>
                                 <div className="space-y-1">
-                                    <label className="text-xs text-muted-foreground">Day</label>
-                                    <select
-                                        className="h-9 w-32 rounded-md border border-input bg-background px-2 text-sm"
+                                    <Label className="text-xs">Day</Label>
+                                    <UiSelect
                                         value={breakDay}
                                         onChange={(e) => setBreakDay(e.target.value)}
                                     >
@@ -301,27 +311,32 @@ function HoursDialog({ location, onClose }: HoursDialogProps) {
                                                 {d.label}
                                             </option>
                                         ))}
-                                    </select>
+                                    </UiSelect>
                                 </div>
                                 <div className="space-y-1">
-                                    <label className="text-xs text-muted-foreground">From</label>
+                                    <Label className="text-xs">From</Label>
                                     <Input
                                         type="time"
-                                        className="w-28"
+                                        className="min-w-[7.5rem]"
                                         value={breakStart}
                                         onChange={(e) => setBreakStart(e.target.value)}
                                     />
                                 </div>
                                 <div className="space-y-1">
-                                    <label className="text-xs text-muted-foreground">To</label>
+                                    <Label className="text-xs">To</Label>
                                     <Input
                                         type="time"
-                                        className="w-28"
+                                        className="min-w-[7.5rem]"
                                         value={breakEnd}
                                         onChange={(e) => setBreakEnd(e.target.value)}
                                     />
                                 </div>
-                                <Button variant="outline" onClick={addBreak} disabled={savingBreak}>
+                                <Button
+                                    variant="outline"
+                                    onClick={addBreak}
+                                    disabled={savingBreak}
+                                    className="col-span-2 justify-self-end"
+                                >
                                     {savingBreak && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
                                     Add Break
                                 </Button>
@@ -464,8 +479,7 @@ export default function InstitutionAdminPanel() {
     const comparisonRows = aggregate?.clinic_comparison ?? []
 
     return (
-        <div className="relative space-y-6 bg-background">
-            <div className="fixed inset-0 overflow-hidden pointer-events-none"><div className="absolute -top-32 -right-32 w-[420px] h-[420px] bg-transparent dark:bg-violet-700/20 rounded-full blur-[100px]" /></div>
+        <div className="ui-page ui-page-stack">
             <PageHeader
                 icon={Building2}
                 title="Institution Admin Panel"
@@ -473,14 +487,19 @@ export default function InstitutionAdminPanel() {
                 actions={
                     <>
                         <DateRangePicker value={range} onChange={setRange} />
-                        <Button onClick={loadData} disabled={loading}>
-                            {loading ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <RefreshCcw className="mr-2 h-4 w-4" />}
+                        <Button
+                            variant="secondary"
+                            size="sm"
+                            onClick={loadData}
+                            disabled={loading}
+                            className="gap-2"
+                        >
+                            <RefreshCcw className={`h-3.5 w-3.5 ${loading ? "animate-spin" : ""}`} />
                             Refresh
                         </Button>
                     </>
                 }
             />
-
 
             {/* Chart + ROI side by side (chart goes full-width when ROI has no data) */}
             <div className={`grid gap-6 items-stretch ${roiConfig && roiCalculation ? "lg:grid-cols-[2fr_3fr]" : ""}`}>
@@ -489,9 +508,9 @@ export default function InstitutionAdminPanel() {
 
                 {/* ROI Summary — only render card when config exists */}
                 {roiConfig && (
-                    <Card className="border-border shadow-sm">
-                        <CardHeader className="pb-2">
-                            <CardTitle className="text-base flex items-center gap-2">
+                    <Card>
+                        <CardHeader>
+                            <CardTitle className="flex items-center gap-2">
                                 <TrendingUp className="h-4 w-4 text-primary" />
                                 ROI Summary
                             </CardTitle>
@@ -503,16 +522,16 @@ export default function InstitutionAdminPanel() {
                             ) : roiCalculation ? (
                                 <div className="space-y-4">
                                     {/* ROI hero */}
-                                    <div className="flex items-center justify-between rounded-xl border border-border p-4">
+                                    <div className="flex items-center justify-between rounded-xl border border-border bg-muted/40 p-4">
                                         <div>
                                             <p className="text-xs text-muted-foreground font-medium uppercase tracking-wide">Monthly ROI</p>
                                             <div className="flex items-center gap-1.5 mt-1">
                                                 {roiCalculation.roi_percentage >= 0 ? (
-                                                    <ArrowUp className="h-4 w-4 text-emerald-600" />
+                                                    <ArrowUp className="h-4 w-4 text-emerald-600 dark:text-emerald-400" />
                                                 ) : (
-                                                    <ArrowDown className="h-4 w-4 text-rose-600" />
+                                                    <ArrowDown className="h-4 w-4 text-rose-600 dark:text-rose-400" />
                                                 )}
-                                                <span className={`text-3xl font-extralight tabular-nums ${roiCalculation.roi_percentage >= 0 ? "text-emerald-600" : "text-rose-600"}`}>
+                                                <span className={`text-2xl font-bold tabular-nums ${roiCalculation.roi_percentage >= 0 ? "text-emerald-600 dark:text-emerald-400" : "text-rose-600 dark:text-rose-400"}`}>
                                                     {roiCalculation.roi_percentage}%
                                                 </span>
                                             </div>
@@ -533,21 +552,21 @@ export default function InstitutionAdminPanel() {
                                             { label: "Staff Saved", value: `${roiCalculation.staff_time_saved_hours}h`, up: true, sub: `$${roiCalculation.staff_cost_saved.toLocaleString()}`, icon: Clock },
                                             { label: "Sub. Cost", value: `$${roiCalculation.monthly_cost.toLocaleString()}`, up: false, icon: CreditCard },
                                         ].map((m) => (
-                                            <div key={m.label} className="flex items-center gap-3 rounded-xl border border-border p-3">
-                                                <div className="grid size-9 shrink-0 place-items-center rounded-lg bg-foreground shadow-[0_10px_24px_rgba(15,23,42,0.14)]">
-                                                    <m.icon className="size-5 text-background" />
+                                            <div key={m.label} className="flex items-center gap-3 rounded-xl border border-border bg-muted/40 p-3">
+                                                <div className="grid size-9 shrink-0 place-items-center rounded-lg bg-primary/10 text-primary">
+                                                    <m.icon className="size-5" />
                                                 </div>
                                                 <div className="min-w-0">
-                                                    <p className="text-[10px] text-muted-foreground font-medium uppercase tracking-wide">{m.label}</p>
+                                                    <p className="text-2xs text-muted-foreground font-medium uppercase tracking-wide">{m.label}</p>
                                                     <div className="flex items-center gap-1 mt-0.5">
                                                         {m.up !== undefined && (
                                                             m.up
-                                                                ? <ArrowUp className="h-3 w-3 text-emerald-600" />
-                                                                : <ArrowDown className="h-3 w-3 text-rose-600" />
+                                                                ? <ArrowUp className="h-3 w-3 text-emerald-600 dark:text-emerald-400" />
+                                                                : <ArrowDown className="h-3 w-3 text-rose-600 dark:text-rose-400" />
                                                         )}
                                                         <span className="text-sm font-semibold tabular-nums text-foreground">{m.value}</span>
                                                     </div>
-                                                    {m.sub && <p className="text-[10px] text-muted-foreground/70 mt-0.5">{m.sub} saved</p>}
+                                                    {m.sub && <p className="text-2xs text-muted-foreground mt-0.5">{m.sub} saved</p>}
                                                 </div>
                                             </div>
                                         ))}
@@ -563,7 +582,7 @@ export default function InstitutionAdminPanel() {
                 )}
             </div>
 
-            <Card className="border-border shadow-sm">
+            <Card>
                 <CardHeader>
                     <CardTitle className="flex items-center gap-2">
                         <MapPin className="h-4 w-4" />
@@ -574,7 +593,7 @@ export default function InstitutionAdminPanel() {
                     </CardDescription>
                 </CardHeader>
                 <CardContent>
-                    <div className="overflow-hidden rounded-lg border border-border/70 bg-background/60">
+                    <div className="overflow-hidden rounded-lg border border-border bg-background/60 shadow-sm">
                         <Table>
                             <TableHeader>
                                 <TableRow>
@@ -618,12 +637,14 @@ export default function InstitutionAdminPanel() {
                                                 </Select>
                                             </TableCell>
                                             <TableCell>
-                                                <span className={location.is_active
-                                                    ? "inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium ring-1 ring-inset bg-green-50 text-green-700 ring-green-600/20 dark:bg-green-900/20 dark:text-green-400 dark:ring-green-900/10"
-                                                    : "inline-flex rounded-full border border-border bg-muted px-2 py-0.5 text-xs text-muted-foreground"}
+                                                <Badge
+                                                    variant="secondary"
+                                                    className={location.is_active
+                                                        ? "border border-border bg-primary/10 text-primary"
+                                                        : "border border-border bg-muted text-muted-foreground"}
                                                 >
                                                     {location.is_active ? "Active" : "Inactive"}
-                                                </span>
+                                                </Badge>
                                             </TableCell>
                                             <TableCell className="text-right">
                                                 <div className="flex justify-end gap-2">

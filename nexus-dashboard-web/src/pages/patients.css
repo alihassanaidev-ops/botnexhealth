@@ -1,0 +1,151 @@
+.patients-surface {
+    overflow: hidden;
+    border: 1px solid hsl(var(--border) / 0.82);
+    border-radius: var(--surface-radius);
+    background: hsl(var(--card));
+    box-shadow: var(--surface-shadow);
+}
+
+.patients-header-total {
+    display: grid;
+    justify-items: end;
+    min-width: 5rem;
+}
+
+.patients-header-total p {
+    color: hsl(var(--foreground));
+    font-size: 1.55rem;
+    font-weight: 720;
+    line-height: 1;
+    letter-spacing: -0.035em;
+    font-variant-numeric: tabular-nums;
+}
+
+.patients-header-total span {
+    margin-top: 0.25rem;
+    color: hsl(var(--muted-foreground));
+    font-size: 0.66rem;
+}
+
+.patients-toolbar {
+    display: flex;
+    align-items: center;
+    gap: 0.55rem;
+    padding: 0.75rem;
+    border: 1px solid hsl(var(--border) / 0.82);
+    border-radius: var(--surface-radius);
+    background: hsl(var(--card));
+    box-shadow: 0 1px 2px hsl(230 40% 10% / 0.04);
+}
+
+.patients-search,
+.patients-dialog-search {
+    position: relative;
+    width: clamp(15rem, 24vw, 22rem);
+}
+
+.patients-reset {
+    min-height: var(--control-md);
+    padding-inline: 0.7rem;
+}
+
+.patients-table-scroll {
+    width: 100%;
+    overflow-x: auto;
+}
+
+.patients-table {
+    min-width: 46rem;
+    font-size: 0.78rem;
+}
+
+.patients-table .ui-table-head,
+.patients-table .ui-table-cell {
+    padding-inline: 1rem;
+}
+
+.patients-pagination {
+    display: flex;
+    flex-direction: column;
+    gap: 0.75rem;
+    padding: 0.85rem 1rem;
+    border-top: 1px solid hsl(var(--border));
+    background: hsl(var(--muted) / 0.18);
+}
+
+.patients-detail-dialog {
+    width: min(calc(100dvw - 2rem), 52rem);
+}
+
+.patients-merge-dialog {
+    width: min(calc(100dvw - 2rem), 38rem);
+}
+
+.patients-dialog-search {
+    width: 100%;
+}
+
+.patients-merge-results {
+    max-height: min(20rem, 42dvh);
+    overflow-y: auto;
+    border: 1px solid hsl(var(--border));
+    border-radius: var(--radius-lg);
+    background: hsl(var(--card));
+}
+
+.patients-merge-row,
+.patients-linked-row {
+    display: flex;
+    min-height: 3.35rem;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.75rem;
+    padding: 0.55rem 0.7rem;
+}
+
+.patients-merge-row + .patients-merge-row,
+.patients-linked-row + .patients-linked-row {
+    border-top: 1px solid hsl(var(--border) / 0.72);
+}
+
+.patients-detail-section {
+    padding: 0.9rem;
+    border: 1px solid hsl(var(--border) / 0.82);
+    border-radius: var(--radius-lg);
+    background: hsl(var(--muted) / 0.18);
+}
+
+.patients-call-row {
+    padding: 0.85rem;
+    border: 1px solid hsl(var(--border) / 0.82);
+    border-radius: var(--radius-md);
+    background: hsl(var(--card));
+}
+
+@media (min-width: 640px) {
+    .patients-pagination {
+        flex-direction: row;
+        align-items: center;
+        justify-content: space-between;
+    }
+}
+
+@media (max-width: 640px) {
+    .patients-header-total {
+        justify-items: start;
+    }
+
+    .patients-toolbar {
+        align-items: stretch;
+    }
+
+    .patients-search {
+        width: 100%;
+        flex: 1;
+    }
+
+    .patients-detail-dialog,
+    .patients-merge-dialog {
+        width: calc(100dvw - 1rem);
+    }
+}

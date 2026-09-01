@@ -3,21 +3,22 @@ import {
     Building2, Phone, CalendarCheck, UserPlus, Percent, Clock, RefreshCcw, Layers, MapPin,
 } from "lucide-react"
 import { PageHeader } from "@/components/PageHeader"
+import groupsIcon from "@/assets/icons/presentation/groups.png"
 import { Area, AreaChart, CartesianGrid, XAxis } from "recharts"
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
-import { Button } from "@/components/ui/button"
-import { Input } from "@/components/ui/input"
-import { Skeleton } from "@/components/ui/skeleton"
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/foundation/compat/card"
+import { Button } from "@/components/foundation/compat/button"
+import { Input } from "@/components/foundation/compat/input"
+import { Skeleton } from "@/components/foundation/compat/skeleton"
 import { Search, ArrowUpDown } from "lucide-react"
 import {
     Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
-} from "@/components/ui/select"
+} from "@/components/foundation/compat/select"
 import {
     Table, TableBody, TableCell, TableHead, TableHeader, TableRow,
-} from "@/components/ui/table"
+} from "@/components/foundation/compat/table"
 import {
     ChartContainer, ChartTooltip, ChartTooltipContent, type ChartConfig,
-} from "@/components/ui/chart"
+} from "@/components/foundation/compat/chart"
 import { StatsCard } from "@/components/dashboard/StatsCard"
 import { ComparisonChart, type ComparisonRow } from "@/components/dashboard/ComparisonChart"
 import { DateRangePicker } from "@/components/dashboard/DateRangePicker"
@@ -175,9 +176,10 @@ export default function GroupDashboard() {
     }
 
     return (
-        <div className="relative flex-1 space-y-6 bg-background p-8 pt-6">
+        <div className="ui-page ui-page-stack">
             <PageHeader
                 icon={Layers}
+                art={groupsIcon}
                 title={title}
                 description={
                     inInstitution
@@ -244,7 +246,7 @@ export default function GroupDashboard() {
 
             {/* Trend + comparison */}
             <div className="grid gap-4 lg:grid-cols-2">
-                <Card className="border-border shadow-sm">
+                <Card>
                     <CardHeader className="pb-2"><CardTitle className="text-base">Call volume trend</CardTitle></CardHeader>
                     <CardContent>
                         {loading ? (
@@ -263,7 +265,7 @@ export default function GroupDashboard() {
                                         </linearGradient>
                                     </defs>
                                     <CartesianGrid vertical={false} strokeDasharray="3 3" className="stroke-border/50" />
-                                    <XAxis dataKey="label" tickLine={false} axisLine={false} tickMargin={8} minTickGap={24} className="text-[10px]" />
+                                    <XAxis dataKey="label" tickLine={false} axisLine={false} tickMargin={8} minTickGap={24} className="text-2xs" />
                                     <ChartTooltip content={<ChartTooltipContent />} />
                                     <Area type="monotone" dataKey="total_calls" stroke="hsl(var(--chart-1))" fill="url(#grpCalls)" strokeWidth={2} />
                                     <Area type="monotone" dataKey="appointments_booked" stroke="hsl(var(--chart-2))" fill="url(#grpBookings)" strokeWidth={2} />
@@ -274,9 +276,9 @@ export default function GroupDashboard() {
                 </Card>
 
                 {atLocation ? (
-                    <Card className="border-border shadow-sm flex items-center justify-center">
+                    <Card className="flex items-center justify-center">
                         <CardContent className="py-12 text-center text-sm text-muted-foreground">
-                            <MapPin className="mx-auto mb-2 h-7 w-7 text-muted-foreground/30" />
+                            <MapPin className="mx-auto mb-2 h-7 w-7 text-muted-foreground" />
                             Viewing a single location. Switch to “All locations” to compare.
                         </CardContent>
                     </Card>
@@ -319,7 +321,7 @@ export default function GroupDashboard() {
                                             { key: "booking_rate", label: "Booking rate", align: "right" },
                                             { key: "avg_call_duration_seconds", label: "Avg call", align: "right" },
                                         ] as const).map((col) => (
-                                            <TableHead key={col.key} className={`px-4 py-3 text-${col.align} text-[11px] font-semibold text-muted-foreground uppercase tracking-wide whitespace-nowrap`}>
+                                            <TableHead key={col.key} className={`px-4 py-3 text-${col.align} text-xs font-semibold text-muted-foreground uppercase tracking-wide whitespace-nowrap`}>
                                                 <button
                                                     onClick={() => toggleSort(col.key)}
                                                     className={`inline-flex items-center gap-1 hover:text-foreground transition-colors ${col.align === "right" ? "flex-row-reverse" : ""} ${sortKey === col.key ? "text-foreground" : ""}`}

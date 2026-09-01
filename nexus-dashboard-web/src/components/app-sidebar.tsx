@@ -1,95 +1,83 @@
-import {
-    Sidebar,
-    SidebarContent,
-    SidebarGroup,
-    SidebarGroupContent,
-    SidebarGroupLabel,
-    SidebarMenu,
-    SidebarMenuButton,
-    SidebarMenuItem,
-    SidebarRail,
-} from "@/components/ui/sidebar"
 import { LocationSelector } from "@/components/location-selector"
-import {
-    Home,
-    Users,
-    Building2,
-    CalendarCheck,
-    CalendarClock,
-    UserCog,
-    Armchair,
-    LayoutDashboard,
-    Megaphone,
-    Phone,
-    PhoneForwarded,
-    Shield,
-    ShieldCheck,
-    ShieldOff,
-    MessageSquare,
-    Mail,
-    MailCheck,
-    Inbox as InboxIcon,
-    Settings,
-    ClipboardList,
-    Layers,
-    Tag,
-} from "lucide-react"
+import { useAppShell } from "@/components/foundation/AppShell"
 import { Link, useLocation } from "react-router-dom"
 import { useAuth } from "@/context/AuthContext"
 import { useInstitution } from "@/context/InstitutionContext"
+import dashboardIcon from "@/assets/icons/presentation/dashboard.png"
+import callsIcon from "@/assets/icons/presentation/calls.png"
+import patientsIcon from "@/assets/icons/presentation/patients-outlined.png"
+import campaignsIcon from "@/assets/icons/presentation/campaigns-outlined.png"
+import schedulingIcon from "@/assets/icons/presentation/scheduling.png"
+import settingsIcon from "@/assets/icons/presentation/settings.png"
+import adminIcon from "@/assets/icons/presentation/admin.png"
+import usersIcon from "@/assets/icons/presentation/users-outlined.png"
+import auditIcon from "@/assets/icons/presentation/audit.png"
+import workflowIcon from "@/assets/icons/presentation/workflow.png"
+import groupsIcon from "@/assets/icons/presentation/groups.png"
+import inboxIcon from "@/assets/icons/presentation/inbox.png"
+import telephonyIcon from "@/assets/icons/presentation/telephony.png"
+import callbackQueueIcon from "@/assets/icons/presentation/callback-queue.png"
+import emailTemplatesIcon from "@/assets/icons/presentation/email-templates-v2.png"
+import campaignEmailsIcon from "@/assets/icons/presentation/campaign-emails-v2.png"
+import sendingAddressIcon from "@/assets/icons/presentation/sending-address-v2.png"
+import emailPreferencesIcon from "@/assets/icons/presentation/email-preferences-v2.png"
+import appointmentTypesIcon from "@/assets/icons/presentation/appointment-types.png"
+import operatoriesIcon from "@/assets/icons/presentation/operatories.png"
+import insurancePlansIcon from "@/assets/icons/presentation/insurance-plans.png"
+import appointmentSyncIcon from "@/assets/icons/presentation/appointment-sync.png"
 
-type NavItemDef = { title: string; url: string; icon: React.ElementType; exact?: boolean }
+type NavItemDef = { title: string; url: string; asset: string; exact?: boolean }
 
 // Admin-only nav items
 const adminNav: NavItemDef[] = [
     {
         title: "Admin Dashboard",
         url: "/admin",
-        icon: LayoutDashboard,
+        asset: dashboardIcon,
         exact: true,
     },
     {
         title: "Institutions",
         url: "/institutions",
-        icon: Users,
+        asset: adminIcon,
     },
     {
         title: "Groups",
         url: "/groups",
-        icon: Layers,
+        asset: groupsIcon,
     },
     {
         title: "Users",
         url: "/admin/users",
-        icon: UserCog,
+        asset: usersIcon,
     },
     {
         // Platform-wide patient conversations. The page filters by practice
         // and location; the API is what actually enforces the span.
         title: "Inbox",
         url: "/inbox",
-        icon: InboxIcon,
+        asset: inboxIcon,
     },
     {
         // Both email admin surfaces ask which practice first.
         title: "Campaign Emails",
         url: "/institution-admin/campaign-email-templates",
-        icon: Mail,
+        asset: campaignEmailsIcon,
     },
     {
         title: "Sending Addresses",
         url: "/institution-admin/email-sending-address",
-        icon: MailCheck,
+        asset: sendingAddressIcon,
     },
     {
         title: "Phone Numbers",
         url: "/admin/twilio",
-        icon: MessageSquare,
+        asset: telephonyIcon,
     },
     {
         title: "Audit Logs",
         url: "/admin/audit-logs",
-        icon: ShieldCheck,
+        asset: auditIcon,
     },
 ]
 
@@ -97,48 +85,48 @@ const institutionAdminNav: NavItemDef[] = [
     {
         title: "Institution Admin",
         url: "/institution-admin",
-        icon: Building2,
+        asset: adminIcon,
         exact: true,
     },
     {
         title: "User Management",
         url: "/institution-admin/users",
-        icon: Users,
+        asset: usersIcon,
     },
     {
         title: "Dashboard",
         url: "/dashboard",
-        icon: Home,
+        asset: dashboardIcon,
     },
     {
         title: "Calls",
         url: "/calls",
-        icon: Phone,
+        asset: callsIcon,
     },
     {
         title: "Callback Queue",
         url: "/callbacks",
-        icon: PhoneForwarded,
+        asset: callbackQueueIcon,
     },
     {
         title: "Call Statuses",
         url: "/institution-admin/call-statuses",
-        icon: Tag,
+        asset: workflowIcon,
     },
     {
         title: "Campaigns",
         url: "/institution-admin/campaigns",
-        icon: Megaphone,
+        asset: campaignsIcon,
     },
     {
         title: "Appointment Sync",
         url: "/institution-admin/appointment-sync",
-        icon: CalendarClock,
+        asset: appointmentSyncIcon,
     },
     {
         title: "DNC Patients",
         url: "/institution-admin/do-not-contact",
-        icon: ShieldOff,
+        asset: patientsIcon,
     },
 ]
 
@@ -146,33 +134,33 @@ const locationAdminNav: NavItemDef[] = [
     {
         title: "Management",
         url: "/location-admin",
-        icon: Building2,
+        asset: adminIcon,
         exact: true,
     },
     {
         title: "Dashboard",
         url: "/dashboard",
-        icon: Home,
+        asset: dashboardIcon,
     },
     {
         title: "Calls",
         url: "/calls",
-        icon: Phone,
+        asset: callsIcon,
     },
     {
         title: "Callback Queue",
         url: "/callbacks",
-        icon: PhoneForwarded,
+        asset: callbackQueueIcon,
     },
     {
         title: "Call Statuses",
         url: "/institution-admin/call-statuses",
-        icon: Tag,
+        asset: workflowIcon,
     },
     {
         title: "Appointment Sync",
         url: "/institution-admin/appointment-sync",
-        icon: CalendarClock,
+        asset: appointmentSyncIcon,
     },
 ]
 
@@ -180,17 +168,17 @@ const staffNav: NavItemDef[] = [
     {
         title: "Dashboard",
         url: "/dashboard",
-        icon: Home,
+        asset: dashboardIcon,
     },
     {
         title: "Calls",
         url: "/calls",
-        icon: Phone,
+        asset: callsIcon,
     },
     {
         title: "Callback Queue",
         url: "/callbacks",
-        icon: PhoneForwarded,
+        asset: callbackQueueIcon,
     },
 ]
 
@@ -199,7 +187,7 @@ const groupNav: NavItemDef[] = [
     {
         title: "Group Dashboard",
         url: "/group",
-        icon: Layers,
+        asset: groupsIcon,
         exact: true,
     },
     {
@@ -207,7 +195,7 @@ const groupNav: NavItemDef[] = [
         // content, so the page renders volumes and response times.
         title: "Conversations",
         url: "/inbox",
-        icon: InboxIcon,
+        asset: inboxIcon,
     },
 ]
 
@@ -216,65 +204,62 @@ const navSetup: NavItemDef[] = [
     {
         title: "Setup Overview",
         url: "/setup",
-        icon: ClipboardList,
+        asset: settingsIcon,
         exact: true,
     },
     {
         title: "Appointment Types",
         url: "/setup/appointment-types",
-        icon: CalendarCheck,
+        asset: appointmentTypesIcon,
     },
     {
         title: "Reasons",
         url: "/setup/reasons",
-        icon: Tag,
+        asset: schedulingIcon,
     },
     {
         title: "Providers & Scheduling",
         url: "/setup/providers",
-        icon: UserCog,
+        asset: schedulingIcon,
     },
     {
         title: "Operatories",
         url: "/setup/operatories",
-        icon: Armchair,
+        asset: operatoriesIcon,
     },
     {
         title: "Insurance Plans",
         url: "/setup/insurance-plans",
-        icon: Shield,
+        asset: insurancePlansIcon,
     },
     {
         title: "Audit Logs",
         url: "/setup/audit-logs",
-        icon: ShieldCheck,
+        asset: auditIcon,
     },
 ]
 
 function NavItem({ item, isActive }: { item: NavItemDef; isActive: boolean }) {
+    const { closeMobile } = useAppShell()
+
     return (
-        <SidebarMenuItem>
-            <SidebarMenuButton
-                asChild
-                tooltip={item.title}
-                className={`
-                    relative transition-all duration-150 rounded-md
-                    ${isActive
-                        ? "bg-sidebar-accent text-sidebar-primary font-semibold before:absolute before:left-0 before:top-1 before:bottom-1 before:w-0.5 before:rounded-full before:bg-sidebar-primary"
-                        : "text-sidebar-foreground font-medium hover:bg-sidebar-accent/50 hover:text-sidebar-foreground"
-                    }
-                `}
+        <li>
+            <Link
+                to={item.url}
+                className="shell-nav-link"
+                data-active={isActive ? "true" : "false"}
+                aria-current={isActive ? "page" : undefined}
+                title={item.title}
+                onClick={closeMobile}
             >
-                <Link to={item.url} aria-current={isActive ? "page" : undefined}>
-                    <item.icon className={`transition-colors ${isActive ? "text-sidebar-primary" : ""}`} />
-                    <span>{item.title}</span>
-                </Link>
-            </SidebarMenuButton>
-        </SidebarMenuItem>
+                <span className="shell-nav-icon" aria-hidden="true"><img src={item.asset} alt="" /></span>
+                <span className="shell-nav-text">{item.title}</span>
+            </Link>
+        </li>
     )
 }
 
-export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
+export function AppSidebar() {
     const { user } = useAuth();
     const { hasPms, pmsType } = useInstitution();
     const location = useLocation();
@@ -301,28 +286,19 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
         : pmsSetupNav;
 
     return (
-        <Sidebar
-            collapsible="icon"
-            className="!top-14 !h-[calc(100svh-3.5rem)]"
-            {...props}
-        >
-            <SidebarContent className="pt-2">
+        <aside className="shell-sidebar" aria-label="Primary navigation">
+            <div className="shell-sidebar-inner">
                 {user?.role === "INSTITUTION_ADMIN" && (
-                    <SidebarGroup className="pt-2">
-                        <SidebarGroupLabel className="text-[10px] font-semibold uppercase tracking-widest text-sidebar-foreground/40 px-2 mb-1">
-                            Active Location
-                        </SidebarGroupLabel>
-                        <SidebarGroupContent className="px-2">
+                    <section className="shell-nav-section">
+                        <h2 className="shell-nav-label">Active Location</h2>
+                        <div className="shell-location-wrap">
                             <LocationSelector />
-                        </SidebarGroupContent>
-                    </SidebarGroup>
+                        </div>
+                    </section>
                 )}
-                <SidebarGroup>
-                    <SidebarGroupLabel className="text-[10px] font-semibold uppercase tracking-widest text-sidebar-foreground/40 px-2 mb-1 mt-2">
-                        Menu
-                    </SidebarGroupLabel>
-                    <SidebarGroupContent>
-                        <SidebarMenu>
+                <section className="shell-nav-section">
+                    <h2 className="shell-nav-label">Menu</h2>
+                    <ul className="shell-nav-list">
                             {mainNav.map((item) => (
                                 <NavItem
                                     key={item.title}
@@ -338,20 +314,16 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
                                 patient directory in place of Practice Setup. */}
                             {isInstitution && !hasPms && (
                                 <NavItem
-                                    item={{ title: "Patients", url: "/patients", icon: Users }}
+                                    item={{ title: "Patients", url: "/patients", asset: patientsIcon }}
                                     isActive={location.pathname === "/patients" || location.pathname.startsWith("/patients/")}
                                 />
                             )}
-                        </SidebarMenu>
-                    </SidebarGroupContent>
-                </SidebarGroup>
+                    </ul>
+                </section>
                 {isInstitution && hasPms && (
-                    <SidebarGroup>
-                        <SidebarGroupLabel className="text-[10px] font-semibold uppercase tracking-widest text-sidebar-foreground/40 px-2 mb-1">
-                            Practice Setup
-                        </SidebarGroupLabel>
-                        <SidebarGroupContent>
-                            <SidebarMenu>
+                    <section className="shell-nav-section">
+                        <h2 className="shell-nav-label">Practice Setup</h2>
+                        <ul className="shell-nav-list">
                                 {setupNav.map((item) => (
                                     <NavItem
                                         key={item.title}
@@ -363,23 +335,19 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
                                         }
                                     />
                                 ))}
-                            </SidebarMenu>
-                        </SidebarGroupContent>
-                    </SidebarGroup>
+                        </ul>
+                    </section>
                 )}
                 {isInstitution && (
-                    <SidebarGroup>
-                        <SidebarGroupLabel className="text-[10px] font-semibold uppercase tracking-widest text-sidebar-foreground/40 px-2 mb-1">
-                            Settings
-                        </SidebarGroupLabel>
-                        <SidebarGroupContent>
-                            <SidebarMenu>
+                    <section className="shell-nav-section">
+                        <h2 className="shell-nav-label">Settings</h2>
+                        <ul className="shell-nav-list">
                                 {user?.role === "INSTITUTION_ADMIN" && (
                                     <NavItem
                                         item={{
                                             title: "Email Templates",
                                             url: "/institution-admin/email-templates",
-                                            icon: Mail,
+                                            asset: emailTemplatesIcon,
                                         }}
                                         isActive={location.pathname === "/institution-admin/email-templates"}
                                     />
@@ -391,7 +359,7 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
                                     item={{
                                         title: "Inbox",
                                         url: "/inbox",
-                                        icon: InboxIcon,
+                                        asset: inboxIcon,
                                     }}
                                     isActive={location.pathname.startsWith("/inbox")}
                                 />
@@ -400,7 +368,7 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
                                         item={{
                                             title: "Campaign Emails",
                                             url: "/institution-admin/campaign-email-templates",
-                                            icon: Mail,
+                                            asset: campaignEmailsIcon,
                                         }}
                                         isActive={location.pathname.startsWith("/institution-admin/campaign-email-templates")}
                                     />
@@ -410,7 +378,7 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
                                         item={{
                                             title: "Sending Address",
                                             url: "/institution-admin/email-sending-address",
-                                            icon: Mail,
+                                            asset: sendingAddressIcon,
                                         }}
                                         isActive={location.pathname.startsWith("/institution-admin/email-sending-address")}
                                     />
@@ -419,7 +387,7 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
                                     item={{
                                         title: "Email Preferences",
                                         url: "/notification-preferences",
-                                        icon: MailCheck,
+                                        asset: emailPreferencesIcon,
                                     }}
                                     isActive={location.pathname === "/notification-preferences"}
                                 />
@@ -428,17 +396,15 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
                                         item={{
                                             title: "Settings",
                                             url: "/institution-admin/settings",
-                                            icon: Settings,
+                                            asset: settingsIcon,
                                         }}
                                         isActive={location.pathname === "/institution-admin/settings" || location.pathname.startsWith("/institution-admin/settings")}
                                     />
                                 )}
-                            </SidebarMenu>
-                        </SidebarGroupContent>
-                    </SidebarGroup>
+                        </ul>
+                    </section>
                 )}
-            </SidebarContent>
-            <SidebarRail />
-        </Sidebar>
+            </div>
+        </aside>
     )
 }

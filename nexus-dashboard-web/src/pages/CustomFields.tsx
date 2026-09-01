@@ -1,17 +1,17 @@
 import { useEffect, useState, useCallback } from "react"
-import { Button } from "@/components/ui/button"
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
-import { Badge } from "@/components/ui/badge"
-import { Input } from "@/components/ui/input"
-import { Label } from "@/components/ui/label"
-import { Switch } from "@/components/ui/switch"
+import { Button } from "@/components/foundation/compat/button"
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/foundation/compat/table"
+import { Badge } from "@/components/foundation/compat/badge"
+import { Input } from "@/components/foundation/compat/input"
+import { Label } from "@/components/foundation/compat/label"
+import { Switch } from "@/components/foundation/compat/switch"
 import {
     Select,
     SelectContent,
     SelectItem,
     SelectTrigger,
     SelectValue,
-} from "@/components/ui/select"
+} from "@/components/foundation/compat/select"
 import {
     Dialog,
     DialogContent,
@@ -19,7 +19,7 @@ import {
     DialogFooter,
     DialogHeader,
     DialogTitle,
-} from "@/components/ui/dialog"
+} from "@/components/foundation/compat/dialog"
 import { toast } from "sonner"
 import { Plus, Pencil, Trash2, ShieldAlert, EyeOff, ListChecks } from "lucide-react"
 import { PageHeader } from "@/components/PageHeader"
@@ -211,8 +211,7 @@ export default function CustomFields() {
     }
 
     return (
-        <div className="relative flex-1 space-y-4 bg-background p-8 pt-6">
-            <div className="fixed inset-0 overflow-hidden pointer-events-none"><div className="absolute -top-32 -right-32 w-[420px] h-[420px] bg-transparent dark:bg-violet-700/20 rounded-full blur-[100px]" /></div>
+        <div className="ui-page ui-page-stack">
             <PageHeader
                 icon={ListChecks}
                 title="Custom Fields"

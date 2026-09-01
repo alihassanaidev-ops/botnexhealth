@@ -13,11 +13,12 @@ import {
 import { PageHeader } from "@/components/PageHeader"
 import { toast } from "sonner"
 
-import { Button } from "@/components/ui/button"
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
-import { Input } from "@/components/ui/input"
-import { Label } from "@/components/ui/label"
-import { FormSkeleton } from "@/components/ui/skeletons"
+import { Button } from "@/components/foundation/compat/button"
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/foundation/compat/card"
+import { Input } from "@/components/foundation/compat/input"
+import { Label } from "@/components/foundation/compat/label"
+import { UiSelect } from "@/components/foundation/Primitives"
+import { FormSkeleton } from "@/components/foundation/compat/skeletons"
 import {
     Table,
     TableBody,
@@ -25,7 +26,7 @@ import {
     TableHead,
     TableHeader,
     TableRow,
-} from "@/components/ui/table"
+} from "@/components/foundation/compat/table"
 import {
     Dialog,
     DialogContent,
@@ -33,7 +34,7 @@ import {
     DialogFooter,
     DialogHeader,
     DialogTitle,
-} from "@/components/ui/dialog"
+} from "@/components/foundation/compat/dialog"
 import {
     createTransferNumber,
     deleteTransferNumber,
@@ -348,16 +349,14 @@ export default function InstitutionSettings() {
 
     if (loading) {
         return (
-            <div className="relative flex-1 space-y-4 bg-background p-8 pt-6">
-                <div className="fixed inset-0 overflow-hidden pointer-events-none"><div className="absolute -top-32 -right-32 w-[420px] h-[420px] bg-transparent dark:bg-violet-700/20 rounded-full blur-[100px]" /></div>
+            <div className="ui-page ui-page-stack">
                 <FormSkeleton rows={6} />
             </div>
         )
     }
 
     return (
-        <div className="relative flex-1 space-y-4 bg-background p-8 pt-6">
-            <div className="fixed inset-0 overflow-hidden pointer-events-none"><div className="absolute -top-32 -right-32 w-[420px] h-[420px] bg-transparent dark:bg-violet-700/20 rounded-full blur-[100px]" /></div>
+        <div className="ui-page ui-page-stack">
             <PageHeader
                 icon={Settings}
                 title="Settings"
@@ -365,7 +364,7 @@ export default function InstitutionSettings() {
             />
 
             {/* Billing Section */}
-            <Card className="border-border bg-background/60 shadow-sm mt-4">
+            <Card className="bg-background/60 mt-4">
                 <CardHeader>
                     <CardTitle className="flex items-center gap-2">
                         <Mail className="h-4 w-4" />
@@ -477,7 +476,7 @@ export default function InstitutionSettings() {
 
             {/* Transfer Numbers Section */}
             <div className="space-y-4 mt-4">
-                <Card className="border-border bg-background/60 shadow-sm">
+                <Card className="bg-background/60">
                     <CardHeader>
                         <CardTitle className="flex items-center gap-2">
                             <Phone className="h-4 w-4" />
@@ -500,8 +499,7 @@ export default function InstitutionSettings() {
                         {transferRows.map((row) => (
                             <div key={row.id} className="grid gap-4 sm:grid-cols-12 items-start">
                                 <div className="sm:col-span-4">
-                                    <select
-                                        className="flex h-9 w-full items-center justify-between whitespace-nowrap rounded-md border border-border/80 bg-background px-3 py-2 text-sm shadow-sm ring-offset-background placeholder:text-muted-foreground focus:border-primary/50 focus:outline-none focus:ring-2 focus:ring-primary/25 disabled:cursor-not-allowed disabled:opacity-50"
+                                    <UiSelect
                                         value={row.locationId}
                                         onChange={(e) => handleLocationChange(row.id, e.target.value)}
                                     >
@@ -511,7 +509,7 @@ export default function InstitutionSettings() {
                                                 {loc.name}
                                             </option>
                                         ))}
-                                    </select>
+                                    </UiSelect>
                                 </div>
                                 <div className="sm:col-span-3">
                                     <Input
@@ -555,7 +553,7 @@ export default function InstitutionSettings() {
                     </CardContent>
                 </Card>
 
-                <Card className="border-border bg-background/60 shadow-sm">
+                <Card className="bg-background/60">
                     <CardHeader>
                         <CardTitle className="flex items-center gap-2">
                             <Phone className="h-4 w-4" />

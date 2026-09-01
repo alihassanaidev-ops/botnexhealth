@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from "react"
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
-import { Switch } from "@/components/ui/switch"
-import { Label } from "@/components/ui/label"
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/foundation/compat/card"
+import { Switch } from "@/components/foundation/compat/switch"
+import { Label } from "@/components/foundation/compat/label"
 import { toast } from "sonner"
 import {
     getNotificationPreferences,
@@ -17,9 +17,9 @@ import { Phone, AlertTriangle, CalendarCheck, Loader2, Plus, Trash2, Bell, MailC
 import { PageHeader } from "@/components/PageHeader"
 import { useAuth } from "@/context/AuthContext"
 import { useInstitution } from "@/context/InstitutionContext"
-import { Input } from "@/components/ui/input"
-import { Checkbox } from "@/components/ui/checkbox"
-import { Badge } from "@/components/ui/badge"
+import { Input } from "@/components/foundation/compat/input"
+import { Checkbox } from "@/components/foundation/compat/checkbox"
+import { Badge } from "@/components/foundation/compat/badge"
 import {
     Table,
     TableBody,
@@ -27,9 +27,9 @@ import {
     TableHead,
     TableHeader,
     TableRow,
-} from "@/components/ui/table"
-import { Button } from "@/components/ui/button"
-import { FormSkeleton } from "@/components/ui/skeletons"
+} from "@/components/foundation/compat/table"
+import { Button } from "@/components/foundation/compat/button"
+import { FormSkeleton } from "@/components/foundation/compat/skeletons"
 
 const TEMPLATE_META: Record<string, { label: string; description: string; icon: React.ElementType }> = {
     call_summary: {
@@ -186,7 +186,7 @@ export default function NotificationPreferences() {
     }
 
     return (
-        <div className="p-6 max-w-4xl mx-auto space-y-6">
+        <div className="ui-page ui-page-stack mx-auto max-w-4xl">
             <PageHeader
                 icon={MailCheck}
                 title="Email Preferences"
@@ -233,7 +233,7 @@ export default function NotificationPreferences() {
                                             >
                                                 {meta.label}
                                             </Label>
-                                            <p className="text-[10px] leading-relaxed text-muted-foreground">
+                                            <p className="text-2xs leading-relaxed text-muted-foreground">
                                                 {meta.description}
                                             </p>
                                         </div>
@@ -288,7 +288,7 @@ export default function NotificationPreferences() {
                                         Add
                                     </Button>
                                 </div>
-                                <div className="flex flex-wrap items-center gap-x-4 gap-y-2 text-[11px]">
+                                <div className="flex flex-wrap items-center gap-x-4 gap-y-2 text-xs">
                                     {([
                                         ["call_summary", "Call Summary"],
                                         ["urgent_alert", "Urgent Alert"],
@@ -317,7 +317,7 @@ export default function NotificationPreferences() {
                             {extRecipientsLoading ? (
                                 <FormSkeleton rows={3} />
                             ) : extRecipients.length === 0 ? (
-                                <p className="text-[11px] text-muted-foreground text-center py-4">
+                                <p className="text-xs text-muted-foreground text-center py-4">
                                     No external recipients configured.
                                 </p>
                             ) : (
@@ -341,7 +341,7 @@ export default function NotificationPreferences() {
                                                             </div>
                                                             <Badge
                                                                 variant="outline"
-                                                                className="text-[9px] h-4 px-1 uppercase tracking-tighter"
+                                                                className="text-2xs h-4 px-1 uppercase tracking-tighter"
                                                             >
                                                                 {r.template_type.replace(/_/g, " ")}
                                                             </Badge>
@@ -362,7 +362,7 @@ export default function NotificationPreferences() {
                                                             <Button
                                                                 variant="ghost"
                                                                 size="icon"
-                                                                className="h-7 w-7"
+                                                                className="w-7"
                                                                 onClick={() =>
                                                                     handleDeleteExtRecipient(r.id)
                                                                 }

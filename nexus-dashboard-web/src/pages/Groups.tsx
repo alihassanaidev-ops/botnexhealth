@@ -4,23 +4,25 @@ import { zodResolver } from "@hookform/resolvers/zod"
 import * as z from "zod"
 import { Layers, Plus, RefreshCw, Settings2, X, Building2 } from "lucide-react"
 import { PageHeader } from "@/components/PageHeader"
-import { Button } from "@/components/ui/button"
-import { Card, CardContent } from "@/components/ui/card"
-import { Input } from "@/components/ui/input"
+import { Button } from "@/components/foundation/compat/button"
+import { Card, CardContent } from "@/components/foundation/compat/card"
+import { Input } from "@/components/foundation/compat/input"
 import {
     Table, TableBody, TableCell, TableHead, TableHeader, TableRow,
-} from "@/components/ui/table"
+} from "@/components/foundation/compat/table"
 import {
     Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle,
-} from "@/components/ui/dialog"
+} from "@/components/foundation/compat/dialog"
 import {
     Form, FormControl, FormField, FormItem, FormLabel, FormMessage,
-} from "@/components/ui/form"
+} from "@/components/foundation/compat/form"
 import {
     Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
-} from "@/components/ui/select"
-import { Skeleton } from "@/components/ui/skeleton"
+} from "@/components/foundation/compat/select"
+import { Skeleton } from "@/components/foundation/compat/skeleton"
 import { toast } from "sonner"
+import groupsIcon from "@/assets/icons/presentation/groups.png"
+import "./groups.css"
 import api from "@/lib/api"
 import {
     listGroups, createGroup, assignInstitution, unassignInstitution,
@@ -55,15 +57,15 @@ function CreateGroupDialog({ open, onClose, onCreated }: { open: boolean; onClos
 
     return (
         <Dialog open={open} onOpenChange={(o) => !o && onClose()}>
-            <DialogContent className="max-w-md">
-                <DialogHeader>
-                    <DialogTitle className="flex items-center gap-2"><Layers className="h-5 w-5" /> New Group</DialogTitle>
+            <DialogContent className="groups-dialog groups-create-dialog">
+                <DialogHeader className="groups-dialog-header">
+                    <DialogTitle className="groups-dialog-title"><span className="groups-dialog-mark ui-artwork"><img src={groupsIcon} alt="" /></span> New Group</DialogTitle>
                     <DialogDescription>
                         A DSO/practice-group umbrella. The invited user gets the read-only GROUP_ADMIN role over the group's practices.
                     </DialogDescription>
                 </DialogHeader>
                 <Form {...form}>
-                    <form onSubmit={form.handleSubmit(onSubmit)} className="space-y-4">
+                    <form onSubmit={form.handleSubmit(onSubmit)} className="groups-form">
                         <FormField control={form.control} name="name" render={({ field }) => (
                             <FormItem><FormLabel>Group Name</FormLabel><FormControl><Input placeholder="Bright Dental Group" {...field} /></FormControl><FormMessage /></FormItem>
                         )} />
@@ -73,7 +75,7 @@ function CreateGroupDialog({ open, onClose, onCreated }: { open: boolean; onClos
                         <FormField control={form.control} name="email" render={({ field }) => (
                             <FormItem><FormLabel>Group Admin Email</FormLabel><FormControl><Input placeholder="ops@brightdental.com" {...field} /></FormControl><FormMessage /></FormItem>
                         )} />
-                        <Button type="submit" className="w-full">Create Group</Button>
+                        <Button type="submit" className="groups-submit">Create Group</Button>
                     </form>
                 </Form>
             </DialogContent>
@@ -126,31 +128,31 @@ function ManageMembersDialog({
 
     return (
         <Dialog open={!!group} onOpenChange={(o) => !o && onClose()}>
-            <DialogContent className="max-w-lg">
-                <DialogHeader>
-                    <DialogTitle className="flex items-center gap-2"><Settings2 className="h-5 w-5" /> {group.name} — members</DialogTitle>
+            <DialogContent className="groups-dialog groups-members-dialog">
+                <DialogHeader className="groups-dialog-header">
+                    <DialogTitle className="groups-dialog-title"><span className="groups-dialog-mark ui-artwork"><img src={groupsIcon} alt="" /></span> {group.name} — members</DialogTitle>
                     <DialogDescription>Assign or remove practices. Members move with a single FK flip — no data is touched.</DialogDescription>
                 </DialogHeader>
 
-                <div className="flex items-center gap-2">
+                <div className="groups-member-picker">
                     <Select value={toAdd} onValueChange={setToAdd}>
-                        <SelectTrigger className="h-9"><SelectValue placeholder="Add a practice…" /></SelectTrigger>
+                        <SelectTrigger><SelectValue placeholder="Add a practice…" /></SelectTrigger>
                         <SelectContent>
                             {unassigned.length === 0
                                 ? <div className="px-2 py-1.5 text-sm text-muted-foreground">No unassigned practices</div>
                                 : unassigned.map((i) => <SelectItem key={i.id} value={i.id}>{i.name}</SelectItem>)}
                         </SelectContent>
                     </Select>
-                    <Button size="sm" onClick={doAssign} disabled={!toAdd || busy} className="gap-1 shrink-0"><Plus className="h-3.5 w-3.5" /> Add</Button>
+                    <Button size="sm" onClick={doAssign} disabled={!toAdd || busy} className="groups-member-add"><Plus className="h-3.5 w-3.5" /> Add</Button>
                 </div>
 
-                <div className="max-h-72 overflow-y-auto rounded-md border divide-y">
+                <div className="groups-member-list">
                     {members.length === 0 ? (
-                        <p className="p-4 text-sm text-muted-foreground text-center">No practices in this group yet.</p>
+                        <p className="groups-member-empty">No practices in this group yet.</p>
                     ) : members.map((m) => (
-                        <div key={m.id} className="flex items-center justify-between gap-2 px-3 py-2">
-                            <span className="flex items-center gap-2 text-sm"><Building2 className="h-4 w-4 text-muted-foreground" /> {m.name}</span>
-                            <Button variant="ghost" size="sm" className="h-7 gap-1 text-xs text-destructive" disabled={busy} onClick={() => doRemove(m)}>
+                        <div key={m.id} className="groups-member-row">
+                            <span className="groups-member-name"><span className="groups-member-icon"><Building2 /></span><span>{m.name}</span></span>
+                            <Button variant="ghost" size="sm" className="groups-member-remove" disabled={busy} onClick={() => doRemove(m)}>
                                 <X className="h-3.5 w-3.5" /> Remove
                             </Button>
                         </div>
@@ -190,7 +192,7 @@ export default function Groups() {
     const managingLive = managing ? groups.find((g) => g.id === managing.id) ?? managing : null
 
     return (
-        <div className="relative flex-1 space-y-6 bg-background p-8 pt-6">
+        <div className="ui-page ui-page-stack">
             <PageHeader
                 icon={Layers}
                 title="Groups"
@@ -210,10 +212,10 @@ export default function Groups() {
                     <Table className="w-full text-sm">
                         <TableHeader className="border-b border-border bg-muted">
                             <TableRow>
-                                <TableHead className="px-4 py-3 text-left text-[11px] font-semibold text-muted-foreground uppercase tracking-wide">Group</TableHead>
-                                <TableHead className="px-4 py-3 text-left text-[11px] font-semibold text-muted-foreground uppercase tracking-wide">Slug</TableHead>
-                                <TableHead className="px-4 py-3 text-left text-[11px] font-semibold text-muted-foreground uppercase tracking-wide">Practices</TableHead>
-                                <TableHead className="px-4 py-3 text-right text-[11px] font-semibold text-muted-foreground uppercase tracking-wide">Actions</TableHead>
+                                <TableHead className="px-4 py-3 text-left text-xs font-semibold text-muted-foreground uppercase tracking-wide">Group</TableHead>
+                                <TableHead className="px-4 py-3 text-left text-xs font-semibold text-muted-foreground uppercase tracking-wide">Slug</TableHead>
+                                <TableHead className="px-4 py-3 text-left text-xs font-semibold text-muted-foreground uppercase tracking-wide">Practices</TableHead>
+                                <TableHead className="px-4 py-3 text-right text-xs font-semibold text-muted-foreground uppercase tracking-wide">Actions</TableHead>
                             </TableRow>
                         </TableHeader>
                         <TableBody>
@@ -229,7 +231,7 @@ export default function Groups() {
                                     <TableCell className="px-4 font-mono text-sm text-muted-foreground">{g.slug}</TableCell>
                                     <TableCell className="px-4 tabular-nums">{g.member_count}</TableCell>
                                     <TableCell className="px-4 text-right">
-                                        <Button variant="outline" size="sm" className="h-7 gap-1 text-xs" onClick={() => setManaging(g)}>
+                                        <Button variant="outline" size="sm" className="gap-1 text-xs" onClick={() => setManaging(g)}>
                                             <Settings2 className="h-3.5 w-3.5" /> Manage members
                                         </Button>
                                     </TableCell>

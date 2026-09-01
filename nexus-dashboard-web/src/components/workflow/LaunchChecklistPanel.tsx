@@ -84,7 +84,7 @@ export default function LaunchChecklistPanel({
             <div className="space-y-3">
                 {Array.from(grouped.entries()).map(([section, sectionItems]) => (
                     <div key={section} className="space-y-1.5">
-                        <div className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
+                        <div className="text-2xs font-semibold uppercase tracking-wide text-muted-foreground">
                             {SECTION_LABELS[section] ?? section}
                         </div>
                         <ul className="space-y-1.5">
@@ -117,7 +117,7 @@ function StatusPill({ status }: { status: LaunchChecklistStatus }) {
     return (
         <span
             className={cn(
-                "shrink-0 rounded-full border px-2 py-0.5 text-[11px] font-semibold capitalize",
+                "shrink-0 rounded-full border px-2 py-0.5 text-xs font-semibold capitalize",
                 status === "pass" && "border-emerald-200 bg-emerald-50 text-emerald-700 dark:border-emerald-900 dark:bg-emerald-950/40 dark:text-emerald-300",
                 status === "warning" && "border-amber-200 bg-amber-50 text-amber-700 dark:border-amber-900/60 dark:bg-amber-950/30 dark:text-amber-300",
                 status === "blocked" && "border-red-200 bg-red-50 text-red-700 dark:border-red-900/60 dark:bg-red-950/30 dark:text-red-300",
@@ -132,7 +132,7 @@ function StatusPill({ status }: { status: LaunchChecklistStatus }) {
 function Metric({ label, value }: { label: string; value: string }) {
     return (
         <div className="min-w-0 rounded-md border border-border px-2 py-1.5">
-            <div className="text-[10px] uppercase tracking-wide text-muted-foreground">{label}</div>
+            <div className="text-2xs uppercase tracking-wide text-muted-foreground">{label}</div>
             <div className="truncate font-medium text-foreground">{value}</div>
         </div>
     )

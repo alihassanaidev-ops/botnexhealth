@@ -20,11 +20,7 @@ import {
     PhoneOutgoing,
     UserPlus,
 } from "lucide-react"
-import { Button } from "@/components/ui/button"
-import { Badge } from "@/components/ui/badge"
-import { Skeleton } from "@/components/ui/skeleton"
-import { Textarea } from "@/components/ui/textarea"
-import { ScrollArea } from "@/components/ui/scroll-area"
+import { UiBadge, UiButton, UiSkeleton, UiTextarea } from "@/components/foundation/Primitives"
 import { RevealablePhone } from "@/components/RevealablePhone"
 import { toast } from "sonner"
 import { getCall, resolveCallback } from "@/lib/calls-api"
@@ -87,14 +83,14 @@ interface ConversationViewProps {
 function DirectionPill({ direction }: { direction: string | null }) {
     if (direction === "inbound") {
         return (
-            <span className="inline-flex items-center gap-1 rounded-full bg-blue-500/10 px-2 py-0.5 text-[11px] font-medium text-blue-600 dark:text-blue-400">
+            <span className="inline-flex items-center gap-1 rounded-full bg-blue-500/10 px-2 py-0.5 text-xs font-medium text-blue-600 dark:text-blue-400">
                 <PhoneIncoming className="h-3 w-3" /> Inbound
             </span>
         )
     }
     if (direction === "outbound") {
         return (
-            <span className="inline-flex items-center gap-1 rounded-full bg-purple-500/10 px-2 py-0.5 text-[11px] font-medium text-purple-600 dark:text-purple-400">
+            <span className="inline-flex items-center gap-1 rounded-full bg-purple-500/10 px-2 py-0.5 text-xs font-medium text-purple-600 dark:text-purple-400">
                 <PhoneOutgoing className="h-3 w-3" /> Outbound
             </span>
         )
@@ -103,7 +99,7 @@ function DirectionPill({ direction }: { direction: string | null }) {
 }
 
 function Avatar({ name, size = "md" }: { name: string | null | undefined; size?: "sm" | "md" }) {
-    const dim = size === "sm" ? "size-9 text-[11px]" : "size-10 text-xs"
+    const dim = size === "sm" ? "size-9 text-xs" : "size-10 text-xs"
     if (!name) {
         return (
             <div className={cn("grid shrink-0 place-items-center rounded-full bg-muted font-semibold text-muted-foreground", dim)}>
@@ -112,7 +108,7 @@ function Avatar({ name, size = "md" }: { name: string | null | undefined; size?:
         )
     }
     return (
-        <div className={cn("grid shrink-0 place-items-center rounded-full bg-gradient-to-br from-violet-500 to-purple-600 font-semibold text-white", dim)}>
+        <div className={cn("grid shrink-0 place-items-center rounded-full bg-primary font-semibold text-primary-foreground", dim)}>
             {getInitials(name)}
         </div>
     )
@@ -149,7 +145,7 @@ function ConversationRow({
                     <span className={cn("truncate text-sm", name ? "font-medium" : "italic text-muted-foreground")}>
                         {name ?? "Unknown caller"}
                     </span>
-                    <span className="shrink-0 text-[11px] tabular-nums text-muted-foreground">
+                    <span className="shrink-0 text-xs tabular-nums text-muted-foreground">
                         {formatListTimestamp(item.date, item.time)}
                     </span>
                 </div>
@@ -159,7 +155,7 @@ function ConversationRow({
                     )}
                     <DirectionPill direction={item.direction ?? null} />
                     {item.needsCallback && (
-                        <span className="inline-flex items-center gap-1 text-[11px] font-medium text-amber-600 dark:text-amber-400">
+                        <span className="inline-flex items-center gap-1 text-xs font-medium text-amber-600 dark:text-amber-400">
                             <span className="h-1.5 w-1.5 rounded-full bg-amber-500" /> Callback
                         </span>
                     )}
@@ -167,7 +163,7 @@ function ConversationRow({
                 {item.summary ? (
                     <p className="mt-1 line-clamp-2 text-xs leading-relaxed text-muted-foreground">{item.summary}</p>
                 ) : (
-                    <p className="mt-1 text-xs italic text-muted-foreground/70">No summary</p>
+                    <p className="mt-1 text-xs italic text-muted-foreground">No summary</p>
                 )}
                 {(item.status || tags.length > 0) && (
                     <div className="mt-1.5 flex flex-wrap items-center gap-1">
@@ -176,9 +172,9 @@ function ConversationRow({
                             <TagBadge key={t} tag={t} />
                         ))}
                         {tags.length > 2 && (
-                            <Badge variant="secondary" className="text-[10px]">
+                            <UiBadge tone="neutral" className="text-2xs">
                                 +{tags.length - 2}
-                            </Badge>
+                            </UiBadge>
                         )}
                     </div>
                 )}
@@ -192,14 +188,14 @@ function RowSkeletons() {
         <div>
             {Array.from({ length: 7 }).map((_, i) => (
                 <div key={i} className="flex items-start gap-3 border-b border-border/60 px-3 py-3">
-                    <Skeleton className="size-9 shrink-0 rounded-full" />
+                    <UiSkeleton className="size-9 shrink-0 rounded-full" />
                     <div className="flex-1 space-y-2">
                         <div className="flex justify-between">
-                            <Skeleton className="h-3.5 w-24" />
-                            <Skeleton className="h-3 w-10" />
+                            <UiSkeleton className="h-3.5 w-24" />
+                            <UiSkeleton className="h-3 w-10" />
                         </div>
-                        <Skeleton className="h-3 w-20 rounded-full" />
-                        <Skeleton className="h-3 w-full" />
+                        <UiSkeleton className="h-3 w-20 rounded-full" />
+                        <UiSkeleton className="h-3 w-full" />
                     </div>
                 </div>
             ))}
@@ -212,7 +208,7 @@ function RowSkeletons() {
 function DetailField({ label, children }: { label: string; children: React.ReactNode }) {
     return (
         <div>
-            <p className="mb-1 text-[11px] font-medium uppercase tracking-wide text-muted-foreground">{label}</p>
+            <p className="mb-1 text-xs font-medium uppercase tracking-wide text-muted-foreground">{label}</p>
             {children}
         </div>
     )
@@ -252,16 +248,16 @@ function CallbackResolver({ detail, onResolved }: { detail: CallDetail; onResolv
     return (
         <div className="space-y-2 rounded-lg border border-amber-500/20 bg-amber-500/10 p-3">
             <p className="text-xs font-medium text-amber-600 dark:text-amber-400">This call needs a callback</p>
-            <Textarea
+            <UiTextarea
                 placeholder="Add a resolution note (optional)…"
                 value={note}
                 onChange={(e) => setNote(e.target.value)}
                 className="min-h-[72px] resize-none bg-background text-sm"
             />
-            <Button size="sm" className="w-full gap-1.5" onClick={handleResolve} disabled={resolving}>
+            <UiButton variant="primary" size="sm" className="w-full gap-1.5" onClick={handleResolve} disabled={resolving}>
                 {resolving ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <CheckCircle2 className="h-3.5 w-3.5" />}
                 {resolving ? "Resolving…" : "Mark resolved"}
-            </Button>
+            </UiButton>
         </div>
     )
 }
@@ -369,9 +365,9 @@ function DetailsPane({
     onResolved: () => void
 }) {
     return (
-        <ScrollArea className="flex-1">
+        <div className="min-h-0 flex-1 overflow-y-auto">
             <DetailsContent detail={detail} statuses={statuses} onResolved={onResolved} />
-        </ScrollArea>
+        </div>
     )
 }
 
@@ -394,17 +390,17 @@ function CenterPane({
         return (
             <div className="flex flex-1 flex-col">
                 <div className="flex items-center gap-3 border-b border-border px-5 py-4">
-                    <Skeleton className="size-10 rounded-full" />
+                    <UiSkeleton className="size-10 rounded-full" />
                     <div className="space-y-2">
-                        <Skeleton className="h-4 w-40" />
-                        <Skeleton className="h-3 w-28" />
+                        <UiSkeleton className="h-4 w-40" />
+                        <UiSkeleton className="h-3 w-28" />
                     </div>
                 </div>
                 <div className="flex-1 space-y-3 p-5">
-                    <Skeleton className="h-16 w-full" />
-                    <Skeleton className="h-10 w-3/4" />
-                    <Skeleton className="ml-auto h-10 w-2/3" />
-                    <Skeleton className="h-10 w-3/5" />
+                    <UiSkeleton className="h-16 w-full" />
+                    <UiSkeleton className="h-10 w-3/4" />
+                    <UiSkeleton className="ml-auto h-10 w-2/3" />
+                    <UiSkeleton className="h-10 w-3/5" />
                 </div>
             </div>
         )
@@ -414,7 +410,7 @@ function CenterPane({
         return (
             <div className="flex flex-1 flex-col items-center justify-center gap-3 p-8 text-center">
                 <div className="grid size-14 place-items-center rounded-full bg-muted">
-                    <MessagesSquare className="h-7 w-7 text-muted-foreground/50" />
+                    <MessagesSquare className="h-7 w-7 text-muted-foreground" />
                 </div>
                 <div>
                     <p className="text-sm font-medium text-foreground/70">Select a conversation</p>
@@ -432,15 +428,15 @@ function CenterPane({
         <div className="flex min-h-0 flex-1 flex-col">
             {/* Header */}
             <div className="flex shrink-0 items-center gap-3 border-b border-border px-5 py-3.5">
-                <Button
-                    variant="ghost"
+                <UiButton
+                    variant="quiet"
                     size="icon"
-                    className="-ml-2 h-8 w-8 shrink-0 md:hidden"
+                    className="-ml-2 w-8 shrink-0 md:hidden"
                     onClick={onBack}
                     aria-label="Back to list"
                 >
                     <ArrowLeft className="h-4 w-4" />
-                </Button>
+                </UiButton>
                 <Avatar name={name} />
                 <div className="min-w-0 flex-1">
                     <div className="flex items-center gap-2">
@@ -448,7 +444,7 @@ function CenterPane({
                             {name ?? "Unknown caller"}
                         </span>
                         {detail.is_new_patient && (
-                            <span className="inline-flex shrink-0 items-center gap-1 text-[11px] font-normal text-indigo-600 dark:text-indigo-400">
+                            <span className="inline-flex shrink-0 items-center gap-1 text-xs font-normal text-indigo-600 dark:text-indigo-400">
                                 <UserPlus className="h-3.5 w-3.5" /> New
                             </span>
                         )}
@@ -476,7 +472,7 @@ function CenterPane({
             <div className="flex min-h-0 flex-1 flex-col">
                 {detail.summary && (
                     <div className="shrink-0 border-b border-border bg-muted/40 px-5 py-3">
-                        <p className="mb-1 text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
+                        <p className="mb-1 text-xs font-medium uppercase tracking-wide text-muted-foreground">
                             AI Summary
                         </p>
                         <p className="text-xs leading-relaxed text-foreground/90">{detail.summary}</p>
@@ -590,7 +586,7 @@ export function ConversationView({
                 ) : items.length === 0 ? (
                     <div className="flex flex-1 flex-col items-center justify-center gap-2 p-6 text-center">
                         <div className="grid size-11 place-items-center rounded-full bg-muted">
-                            <Inbox className="h-5 w-5 text-muted-foreground/50" />
+                            <Inbox className="h-5 w-5 text-muted-foreground" />
                         </div>
                         <p className="text-sm font-medium text-foreground/70">{emptyTitle}</p>
                         <p className="text-xs text-muted-foreground">
@@ -598,7 +594,7 @@ export function ConversationView({
                         </p>
                     </div>
                 ) : (
-                    <ScrollArea className="flex-1">
+                    <div className="min-h-0 flex-1 overflow-y-auto">
                         {items.map((item) => (
                             <ConversationRow
                                 key={item.id}
@@ -607,39 +603,39 @@ export function ConversationView({
                                 onSelect={() => selectCall(item.id)}
                             />
                         ))}
-                    </ScrollArea>
+                    </div>
                 )}
 
                 {!loading && total > 0 && (
                     <div className="flex shrink-0 items-center justify-between gap-2 border-t border-border px-3 py-2">
-                        <span className="text-[11px] tabular-nums text-muted-foreground">
+                        <span className="text-xs tabular-nums text-muted-foreground">
                             {from}–{to} of {total.toLocaleString()}
                         </span>
                         {pageCount > 1 && (
                             <div className="flex items-center gap-1">
-                                <Button
-                                    variant="outline"
+                                <UiButton
+                                    variant="secondary"
                                     size="icon"
-                                    className="h-7 w-7"
+                                    className="w-7"
                                     disabled={page === 0}
                                     onClick={() => onPageChange(page - 1)}
                                     aria-label="Previous page"
                                 >
                                     <ChevronLeft className="h-4 w-4" />
-                                </Button>
-                                <span className="px-1 text-[11px] tabular-nums text-muted-foreground">
+                                </UiButton>
+                                <span className="px-1 text-xs tabular-nums text-muted-foreground">
                                     {page + 1}/{pageCount}
                                 </span>
-                                <Button
-                                    variant="outline"
+                                <UiButton
+                                    variant="secondary"
                                     size="icon"
-                                    className="h-7 w-7"
+                                    className="w-7"
                                     disabled={page >= pageCount - 1}
                                     onClick={() => onPageChange(page + 1)}
                                     aria-label="Next page"
                                 >
                                     <ChevronRight className="h-4 w-4" />
-                                </Button>
+                                </UiButton>
                             </div>
                         )}
                     </div>

@@ -31,7 +31,7 @@ import {
     browserSupportsWebAuthn,
 } from "@simplewebauthn/browser"
 
-import { Button } from "@/components/ui/button"
+import { Button } from "@/components/foundation/compat/button"
 import {
     Form,
     FormControl,
@@ -39,9 +39,9 @@ import {
     FormItem,
     FormLabel,
     FormMessage,
-} from "@/components/ui/form"
-import { Input } from "@/components/ui/input"
-import { Separator } from "@/components/ui/separator"
+} from "@/components/foundation/compat/form"
+import { Input } from "@/components/foundation/compat/input"
+import { Separator } from "@/components/foundation/compat/separator"
 import {
     startTotpSetup,
     verifyTotpSetup,

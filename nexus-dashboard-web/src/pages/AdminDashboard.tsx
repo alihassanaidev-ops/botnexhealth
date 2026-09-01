@@ -11,10 +11,10 @@ import {
     LayoutDashboard,
 } from "lucide-react"
 import { PageHeader } from "@/components/PageHeader"
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
-import { Button } from "@/components/ui/button"
-import { Badge } from "@/components/ui/badge"
-import { Skeleton } from "@/components/ui/skeleton"
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/foundation/compat/card"
+import { Button } from "@/components/foundation/compat/button"
+import { Badge } from "@/components/foundation/compat/badge"
+import { Skeleton } from "@/components/foundation/compat/skeleton"
 import { toast } from "sonner"
 import type { InstitutionDetail } from "@/types"
 import { listInstitutionsDetailed } from "@/lib/admin-api"
@@ -59,15 +59,14 @@ export default function AdminDashboard() {
     }
 
     const adminCards = [
-        { label: "Total Institutions", value: institutions.length, icon: Building2, glowRgb: "139,92,246", description: "All registered practices" },
-        { label: "Active", value: activeInstitutions.length, icon: CheckCircle2, glowRgb: "16,185,129", description: "Currently active" },
-        { label: "Inactive", value: inactiveInstitutions.length, icon: XCircle, glowRgb: "239,68,68", description: "Disabled or paused" },
-        { label: "Fully Configured", value: fullyConfigured.length, icon: Settings, glowRgb: "59,130,246", description: "PMS + Retell ready" },
+        { label: "Total Institutions", value: institutions.length, icon: Building2, description: "All registered practices" },
+        { label: "Active", value: activeInstitutions.length, icon: CheckCircle2, description: "Currently active" },
+        { label: "Inactive", value: inactiveInstitutions.length, icon: XCircle, description: "Disabled or paused" },
+        { label: "Fully Configured", value: fullyConfigured.length, icon: Settings, description: "PMS + Retell ready" },
     ]
 
     return (
-        <div className="relative flex-1 space-y-6 bg-background p-8 pt-6">
-            <div className="fixed inset-0 overflow-hidden pointer-events-none"><div className="absolute -top-32 -right-32 w-[420px] h-[420px] bg-transparent dark:bg-violet-700/20 rounded-full blur-[100px]" /></div>
+        <div className="ui-page ui-page-stack">
             <PageHeader
                 icon={LayoutDashboard}
                 title="Admin Dashboard"
@@ -85,39 +84,32 @@ export default function AdminDashboard() {
             {/* Stats Cards */}
             <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-4">
                 {adminCards.map((card) => (
-                    <div key={card.label} className="group relative overflow-hidden rounded-2xl bg-gradient-to-br from-card via-card to-accent/30 border border-border/60 shadow-sm transition-all duration-300 ease-out hover:-translate-y-1 hover:shadow-lg cursor-default">
-                        <div
-                            className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-40 h-40 rounded-full opacity-[0.08] blur-3xl transition-opacity duration-300 group-hover:opacity-[0.15]"
-                            style={{ background: `radial-gradient(circle, rgba(${card.glowRgb}, 0.8) 0%, transparent 70%)` }}
-                        />
-                        <div className="absolute inset-x-0 top-0 h-px bg-gradient-to-r from-transparent via-primary/20 to-transparent" />
-                        <div className="relative p-6">
-                            <div className="flex items-center justify-between mb-5">
-                                <span className="text-sm font-medium text-muted-foreground">{card.label}</span>
-                                <div className="grid shrink-0 place-items-center rounded-xl bg-foreground p-2.5 shadow-[0_10px_24px_rgba(15,23,42,0.14)]">
-                                    <card.icon className="h-4 w-4 text-background" />
+                    <div key={card.label} className="rounded-xl border border-border/80 bg-card p-5 shadow-sm">
+                            <div className="mb-3 flex items-center justify-between">
+                                <span className="text-xs font-medium text-muted-foreground">{card.label}</span>
+                                <div className="grid size-8 shrink-0 place-items-center rounded-lg bg-muted">
+                                    <card.icon className="h-4 w-4 text-foreground" />
                                 </div>
                             </div>
                             {loading ? (
                                 <Skeleton className="h-12 w-20" />
                             ) : (
                                 <>
-                                    <div className="text-5xl font-extralight tabular-nums tracking-tight text-foreground">
+                                    <div className="text-2xl font-semibold tabular-nums tracking-tight text-foreground">
                                         {card.value}
                                     </div>
-                                    <p className="text-xs mt-2 text-muted-foreground/60 font-medium tracking-wide uppercase">
+                                    <p className="mt-1 text-xs text-muted-foreground">
                                         {card.description}
                                     </p>
                                 </>
                             )}
-                        </div>
                     </div>
                 ))}
             </div>
 
             {/* Integration Overview */}
             {!loading && (
-                <Card className="border-border bg-gradient-to-r from-secondary/70 via-accent/60 to-primary2/25">
+                <Card>
                     <CardHeader>
                         <CardTitle>Integration Coverage</CardTitle>
                         <CardDescription>
@@ -141,7 +133,7 @@ export default function AdminDashboard() {
             )}
 
             {/* Institution Table */}
-            <Card className="border-border/80 shadow-sm">
+            <Card>
                 <CardHeader>
                     <div className="flex items-center justify-between">
                         <div>

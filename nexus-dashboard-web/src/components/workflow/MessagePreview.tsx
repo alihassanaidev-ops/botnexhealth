@@ -18,7 +18,7 @@ export function SmsPreview({ node }: { node: SendSmsNode }) {
             <div className="max-w-[85%] whitespace-pre-wrap rounded-2xl rounded-bl-sm bg-blue-500 px-3 py-2 text-sm text-white shadow-sm">
                 {previewBody || <span className="italic opacity-70">No message yet</span>}
             </div>
-            <p className="text-[10px] text-muted-foreground">
+            <p className="text-2xs text-muted-foreground">
                 {previewBody.length} chars · {segments} segment{segments === 1 ? "" : "s"} · preview uses sample data
             </p>
         </div>
@@ -29,7 +29,7 @@ export function EmailPreview({ node }: { node: SendEmailNode }) {
     return (
         <div className="overflow-hidden rounded-md border border-border">
             <div className="border-b border-border bg-muted/50 px-3 py-2">
-                <div className="text-[10px] uppercase tracking-wide text-muted-foreground">Subject</div>
+                <div className="text-2xs uppercase tracking-wide text-muted-foreground">Subject</div>
                 <div className="text-sm font-medium">
                     {renderTemplate(node.subject_template) || <span className="italic text-muted-foreground">No subject</span>}
                 </div>

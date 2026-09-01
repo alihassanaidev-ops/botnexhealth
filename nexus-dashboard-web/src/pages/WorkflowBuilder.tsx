@@ -10,9 +10,9 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { Link, useNavigate, useParams, useSearchParams } from "react-router-dom"
 import { Activity, ArrowLeft, History, Loader2, Pencil } from "lucide-react"
-import { Button } from "@/components/ui/button"
-import { Input } from "@/components/ui/input"
-import { Skeleton } from "@/components/ui/skeleton"
+import { Button } from "@/components/foundation/compat/button"
+import { Input } from "@/components/foundation/compat/input"
+import { Skeleton } from "@/components/foundation/compat/skeleton"
 import { toast } from "sonner"
 import { cn } from "@/lib/utils"
 import {
@@ -59,6 +59,7 @@ import type {
     WorkflowNode,
     WorkflowTrigger,
 } from "@/types/workflow"
+import workflowIcon from "@/assets/icons/presentation/workflow.png"
 
 const STATUS_STYLES: Record<string, string> = {
     active: "bg-emerald-50 text-emerald-700 border-emerald-200 dark:bg-emerald-950/40 dark:text-emerald-400 dark:border-emerald-800",
@@ -433,14 +434,17 @@ export default function WorkflowBuilder() {
     }
 
     return (
-        <div className="flex h-[calc(100vh-4rem)] flex-col overflow-hidden">
+        <div className="workflow-builder flex h-[calc(100vh-4rem)] flex-col overflow-hidden">
             {/* Header */}
             <div className="flex items-center gap-3 border-b border-border px-4 py-2.5">
-                <Button variant="ghost" size="icon" asChild className="h-8 w-8">
+                <Button variant="ghost" size="icon" asChild className="w-8">
                     <Link to={`/institution-admin/campaigns/${id}`}>
                         <ArrowLeft className="h-4 w-4" />
                     </Link>
                 </Button>
+                <span className="ui-artwork workflow-toolbar-art" aria-hidden="true">
+                    <img src={workflowIcon} alt="" />
+                </span>
                 <Input
                     value={name}
                     disabled={readOnly || view === "executions"}

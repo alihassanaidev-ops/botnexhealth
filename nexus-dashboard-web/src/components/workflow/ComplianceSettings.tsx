@@ -5,15 +5,15 @@
  * resolves the `content_class_unset` warning surfaced in the validation panel.
  */
 import { ShieldCheck } from "lucide-react"
-import { Label } from "@/components/ui/label"
-import { Switch } from "@/components/ui/switch"
+import { Label } from "@/components/foundation/compat/label"
+import { Switch } from "@/components/foundation/compat/switch"
 import {
     Select,
     SelectContent,
     SelectItem,
     SelectTrigger,
     SelectValue,
-} from "@/components/ui/select"
+} from "@/components/foundation/compat/select"
 import type { ComplianceMetadata, ContentClass } from "@/types/workflow"
 
 const CONTENT_CLASSES: { value: ContentClass; label: string }[] = [

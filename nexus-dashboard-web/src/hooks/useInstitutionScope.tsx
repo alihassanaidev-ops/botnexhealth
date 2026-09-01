@@ -19,7 +19,7 @@ import {
     SelectItem,
     SelectTrigger,
     SelectValue,
-} from "@/components/ui/select"
+} from "@/components/foundation/compat/select"
 import { useAuth } from "@/context/AuthContext"
 import { listInstitutionsDetailed } from "@/lib/admin-api"
 import type { InstitutionDetail } from "@/types"

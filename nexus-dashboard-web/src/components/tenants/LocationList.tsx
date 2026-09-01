@@ -1,8 +1,8 @@
 import { useState, useEffect, useCallback } from "react";
 import { Plus, RefreshCw, Pencil, Trash2, Loader2, MessageSquare, UserPlus, MailPlus, UserMinus, Clock } from "lucide-react";
-import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
+import { Button } from "@/components/foundation/compat/button";
+import { Input } from "@/components/foundation/compat/input";
+import { Label } from "@/components/foundation/compat/label";
 import {
     Table,
     TableBody,
@@ -10,7 +10,7 @@ import {
     TableHead,
     TableHeader,
     TableRow,
-} from "@/components/ui/table";
+} from "@/components/foundation/compat/table";
 import {
     Dialog,
     DialogContent,
@@ -18,9 +18,9 @@ import {
     DialogFooter,
     DialogHeader,
     DialogTitle,
-} from "@/components/ui/dialog";
-import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
-import { Badge } from "@/components/ui/badge";
+} from "@/components/foundation/compat/dialog";
+import { Alert, AlertDescription, AlertTitle } from "@/components/foundation/compat/alert";
+import { Badge } from "@/components/foundation/compat/badge";
 import { LocationForm } from "./LocationForm";
 import { LocationHoursDialog } from "./LocationHoursDialog";
 import { toast } from "sonner";
@@ -347,7 +347,7 @@ export function LocationList({ institutionSlug, hasPms = true, pmsType = "nexhea
                                             <Button
                                                 variant="outline"
                                                 size="sm"
-                                                className="h-7 text-xs"
+                                                className="text-xs"
                                                 onClick={() => {
                                                     setInviteTarget(loc);
                                                     setInviteEmail("");
@@ -420,7 +420,7 @@ export function LocationList({ institutionSlug, hasPms = true, pmsType = "nexhea
 
             {/* Create / Edit Form View */}
             {viewMode === "form" && (
-                <div className="rounded-xl border border-border bg-gradient-to-b from-card to-accent/20 p-4 shadow-sm">
+                <div className="rounded-xl border border-border bg-card p-4 shadow-sm">
                     <LocationForm
                         institutionSlug={institutionSlug}
                         location={editingLocation}

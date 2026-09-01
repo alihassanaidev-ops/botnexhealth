@@ -1,0 +1,43 @@
+.ui-table-scroll {
+    width: 100%;
+    overflow-x: auto;
+}
+
+.ui-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: var(--text-sm);
+}
+
+.ui-table-header {
+    color: hsl(var(--muted-foreground));
+    background: hsl(var(--muted) / 0.45);
+}
+
+.ui-table-row {
+    border-bottom: 1px solid hsl(var(--border) / 0.7);
+    transition: background 130ms ease;
+}
+
+.ui-table-body .ui-table-row:hover {
+    background: hsl(var(--muted) / 0.38);
+}
+
+.ui-table-body .ui-table-row:last-child {
+    border-bottom: 0;
+}
+
+.ui-table-head,
+.ui-table-cell {
+    padding: 0.72rem 0.9rem;
+    text-align: left;
+    vertical-align: middle;
+}
+
+.ui-table-head {
+    height: 2.4rem;
+    font-size: 0.72rem;
+    font-weight: 720;
+    letter-spacing: 0.055em;
+    text-transform: uppercase;
+}

@@ -1,5 +1,4 @@
 import { Bar, BarChart, ResponsiveContainer, XAxis, YAxis } from "recharts"
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 
 const data = [
     { name: "Jan", total: Math.floor(Math.random() * 5000) + 1000 },
@@ -18,11 +17,11 @@ const data = [
 
 export function OverviewChart() {
     return (
-        <Card className="col-span-4">
-            <CardHeader>
-                <CardTitle>Overview</CardTitle>
-            </CardHeader>
-            <CardContent className="pl-2">
+        <section className="col-span-4 rounded-2xl border border-border/80 bg-card shadow-sm">
+            <div className="px-6 pb-2 pt-5">
+                <h3 className="text-base font-semibold">Overview</h3>
+            </div>
+            <div className="pb-5 pl-2 pr-5">
                 <ResponsiveContainer width="100%" height={350}>
                     <BarChart data={data}>
                         <XAxis
@@ -47,7 +46,7 @@ export function OverviewChart() {
                         />
                     </BarChart>
                 </ResponsiveContainer>
-            </CardContent>
-        </Card>
+            </div>
+        </section>
     )
 }

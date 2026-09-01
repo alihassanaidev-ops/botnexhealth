@@ -2,25 +2,25 @@ import { useState, useEffect } from "react";
 import { Loader2, Plus, Clock, Trash2 } from "lucide-react";
 import { toast } from "sonner";
 import api from "@/lib/api";
-import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
-import { Switch } from "@/components/ui/switch";
+import { Button } from "@/components/foundation/compat/button";
+import { Input } from "@/components/foundation/compat/input";
+import { Label } from "@/components/foundation/compat/label";
+import { Switch } from "@/components/foundation/compat/switch";
 import {
     Dialog,
     DialogContent,
     DialogDescription,
     DialogHeader,
     DialogTitle,
-} from "@/components/ui/dialog";
+} from "@/components/foundation/compat/dialog";
 import {
     Select,
     SelectContent,
     SelectItem,
     SelectTrigger,
     SelectValue,
-} from "@/components/ui/select";
-import { FormSkeleton } from "@/components/ui/skeletons";
+} from "@/components/foundation/compat/select";
+import { FormSkeleton } from "@/components/foundation/compat/skeletons";
 import type { Location, OperatingHoursResponse, OperatingHoursEntry, BreakResponse, BreakCreateRequest } from "@/types";
 
 interface LocationHoursDialogProps {

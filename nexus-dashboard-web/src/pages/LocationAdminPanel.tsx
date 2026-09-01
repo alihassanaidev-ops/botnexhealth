@@ -3,12 +3,12 @@ import { Loader2, MailPlus, RefreshCcw, Users, Building2 } from "lucide-react"
 import { PageHeader } from "@/components/PageHeader"
 import { toast } from "sonner"
 
-import { Button } from "@/components/ui/button"
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
-import { Input } from "@/components/ui/input"
-import { Label } from "@/components/ui/label"
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
+import { Button } from "@/components/foundation/compat/button"
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/foundation/compat/card"
+import { Input } from "@/components/foundation/compat/input"
+import { Label } from "@/components/foundation/compat/label"
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/foundation/compat/select"
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/foundation/compat/table"
 import { useAuth } from "@/context/AuthContext"
 import { useCooldown } from "@/hooks/use-cooldown"
 import {
@@ -111,8 +111,7 @@ export default function LocationAdminPanel() {
     }
 
     return (
-        <div className="relative space-y-6 bg-background">
-            <div className="fixed inset-0 overflow-hidden pointer-events-none"><div className="absolute -top-32 -right-32 w-[420px] h-[420px] bg-transparent dark:bg-violet-700/20 rounded-full blur-[100px]" /></div>
+        <div className="ui-page ui-page-stack">
             <PageHeader
                 icon={Building2}
                 title="Location Admin"

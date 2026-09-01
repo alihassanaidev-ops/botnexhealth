@@ -23,19 +23,19 @@ import {
 import { toast } from "sonner"
 
 import { PageHeader } from "@/components/PageHeader"
-import { Badge } from "@/components/ui/badge"
-import { Button } from "@/components/ui/button"
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
-import { Label } from "@/components/ui/label"
-import { Switch } from "@/components/ui/switch"
-import { CardsSkeleton } from "@/components/ui/skeletons"
+import { Badge } from "@/components/foundation/compat/badge"
+import { Button } from "@/components/foundation/compat/button"
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/foundation/compat/card"
+import { Label } from "@/components/foundation/compat/label"
+import { Switch } from "@/components/foundation/compat/switch"
+import { CardsSkeleton } from "@/components/foundation/compat/skeletons"
 import {
     Select,
     SelectContent,
     SelectItem,
     SelectTrigger,
     SelectValue,
-} from "@/components/ui/select"
+} from "@/components/foundation/compat/select"
 import { useAuth } from "@/context/AuthContext"
 import { useLocationContext } from "@/context/LocationContext"
 import {
@@ -331,7 +331,7 @@ export default function Inbox() {
     }
 
     return (
-        <div className="space-y-6">
+        <div className="ui-page ui-page-stack">
             <PageHeader
                 icon={InboxIcon}
                 title="Inbox"

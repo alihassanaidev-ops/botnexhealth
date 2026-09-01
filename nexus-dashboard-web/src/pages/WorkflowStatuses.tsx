@@ -10,16 +10,16 @@
 import { useEffect, useState } from "react"
 import { Tag, Plus, Pencil, Loader2, Archive, ArchiveRestore, RefreshCcw } from "lucide-react"
 import { PageHeader } from "@/components/PageHeader"
-import { Card, CardContent } from "@/components/ui/card"
-import { Button } from "@/components/ui/button"
-import { Input } from "@/components/ui/input"
-import { Skeleton } from "@/components/ui/skeleton"
+import { Card, CardContent } from "@/components/foundation/compat/card"
+import { Button } from "@/components/foundation/compat/button"
+import { Input } from "@/components/foundation/compat/input"
+import { Skeleton } from "@/components/foundation/compat/skeleton"
 import {
     Dialog,
     DialogContent,
     DialogHeader,
     DialogTitle,
-} from "@/components/ui/dialog"
+} from "@/components/foundation/compat/dialog"
 import { toast } from "sonner"
 import {
     createWorkflowStatus,
@@ -110,8 +110,7 @@ export default function WorkflowStatuses() {
     }
 
     return (
-        <div className="relative flex-1 space-y-6 bg-background p-8 pt-6">
-            <div className="fixed inset-0 overflow-hidden pointer-events-none"><div className="absolute -top-32 -right-32 w-[420px] h-[420px] bg-transparent dark:bg-violet-700/20 rounded-full blur-[100px]" /></div>
+        <div className="ui-page ui-page-stack">
 
             {/* Header */}
             <PageHeader
@@ -180,17 +179,17 @@ export default function WorkflowStatuses() {
                                             {s.name}
                                         </span>
                                         {!s.is_active && (
-                                            <span className="text-[10px] uppercase tracking-wide text-muted-foreground">Archived</span>
+                                            <span className="text-2xs uppercase tracking-wide text-muted-foreground">Archived</span>
                                         )}
                                     </div>
                                     <div className="flex items-center gap-1">
-                                        <Button variant="ghost" size="icon" className="h-8 w-8" onClick={() => openEdit(s)} aria-label="Edit">
+                                        <Button variant="ghost" size="icon" className="w-8" onClick={() => openEdit(s)} aria-label="Edit">
                                             <Pencil className="h-3.5 w-3.5" />
                                         </Button>
                                         <Button
                                             variant="ghost"
                                             size="icon"
-                                            className="h-8 w-8"
+                                            className="w-8"
                                             onClick={() => toggleActive(s)}
                                             aria-label={s.is_active ? "Archive" : "Restore"}
                                         >

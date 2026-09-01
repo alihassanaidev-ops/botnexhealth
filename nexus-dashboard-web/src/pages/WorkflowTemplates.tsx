@@ -2,20 +2,20 @@
 import { useEffect, useMemo, useState } from "react"
 import { Link, useNavigate } from "react-router-dom"
 import { ArrowLeft, CheckCircle2, LayoutTemplate, Loader2, Sparkles } from "lucide-react"
-import { Badge } from "@/components/ui/badge"
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
-import { Button } from "@/components/ui/button"
-import { Checkbox } from "@/components/ui/checkbox"
-import { Input } from "@/components/ui/input"
-import { Skeleton } from "@/components/ui/skeleton"
-import { Label } from "@/components/ui/label"
+import { Badge } from "@/components/foundation/compat/badge"
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/foundation/compat/card"
+import { Button } from "@/components/foundation/compat/button"
+import { Checkbox } from "@/components/foundation/compat/checkbox"
+import { Input } from "@/components/foundation/compat/input"
+import { Skeleton } from "@/components/foundation/compat/skeleton"
+import { Label } from "@/components/foundation/compat/label"
 import {
     Select,
     SelectContent,
     SelectItem,
     SelectTrigger,
     SelectValue,
-} from "@/components/ui/select"
+} from "@/components/foundation/compat/select"
 import {
     Dialog,
     DialogContent,
@@ -23,7 +23,7 @@ import {
     DialogFooter,
     DialogHeader,
     DialogTitle,
-} from "@/components/ui/dialog"
+} from "@/components/foundation/compat/dialog"
 import { toast } from "sonner"
 import { createWorkflowFromTemplate, listTemplates, type CampaignTemplate } from "@/lib/workflow-api"
 import { triggerTypeLabel } from "@/lib/workflow/catalog"
@@ -31,6 +31,8 @@ import { listAppointmentTypes, listLocations } from "@/lib/tenant-api"
 import { listOutboundVoiceProfiles } from "@/lib/outbound-voice-api"
 import type { CachedAppointmentType, LocationInfo, OutboundVoiceProfile } from "@/types"
 import type { TriggerType } from "@/types/workflow"
+import { PageHeader } from "@/components/PageHeader"
+import campaignsIcon from "@/assets/icons/presentation/campaigns-outlined.png"
 
 const CATEGORY_LABELS: Record<string, string> = {
     appointment_ops: "Appointment ops",
@@ -402,9 +404,9 @@ export default function WorkflowTemplates() {
         pickedCapability?.supported === false
 
     return (
-        <div className="relative flex-1 space-y-6 bg-background p-8 pt-6">
+        <div className="ui-page ui-page-stack">
             <div className="flex items-center gap-3">
-                <Button variant="ghost" size="icon" asChild className="h-8 w-8">
+                <Button variant="ghost" size="icon" asChild className="w-8">
                     <Link to="/institution-admin/campaigns">
                         <ArrowLeft className="h-4 w-4" />
                     </Link>
@@ -412,15 +414,12 @@ export default function WorkflowTemplates() {
                 <span className="text-sm text-muted-foreground">Campaigns</span>
             </div>
 
-            <div>
-                <h2 className="flex items-center gap-2 text-3xl font-bold tracking-tight">
-                    <LayoutTemplate className="h-7 w-7" />
-                    Start from a template
-                </h2>
-                <p className="mt-1 text-muted-foreground">
-                    Dental campaign defaults with required fields, readiness checks, and launch metadata.
-                </p>
-            </div>
+            <PageHeader
+                icon={LayoutTemplate}
+                art={campaignsIcon}
+                title="Start from a template"
+                description="Dental campaign defaults with required fields, readiness checks, and launch metadata."
+            />
 
             {loading ? (
                 <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
@@ -498,7 +497,7 @@ export default function WorkflowTemplates() {
                                             {t.tags.map((tag) => (
                                                 <span
                                                     key={tag}
-                                                    className="rounded-full bg-muted px-2 py-0.5 text-[10px] font-medium text-muted-foreground"
+                                                    className="rounded-full bg-muted px-2 py-0.5 text-2xs font-medium text-muted-foreground"
                                                 >
                                                     {tag}
                                                 </span>
@@ -834,7 +833,7 @@ export default function WorkflowTemplates() {
                                                 key={check}
                                                 className="flex items-center gap-2 text-xs text-muted-foreground"
                                             >
-                                                <CheckCircle2 className="h-3.5 w-3.5 text-emerald-600" />
+                                                <CheckCircle2 className="h-3.5 w-3.5 text-emerald-600 dark:text-emerald-400" />
                                                 <span>{check.replace(/_/g, " ")}</span>
                                             </div>
                                         ))}
@@ -844,7 +843,7 @@ export default function WorkflowTemplates() {
                                     <div className="text-sm font-medium">Required fields</div>
                                     <div className="mt-2 flex flex-wrap gap-1">
                                         {picked.metadata.required_merge_fields.map((field) => (
-                                            <Badge key={field} variant="outline" className="font-mono text-[10px]">
+                                            <Badge key={field} variant="outline" className="font-mono text-2xs">
                                                 {`{{${field}}}`}
                                             </Badge>
                                         ))}
@@ -860,7 +859,7 @@ export default function WorkflowTemplates() {
                                             PMS capability: {picked.metadata.pms_capability_requirements.join(", ")}
                                         </div>
                                         {pickedCapability?.message && (
-                                            <div className={pickedCapability.supported ? "text-emerald-600" : "text-destructive"}>
+                                            <div className={pickedCapability.supported ? "text-emerald-600 dark:text-emerald-400" : "text-destructive"}>
                                                 {pickedCapability.message}
                                             </div>
                                         )}

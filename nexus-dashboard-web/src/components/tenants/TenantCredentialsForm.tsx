@@ -3,7 +3,7 @@ import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import * as z from "zod";
 import { AlertCircle, CheckCircle2, KeyRound, Loader2, Pencil, Trash2, X } from "lucide-react";
-import { Button } from "@/components/ui/button";
+import { Button } from "@/components/foundation/compat/button";
 import {
     Form,
     FormControl,
@@ -11,19 +11,19 @@ import {
     FormItem,
     FormLabel,
     FormMessage,
-} from "@/components/ui/form";
-import { Input } from "@/components/ui/input";
+} from "@/components/foundation/compat/form";
+import { Input } from "@/components/foundation/compat/input";
 import {
     Card,
-} from "@/components/ui/card";
-import { Label } from "@/components/ui/label";
+} from "@/components/foundation/compat/card";
+import { Label } from "@/components/foundation/compat/label";
 import {
     Select,
     SelectContent,
     SelectItem,
     SelectTrigger,
     SelectValue,
-} from "@/components/ui/select";
+} from "@/components/foundation/compat/select";
 import { toast } from "sonner";
 import api from "@/lib/api";
 import {
@@ -131,7 +131,7 @@ function TwilioCredentialsCard({ institutionSlug }: { institutionSlug: string })
     }
 
     return (
-        <Card className="overflow-hidden border-border">
+        <Card className="overflow-hidden">
             <div className="flex flex-col items-start justify-between gap-4 p-4 sm:flex-row sm:items-center">
                 <div className="space-y-1">
                     <div className="flex items-center gap-2">
@@ -404,7 +404,7 @@ export function TenantCredentialsForm({ institution, onUpdated }: InstitutionCre
         const isEditing = editingSection === section;
 
         return (
-            <Card className={`group overflow-hidden border-border bg-gradient-to-br from-card to-accent/20 transition-all duration-200 hover:-translate-y-0.5 hover:border-border hover:shadow-md hover:shadow-primary/10 ${isEditing ? "ring-1 ring-primary/40 border-border" : ""}`}>
+            <Card className={`overflow-hidden transition-colors duration-150 hover:border-foreground/15 ${isEditing ? "ring-1 ring-primary/40 border-border" : ""}`}>
                 <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between p-4 gap-4">
                     <div className="flex-1 space-y-1">
                         <div className="flex items-center gap-2">
@@ -422,7 +422,7 @@ export function TenantCredentialsForm({ institution, onUpdated }: InstitutionCre
                                 type="button"
                                 variant="ghost"
                                 size="icon"
-                                className="h-8 w-8 text-muted-foreground hover:bg-primary/10 hover:text-primary"
+                                className="w-8 text-muted-foreground hover:bg-primary/10 hover:text-primary"
                                 onClick={() => setEditingSection(null)}
                             >
                                 <X className="h-4 w-4" />
@@ -432,7 +432,7 @@ export function TenantCredentialsForm({ institution, onUpdated }: InstitutionCre
                                 type="button"
                                 variant="ghost"
                                 size="icon"
-                                className="h-8 w-8 text-muted-foreground hover:bg-primary/10 hover:text-primary"
+                                className="w-8 text-muted-foreground hover:bg-primary/10 hover:text-primary"
                                 onClick={() => setEditingSection(section)}
                             >
                                 <Pencil className="h-4 w-4" />
@@ -530,7 +530,7 @@ export function TenantCredentialsForm({ institution, onUpdated }: InstitutionCre
                                     {isVerifying ? "Verifying..." : "Verify Key"}
                                 </Button>
                                 {verification && (
-                                    <span className={`text-xs font-medium ${verification.ok ? "text-green-600" : "text-destructive"}`}>
+                                    <span className={`text-xs font-medium ${verification.ok ? "text-green-600 dark:text-green-400" : "text-destructive"}`}>
                                         {verification.message}
                                     </span>
                                 )}

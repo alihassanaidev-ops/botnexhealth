@@ -81,7 +81,7 @@ export default function WorkflowValidationPanel({
 
             {backendIssues.length > 0 && (
                 <div className="space-y-1.5">
-                    <div className="flex items-center gap-1.5 pt-1 text-[10px] font-semibold uppercase tracking-wide text-violet-600 dark:text-violet-400">
+                    <div className="flex items-center gap-1.5 pt-1 text-2xs font-semibold uppercase tracking-wide text-violet-600 dark:text-violet-400">
                         <ShieldAlert className="h-3.5 w-3.5" /> Server &amp; compliance checks
                     </div>
                     <ul className="space-y-1.5">
@@ -94,7 +94,7 @@ export default function WorkflowValidationPanel({
 
             {showReadiness && (
                 <div className="space-y-1.5">
-                    <div className="flex items-center gap-1.5 pt-1 text-[10px] font-semibold uppercase tracking-wide text-sky-600 dark:text-sky-400">
+                    <div className="flex items-center gap-1.5 pt-1 text-2xs font-semibold uppercase tracking-wide text-sky-600 dark:text-sky-400">
                         <Radio className="h-3.5 w-3.5" /> Channel readiness
                     </div>
                     <div className="flex flex-wrap gap-1.5">
@@ -102,7 +102,7 @@ export default function WorkflowValidationPanel({
                             <span
                                 key={s.channel}
                                 className={cn(
-                                    "inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[11px] font-medium",
+                                    "inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-xs font-medium",
                                     s.ready
                                         ? "border-emerald-200 bg-emerald-50 text-emerald-700 dark:border-emerald-900 dark:bg-emerald-950/40 dark:text-emerald-300"
                                         : "border-amber-200 bg-amber-50 text-amber-700 dark:border-amber-900/60 dark:bg-amber-950/30 dark:text-amber-300",
@@ -169,17 +169,17 @@ function IssueRow({
                     <span className="flex items-center gap-1.5">
                         <span className="font-medium text-foreground">{issue.message}</span>
                         {fromServer && (
-                            <span className="shrink-0 rounded bg-violet-100 px-1 py-0.5 text-[9px] font-semibold uppercase text-violet-700 dark:bg-violet-950/60 dark:text-violet-300">
+                            <span className="shrink-0 rounded bg-violet-100 px-1 py-0.5 text-2xs font-semibold uppercase text-violet-700 dark:bg-violet-950/60 dark:text-violet-300">
                                 Server
                             </span>
                         )}
                     </span>
                     {issue.fix && <span className="mt-0.5 block text-muted-foreground">{issue.fix}</span>}
                     {issue.code && (
-                        <span className="mt-0.5 block font-mono text-[10px] text-muted-foreground">{issue.code}</span>
+                        <span className="mt-0.5 block font-mono text-2xs text-muted-foreground">{issue.code}</span>
                     )}
                     {issue.node_id && issue.node_id !== TRIGGER_NODE_ID && (
-                        <span className="mt-0.5 block font-mono text-[10px] text-muted-foreground">{issue.node_id}</span>
+                        <span className="mt-0.5 block font-mono text-2xs text-muted-foreground">{issue.node_id}</span>
                     )}
                 </span>
             </button>

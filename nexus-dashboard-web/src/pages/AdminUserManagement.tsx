@@ -6,14 +6,14 @@ import {
     TableHead,
     TableHeader,
     TableRow,
-} from "@/components/ui/table";
+} from "@/components/foundation/compat/table";
 import {
     Select,
     SelectContent,
     SelectItem,
     SelectTrigger,
     SelectValue,
-} from "@/components/ui/select";
+} from "@/components/foundation/compat/select";
 import {
     Dialog,
     DialogContent,
@@ -21,15 +21,15 @@ import {
     DialogFooter,
     DialogHeader,
     DialogTitle,
-} from "@/components/ui/dialog";
-import { Badge } from "@/components/ui/badge";
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+} from "@/components/foundation/compat/dialog";
+import { Badge } from "@/components/foundation/compat/badge";
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/foundation/compat/card";
 import { RefreshCw, ChevronLeft, ChevronRight, Trash2, MailPlus, UserCog, Loader2, Pencil, Plus } from "lucide-react";
 import { PageHeader } from "@/components/PageHeader";
-import { Button } from "@/components/ui/button";
-import { TableSkeleton } from "@/components/ui/skeletons";
-import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
+import { Button } from "@/components/foundation/compat/button";
+import { TableSkeleton } from "@/components/foundation/compat/skeletons";
+import { Input } from "@/components/foundation/compat/input";
+import { Label } from "@/components/foundation/compat/label";
 import { toast } from "sonner";
 
 import {
@@ -57,7 +57,7 @@ function statusBadge(user: AdminUserRow) {
         return <Badge variant="secondary" className="bg-muted text-muted-foreground">Removed</Badge>;
     }
     if (user.invite_status === "PENDING") {
-        return <Badge variant="secondary" className="bg-amber-500/10 text-amber-600 border border-amber-200 dark:border-amber-900">Pending</Badge>;
+        return <Badge variant="secondary" className="bg-amber-500/10 text-amber-600 dark:text-amber-400 border border-amber-200 dark:border-amber-900">Pending</Badge>;
     }
     if (!user.is_active) {
         return <Badge variant="secondary" className="bg-muted text-muted-foreground">Inactive</Badge>;
@@ -261,8 +261,7 @@ export default function AdminUserManagement() {
     const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE));
 
     return (
-        <div className="relative space-y-6 bg-background">
-            <div className="fixed inset-0 overflow-hidden pointer-events-none"><div className="absolute -top-32 -right-32 w-[420px] h-[420px] bg-transparent dark:bg-violet-700/20 rounded-full blur-[100px]" /></div>
+        <div className="ui-page ui-page-stack">
             <PageHeader
                 icon={UserCog}
                 title="Users"
@@ -356,10 +355,10 @@ export default function AdminUserManagement() {
                                                     <TableCell className="font-medium">{user.email}</TableCell>
                                                     <TableCell>{formatRoleLabel(user.role)}</TableCell>
                                                     <TableCell className="text-sm text-muted-foreground">
-                                                        {user.institution_name || <span className="text-muted-foreground/60">—</span>}
+                                                        {user.institution_name || <span className="text-muted-foreground">—</span>}
                                                     </TableCell>
                                                     <TableCell className="text-sm text-muted-foreground">
-                                                        {user.location_name || <span className="text-muted-foreground/60">—</span>}
+                                                        {user.location_name || <span className="text-muted-foreground">—</span>}
                                                     </TableCell>
                                                     <TableCell>{statusBadge(user)}</TableCell>
                                                     <TableCell className="text-right">

@@ -1,20 +1,20 @@
 import { useEffect, useState, useCallback, useMemo, useRef } from "react"
-import { Button } from "@/components/ui/button"
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
-import { Badge } from "@/components/ui/badge"
-import { Checkbox } from "@/components/ui/checkbox"
-import { Calendar as CalendarPicker } from "@/components/ui/calendar"
-import { Progress } from "@/components/ui/progress"
-import { Alert, AlertDescription } from "@/components/ui/alert"
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
-import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog"
+import { Button } from "@/components/foundation/compat/button"
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/foundation/compat/card"
+import { Badge } from "@/components/foundation/compat/badge"
+import { Checkbox } from "@/components/foundation/compat/checkbox"
+import { Calendar as CalendarPicker } from "@/components/foundation/compat/calendar"
+import { Progress } from "@/components/foundation/compat/progress"
+import { Alert, AlertDescription } from "@/components/foundation/compat/alert"
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/foundation/compat/select"
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/foundation/compat/dialog"
 import { toast } from "sonner"
 import { addDays, differenceInCalendarDays, format, startOfDay } from "date-fns"
 import type { DateRange } from "react-day-picker"
 import { RefreshCcw, AlertTriangle, Clock, Calendar, CalendarDays, MapPin, UserCog, ChevronLeft, ChevronRight, Repeat } from "lucide-react"
 import { PageHeader } from "@/components/PageHeader"
 import type { CachedProvider, CachedAvailability, CachedAppointmentType, CachedOperatory } from "@/types"
-import { Input } from "@/components/ui/input"
+import { Input } from "@/components/foundation/compat/input"
 import {
     getSetupOverview,
     listProviders,
@@ -726,7 +726,7 @@ export default function ProvidersScheduling() {
                                 {av.begin_time} - {av.end_time}
                             </span>
                             {isPastDate && (
-                                <Badge variant="outline" className="text-xs text-muted-foreground/60 border-border/40">
+                                <Badge variant="outline" className="text-xs text-muted-foreground border-border/40">
                                     Expired
                                 </Badge>
                             )}
@@ -822,8 +822,7 @@ export default function ProvidersScheduling() {
     }
 
     return (
-        <div className="relative flex-1 space-y-4 bg-background p-8 pt-6">
-            <div className="fixed inset-0 overflow-hidden pointer-events-none"><div className="absolute -top-32 -right-32 w-[420px] h-[420px] bg-transparent dark:bg-violet-700/20 rounded-full blur-[100px]" /></div>
+        <div className="ui-page ui-page-stack">
             <PageHeader
                 icon={UserCog}
                 title="Providers & Scheduling"
@@ -1114,7 +1113,7 @@ export default function ProvidersScheduling() {
                                 )}
 
                                 {hasNarrowingFilter && (
-                                    <Button variant="ghost" size="sm" className="h-9 text-xs" onClick={resetFilters}>
+                                    <Button variant="ghost" size="sm" className="text-xs" onClick={resetFilters}>
                                         Clear filters
                                     </Button>
                                 )}
@@ -1229,7 +1228,7 @@ export default function ProvidersScheduling() {
                                             <Button
                                                 variant="ghost"
                                                 size="sm"
-                                                className="h-7 px-2 text-xs"
+                                                className="px-2 text-xs"
                                                 onClick={() => setBulkRange(undefined)}
                                                 disabled={bulkRunning || !bulkRange?.from}
                                             >
@@ -1260,7 +1259,7 @@ export default function ProvidersScheduling() {
                                                 <Button
                                                     variant="ghost"
                                                     size="sm"
-                                                    className="h-7 px-2 text-xs"
+                                                    className="px-2 text-xs"
                                                     onClick={() =>
                                                         setBulkOperatoryIds(
                                                             allBulkOperatoriesSelected

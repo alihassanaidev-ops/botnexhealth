@@ -23,9 +23,9 @@ import {
 } from "lucide-react"
 import { toast } from "sonner"
 
-import { Badge } from "@/components/ui/badge"
-import { Button } from "@/components/ui/button"
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
+import { Badge } from "@/components/foundation/compat/badge"
+import { Button } from "@/components/foundation/compat/button"
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/foundation/compat/card"
 import {
     Dialog,
     DialogContent,
@@ -33,24 +33,24 @@ import {
     DialogFooter,
     DialogHeader,
     DialogTitle,
-} from "@/components/ui/dialog"
+} from "@/components/foundation/compat/dialog"
 import {
     DropdownMenu,
     DropdownMenuContent,
     DropdownMenuItem,
     DropdownMenuSeparator,
     DropdownMenuTrigger,
-} from "@/components/ui/dropdown-menu"
-import { Input } from "@/components/ui/input"
+} from "@/components/foundation/compat/dropdown-menu"
+import { Input } from "@/components/foundation/compat/input"
 import {
     Select,
     SelectContent,
     SelectItem,
     SelectTrigger,
     SelectValue,
-} from "@/components/ui/select"
-import { Skeleton } from "@/components/ui/skeleton"
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
+} from "@/components/foundation/compat/select"
+import { Skeleton } from "@/components/foundation/compat/skeleton"
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/foundation/compat/tabs"
 import {
     cancelCampaignRun,
     deleteCampaign,
@@ -73,6 +73,8 @@ import type {
     CampaignRunListItem,
     CampaignUsage,
 } from "@/types"
+import { PageHeader } from "@/components/PageHeader"
+import campaignsIcon from "@/assets/icons/presentation/campaigns-outlined.png"
 
 const WORKFLOW_STATUS_STYLES: Record<string, string> = {
     active: "border-emerald-200 bg-emerald-50 text-emerald-700 dark:border-emerald-800 dark:bg-emerald-950/40 dark:text-emerald-400",
@@ -313,8 +315,8 @@ function OverviewTab({
                 ) : (
                     <>
                         <Stat icon={<ActivitySquare className="h-3.5 w-3.5" />} label="Active runs" value={number((runCounts.running ?? 0) + (runCounts.waiting ?? 0) + (runCounts.pending ?? 0))} />
-                        <Stat icon={<CheckCircle2 className="h-3.5 w-3.5" />} label="Completed" value={number(runCounts.completed)} tone="text-emerald-600" />
-                        <Stat icon={<XCircle className="h-3.5 w-3.5" />} label="Failed or blocked" value={number((runCounts.failed ?? 0) + (runCounts.blocked ?? 0))} tone="text-red-600" />
+                        <Stat icon={<CheckCircle2 className="h-3.5 w-3.5" />} label="Completed" value={number(runCounts.completed)} tone="text-emerald-600 dark:text-emerald-400" />
+                        <Stat icon={<XCircle className="h-3.5 w-3.5" />} label="Failed or blocked" value={number((runCounts.failed ?? 0) + (runCounts.blocked ?? 0))} tone="text-red-600 dark:text-red-400" />
                         <Stat icon={<MessageSquare className="h-3.5 w-3.5" />} label="Responses" value={number(responseTotal)} />
                     </>
                 )}
@@ -465,7 +467,7 @@ function ExecutionsTab({
                                             <Button
                                                 variant="ghost"
                                                 size="icon"
-                                                className="h-8 w-8 text-red-600 hover:text-red-700"
+                                                className="w-8 text-red-600 dark:text-red-400 hover:text-red-700 dark:text-red-400"
                                                 onClick={() => onCancelRun(run)}
                                                 disabled={acting !== null}
                                                 title="Cancel run"
@@ -545,7 +547,7 @@ function RunFilters({
                     type="button"
                     variant="ghost"
                     size="sm"
-                    className="h-8 gap-1.5 text-xs"
+                    className="gap-1.5 text-xs"
                     aria-expanded={showMore}
                     onClick={() => setShowMore((open) => !open)}
                 >
@@ -736,9 +738,9 @@ export default function CampaignDetail() {
     }
 
     return (
-        <div className="flex-1 space-y-6 bg-background p-8 pt-6">
+        <div className="ui-page ui-page-stack">
             <div className="flex items-center gap-3">
-                <Button variant="ghost" size="icon" asChild className="h-8 w-8">
+                <Button variant="ghost" size="icon" asChild className="w-8">
                     <Link to="/institution-admin/campaigns">
                         <ArrowLeft className="h-4 w-4" />
                     </Link>
@@ -752,10 +754,10 @@ export default function CampaignDetail() {
                     <Skeleton className="h-5 w-40" />
                 </div>
             ) : campaign ? (
-                <div className="flex items-start justify-between gap-4">
-                    <div className="space-y-1">
-                        <h2 className="text-3xl font-bold tracking-tight">{campaign.name}</h2>
-                        <div className="flex flex-wrap items-center gap-3">
+                <PageHeader
+                    art={campaignsIcon}
+                    title={campaign.name}
+                    description={<div className="flex flex-wrap items-center gap-3">
                             <WorkflowStatusBadge status={campaign.status} />
                             <span className="text-xs text-muted-foreground">
                                 {campaign.trigger_type
@@ -765,9 +767,8 @@ export default function CampaignDetail() {
                             <span className="text-xs text-muted-foreground">
                                 {number(activeRuns)} active run{activeRuns === 1 ? "" : "s"}
                             </span>
-                        </div>
-                    </div>
-                    <div className="flex flex-wrap items-center justify-end gap-2">
+                        </div>}
+                    actions={<div className="flex flex-wrap items-center justify-end gap-2">
                         <Button variant="outline" size="sm" asChild className="gap-1.5">
                             <Link to={`/institution-admin/campaigns/${campaign.id}/builder`}>
                                 <Pencil className="h-3.5 w-3.5" />
@@ -794,7 +795,7 @@ export default function CampaignDetail() {
                         )}
                         <DropdownMenu>
                             <DropdownMenuTrigger asChild>
-                                <Button variant="ghost" size="icon" className="h-8 w-8" disabled={acting !== null} aria-label="More actions">
+                                <Button variant="ghost" size="icon" className="w-8" disabled={acting !== null} aria-label="More actions">
                                     <MoreHorizontal className="h-4 w-4" />
                                 </Button>
                             </DropdownMenuTrigger>
@@ -824,8 +825,8 @@ export default function CampaignDetail() {
                                 </DropdownMenuItem>
                             </DropdownMenuContent>
                         </DropdownMenu>
-                    </div>
-                </div>
+                    </div>}
+                />
             ) : (
                 <p className="text-sm text-muted-foreground">Campaign not found.</p>
             )}

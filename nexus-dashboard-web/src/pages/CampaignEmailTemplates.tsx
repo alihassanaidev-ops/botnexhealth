@@ -20,15 +20,15 @@ import {
 import { toast } from "sonner"
 
 import { PageHeader } from "@/components/PageHeader"
-import { Badge } from "@/components/ui/badge"
-import { Button } from "@/components/ui/button"
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
-import { Input } from "@/components/ui/input"
-import { Label } from "@/components/ui/label"
-import { Switch } from "@/components/ui/switch"
-import { Textarea } from "@/components/ui/textarea"
-import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs"
-import { CardsSkeleton } from "@/components/ui/skeletons"
+import { Badge } from "@/components/foundation/compat/badge"
+import { Button } from "@/components/foundation/compat/button"
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/foundation/compat/card"
+import { Input } from "@/components/foundation/compat/input"
+import { Label } from "@/components/foundation/compat/label"
+import { Switch } from "@/components/foundation/compat/switch"
+import { Textarea } from "@/components/foundation/compat/textarea"
+import { Tabs, TabsList, TabsTrigger } from "@/components/foundation/compat/tabs"
+import { CardsSkeleton } from "@/components/foundation/compat/skeletons"
 import {
     Dialog,
     DialogContent,
@@ -36,7 +36,7 @@ import {
     DialogFooter,
     DialogHeader,
     DialogTitle,
-} from "@/components/ui/dialog"
+} from "@/components/foundation/compat/dialog"
 import { useInstitutionScope } from "@/hooks/useInstitutionScope"
 import {
     createCampaignEmailTemplate,
@@ -237,7 +237,7 @@ export default function CampaignEmailTemplates() {
     if (loading) return <CardsSkeleton />
 
     return (
-        <div className="space-y-6">
+        <div className="ui-page ui-page-stack">
             <PageHeader
                 icon={Mail}
                 title="Campaign Email Templates"
@@ -478,7 +478,7 @@ export default function CampaignEmailTemplates() {
                                         </span>
                                     </span>
                                     {copiedField === field.name ? (
-                                        <Check className="h-3.5 w-3.5 shrink-0 text-emerald-600" />
+                                        <Check className="h-3.5 w-3.5 shrink-0 text-emerald-600 dark:text-emerald-400" />
                                     ) : (
                                         <Copy className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
                                     )}

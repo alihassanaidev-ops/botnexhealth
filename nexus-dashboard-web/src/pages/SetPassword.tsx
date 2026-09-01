@@ -3,7 +3,7 @@ import { useForm } from "react-hook-form"
 import { zodResolver } from "@hookform/resolvers/zod"
 import * as z from "zod"
 import { useAuth } from "@/context/AuthContext"
-import { Button } from "@/components/ui/button"
+import { Button } from "@/components/foundation/compat/button"
 import {
     Form,
     FormControl,
@@ -11,9 +11,9 @@ import {
     FormItem,
     FormLabel,
     FormMessage,
-} from "@/components/ui/form"
-import { Input } from "@/components/ui/input"
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
+} from "@/components/foundation/compat/form"
+import { Input } from "@/components/foundation/compat/input"
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/foundation/compat/card"
 import { toast } from "sonner"
 import { Link, useSearchParams } from "react-router-dom"
 import { MfaFlow } from "@/components/mfa-flow"
@@ -82,7 +82,7 @@ export default function SetPassword() {
         return (
             <div className="relative flex h-screen w-full items-center justify-center bg-background p-4">
                 <div className="fixed inset-0 overflow-hidden pointer-events-none"><div className="absolute -top-32 -right-32 w-[420px] h-[420px] bg-transparent dark:bg-violet-700/20 rounded-full blur-[100px]" /></div>
-                <Card className="w-full max-w-sm border-border bg-gradient-to-b from-card to-accent/20 shadow-lg">
+                <Card className="w-full max-w-sm">
                     <CardHeader>
                         <CardTitle className="text-2xl">Invalid Link</CardTitle>
                         <CardDescription>
@@ -105,7 +105,7 @@ export default function SetPassword() {
                 <div className="fixed inset-0 overflow-hidden pointer-events-none">
                     <div className="absolute -top-32 -right-32 w-[420px] h-[420px] bg-transparent dark:bg-violet-700/20 rounded-full blur-[100px]" />
                 </div>
-                <Card className="w-full max-w-md border-border bg-gradient-to-b from-card to-accent/20 shadow-lg">
+                <Card className="w-full max-w-md">
                     <CardHeader>
                         <CardTitle className="text-2xl">
                             {challenge.status === "mfa_setup_required"
@@ -139,7 +139,7 @@ export default function SetPassword() {
     return (
         <div className="relative flex h-screen w-full items-center justify-center bg-background p-4">
             <div className="fixed inset-0 overflow-hidden pointer-events-none"><div className="absolute -top-32 -right-32 w-[420px] h-[420px] bg-transparent dark:bg-violet-700/20 rounded-full blur-[100px]" /></div>
-            <Card className="w-full max-w-sm border-border bg-gradient-to-b from-card to-accent/20 shadow-lg">
+            <Card className="w-full max-w-sm">
                 <CardHeader>
                     <CardTitle className="text-2xl">
                         {isResetFlow ? "Reset Password" : "Set Password"}

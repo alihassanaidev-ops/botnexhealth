@@ -1,0 +1,69 @@
+.ui-select-control {
+    box-sizing: border-box;
+    width: 100%;
+    height: var(--control-md);
+    border: 1px solid hsl(var(--input));
+    border-radius: var(--radius-md);
+    outline: none;
+    color: hsl(var(--foreground));
+    background-color: hsl(var(--background));
+    font-family: inherit;
+    font-size: var(--text-sm);
+    line-height: 1.2;
+    box-shadow: 0 1px 2px rgb(0 0 0 / 0.04);
+    transition: border-color 140ms ease, box-shadow 140ms ease, background-color 140ms ease;
+}
+
+/* Two sizes only, matched to .ui-button-sm / .ui-button-md, so a select and a
+   button sitting in the same toolbar are the same height without per-page
+   height overrides. */
+.ui-select-control-sm {
+    height: var(--control-sm);
+    font-size: 0.8rem;
+}
+
+.ui-select-control-sm.ui-select-trigger {
+    padding: 0 0.72rem;
+}
+
+.ui-select-control-md {
+    height: var(--control-md);
+}
+
+.ui-select-control:hover:not(:disabled) {
+    border-color: hsl(var(--ring) / 0.32);
+}
+
+.ui-select-control:focus,
+.ui-select-control:focus-visible,
+.ui-select-control[data-state="open"] {
+    border-color: hsl(var(--ring) / 0.65);
+    box-shadow: 0 0 0 3px hsl(var(--ring) / 0.12);
+}
+
+.ui-select-control:disabled,
+.ui-select-control[data-disabled] {
+    cursor: not-allowed;
+    opacity: 0.48;
+}
+
+.ui-select-trigger {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.55rem;
+    padding: 0 0.78rem;
+}
+
+.ui-select-trigger > svg {
+    width: 0.9rem;
+    height: 0.9rem;
+    flex: none;
+    color: hsl(var(--muted-foreground));
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .ui-select-control {
+        transition: none;
+    }
+}

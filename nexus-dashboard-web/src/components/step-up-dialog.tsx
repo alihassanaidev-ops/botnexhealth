@@ -25,8 +25,8 @@ import {
     DialogDescription,
     DialogHeader,
     DialogTitle,
-} from "@/components/ui/dialog"
-import { Button } from "@/components/ui/button"
+} from "@/components/foundation/compat/dialog"
+import { Button } from "@/components/foundation/compat/button"
 import {
     Form,
     FormControl,
@@ -34,8 +34,8 @@ import {
     FormItem,
     FormLabel,
     FormMessage,
-} from "@/components/ui/form"
-import { Input } from "@/components/ui/input"
+} from "@/components/foundation/compat/form"
+import { Input } from "@/components/foundation/compat/input"
 import {
     stepUpVerifyTotp,
     stepUpVerifyRecoveryCode,

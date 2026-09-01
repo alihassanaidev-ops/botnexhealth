@@ -8,28 +8,25 @@ import {
     AlertCircle,
     RefreshCcw,
     ArrowRight,
-    CalendarDays,
     Clock,
-    Users,
-    Percent,
-    Timer,
     MapPin,
     Activity,
+    CalendarDays,
     Home,
 } from "lucide-react"
+import callsArt from "@/assets/icons/presentation/calls.png"
+import schedulingArt from "@/assets/icons/presentation/scheduling.png"
+import patientsArt from "@/assets/icons/presentation/patients-outlined.png"
+import dashboardArt from "@/assets/icons/presentation/dashboard.png"
 
 import { PageHeader } from "@/components/PageHeader"
-import { Button } from "@/components/ui/button"
-import { Badge } from "@/components/ui/badge"
-import { Skeleton } from "@/components/ui/skeleton"
-import { Input } from "@/components/ui/input"
 import {
-    Select,
-    SelectContent,
-    SelectItem,
-    SelectTrigger,
-    SelectValue,
-} from "@/components/ui/select"
+    UiBadge,
+    UiButton,
+    UiInput,
+    UiSelect,
+    UiSkeleton,
+} from "@/components/foundation/Primitives"
 import { toast } from "sonner"
 import { useAuth } from "@/context/AuthContext"
 import { useSSE } from "@/hooks/useSSE"
@@ -41,6 +38,7 @@ import { STATUS_OPTIONS } from "@/lib/constants"
 import { DateRangePicker } from "@/components/dashboard/DateRangePicker"
 import { RevealablePhone } from "@/components/RevealablePhone"
 import { lastNDaysRange, type DateRangeValue } from "@/lib/date-range"
+import "@/components/dashboard/dashboard.css"
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -71,40 +69,36 @@ function formatDuration(seconds: number | null): string {
 
 // Range-scoped cards — driven by the date-range picker, sourced from summary.range.
 const RANGE_CARD_CONFIG = [
-    { label: "Total Calls", key: "total_calls" as const, icon: Phone, accentColor: "violet", glowRgb: "139,92,246" },
-    { label: "Appointments Booked", key: "appointments_booked" as const, icon: CalendarDays, accentColor: "emerald", glowRgb: "16,185,129" },
-    { label: "New Patients", key: "new_patients" as const, icon: Users, accentColor: "sky", glowRgb: "14,165,233" },
-    { label: "Booking Rate", key: "booking_rate" as const, icon: Percent, accentColor: "amber", glowRgb: "245,158,11", suffix: "%" },
+    { label: "Total Calls", key: "total_calls" as const, art: callsArt, caption: "calls handled" },
+    { label: "Appointments Booked", key: "appointments_booked" as const, art: schedulingArt, caption: "appointments" },
+    { label: "New Patients", key: "new_patients" as const, art: patientsArt, caption: "first-time callers" },
+    { label: "Booking Rate", key: "booking_rate" as const, art: dashboardArt, suffix: "%", caption: "of calls booked" },
 ]
 
 const METRIC_CARDS_CONFIG = [
     {
         label: "Appointments Booked",
         key: "appointments_booked_month" as const,
-        icon: CalendarDays,
-        accentColor: "emerald",
-        glowRgb: "16,185,129",
+        art: schedulingArt,
+        caption: "appointments",
     },
     {
         label: "New Patients",
         key: "new_patients_month" as const,
-        icon: Users,
-        accentColor: "sky",
-        glowRgb: "14,165,233",
+        art: patientsArt,
+        caption: "first-time callers",
     },
     {
         label: "Booking Rate",
         key: "booking_rate_month" as const,
-        icon: Percent,
-        accentColor: "amber",
-        glowRgb: "245,158,11",
+        art: dashboardArt,
+        caption: "of calls booked",
     },
     {
         label: "Avg Call Duration",
         key: "avg_call_duration_seconds" as const,
-        icon: Timer,
-        accentColor: "violet",
-        glowRgb: "139,92,246",
+        art: callsArt,
+        caption: "average length",
     },
 ]
 
@@ -125,14 +119,6 @@ const TAG_BAR_COLOR: Record<string, string> = {
     insurance_verified: "bg-green-500",
     insurance_unverified: "bg-rose-500",
     no_action_needed: "bg-zinc-400",
-}
-
-const TAG_BAR_GLOW: Record<string, string> = {
-    appointment_booked: "shadow-emerald-500/30",
-    appointment_rescheduled: "shadow-blue-500/30",
-    emergency: "shadow-red-500/30",
-    complaint: "shadow-orange-500/30",
-    needs_callback: "shadow-amber-500/30",
 }
 
 // ── Animated Count Hook ───────────────────────────────────────────────────────
@@ -176,66 +162,55 @@ function useAnimatedCount(target: number | undefined, duration = 600): number {
 interface GlassCardProps {
     label: string
     value: number | undefined
-    icon: React.ElementType
-    accentColor: string
-    glowRgb: string
+    art: string
     loading: boolean
     suffix?: string
+    caption: string
     formatValue?: (val: number) => string
+    emphasis?: "primary" | "secondary"
 }
 
 function GlassCard({
     label,
     value,
-    icon: Icon,
-    glowRgb,
+    art,
     loading,
     suffix = "",
+    caption,
     formatValue,
+    emphasis = "primary",
 }: GlassCardProps) {
     const animatedValue = useAnimatedCount(loading ? undefined : (value ?? 0))
 
     if (loading) {
         return (
-            <div className="relative rounded-2xl border border-border/60 bg-card p-6 space-y-4">
-                <div className="flex items-center justify-between">
-                    <Skeleton className="h-4 w-20" />
-                    <Skeleton className="h-9 w-9 rounded-xl" />
+            <div className="metric-card" data-emphasis={emphasis}>
+                <div className="metric-card-head">
+                    <UiSkeleton className="metric-card-label-ghost" />
+                    <UiSkeleton className="metric-card-icon" />
                 </div>
-                <Skeleton className="h-12 w-24" />
+                <UiSkeleton className="metric-card-value-ghost" />
+                <UiSkeleton className="metric-card-meta-ghost" />
             </div>
         )
     }
 
     return (
-        <div className="group relative overflow-hidden rounded-2xl bg-gradient-to-br from-card via-card to-accent/30 border border-border/60 shadow-sm transition-all duration-300 ease-out hover:-translate-y-1 hover:shadow-lg cursor-default">
-            {/* Radial glow */}
-            <div
-                className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-40 h-40 rounded-full opacity-[0.08] blur-3xl transition-opacity duration-300 group-hover:opacity-[0.15]"
-                style={{ background: `radial-gradient(circle, rgba(${glowRgb}, 0.8) 0%, transparent 70%)` }}
-            />
-
-            {/* Top edge highlight */}
-            <div className="absolute inset-x-0 top-0 h-px bg-gradient-to-r from-transparent via-primary/20 to-transparent" />
-
-            <div className="relative p-6">
-                <div className="flex items-center justify-between mb-5">
-                    <span className="text-sm font-medium text-muted-foreground">{label}</span>
-                    <div className="grid shrink-0 place-items-center rounded-xl bg-foreground p-2.5 shadow-[0_10px_24px_rgba(15,23,42,0.14)]">
-                        <Icon className="h-4 w-4 text-background" />
-                    </div>
+        <div className="metric-card" data-emphasis={emphasis}>
+            <div className="metric-card-head">
+                <span className="metric-card-label">{label}</span>
+                <div className="metric-card-icon ui-artwork" aria-hidden="true">
+                    <img src={art} alt="" />
                 </div>
-                <div className="text-5xl font-extralight tabular-nums tracking-tight text-foreground animate-count-fade">
-                    {formatValue
-                        ? (loading ? "" : formatValue(value ?? 0))
-                        : suffix === "%"
-                            ? (Number(value ?? 0).toFixed(2) + suffix)
-                            : (animatedValue.toLocaleString() + suffix)}
-                </div>
-                <p className="text-xs mt-2 text-muted-foreground/60 font-medium tracking-wide uppercase">
-                    {formatValue ? "avg length" : "calls"}
-                </p>
             </div>
+            <div className="metric-card-value animate-count-fade">
+                {formatValue
+                    ? (loading ? "" : formatValue(value ?? 0))
+                    : suffix === "%"
+                        ? (Number(value ?? 0).toFixed(1) + suffix)
+                        : (animatedValue.toLocaleString() + suffix)}
+            </div>
+            <p className="metric-card-meta">{caption}</p>
         </div>
     )
 }
@@ -266,11 +241,11 @@ function QueueItem({ item, onResolved }: QueueItemProps) {
     }
 
     return (
-        <div className="rounded-xl border border-border/40 bg-card/50 hover:bg-accent/30 transition-all duration-200 p-4 space-y-2">
+        <div className="dashboard-queue-item">
             <div className="flex items-start justify-between gap-2">
                 <div className="flex items-start gap-2.5 min-w-0">
                     {item.contact_name ? (
-                        <div className="grid size-8 shrink-0 place-items-center rounded-full bg-gradient-to-br from-violet-500 to-purple-600 text-[11px] font-semibold text-white">
+                        <div className="grid size-8 shrink-0 place-items-center rounded-full bg-primary text-xs font-semibold text-primary-foreground">
                             {getInitials(item.contact_name)}
                         </div>
                     ) : (
@@ -280,12 +255,12 @@ function QueueItem({ item, onResolved }: QueueItemProps) {
                         <p className="font-medium text-sm truncate text-foreground">
                             {item.contact_name ?? <span className="text-muted-foreground italic">Unknown caller</span>}
                         </p>
-                        <p className="text-xs text-muted-foreground/70 mt-0.5">
+                        <p className="text-xs text-muted-foreground mt-0.5">
                             {formatDate(item.call_date)} · {formatTime(item.call_time)}
                             {item.call_duration_seconds ? ` · ${formatDuration(item.call_duration_seconds)}` : ""}
                         </p>
                         {item.booked_appointment_type_name && (
-                            <span className="mt-1 inline-flex items-center gap-1 rounded-full bg-emerald-500/10 px-2 py-0.5 text-[10px] font-medium text-emerald-600 dark:text-emerald-400">
+                            <span className="mt-1 inline-flex items-center gap-1 rounded-full bg-emerald-500/10 px-2 py-0.5 text-xs font-medium text-emerald-600 dark:text-emerald-400">
                                 Booked: {item.booked_appointment_type_name}
                             </span>
                         )}
@@ -299,31 +274,32 @@ function QueueItem({ item, onResolved }: QueueItemProps) {
                         )}
                     </div>
                 </div>
-                <Button
-                    variant={open ? "ghost" : "secondary"}
+                <UiButton
+                    variant={open ?"quiet" :"secondary"}
                     size="sm"
-                    className="text-xs gap-1 shrink-0 h-7"
+                    className="text-xs gap-1 shrink-0"
                     onClick={() => setOpen((o) => !o)}
                 >
                     {open ? "Cancel" : "Resolve"}
-                </Button>
+                </UiButton>
             </div>
 
             {item.summary && (
-                <p className="text-xs text-muted-foreground/60 line-clamp-2 leading-relaxed pl-[18px]">
+                <p className="dashboard-queue-indent text-xs text-muted-foreground line-clamp-2 leading-relaxed">
                     {item.summary}
                 </p>
             )}
 
             {open && (
-                <div className="space-y-2 pt-1 pl-[18px]">
-                    <Input
+                <div className="dashboard-queue-indent space-y-2 pt-1">
+                    <UiInput
                         placeholder="Resolution note (optional)..."
                         value={note}
                         onChange={(e) => setNote(e.target.value)}
                         className="text-xs h-8"
                     />
-                    <Button
+                    <UiButton
+                        variant="primary"
                         size="sm"
                         className="gap-1.5 w-full"
                         onClick={handleResolve}
@@ -331,7 +307,7 @@ function QueueItem({ item, onResolved }: QueueItemProps) {
                     >
                         <CheckCircle2 className="h-3.5 w-3.5" />
                         {resolving ? "Resolving..." : "Mark Resolved"}
-                    </Button>
+                    </UiButton>
                 </div>
             )}
         </div>
@@ -341,7 +317,6 @@ function QueueItem({ item, onResolved }: QueueItemProps) {
 // ── Animated Tag Bar ──────────────────────────────────────────────────────────
 
 interface TagBarProps {
-    tag: string
     label: string
     count: number
     total: number
@@ -350,7 +325,7 @@ interface TagBarProps {
     barColor: string
 }
 
-function TagBar({ tag, label, count, total, pct, colorClass, barColor }: TagBarProps) {
+function TagBar({ label, count, total, pct, colorClass, barColor }: TagBarProps) {
     const [width, setWidth] = useState(0)
 
     useEffect(() => {
@@ -359,22 +334,18 @@ function TagBar({ tag, label, count, total, pct, colorClass, barColor }: TagBarP
     }, [pct])
 
     const countPct = total > 0 ? Math.round((count / total) * 100) : 0
-    const glowClass = TAG_BAR_GLOW[tag] ?? ""
 
     return (
-        <div className="flex items-center gap-3 group/bar">
-            <span className={`inline-flex items-center rounded-lg border px-2.5 py-1 text-xs font-medium w-40 shrink-0 truncate ${colorClass} transition-all duration-200`}>
+        <div className="dashboard-tag-row group/bar">
+            <span className={`dashboard-tag-label ${colorClass}`}>
                 {label}
             </span>
-            <div className="flex-1 bg-muted/50 rounded-full h-2.5 overflow-hidden">
-                <div
-                    className={`h-2.5 rounded-full transition-all duration-700 ease-out ${barColor} ${glowClass ? `shadow-sm ${glowClass}` : ""}`}
-                    style={{ width: `${width}%` }}
-                />
+            <div className="dashboard-tag-track">
+                <div className={`dashboard-tag-fill ${barColor}`} style={{ width: `${width}%` }} />
             </div>
-            <div className="flex items-center gap-1.5 w-16 justify-end shrink-0">
+            <div className="dashboard-tag-count">
                 <span className="text-sm font-semibold tabular-nums text-foreground">{count}</span>
-                <span className="text-xs text-muted-foreground/50">({countPct}%)</span>
+                <span className="text-xs text-muted-foreground">({countPct}%)</span>
             </div>
         </div>
     )
@@ -465,13 +436,8 @@ export default function Dashboard() {
     const totalTagCount = tagCounts.reduce((sum, tc) => sum + tc.count, 0)
 
     return (
-        <div className="flex-1 min-h-screen bg-background animate-fade-in-up">
-            {/* Violet top-right corner glow */}
-            <div className="fixed inset-0 overflow-hidden pointer-events-none">
-                <div className="absolute -top-32 -right-32 w-[420px] h-[420px] bg-transparent dark:bg-violet-700/20 rounded-full blur-[100px]" />
-            </div>
-
-            <div className="relative z-10 p-8 pt-6 space-y-6">
+        <div className="ui-page animate-fade-in-up">
+            <div className="ui-page-stack">
                 <PageHeader
                     icon={Home}
                     title="Dashboard"
@@ -479,71 +445,79 @@ export default function Dashboard() {
                     actions={
                         <>
                             {user?.role === "INSTITUTION_ADMIN" && (
-                                <Select value={selectedLocationSlug} onValueChange={setSelectedLocationSlug}>
-                                    <SelectTrigger className="w-[180px] h-8 text-xs">
-                                        <MapPin className="mr-2 h-3.5 w-3.5" />
-                                        <SelectValue placeholder="Select location" />
-                                    </SelectTrigger>
-                                    <SelectContent>
-                                        <SelectItem value="all">All Locations</SelectItem>
+                                <div className="dashboard-location-control">
+                                    <MapPin className="pointer-events-none absolute left-2.5 top-1/2 z-10 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" />
+                                    <UiSelect
+                                        aria-label="Select location"
+                                        value={selectedLocationSlug}
+                                        onChange={(event) => setSelectedLocationSlug(event.target.value)}
+                                        uiSize="sm"
+                                        className="pl-8"
+                                    >
+                                        <option value="all">All Locations</option>
                                         {locations.map((loc) => (
-                                            <SelectItem key={loc.slug} value={loc.slug}>
+                                            <option key={loc.slug} value={loc.slug}>
                                                 {loc.name}
-                                            </SelectItem>
+                                            </option>
                                         ))}
-                                    </SelectContent>
-                                </Select>
+                                    </UiSelect>
+                                </div>
                             )}
                             <DateRangePicker value={range} onChange={setRange} />
-                            <Button
-                                variant="outline"
+                            <UiButton
+                                variant="secondary"
                                 size="sm"
                                 onClick={fetchSummary}
                                 disabled={loading}
-                                className="gap-2 h-8 text-xs"
+                                className="gap-2"
                             >
                                 <RefreshCcw className={`h-3.5 w-3.5 ${loading ? "animate-spin" : ""}`} />
                                 Refresh
-                            </Button>
+                            </UiButton>
                         </>
                     }
                 />
 
                 {/* Range-scoped cards (driven by the date-range picker) */}
-                <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-4">
-                    {RANGE_CARD_CONFIG.map(({ label, key, icon, accentColor, glowRgb, suffix }) => (
-                        <GlassCard
-                            key={key}
-                            label={label}
-                            value={summary?.range?.[key]}
-                            icon={icon}
-                            accentColor={accentColor}
-                            glowRgb={glowRgb}
-                            suffix={suffix}
-                            loading={loading}
-                        />
-                    ))}
+                <div>
+                    <div className="ui-section-label dashboard-section-label">
+                        <CalendarDays className="h-4 w-4" />
+                        <span>Selected range</span>
+                    </div>
+                    <div className="dashboard-metric-grid dashboard-metric-grid-primary">
+                        {RANGE_CARD_CONFIG.map(({ label, key, art, suffix, caption }) => (
+                            <GlassCard
+                                key={key}
+                                label={label}
+                                value={summary?.range?.[key]}
+                                art={art}
+                                suffix={suffix}
+                                caption={caption}
+                                loading={loading}
+                            />
+                        ))}
+                    </div>
                 </div>
 
                 {/* Metric cards */}
                 {aggregateMetrics && (
                     <div>
-                        <div className="flex items-center gap-2 mb-3">
-                            <Activity className="h-4 w-4 text-muted-foreground/50" />
-                            <span className="text-xs font-semibold uppercase tracking-widest text-muted-foreground/50">Monthly Metrics</span>
+                        <div className="ui-section-label dashboard-section-label">
+                            <Activity className="h-4 w-4" />
+                            <span>This month</span>
                         </div>
-                        <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-4">
-                            {METRIC_CARDS_CONFIG.map(({ label, key, icon, accentColor, glowRgb }) => (
+                        <div className="dashboard-metric-grid dashboard-metric-grid-secondary">
+                            {METRIC_CARDS_CONFIG.map(({ label, key, art, caption }) => (
                                 <GlassCard
                                     key={key}
                                     label={label}
                                     value={aggregateMetrics?.[key] ?? 0}
-                                    icon={icon}
-                                    accentColor={accentColor}
-                                    glowRgb={glowRgb}
+                                    art={art}
                                     loading={loading}
+                                    caption={caption}
                                     suffix={key === "booking_rate_month" ? "%" : ""}
                                     formatValue={key === "avg_call_duration_seconds" ? formatDuration : undefined}
+                                    emphasis="secondary"
                                 />
                             ))}
                         </div>
@@ -551,34 +525,32 @@ export default function Dashboard() {
                 )}
 
                 {/* Bottom grid: tag breakdown + callback queue */}
-                <div className="grid gap-6 lg:grid-cols-2">
+                <div className="dashboard-detail-grid">
                     {/* Tag breakdown */}
-                    <div className="relative overflow-hidden rounded-2xl bg-gradient-to-br from-card via-card to-accent/30 border border-border/60 shadow-sm">
-                        <div className="absolute inset-0 bg-[radial-gradient(ellipse_at_top_left,hsl(var(--primary)/0.06),transparent_60%)]" />
-                        <div className="absolute inset-x-0 top-0 h-px bg-gradient-to-r from-transparent via-primary/20 to-transparent" />
-                        <div className="relative">
-                            <div className="p-6 pb-4">
-                                <h3 className="text-base font-semibold text-foreground">Call Tags Breakdown</h3>
-                                <p className="text-sm text-muted-foreground/60 mt-0.5">All-time calls by primary tag.</p>
+                    <div className="dashboard-panel">
+                        <div>
+                            <div className="dashboard-panel-header">
+                                <h3>Call Tags Breakdown</h3>
+                                <p>All-time calls by primary tag.</p>
                             </div>
-                            <div className="px-6 pb-6">
+                            <div className="dashboard-panel-body">
                                 {loading ? (
                                     <div className="space-y-4">
                                         {Array.from({ length: 5 }).map((_, i) => (
                                             <div key={i} className="flex items-center gap-3">
-                                                <Skeleton className="h-5 w-40 rounded-lg" />
-                                                <Skeleton className="h-2.5 flex-1 rounded-full" />
-                                                <Skeleton className="h-4 w-16" />
+                                                <UiSkeleton className="h-5 w-40 rounded-lg" />
+                                                <UiSkeleton className="h-2.5 flex-1 rounded-full" />
+                                                <UiSkeleton className="h-4 w-16" />
                                             </div>
                                         ))}
                                     </div>
                                 ) : tagCounts.length === 0 ? (
                                     <div className="flex flex-col items-center justify-center py-10 text-center gap-2">
                                         <div className="h-12 w-12 rounded-2xl bg-primary/10 flex items-center justify-center">
-                                            <Phone className="h-6 w-6 text-primary/40" />
+                                            <Phone className="h-6 w-6 text-primary" />
                                         </div>
                                         <p className="text-sm font-medium mt-2 text-foreground">No calls recorded yet.</p>
-                                        <p className="text-xs text-muted-foreground/50">Tags will appear here once your agent handles calls.</p>
+                                        <p className="text-xs text-muted-foreground">Tags will appear here once your agent handles calls.</p>
                                     </div>
                                 ) : (
                                     <div className="space-y-3.5">
@@ -590,7 +562,6 @@ export default function Dashboard() {
                                             return (
                                                 <TagBar
                                                     key={tc.tag}
-                                                    tag={tc.tag}
                                                     label={tc.label}
                                                     count={tc.count}
                                                     total={totalTagCount}
@@ -603,11 +574,16 @@ export default function Dashboard() {
                                     </div>
                                 )}
 
-                                <div className="mt-5 pt-4 border-t border-border/40">
+                                <div className="dashboard-panel-footer">
                                     <Link to="/calls">
-                                        <Button variant="ghost" size="sm" className="gap-1.5 text-xs h-7 text-muted-foreground hover:text-foreground">
-                                            View all calls <ArrowRight className="h-3 w-3" />
-                                        </Button>
+                                        <UiButton variant="quiet" size="sm" className="gap-1.5 text-xs">
+                                            <PhoneIncoming className="h-3 w-3" /> All calls
+                                        </UiButton>
+                                    </Link>
+                                    <Link to="/calls" state={{ tags: ["appointment_booked"] }}>
+                                        <UiButton variant="quiet" size="sm" className="gap-1.5 text-xs">
+                                            <PhoneOutgoing className="h-3 w-3" /> Booked today
+                                        </UiButton>
                                     </Link>
                                 </div>
                             </div>
@@ -615,33 +591,32 @@ export default function Dashboard() {
                     </div>
 
                     {/* Callback queue */}
-                    <div className="relative overflow-hidden rounded-2xl bg-gradient-to-br from-card via-card to-accent/30 border border-border/60 shadow-sm transition-all duration-300">
-                        <div className="absolute inset-x-0 top-0 h-px bg-gradient-to-r from-transparent via-primary/20 to-transparent" />
-                        <div className="relative">
-                            <div className="p-6 pb-4">
+                    <div className="dashboard-panel">
+                        <div>
+                            <div className="dashboard-panel-header">
                                 <div className="flex items-center justify-between">
                                     <div>
-                                        <h3 className="text-base font-semibold text-foreground flex items-center gap-2">
-                                            <Clock className={`h-4 w-4 ${hasCallbacks ? "text-amber-500" : "text-muted-foreground/40"}`} />
+                                        <h3 className="flex items-center gap-2">
+                                            <Clock className={`h-4 w-4 ${hasCallbacks ? "text-amber-500" : "text-muted-foreground"}`} />
                                             Needs Callback
                                             {hasCallbacks && (
-                                                <Badge
-                                                    variant="destructive"
-                                                    className="text-[10px] h-5 px-1.5 font-semibold rounded-lg"
+                                                <UiBadge
+                                                    tone="danger"
+                                                    className="text-2xs h-5 px-1.5 font-semibold rounded-lg"
                                                 >
                                                     {callbackQueue.length}
-                                                </Badge>
+                                                </UiBadge>
                                             )}
                                         </h3>
-                                        <p className="text-sm text-muted-foreground/60 mt-0.5">Unresolved callback requests, oldest first.</p>
+                                        <p>Unresolved callback requests, oldest first.</p>
                                     </div>
                                 </div>
                             </div>
-                            <div className="px-6 pb-6">
+                            <div className="dashboard-panel-body">
                                 {loading ? (
                                     <div className="space-y-3">
                                         {Array.from({ length: 3 }).map((_, i) => (
-                                            <Skeleton key={i} className="h-16 w-full rounded-xl" />
+                                            <UiSkeleton key={i} className="h-16 w-full rounded-xl" />
                                         ))}
                                     </div>
                                 ) : callbackQueue.length === 0 ? (
@@ -651,12 +626,12 @@ export default function Dashboard() {
                                         </div>
                                         <div>
                                             <p className="font-medium text-sm text-foreground">All caught up!</p>
-                                            <p className="text-xs text-muted-foreground/50 mt-0.5">No pending callbacks right now.</p>
+                                            <p className="text-xs text-muted-foreground mt-0.5">No pending callbacks right now.</p>
                                         </div>
                                         <Link to="/calls">
-                                            <Button variant="outline" size="sm" className="gap-1.5 text-xs h-7 mt-1">
+                                            <UiButton variant="secondary" size="sm" className="gap-1.5 text-xs mt-1">
                                                 View all calls <ArrowRight className="h-3 w-3" />
-                                            </Button>
+                                            </UiButton>
                                         </Link>
                                     </div>
                                 ) : (
@@ -668,32 +643,18 @@ export default function Dashboard() {
                                 )}
 
                                 {hasCallbacks && (
-                                    <div className="mt-4 pt-4 border-t border-border/40">
+                                    <div className="dashboard-panel-footer">
                                         <Link to="/callbacks">
-                                            <Button variant="ghost" size="sm" className="gap-1.5 text-xs h-7 text-muted-foreground hover:text-foreground">
+                                            <UiButton variant="quiet" size="sm" className="gap-1.5 text-xs">
                                                 <AlertCircle className="h-3 w-3 text-amber-500" />
                                                 View all callbacks <ArrowRight className="h-3 w-3" />
-                                            </Button>
+                                            </UiButton>
                                         </Link>
                                     </div>
                                 )}
                             </div>
                         </div>
                     </div>
-                </div>
-
-                {/* Quick links */}
-                <div className="flex gap-2 flex-wrap">
-                    <Link to="/calls">
-                        <Button variant="outline" size="sm" className="gap-2 h-8 text-xs">
-                            <PhoneIncoming className="h-3.5 w-3.5" /> All Calls
-                        </Button>
-                    </Link>
-                    <Link to="/calls" state={{ tags: ["appointment_booked"] }}>
-                        <Button variant="outline" size="sm" className="gap-2 h-8 text-xs">
-                            <PhoneOutgoing className="h-3.5 w-3.5" /> Booked Today
-                        </Button>
-                    </Link>
                 </div>
             </div>
         </div>

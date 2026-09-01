@@ -8,23 +8,53 @@
  */
 
 import { useEffect, useState } from "react"
-import { Eye, Loader2 } from "lucide-react"
-import { Button } from "@/components/ui/button"
-import {
-    Select,
-    SelectContent,
-    SelectItem,
-    SelectTrigger,
-    SelectValue,
-} from "@/components/ui/select"
+import { Eye, LayoutList, Loader2, MessagesSquare } from "lucide-react"
+import { UiButton, UiSelect } from "@/components/foundation/Primitives"
 import { toast } from "sonner"
 import { revealCustomPhiField, revealRecording, revealTranscript } from "@/lib/calls-api"
 import { STATUS_OPTIONS } from "@/lib/constants"
 import { statusBadgeClasses, statusSwatchClass } from "@/lib/status-colors"
 import { cn } from "@/lib/utils"
 import type { CallDetail, CustomFieldValue, TranscriptTurn, WorkflowStatus, WorkflowStatusRef } from "@/types"
+import "./view-switch.css"
 
 const STATUS_MAP = Object.fromEntries(STATUS_OPTIONS.map((o) => [o.value, o]))
+
+// ── View switch ─────────────────────────────────────────────────────────────
+
+export type CallsViewMode = "table" | "conversation"
+
+/** Table/conversation toggle, shared by Calls and the Callback Queue. */
+export function ViewSwitch({
+    value,
+    onChange,
+}: {
+    value: CallsViewMode
+    onChange: (mode: CallsViewMode) => void
+}) {
+    return (
+        <div className="calls-view-switch" role="group" aria-label="View mode">
+            <button
+                type="button"
+                className="calls-view-button"
+                onClick={() => onChange("table")}
+                aria-pressed={value === "table"}
+            >
+                <LayoutList className="h-3.5 w-3.5" />
+                <span className="hidden sm:inline">Table</span>
+            </button>
+            <button
+                type="button"
+                className="calls-view-button"
+                onClick={() => onChange("conversation")}
+                aria-pressed={value === "conversation"}
+            >
+                <MessagesSquare className="h-3.5 w-3.5" />
+                <span className="hidden sm:inline">Conversations</span>
+            </button>
+        </div>
+    )
+}
 
 // ── Badges ──────────────────────────────────────────────────────────────────
 
@@ -89,38 +119,27 @@ export function StatusSelect({
     saving?: boolean
     className?: string
 }) {
+    if (saving) {
+        return (
+            <span className={cn("ui-select flex h-8 items-center gap-1.5 text-xs text-muted-foreground", className)}>
+                <Loader2 className="h-3.5 w-3.5 animate-spin" /> Saving…
+            </span>
+        )
+    }
+
     return (
-        <Select
+        <UiSelect
             value={value ?? NO_STATUS}
-            onValueChange={(v) => onChange(v === NO_STATUS ? null : v)}
-            disabled={saving}
+            onChange={(event) => onChange(event.target.value === NO_STATUS ? null : event.target.value)}
+            uiSize="sm"
+            className={cn("w-full", className)}
+            aria-label="Set status"
         >
-            <SelectTrigger className={cn("h-8 w-full text-xs", className)}>
-                {saving ? (
-                    <span className="flex items-center gap-1.5 text-muted-foreground">
-                        <Loader2 className="h-3.5 w-3.5 animate-spin" /> Saving…
-                    </span>
-                ) : (
-                    <SelectValue placeholder="Set status" />
-                )}
-            </SelectTrigger>
-            <SelectContent>
-                <SelectItem value={NO_STATUS}>
-                    <span className="flex items-center gap-2 text-muted-foreground">
-                        <span className="h-2 w-2 rounded-full border border-muted-foreground/40" />
-                        No status
-                    </span>
-                </SelectItem>
+            <option value={NO_STATUS}>No status</option>
                 {statuses.map((s) => (
-                    <SelectItem key={s.id} value={s.id}>
-                        <span className="flex items-center gap-2">
-                            <span className={cn("h-2 w-2 rounded-full", statusSwatchClass(s.color))} />
-                            {s.name}
-                        </span>
-                    </SelectItem>
+                    <option key={s.id} value={s.id}>{s.name}</option>
                 ))}
-            </SelectContent>
-        </Select>
+        </UiSelect>
     )
 }
 
@@ -167,17 +186,17 @@ function CustomFieldDisplay({ callId, field }: { callId: string; field: CustomFi
 
     if (field.is_phi && field.reveal_available && !revealed) {
         return (
-            <Button
+            <UiButton
                 type="button"
-                variant="outline"
+                variant="secondary"
                 size="sm"
-                className="mt-1 h-7 gap-1.5 px-2 text-xs"
+                className="mt-1 gap-1.5 px-2 text-xs"
                 onClick={handleReveal}
                 disabled={revealing}
             >
                 {revealing ? <Loader2 className="h-3 w-3 animate-spin" /> : <Eye className="h-3 w-3" />}
                 Reveal
-            </Button>
+            </UiButton>
         )
     }
 
@@ -221,7 +240,7 @@ export function TranscriptChatBubbles({ turns }: { turns: TranscriptTurn[] }) {
                 if (turn.role === "tool_call_invocation") {
                     return (
                         <div key={i} className="flex justify-center">
-                            <span className="inline-flex items-center gap-1 rounded-full bg-muted border px-2.5 py-0.5 text-[10px] text-muted-foreground">
+                            <span className="inline-flex items-center gap-1 rounded-full bg-muted border px-2.5 py-0.5 text-2xs text-muted-foreground">
                                 ⚙ Agent triggered: <span className="font-medium">{turn.name ?? "action"}</span>
                             </span>
                         </div>
@@ -239,7 +258,7 @@ export function TranscriptChatBubbles({ turns }: { turns: TranscriptTurn[] }) {
                                 : "bg-primary text-primary-foreground rounded-tr-sm"
                                 }`}
                         >
-                            <p className={`font-semibold mb-0.5 text-[10px] ${isAgent ? "opacity-50" : "opacity-75"
+                            <p className={`font-semibold mb-0.5 text-2xs ${isAgent ? "opacity-50" : "opacity-75"
                                 }`}>
                                 {isAgent ? "AI Assistant" : "Caller"}
                             </p>
@@ -304,17 +323,17 @@ export function TranscriptSection({ detail, fill = false }: { detail: CallDetail
     // scrubbed preview, and as a compact bar above the scrubbed preview when
     // there is one.
     const revealButton = (
-        <Button
+        <UiButton
             type="button"
-            variant="outline"
+            variant="secondary"
             size="sm"
-            className="h-8 gap-1.5"
+            className="gap-1.5"
             onClick={handleReveal}
             disabled={revealing || !detail.transcript_available}
         >
             {revealing ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Eye className="h-3.5 w-3.5" />}
             Reveal full transcript
-        </Button>
+        </UiButton>
     )
 
     const gate = (
@@ -331,7 +350,7 @@ export function TranscriptSection({ detail, fill = false }: { detail: CallDetail
         <div className="flex flex-col">
             {!turns && detail.transcript_available && (
                 <div className="flex items-center justify-between gap-2 border-b bg-muted/60 px-3 py-1.5">
-                    <span className="text-[10px] text-muted-foreground">
+                    <span className="text-2xs text-muted-foreground">
                         Redacted view — PHI shown as *****
                     </span>
                     {revealButton}
@@ -352,7 +371,7 @@ export function TranscriptSection({ detail, fill = false }: { detail: CallDetail
         <div>
             <p className="text-xs text-muted-foreground font-medium uppercase tracking-wide mb-1.5">
                 Transcript
-                <span className="ml-1.5 text-[9px] opacity-60 font-normal normal-case">
+                <span className="ml-1.5 text-2xs opacity-60 font-normal normal-case">
                     HIPAA ✓ encrypted + audited
                 </span>
             </p>
@@ -396,17 +415,17 @@ export function RecordingSection({ detail, compact = false }: { detail: CallDeta
             Your browser does not support the audio element.
         </audio>
     ) : (
-        <Button
+        <UiButton
             type="button"
-            variant="outline"
+            variant="secondary"
             size="sm"
-            className="h-8 gap-1.5"
+            className="gap-1.5"
             onClick={handleRevealRecording}
             disabled={revealing}
         >
             {revealing ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Eye className="h-3.5 w-3.5" />}
             Reveal recording
-        </Button>
+        </UiButton>
     )
 
     if (compact) {

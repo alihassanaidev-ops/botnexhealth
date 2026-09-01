@@ -1,7 +1,7 @@
 /**
  * Right-side configuration panel (Sheet) for the selected node or the trigger.
  *
- * Uses controlled shadcn primitives (Input/Textarea/Select/Switch/Label) with immediate
+ * Uses controlled custom primitives (Input/Textarea/Select/Switch/Label) with immediate
  * immutable propagation. Validation is centralized in `lib/workflow/validation.ts` and
  * surfaced in the ValidationPanel, so this panel does not duplicate per-field zod (the
  * definition is a 6-variant discriminated union; centralized validation is the single
@@ -16,13 +16,13 @@ import {
     SheetDescription,
     SheetHeader,
     SheetTitle,
-} from "@/components/ui/sheet"
-import { Button } from "@/components/ui/button"
-import { Input } from "@/components/ui/input"
-import { Textarea } from "@/components/ui/textarea"
-import { Label } from "@/components/ui/label"
-import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover"
-import { Switch } from "@/components/ui/switch"
+} from "@/components/foundation/compat/sheet"
+import { Button } from "@/components/foundation/compat/button"
+import { Input } from "@/components/foundation/compat/input"
+import { Textarea } from "@/components/foundation/compat/textarea"
+import { Label } from "@/components/foundation/compat/label"
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/foundation/compat/popover"
+import { Switch } from "@/components/foundation/compat/switch"
 import {
     Select,
     SelectContent,
@@ -31,7 +31,7 @@ import {
     SelectLabel,
     SelectTrigger,
     SelectValue,
-} from "@/components/ui/select"
+} from "@/components/foundation/compat/select"
 import { NODE_META, CONDITION_OP_LABELS, TRIGGER_META } from "@/lib/workflow/catalog"
 import {
     listCampaignEmailTemplates,
@@ -1143,7 +1143,7 @@ function VoiceFields({
                                 type="button"
                                 variant="outline"
                                 disabled={readOnly}
-                                className="h-10 w-full justify-between px-3 text-left font-normal"
+                                className="w-full justify-between px-3 text-left font-normal"
                             >
                                 <span className="min-w-0 truncate">
                                     {selectedPhoneCountry
@@ -1255,7 +1255,7 @@ function VoiceFields({
                     </div>
                     <div className="flex flex-wrap gap-1">
                         {VOICE_OUTCOME_BRANCH_VALUES.map((value) => (
-                            <span key={value} className="rounded border border-border px-1.5 py-0.5 text-[11px] text-muted-foreground">
+                            <span key={value} className="rounded border border-border px-1.5 py-0.5 text-xs text-muted-foreground">
                                 {value}
                             </span>
                         ))}
@@ -1923,7 +1923,7 @@ function LlmFields({
                                 variant="outline"
                                 size="sm"
                                 disabled={readOnly || variables.length === 0}
-                                className="h-8 gap-2"
+                                className="gap-2"
                             >
                                 <Plus className="h-3.5 w-3.5" />
                                 Insert variable
@@ -2035,7 +2035,7 @@ function ConditionFields({
                                     </SelectContent>
                                 </Select>
                                 {!readOnly && node.rules.length > 1 && (
-                                    <Button variant="ghost" size="icon" className="h-9 w-9 shrink-0" onClick={() => removeRule(i)}>
+                                    <Button variant="ghost" size="icon" className="w-9 shrink-0" onClick={() => removeRule(i)}>
                                         <Trash2 className="h-3.5 w-3.5" />
                                     </Button>
                                 )}
@@ -2163,7 +2163,7 @@ function MessageField({
                         <SelectContent>
                             {Object.entries(grouped).map(([group, fields]) => (
                                 <SelectGroup key={group}>
-                                    <SelectLabel className="text-[11px] uppercase text-muted-foreground">
+                                    <SelectLabel className="text-xs uppercase text-muted-foreground">
                                         {group}
                                     </SelectLabel>
                                     {fields.map((f) => (

@@ -11,20 +11,21 @@ import {
     Unlock,
 } from "lucide-react"
 import { PageHeader } from "@/components/PageHeader"
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
-import { Button } from "@/components/ui/button"
-import { Badge } from "@/components/ui/badge"
-import { Skeleton } from "@/components/ui/skeleton"
-import { Input } from "@/components/ui/input"
-import { Label } from "@/components/ui/label"
-import { Textarea } from "@/components/ui/textarea"
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/foundation/compat/card"
+import { Button } from "@/components/foundation/compat/button"
+import { Badge } from "@/components/foundation/compat/badge"
+import { Skeleton } from "@/components/foundation/compat/skeleton"
+import { Input } from "@/components/foundation/compat/input"
+import { Label } from "@/components/foundation/compat/label"
+import { Textarea } from "@/components/foundation/compat/textarea"
+import { UiSelect } from "@/components/foundation/Primitives"
 import {
     Dialog,
     DialogContent,
     DialogDescription,
     DialogHeader,
     DialogTitle,
-} from "@/components/ui/dialog"
+} from "@/components/foundation/compat/dialog"
 import { toast } from "sonner"
 import {
     createSmsSuppression,
@@ -156,8 +157,7 @@ export default function TwilioPhoneNumbers() {
     const voiceCapable = numbers.filter((n) => n.capabilities.voice)
 
     return (
-        <div className="relative flex-1 space-y-6 bg-background p-8 pt-6">
-            <div className="fixed inset-0 overflow-hidden pointer-events-none"><div className="absolute -top-32 -right-32 w-[420px] h-[420px] bg-transparent dark:bg-violet-700/20 rounded-full blur-[100px]" /></div>
+        <div className="ui-page ui-page-stack">
             <PageHeader
                 icon={MessageSquare}
                 title="Twilio Phone Numbers"
@@ -180,30 +180,23 @@ export default function TwilioPhoneNumbers() {
             {!loading && (
                 <div className="grid gap-4 md:grid-cols-3">
                     {[
-                        { label: "Total Numbers", value: numbers.length, icon: Phone, glowRgb: "139,92,246" },
-                        { label: "SMS Capable", value: smsCapable.length, icon: MessageSquare, glowRgb: "59,130,246" },
-                        { label: "Voice Capable", value: voiceCapable.length, icon: Mic, glowRgb: "16,185,129" },
+                        { label: "Total Numbers", value: numbers.length, icon: Phone },
+                        { label: "SMS Capable", value: smsCapable.length, icon: MessageSquare },
+                        { label: "Voice Capable", value: voiceCapable.length, icon: Mic },
                     ].map((card) => (
-                        <div key={card.label} className="group relative overflow-hidden rounded-2xl bg-gradient-to-br from-card via-card to-accent/30 border border-border/60 shadow-sm transition-all duration-300 ease-out hover:-translate-y-1 hover:shadow-lg cursor-default">
-                            <div
-                                className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-40 h-40 rounded-full opacity-[0.08] blur-3xl transition-opacity duration-300 group-hover:opacity-[0.15]"
-                                style={{ background: `radial-gradient(circle, rgba(${card.glowRgb}, 0.8) 0%, transparent 70%)` }}
-                            />
-                            <div className="absolute inset-x-0 top-0 h-px bg-gradient-to-r from-transparent via-primary/20 to-transparent" />
-                            <div className="relative p-6">
-                                <div className="flex items-center justify-between mb-5">
-                                    <span className="text-sm font-medium text-muted-foreground">{card.label}</span>
-                                    <div className="grid shrink-0 place-items-center rounded-xl bg-foreground p-2.5 shadow-[0_10px_24px_rgba(15,23,42,0.14)]">
-                                        <card.icon className="h-4 w-4 text-background" />
+                        <div key={card.label} className="rounded-xl border border-border/80 bg-card p-5 shadow-sm">
+                                <div className="mb-3 flex items-center justify-between">
+                                    <span className="text-xs font-medium text-muted-foreground">{card.label}</span>
+                                    <div className="grid size-8 shrink-0 place-items-center rounded-lg bg-muted">
+                                        <card.icon className="h-4 w-4 text-foreground" />
                                     </div>
                                 </div>
-                                <div className="text-5xl font-extralight tabular-nums tracking-tight text-foreground">
+                                <div className="text-2xl font-semibold tabular-nums tracking-tight text-foreground">
                                     {card.value}
                                 </div>
-                                <p className="text-xs mt-2 text-muted-foreground/60 font-medium tracking-wide uppercase">
+                                <p className="mt-1 text-xs text-muted-foreground">
                                     numbers
                                 </p>
-                            </div>
                         </div>
                     ))}
                 </div>
@@ -316,9 +309,8 @@ export default function TwilioPhoneNumbers() {
                         <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
                             <div className="space-y-1.5">
                                 <Label htmlFor="suppression-location">Location</Label>
-                                <select
+                                <UiSelect
                                     id="suppression-location"
-                                    className="h-10 w-full rounded-md border border-input bg-background px-3 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
                                     value={suppressionLocationId}
                                     onChange={(e) => setSuppressionLocationId(e.target.value)}
                                 >
@@ -328,7 +320,7 @@ export default function TwilioPhoneNumbers() {
                                             {loc.institution_name} — {loc.location_name}
                                         </option>
                                     ))}
-                                </select>
+                                </UiSelect>
                             </div>
                             <div className="space-y-1.5">
                                 <Label htmlFor="suppression-phone">Phone</Label>
@@ -438,9 +430,8 @@ export default function TwilioPhoneNumbers() {
                     <div className="space-y-4 py-2">
                         <div className="space-y-2">
                             <Label htmlFor="sms-location">Location</Label>
-                            <select
+                            <UiSelect
                                 id="sms-location"
-                                className="h-10 w-full rounded-md border border-input bg-background px-3 text-sm"
                                 value={selectedLocationId}
                                 onChange={(e) => setSelectedLocationId(e.target.value)}
                             >
@@ -452,7 +443,7 @@ export default function TwilioPhoneNumbers() {
                                             {loc.institution_name} — {loc.location_name}
                                         </option>
                                     ))}
-                            </select>
+                            </UiSelect>
                         </div>
                         <div className="space-y-2">
                             <Label htmlFor="to-number">To (E.164 format)</Label>

@@ -11,19 +11,17 @@ import {
 } from "@simplewebauthn/browser"
 import axios from "axios"
 
+import passkeyShield from "@/assets/icons/passkey-shield-v2.png"
 import { useAuth } from "@/context/AuthContext"
-import { Button } from "@/components/ui/button"
 import {
-    Form,
-    FormControl,
-    FormField,
-    FormItem,
-    FormLabel,
-    FormMessage,
-} from "@/components/ui/form"
-import { Input } from "@/components/ui/input"
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
-import { Separator } from "@/components/ui/separator"
+    AuthButton,
+    AuthChoice,
+    AuthCodePanel,
+    AuthDivider,
+    AuthField,
+    AuthHeader,
+    AuthScaffold,
+} from "@/components/foundation/AuthScaffold"
 import {
     startTotpSetup,
     verifyTotpSetup,
@@ -330,448 +328,265 @@ export default function Login() {
         credForm.setValue("password", "")
     }
 
+    const securityIcon = <img src={passkeyShield} alt="" aria-hidden="true" />
+
     return (
-        <div className="relative flex h-screen w-full items-center justify-center bg-background p-4">
-            <div className="fixed inset-0 overflow-hidden pointer-events-none">
-                <div className="absolute -top-32 -right-32 w-[420px] h-[420px] bg-transparent dark:bg-violet-700/20 rounded-full blur-[100px]" />
-            </div>
-            <div className="relative flex w-full max-w-md flex-col items-center">
-                {/* Brand: logo mark + gradient wordmark beneath */}
-                <div className="mb-6 flex flex-col items-center gap-3">
-                    <img src="/scalenexuslogo.svg" alt="ScaleNexus" className="h-16 w-16 object-contain" />
-                    <span className="bg-gradient-to-r from-indigo-500 via-purple-500 to-pink-500 bg-clip-text text-2xl font-bold tracking-tight text-transparent">
-                        ScaleNexus.AI
-                    </span>
-                </div>
-                <Card className="w-full border-border bg-gradient-to-b from-card to-accent/20 shadow-lg">
-                {step.kind === "credentials" && (
-                    <>
-                        <CardHeader>
-                            <CardTitle className="text-2xl">Login</CardTitle>
-                            <CardDescription>
-                                Enter your email below to login to your account.
-                            </CardDescription>
-                        </CardHeader>
-                        <CardContent>
-                            <Form {...credForm}>
-                                <form onSubmit={credForm.handleSubmit(submitCredentials)} className="space-y-4">
-                                    <FormField
-                                        control={credForm.control}
-                                        name="email"
-                                        render={({ field }) => (
-                                            <FormItem>
-                                                <FormLabel>Email</FormLabel>
-                                                <FormControl>
-                                                    <Input placeholder="m@example.com" autoComplete="email" {...field} />
-                                                </FormControl>
-                                                <FormMessage />
-                                            </FormItem>
-                                        )}
-                                    />
-                                    <FormField
-                                        control={credForm.control}
-                                        name="password"
-                                        render={({ field }) => (
-                                            <FormItem>
-                                                <FormLabel>Password</FormLabel>
-                                                <FormControl>
-                                                    <Input type="password" autoComplete="current-password" {...field} />
-                                                </FormControl>
-                                                <FormMessage />
-                                            </FormItem>
-                                        )}
-                                    />
-                                    <Button type="submit" className="w-full" disabled={busy}>
-                                        {busy ? "Signing in..." : "Sign in"}
-                                    </Button>
-                                    <Button
-                                        type="button"
-                                        variant="ghost"
-                                        className="w-full"
-                                        disabled={resetLoading}
-                                        onClick={onForgotPassword}
-                                    >
-                                        {resetLoading ? "Sending reset link..." : "Forgot password?"}
-                                    </Button>
-                                </form>
-                            </Form>
-                        </CardContent>
-                    </>
-                )}
+        <AuthScaffold>
+            {step.kind === "credentials" && (
+                <>
+                    <AuthHeader
+                        title="Login"
+                        description="Enter your email below to login to your account."
+                    />
+                    <form onSubmit={credForm.handleSubmit(submitCredentials)} className="auth-form">
+                        <AuthField
+                            label="Email"
+                            type="email"
+                            placeholder="m@example.com"
+                            autoComplete="email"
+                            error={credForm.formState.errors.email?.message}
+                            {...credForm.register("email")}
+                        />
+                        <AuthField
+                            label="Password"
+                            type="password"
+                            autoComplete="current-password"
+                            error={credForm.formState.errors.password?.message}
+                            {...credForm.register("password")}
+                        />
+                        <AuthButton type="submit" disabled={busy}>
+                            {busy ? "Signing in..." : "Sign in"}
+                        </AuthButton>
+                        <AuthButton
+                            type="button"
+                            variant="quiet"
+                            disabled={resetLoading}
+                            onClick={onForgotPassword}
+                        >
+                            {resetLoading ? "Sending reset link..." : "Forgot password?"}
+                        </AuthButton>
+                    </form>
+                </>
+            )}
 
-                {step.kind === "mfa_setup" && step.choice === "choose" && (
-                    <>
-                        <CardHeader>
-                            <CardTitle className="text-2xl">Set up two-factor</CardTitle>
-                            <CardDescription>
-                                Choose how you want to verify future sign-ins. You can change this
-                                later from your account settings.
-                            </CardDescription>
-                        </CardHeader>
-                        <CardContent className="space-y-3">
-                            <Button
-                                type="button"
-                                className="w-full"
-                                disabled={busy || !supportsPasskey}
-                                onClick={registerPasskey}
-                            >
-                                {busy ? "Working..." : "Use a passkey (Touch ID, Face ID, security key)"}
-                            </Button>
-                            <p className="text-xs text-muted-foreground">
-                                Recommended. Your device handles authentication; nothing is shared
-                                with the server beyond the public key.
-                            </p>
-                            <Separator />
-                            <Button
-                                type="button"
-                                variant="outline"
-                                className="w-full"
-                                disabled={busy}
-                                onClick={pickTotpSetup}
-                            >
-                                Use an authenticator app (TOTP)
-                            </Button>
-                            <p className="text-xs text-muted-foreground">
-                                Scan a QR code with Google Authenticator, 1Password, Authy, etc.
-                            </p>
-                            <Separator />
-                            <Button
-                                type="button"
-                                variant="ghost"
-                                className="w-full"
-                                onClick={backToCredentials}
-                                disabled={busy}
-                            >
-                                Back
-                            </Button>
-                        </CardContent>
-                    </>
-                )}
+            {step.kind === "mfa_setup" && step.choice === "choose" && (
+                <>
+                    <AuthHeader
+                        title="Set up two-factor"
+                        description="Choose how you want to verify future sign-ins. You can change this later from your account settings."
+                        icon={securityIcon}
+                    />
+                    <div className="auth-stack">
+                        <AuthChoice
+                            type="button"
+                            title="Use a passkey (Touch ID, Face ID, security key)"
+                            description="Your device handles authentication; nothing is shared with the server beyond the public key."
+                            badge="Recommended"
+                            icon={securityIcon}
+                            disabled={busy || !supportsPasskey}
+                            onClick={registerPasskey}
+                        />
+                        <AuthDivider />
+                        <AuthChoice
+                            type="button"
+                            title="Use an authenticator app (TOTP)"
+                            description="Scan a QR code with Google Authenticator, 1Password, Authy, etc."
+                            disabled={busy}
+                            onClick={pickTotpSetup}
+                        />
+                        <AuthButton type="button" variant="quiet" onClick={backToCredentials} disabled={busy}>
+                            Back
+                        </AuthButton>
+                    </div>
+                </>
+            )}
 
-                {step.kind === "mfa_setup" && step.choice === "passkey" && (
-                    <>
-                        <CardHeader>
-                            <CardTitle className="text-2xl">Register a passkey</CardTitle>
-                            <CardDescription>
-                                {supportsPasskey
-                                    ? "Click Continue to create a passkey for this account. Your browser will prompt for biometrics or your security key."
-                                    : "This browser doesn't support passkeys. Try Safari, Chrome, Edge, or Firefox on a recent OS."}
-                            </CardDescription>
-                        </CardHeader>
-                        <CardContent className="space-y-3">
-                            <Form {...labelForm}>
-                                <FormField
-                                    control={labelForm.control}
-                                    name="device_label"
-                                    render={({ field }) => (
-                                        <FormItem>
-                                            <FormLabel>Device name (optional)</FormLabel>
-                                            <FormControl>
-                                                <Input
-                                                    placeholder="e.g. MacBook Pro"
-                                                    autoComplete="off"
-                                                    {...field}
-                                                />
-                                            </FormControl>
-                                            <FormMessage />
-                                        </FormItem>
-                                    )}
-                                />
-                            </Form>
-                            <Button
-                                type="button"
-                                className="w-full"
-                                onClick={registerPasskey}
-                                disabled={busy || !supportsPasskey}
-                            >
-                                {busy ? "Waiting for prompt..." : "Continue"}
-                            </Button>
-                            {step.methods.includes("totp") && (
-                                <Button
+            {step.kind === "mfa_setup" && step.choice === "passkey" && (
+                <>
+                    <AuthHeader
+                        title="Register a passkey"
+                        description={supportsPasskey
+                            ? "Click Continue to create a passkey for this account. Your browser will prompt for biometrics or your security key."
+                            : "This browser doesn't support passkeys. Try Safari, Chrome, Edge, or Firefox on a recent OS."}
+                        icon={securityIcon}
+                    />
+                    <div className="auth-stack">
+                        <AuthField
+                            label="Device name (optional)"
+                            placeholder="e.g. MacBook Pro"
+                            autoComplete="off"
+                            error={labelForm.formState.errors.device_label?.message}
+                            {...labelForm.register("device_label")}
+                        />
+                        <AuthButton type="button" onClick={registerPasskey} disabled={busy || !supportsPasskey}>
+                            {busy ? "Waiting for prompt..." : "Continue"}
+                        </AuthButton>
+                        {step.methods.includes("totp") && (
+                            <AuthButton type="button" variant="secondary" onClick={pickTotpSetup} disabled={busy}>
+                                Use an authenticator app instead
+                            </AuthButton>
+                        )}
+                        <AuthButton type="button" variant="quiet" onClick={backToCredentials} disabled={busy}>
+                            Back
+                        </AuthButton>
+                    </div>
+                </>
+            )}
+
+            {step.kind === "mfa_setup" && step.choice === "totp" && step.totp && (
+                <>
+                    <AuthHeader
+                        title="Set up authenticator"
+                        description="Scan the QR with an authenticator app (Google Authenticator, 1Password, Authy) and enter the 6-digit code it shows."
+                    />
+                    <div className="auth-stack">
+                        <div className="auth-qr-wrap">
+                            <QRCodeSVG value={step.totp.provisioning_uri} size={192} includeMargin={false} />
+                        </div>
+                        <AuthCodePanel>
+                            <div className="auth-description">Can&apos;t scan? Enter this secret manually:</div>
+                            <div className="break-all font-mono text-foreground">{step.totp.secret}</div>
+                        </AuthCodePanel>
+                        <form onSubmit={codeForm.handleSubmit(submitSetupTotp)} className="auth-form">
+                            <AuthField
+                                label="6-digit code"
+                                inputMode="numeric"
+                                autoComplete="one-time-code"
+                                placeholder="123456"
+                                maxLength={6}
+                                error={codeForm.formState.errors.code?.message}
+                                {...codeForm.register("code")}
+                            />
+                            <AuthButton type="submit" disabled={busy}>
+                                {busy ? "Verifying..." : "Verify and continue"}
+                            </AuthButton>
+                            {step.methods.includes("webauthn") && (
+                                <AuthButton
                                     type="button"
-                                    variant="ghost"
-                                    className="w-full"
-                                    onClick={pickTotpSetup}
+                                    variant="secondary"
+                                    onClick={() => setStep({ ...step, choice: "passkey", totp: undefined })}
                                     disabled={busy}
                                 >
-                                    Use an authenticator app instead
-                                </Button>
+                                    Use a passkey instead
+                                </AuthButton>
                             )}
-                            <Button
-                                type="button"
-                                variant="ghost"
-                                className="w-full text-muted-foreground"
-                                onClick={backToCredentials}
-                                disabled={busy}
-                            >
+                            <AuthButton type="button" variant="quiet" onClick={backToCredentials} disabled={busy}>
                                 Back
-                            </Button>
-                        </CardContent>
-                    </>
-                )}
+                            </AuthButton>
+                        </form>
+                    </div>
+                </>
+            )}
 
-                {step.kind === "mfa_setup" && step.choice === "totp" && step.totp && (
-                    <>
-                        <CardHeader>
-                            <CardTitle className="text-2xl">Set up authenticator</CardTitle>
-                            <CardDescription>
-                                Scan the QR with an authenticator app (Google Authenticator,
-                                1Password, Authy) and enter the 6-digit code it shows.
-                            </CardDescription>
-                        </CardHeader>
-                        <CardContent className="space-y-4">
-                            <div className="flex justify-center rounded-lg bg-white p-4">
-                                <QRCodeSVG value={step.totp.provisioning_uri} size={192} includeMargin={false} />
-                            </div>
-                            <div className="rounded-md border border-border bg-muted/40 p-3 text-xs">
-                                <div className="text-muted-foreground mb-1">
-                                    Can&apos;t scan? Enter this secret manually:
-                                </div>
-                                <div className="break-all font-mono text-foreground">
-                                    {step.totp.secret}
-                                </div>
-                            </div>
-                            <Form {...codeForm}>
-                                <form onSubmit={codeForm.handleSubmit(submitSetupTotp)} className="space-y-3">
-                                    <FormField
-                                        control={codeForm.control}
-                                        name="code"
-                                        render={({ field }) => (
-                                            <FormItem>
-                                                <FormLabel>6-digit code</FormLabel>
-                                                <FormControl>
-                                                    <Input
-                                                        inputMode="numeric"
-                                                        autoComplete="one-time-code"
-                                                        placeholder="123456"
-                                                        maxLength={6}
-                                                        {...field}
-                                                    />
-                                                </FormControl>
-                                                <FormMessage />
-                                            </FormItem>
-                                        )}
-                                    />
-                                    <Button type="submit" className="w-full" disabled={busy}>
-                                        {busy ? "Verifying..." : "Verify and continue"}
-                                    </Button>
-                                    {step.methods.includes("webauthn") && (
-                                        <Button
-                                            type="button"
-                                            variant="ghost"
-                                            className="w-full"
-                                            onClick={() =>
-                                                setStep({ ...step, choice: "passkey", totp: undefined })
-                                            }
-                                            disabled={busy}
-                                        >
-                                            Use a passkey instead
-                                        </Button>
-                                    )}
-                                    <Button
-                                        type="button"
-                                        variant="ghost"
-                                        className="w-full text-muted-foreground"
-                                        onClick={backToCredentials}
-                                        disabled={busy}
-                                    >
-                                        Back
-                                    </Button>
-                                </form>
-                            </Form>
-                        </CardContent>
-                    </>
-                )}
+            {step.kind === "mfa_verify" && (
+                <>
+                    <AuthHeader
+                        title="Two-factor verification"
+                        description={step.mode === "passkey"
+                            ? `Use your registered passkey for ${step.email}.`
+                            : step.mode === "recovery"
+                              ? `Enter one of your saved recovery codes for ${step.email}.`
+                              : `Enter the 6-digit code from your authenticator app for ${step.email}.`}
+                        icon={step.mode === "passkey" ? securityIcon : undefined}
+                    />
+                    <div className="auth-stack">
+                        {step.mode === "passkey" && (
+                            <>
+                                <AuthButton type="button" onClick={authenticatePasskey} disabled={busy || !supportsPasskey}>
+                                    {busy ? "Waiting for prompt..." : "Sign in with passkey"}
+                                </AuthButton>
+                                {step.methods.includes("totp") && (
+                                    <AuthButton type="button" variant="secondary" onClick={() => setStep({ ...step, mode: "totp" })} disabled={busy}>
+                                        Use authenticator code instead
+                                    </AuthButton>
+                                )}
+                                {step.methods.includes("recovery_code") && (
+                                    <AuthButton type="button" variant="quiet" onClick={() => setStep({ ...step, mode: "recovery" })} disabled={busy}>
+                                        Use a recovery code instead
+                                    </AuthButton>
+                                )}
+                            </>
+                        )}
+                        {step.mode === "totp" && (
+                            <form onSubmit={codeForm.handleSubmit(submitVerifyTotp)} className="auth-form">
+                                <AuthField
+                                    label="6-digit code"
+                                    inputMode="numeric"
+                                    autoComplete="one-time-code"
+                                    placeholder="123456"
+                                    maxLength={6}
+                                    error={codeForm.formState.errors.code?.message}
+                                    {...codeForm.register("code")}
+                                />
+                                <AuthButton type="submit" disabled={busy}>
+                                    {busy ? "Verifying..." : "Verify"}
+                                </AuthButton>
+                                {step.methods.includes("webauthn") && (
+                                    <AuthButton type="button" variant="secondary" onClick={() => setStep({ ...step, mode: "passkey" })} disabled={busy}>
+                                        Use passkey instead
+                                    </AuthButton>
+                                )}
+                                {step.methods.includes("recovery_code") && (
+                                    <AuthButton type="button" variant="quiet" onClick={() => setStep({ ...step, mode: "recovery" })} disabled={busy}>
+                                        Use a recovery code instead
+                                    </AuthButton>
+                                )}
+                            </form>
+                        )}
+                        {step.mode === "recovery" && (
+                            <form onSubmit={recoveryForm.handleSubmit(submitVerifyRecovery)} className="auth-form">
+                                <AuthField
+                                    label="Recovery code"
+                                    autoComplete="off"
+                                    placeholder="xxxxxxxx"
+                                    error={recoveryForm.formState.errors.code?.message}
+                                    {...recoveryForm.register("code")}
+                                />
+                                <AuthButton type="submit" disabled={busy}>
+                                    {busy ? "Verifying..." : "Verify recovery code"}
+                                </AuthButton>
+                                {step.methods.includes("totp") && (
+                                    <AuthButton type="button" variant="secondary" onClick={() => setStep({ ...step, mode: "totp" })} disabled={busy}>
+                                        Use authenticator code instead
+                                    </AuthButton>
+                                )}
+                            </form>
+                        )}
+                        <AuthButton type="button" variant="quiet" onClick={backToCredentials} disabled={busy}>
+                            Back
+                        </AuthButton>
+                    </div>
+                </>
+            )}
 
-                {step.kind === "mfa_verify" && (
-                    <>
-                        <CardHeader>
-                            <CardTitle className="text-2xl">Two-factor verification</CardTitle>
-                            <CardDescription>
-                                {step.mode === "passkey"
-                                    ? `Use your registered passkey for ${step.email}.`
-                                    : step.mode === "recovery"
-                                      ? `Enter one of your saved recovery codes for ${step.email}.`
-                                      : `Enter the 6-digit code from your authenticator app for ${step.email}.`}
-                            </CardDescription>
-                        </CardHeader>
-                        <CardContent className="space-y-3">
-                            {step.mode === "passkey" && (
-                                <>
-                                    <Button
-                                        type="button"
-                                        className="w-full"
-                                        onClick={authenticatePasskey}
-                                        disabled={busy || !supportsPasskey}
-                                    >
-                                        {busy ? "Waiting for prompt..." : "Sign in with passkey"}
-                                    </Button>
-                                    {step.methods.includes("totp") && (
-                                        <Button
-                                            type="button"
-                                            variant="ghost"
-                                            className="w-full"
-                                            onClick={() => setStep({ ...step, mode: "totp" })}
-                                            disabled={busy}
-                                        >
-                                            Use authenticator code instead
-                                        </Button>
-                                    )}
-                                    {step.methods.includes("recovery_code") && (
-                                        <Button
-                                            type="button"
-                                            variant="ghost"
-                                            className="w-full"
-                                            onClick={() => setStep({ ...step, mode: "recovery" })}
-                                            disabled={busy}
-                                        >
-                                            Use a recovery code instead
-                                        </Button>
-                                    )}
-                                </>
-                            )}
-                            {step.mode === "totp" && (
-                                <Form {...codeForm}>
-                                    <form onSubmit={codeForm.handleSubmit(submitVerifyTotp)} className="space-y-3">
-                                        <FormField
-                                            control={codeForm.control}
-                                            name="code"
-                                            render={({ field }) => (
-                                                <FormItem>
-                                                    <FormLabel>6-digit code</FormLabel>
-                                                    <FormControl>
-                                                        <Input
-                                                            inputMode="numeric"
-                                                            autoComplete="one-time-code"
-                                                            placeholder="123456"
-                                                            maxLength={6}
-                                                            {...field}
-                                                        />
-                                                    </FormControl>
-                                                    <FormMessage />
-                                                </FormItem>
-                                            )}
-                                        />
-                                        <Button type="submit" className="w-full" disabled={busy}>
-                                            {busy ? "Verifying..." : "Verify"}
-                                        </Button>
-                                        {step.methods.includes("webauthn") && (
-                                            <Button
-                                                type="button"
-                                                variant="ghost"
-                                                className="w-full"
-                                                onClick={() => setStep({ ...step, mode: "passkey" })}
-                                                disabled={busy}
-                                            >
-                                                Use passkey instead
-                                            </Button>
-                                        )}
-                                        {step.methods.includes("recovery_code") && (
-                                            <Button
-                                                type="button"
-                                                variant="ghost"
-                                                className="w-full"
-                                                onClick={() => setStep({ ...step, mode: "recovery" })}
-                                                disabled={busy}
-                                            >
-                                                Use a recovery code instead
-                                            </Button>
-                                        )}
-                                    </form>
-                                </Form>
-                            )}
-                            {step.mode === "recovery" && (
-                                <Form {...recoveryForm}>
-                                    <form onSubmit={recoveryForm.handleSubmit(submitVerifyRecovery)} className="space-y-3">
-                                        <FormField
-                                            control={recoveryForm.control}
-                                            name="code"
-                                            render={({ field }) => (
-                                                <FormItem>
-                                                    <FormLabel>Recovery code</FormLabel>
-                                                    <FormControl>
-                                                        <Input
-                                                            autoComplete="off"
-                                                            placeholder="xxxxxxxx"
-                                                            {...field}
-                                                        />
-                                                    </FormControl>
-                                                    <FormMessage />
-                                                </FormItem>
-                                            )}
-                                        />
-                                        <Button type="submit" className="w-full" disabled={busy}>
-                                            {busy ? "Verifying..." : "Verify recovery code"}
-                                        </Button>
-                                        {step.methods.includes("totp") && (
-                                            <Button
-                                                type="button"
-                                                variant="ghost"
-                                                className="w-full"
-                                                onClick={() => setStep({ ...step, mode: "totp" })}
-                                                disabled={busy}
-                                            >
-                                                Use authenticator code instead
-                                            </Button>
-                                        )}
-                                    </form>
-                                </Form>
-                            )}
-                            <Button
-                                type="button"
-                                variant="ghost"
-                                className="w-full text-muted-foreground"
-                                onClick={backToCredentials}
-                                disabled={busy}
-                            >
-                                Back
-                            </Button>
-                        </CardContent>
-                    </>
-                )}
-
-                {step.kind === "recovery_codes" && (
-                    <>
-                        <CardHeader>
-                            <CardTitle className="text-2xl">Save your recovery codes</CardTitle>
-                            <CardDescription>
-                                These codes let you sign in if you lose your authenticator. Each
-                                code works once. They will not be shown again — copy them somewhere
-                                safe before continuing.
-                            </CardDescription>
-                        </CardHeader>
-                        <CardContent className="space-y-4">
-                            <div className="rounded-md border border-border bg-muted/40 p-3 font-mono text-sm space-y-1">
-                                {step.codes.map((c) => (
-                                    <div key={c}>{c}</div>
-                                ))}
-                            </div>
-                            <Button
-                                type="button"
-                                variant="outline"
-                                className="w-full"
-                                onClick={() => {
-                                    void navigator.clipboard
-                                        .writeText(step.codes.join("\n"))
-                                        .then(() => toast.success("Recovery codes copied to clipboard"))
-                                        .catch(() => toast.error("Couldn't copy. Select them manually."))
-                                }}
-                            >
-                                Copy codes
-                            </Button>
-                            <Button
-                                type="button"
-                                className="w-full"
-                                onClick={continueAfterRecoveryCodes}
-                                disabled={busy}
-                            >
-                                {busy ? "Continuing..." : "I've saved them — continue"}
-                            </Button>
-                        </CardContent>
-                    </>
-                )}
-                </Card>
-            </div>
-        </div>
+            {step.kind === "recovery_codes" && (
+                <>
+                    <AuthHeader
+                        title="Save your recovery codes"
+                        description="These codes let you sign in if you lose your authenticator. Each code works once. They will not be shown again — copy them somewhere safe before continuing."
+                    />
+                    <div className="auth-stack">
+                        <AuthCodePanel mono>
+                            {step.codes.map((code) => <div key={code}>{code}</div>)}
+                        </AuthCodePanel>
+                        <AuthButton
+                            type="button"
+                            variant="secondary"
+                            onClick={() => {
+                                void navigator.clipboard
+                                    .writeText(step.codes.join("\n"))
+                                    .then(() => toast.success("Recovery codes copied to clipboard"))
+                                    .catch(() => toast.error("Couldn't copy. Select them manually."))
+                            }}
+                        >
+                            Copy codes
+                        </AuthButton>
+                        <AuthButton type="button" onClick={continueAfterRecoveryCodes} disabled={busy}>
+                            {busy ? "Continuing..." : "I've saved them — continue"}
+                        </AuthButton>
+                    </div>
+                </>
+            )}
+        </AuthScaffold>
     )
 }

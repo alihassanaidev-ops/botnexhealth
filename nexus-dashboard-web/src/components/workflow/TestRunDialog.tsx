@@ -11,9 +11,9 @@ import {
     DialogDescription,
     DialogHeader,
     DialogTitle,
-} from "@/components/ui/dialog"
-import { Switch } from "@/components/ui/switch"
-import { Label } from "@/components/ui/label"
+} from "@/components/foundation/compat/dialog"
+import { Switch } from "@/components/foundation/compat/switch"
+import { Label } from "@/components/foundation/compat/label"
 import { cn } from "@/lib/utils"
 import { NODE_META } from "@/lib/workflow/catalog"
 import { simulateRun } from "@/lib/workflow/test-run"
@@ -124,7 +124,7 @@ export default function TestRunDialog({ open, onOpenChange, def }: TestRunDialog
                 </div>
 
                 {source === "offline" && (
-                    <p className="text-[11px] text-muted-foreground">
+                    <p className="text-xs text-muted-foreground">
                         Simulated locally — the server dry-run was unavailable, so this preview may
                         differ from a real run.
                     </p>

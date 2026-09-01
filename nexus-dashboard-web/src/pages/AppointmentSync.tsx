@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react"
+import { useCallback, useEffect, useRef, useState, type ComponentProps } from "react"
 import {
     CalendarClock,
     CheckCircle2,
@@ -10,25 +10,15 @@ import {
     X,
 } from "lucide-react"
 import { PageHeader } from "@/components/PageHeader"
-import { Card, CardContent } from "@/components/ui/card"
-import { Button } from "@/components/ui/button"
-import { Input } from "@/components/ui/input"
-import { Skeleton } from "@/components/ui/skeleton"
+import { UiButton, UiInput, UiSelect, UiSkeleton } from "@/components/foundation/Primitives"
 import {
-    Select,
-    SelectContent,
-    SelectItem,
-    SelectTrigger,
-    SelectValue,
-} from "@/components/ui/select"
-import {
-    Table,
-    TableBody,
-    TableCell,
-    TableHead,
-    TableHeader,
-    TableRow,
-} from "@/components/ui/table"
+    UiTable as Table,
+    UiTableBody as TableBody,
+    UiTableCell as TableCell,
+    UiTableHead as TableHead,
+    UiTableHeader as TableHeader,
+    UiTableRow as TableRow,
+} from "@/components/foundation/DataTable"
 import { toast } from "sonner"
 import {
     listAppointmentSyncStatus,
@@ -40,6 +30,23 @@ import { cn } from "@/lib/utils"
 
 const PAGE_SIZE = 50
 const ALL_STATUSES = "__all__"
+
+function Button({ variant = "default", ...props }: Omit<ComponentProps<typeof UiButton>, "variant"> & {
+    variant?: "default" | "outline" | "ghost"
+}) {
+    return <UiButton variant={variant === "default" ? "primary" : variant === "outline" ? "secondary" : "quiet"} {...props} />
+}
+
+const Input = UiInput
+const Skeleton = UiSkeleton
+
+function Card({ className = "", ...props }: ComponentProps<"section">) {
+    return <section className={`overflow-hidden rounded-2xl border border-border/80 bg-card shadow-sm ${className}`.trim()} {...props} />
+}
+
+function CardContent({ className = "", ...props }: ComponentProps<"div">) {
+    return <div className={className} {...props} />
+}
 const GOTRACKER_STATUSES = [
     { id: 1, label: "Booked" },
     { id: 2, label: "Booked + Waiting" },
@@ -199,7 +206,7 @@ export default function AppointmentSync() {
     const to = Math.min((page + 1) * PAGE_SIZE, total)
 
     return (
-        <div className="relative flex-1 space-y-6 bg-background p-8 pt-6">
+        <div className="ui-page ui-page-stack">
             <PageHeader
                 icon={CalendarClock}
                 title="Appointment Sync"
@@ -221,29 +228,26 @@ export default function AppointmentSync() {
             />
 
             <div className="flex flex-wrap items-center gap-2">
-                <div className="relative">
+                <div className="relative w-[240px] shrink-0 lg:w-[340px]">
                     <Search className="pointer-events-none absolute left-2.5 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
                     <Input
                         placeholder="Search patient or appointment..."
                         value={search}
                         onChange={(event) => setSearch(event.target.value)}
-                        className="h-8 w-[240px] pl-8 lg:w-[340px]"
+                        className="h-8 w-full pl-8"
                     />
                 </div>
                 {isGoTracker && (
-                    <Select value={statusId} onValueChange={setStatusId}>
-                        <SelectTrigger className="h-8 w-[220px]">
-                            <SelectValue />
-                        </SelectTrigger>
-                        <SelectContent>
-                            <SelectItem value={ALL_STATUSES}>All GoTracker statuses</SelectItem>
+                    <div className="w-[220px] shrink-0">
+                        <UiSelect value={statusId} onChange={(event) => setStatusId(event.target.value)} uiSize="sm">
+                            <option value={ALL_STATUSES}>All GoTracker statuses</option>
                             {GOTRACKER_STATUSES.map((status) => (
-                                <SelectItem key={status.id} value={String(status.id)}>
+                                <option key={status.id} value={String(status.id)}>
                                     {status.id} · {status.label}
-                                </SelectItem>
+                                </option>
                             ))}
-                        </SelectContent>
-                    </Select>
+                        </UiSelect>
+                    </div>
                 )}
                 {(search || (isGoTracker && statusId !== ALL_STATUSES)) && (
                     <Button
@@ -265,12 +269,12 @@ export default function AppointmentSync() {
                         <Table className="w-full text-sm">
                             <TableHeader className="border-b border-border bg-muted">
                                 <TableRow>
-                                    <TableHead className="px-4 py-3 text-left text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">Patient</TableHead>
-                                    <TableHead className="px-4 py-3 text-left text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">Appointment</TableHead>
-                                    <TableHead className="px-4 py-3 text-left text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">{isGoTracker ? "GoTracker status" : "Sync status"}</TableHead>
-                                    {isGoTracker && <TableHead className="px-4 py-3 text-left text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">Flags</TableHead>}
-                                    <TableHead className="px-4 py-3 text-left text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">Source</TableHead>
-                                    <TableHead className="px-4 py-3 text-left text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">Last seen</TableHead>
+                                    <TableHead className="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wide text-muted-foreground">Patient</TableHead>
+                                    <TableHead className="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wide text-muted-foreground">Appointment</TableHead>
+                                    <TableHead className="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wide text-muted-foreground">{isGoTracker ? "GoTracker status" : "Sync status"}</TableHead>
+                                    {isGoTracker && <TableHead className="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wide text-muted-foreground">Flags</TableHead>}
+                                    <TableHead className="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wide text-muted-foreground">Source</TableHead>
+                                    <TableHead className="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wide text-muted-foreground">Last seen</TableHead>
                                 </TableRow>
                             </TableHeader>
                             <TableBody>

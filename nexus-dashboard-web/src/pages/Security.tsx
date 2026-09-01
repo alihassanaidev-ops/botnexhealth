@@ -18,11 +18,11 @@ import { startRegistration, browserSupportsWebAuthn } from "@simplewebauthn/brow
 import { KeyRound, Smartphone, ShieldCheck, Trash2, RefreshCw, Plus, Lock } from "lucide-react"
 
 import { PageHeader } from "@/components/PageHeader"
-import { Button } from "@/components/ui/button"
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
-import { Badge } from "@/components/ui/badge"
-import { Separator } from "@/components/ui/separator"
-import { Input } from "@/components/ui/input"
+import { Button } from "@/components/foundation/compat/button"
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/foundation/compat/card"
+import { Badge } from "@/components/foundation/compat/badge"
+import { Separator } from "@/components/foundation/compat/separator"
+import { Input } from "@/components/foundation/compat/input"
 import {
     Dialog,
     DialogContent,
@@ -30,7 +30,7 @@ import {
     DialogFooter,
     DialogHeader,
     DialogTitle,
-} from "@/components/ui/dialog"
+} from "@/components/foundation/compat/dialog"
 import {
     Form,
     FormControl,
@@ -38,7 +38,7 @@ import {
     FormItem,
     FormLabel,
     FormMessage,
-} from "@/components/ui/form"
+} from "@/components/foundation/compat/form"
 import { RecoveryCodesPanel } from "@/components/mfa-flow"
 import { useStepUp } from "@/components/use-step-up"
 import {
@@ -257,7 +257,7 @@ export default function Security() {
     }
 
     return (
-        <div className="space-y-6 p-6">
+        <div className="ui-page ui-page-stack">
             <PageHeader
                 icon={Lock}
                 title="Security"

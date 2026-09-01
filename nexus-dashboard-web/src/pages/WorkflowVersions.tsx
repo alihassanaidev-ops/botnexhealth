@@ -8,9 +8,9 @@
 import { useEffect, useMemo, useState } from "react"
 import { Link, useParams } from "react-router-dom"
 import { AlertCircle, ArrowLeft, History, PencilRuler, ShieldCheck } from "lucide-react"
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
-import { Button } from "@/components/ui/button"
-import { Skeleton } from "@/components/ui/skeleton"
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/foundation/compat/card"
+import { Button } from "@/components/foundation/compat/button"
+import { Skeleton } from "@/components/foundation/compat/skeleton"
 import { cn } from "@/lib/utils"
 import { toast } from "sonner"
 import { getWorkflow, listVersions } from "@/lib/workflow-api"
@@ -18,6 +18,8 @@ import { definitionToFlow } from "@/lib/workflow/graph"
 import WorkflowCanvas from "@/components/workflow/WorkflowCanvas"
 import type { AutomationWorkflow } from "@/types"
 import type { WorkflowDefinition, WorkflowVersion } from "@/types/workflow"
+import { PageHeader } from "@/components/PageHeader"
+import workflowIcon from "@/assets/icons/presentation/workflow.png"
 
 const CONTENT_CLASS_LABELS: Record<string, string> = {
     transactional_care: "Transactional care",
@@ -71,13 +73,10 @@ export default function WorkflowVersions() {
     const flow = useMemo(() => (def ? definitionToFlow(def) : { nodes: [], edges: [] }), [def])
 
     return (
-        <div className="relative flex-1 space-y-6 bg-background p-8 pt-6">
-            <div className="fixed inset-0 overflow-hidden pointer-events-none">
-                <div className="absolute -top-32 -right-32 h-[420px] w-[420px] rounded-full bg-transparent blur-[100px] dark:bg-violet-700/20" />
-            </div>
+        <div className="ui-page ui-page-stack">
 
             <div className="flex items-center gap-3">
-                <Button variant="ghost" size="icon" asChild className="h-8 w-8">
+                <Button variant="ghost" size="icon" asChild className="w-8">
                     <Link to={id ? `/institution-admin/campaigns/${id}` : "/institution-admin/campaigns"}>
                         <ArrowLeft className="h-4 w-4" />
                     </Link>
@@ -88,28 +87,26 @@ export default function WorkflowVersions() {
             {loading ? (
                 <Skeleton className="h-9 w-64" />
             ) : (
-                <div className="flex items-start justify-between gap-4">
-                    <div>
-                        <h2 className="flex items-center gap-2 text-3xl font-bold tracking-tight">
-                            <History className="h-7 w-7" /> Version history
-                        </h2>
-                        <p className="mt-1 text-muted-foreground">
+                <PageHeader
+                    icon={History}
+                    art={workflowIcon}
+                    title="Version history"
+                    description={<>
                             {workflow?.name}
                             {versions.length > 0 && (
                                 <span className="ml-2 text-sm">
                                     · {versions.length} version{versions.length > 1 ? "s" : ""}
                                 </span>
                             )}
-                        </p>
-                    </div>
-                    {workflow && workflow.status !== "archived" && (
+                        </>}
+                    actions={workflow && workflow.status !== "archived" ? (
                         <Button variant="outline" size="sm" className="gap-1.5" asChild>
                             <Link to={`/institution-admin/campaigns/${workflow.id}/builder`}>
                                 <PencilRuler className="h-3.5 w-3.5" /> Open builder
                             </Link>
                         </Button>
-                    )}
-                </div>
+                    ) : undefined}
+                />
             )}
 
             {!loading && loadError && (
@@ -149,7 +146,7 @@ export default function WorkflowVersions() {
                                         <div className="flex items-center gap-2">
                                             <span className="font-semibold">Version {v.version_number}</span>
                                             {v.is_current && (
-                                                <span className="inline-flex items-center gap-1 rounded-full border border-emerald-200 bg-emerald-50 px-2 py-0.5 text-[10px] font-medium text-emerald-700 dark:border-emerald-800 dark:bg-emerald-950/40 dark:text-emerald-400">
+                                                <span className="inline-flex items-center gap-1 rounded-full border border-emerald-200 bg-emerald-50 px-2 py-0.5 text-2xs font-medium text-emerald-700 dark:border-emerald-800 dark:bg-emerald-950/40 dark:text-emerald-400">
                                                     <ShieldCheck className="h-3 w-3" /> Current
                                                 </span>
                                             )}

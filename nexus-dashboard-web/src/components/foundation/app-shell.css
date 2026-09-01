@@ -1,0 +1,639 @@
+.app-shell {
+    --shell-topbar-height: clamp(4rem, calc(3.6rem + 0.25vw), 4.75rem);
+    --shell-sidebar-width: clamp(15.75rem, calc(14rem + 1.1vw), 19rem);
+    --shell-sidebar-collapsed: clamp(4.75rem, calc(4.35rem + 0.25vw), 5.35rem);
+    min-height: 100svh;
+    color: hsl(var(--foreground));
+    background: hsl(var(--background));
+}
+
+.app-shell-body {
+    display: grid;
+    min-height: calc(100svh - var(--shell-topbar-height));
+    grid-template-columns: var(--shell-sidebar-width) minmax(0, 1fr);
+    transition: grid-template-columns 180ms ease;
+}
+
+.app-shell[data-collapsed="true"] .app-shell-body {
+    grid-template-columns: var(--shell-sidebar-collapsed) minmax(0, 1fr);
+}
+
+.app-shell-main {
+    min-width: 0;
+}
+
+.app-shell-content {
+    min-height: calc(100svh - var(--shell-topbar-height));
+}
+
+.app-shell-toggle,
+.shell-icon-button {
+    display: inline-grid;
+    width: 2.35rem;
+    height: 2.35rem;
+    flex: 0 0 auto;
+    place-items: center;
+    border: 1px solid transparent;
+    border-radius: var(--radius-md);
+    color: #cbd1df;
+    background: transparent;
+    cursor: pointer;
+    transition: color 140ms ease, background 140ms ease, border-color 140ms ease;
+}
+
+.app-shell-toggle:hover,
+.shell-icon-button:hover {
+    color: #fff;
+    border-color: rgba(255, 255, 255, 0.08);
+    background: rgba(255, 255, 255, 0.055);
+}
+
+.app-shell-toggle:focus-visible,
+.shell-icon-button:focus-visible,
+.shell-profile-trigger:focus-visible,
+.shell-profile-action:focus-visible,
+.shell-nav-link:focus-visible,
+.shell-location-select:focus-visible {
+    outline: 3px solid rgba(125, 117, 247, 0.3);
+    outline-offset: 2px;
+}
+
+.app-shell-toggle svg,
+.shell-icon-button svg {
+    width: 1.1rem;
+    height: 1.1rem;
+}
+
+.app-shell-backdrop {
+    display: none;
+}
+
+.shell-topbar {
+    position: sticky;
+    z-index: 40;
+    top: 0;
+    display: flex;
+    height: var(--shell-topbar-height);
+    align-items: center;
+    gap: 0.75rem;
+    padding: 0 clamp(1rem, 1.2vw, 2.25rem);
+    border-bottom: 1px solid rgba(164, 178, 214, 0.12);
+    color: #f4f6fb;
+    background: rgba(8, 11, 20, 0.94);
+    backdrop-filter: blur(18px);
+}
+
+.shell-brand {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.65rem;
+    color: #f4f6fb;
+    font-size: 0.9rem;
+    font-weight: 720;
+    letter-spacing: -0.025em;
+    text-decoration: none;
+}
+
+.shell-brand img {
+    width: 1.75rem;
+    height: 1.75rem;
+    object-fit: contain;
+}
+
+.shell-topbar-spacer {
+    flex: 1;
+}
+
+.shell-topbar-actions {
+    display: flex;
+    align-items: center;
+    gap: 0.35rem;
+}
+
+.shell-notification-button {
+    position: relative;
+}
+
+.shell-notification-count {
+    position: absolute;
+    top: 0.15rem;
+    right: 0.1rem;
+    display: grid;
+    min-width: 1rem;
+    height: 1rem;
+    place-items: center;
+    padding: 0 0.2rem;
+    border: 2px solid #080b14;
+    border-radius: var(--radius-pill);
+    color: #fff;
+    background: #ef4444;
+    font-size: 0.57rem;
+    font-weight: 800;
+    line-height: 1;
+}
+
+.shell-profile {
+    position: relative;
+}
+
+.shell-profile summary {
+    list-style: none;
+}
+
+.shell-profile summary::-webkit-details-marker {
+    display: none;
+}
+
+.shell-profile-trigger {
+    display: flex;
+    align-items: center;
+    gap: 0.55rem;
+    min-height: 2.45rem;
+    padding: 0.25rem 0.45rem 0.25rem 0.25rem;
+    border: 1px solid transparent;
+    border-radius: var(--radius-lg);
+    cursor: pointer;
+    transition: background 140ms ease, border-color 140ms ease;
+}
+
+.shell-profile-trigger:hover,
+.shell-profile[open] .shell-profile-trigger {
+    border-color: rgba(255, 255, 255, 0.08);
+    background: rgba(255, 255, 255, 0.055);
+}
+
+.shell-avatar {
+    display: grid;
+    width: 1.9rem;
+    height: 1.9rem;
+    place-items: center;
+    border-radius: var(--radius-md);
+    color: #fff;
+    background: #7168ec;
+    font-size: 0.66rem;
+    font-weight: 800;
+}
+
+.shell-profile-email {
+    max-width: clamp(10rem, 12vw, 16rem);
+    overflow: hidden;
+    color: #d9deea;
+    font-size: var(--text-sm);
+    font-weight: 620;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.shell-profile-chevron {
+    width: 0.9rem;
+    height: 0.9rem;
+    color: #78839b;
+    transition: transform 140ms ease;
+}
+
+.shell-profile[open] .shell-profile-chevron {
+    transform: rotate(180deg);
+}
+
+.shell-profile-menu {
+    position: absolute;
+    top: calc(100% + 0.5rem);
+    right: 0;
+    width: clamp(15rem, 17vw, 19rem);
+    padding: 0.45rem;
+    border: 1px solid rgba(164, 178, 214, 0.15);
+    border-radius: var(--radius-xl);
+    color: #e7eaf3;
+    background: #101625;
+    box-shadow: 0 20px 50px rgba(0, 0, 0, 0.38);
+}
+
+.shell-profile-meta {
+    display: flex;
+    gap: 0.7rem;
+    align-items: center;
+    padding: 0.55rem;
+}
+
+.shell-profile-meta-copy {
+    display: grid;
+    min-width: 0;
+    gap: 0.15rem;
+}
+
+.shell-profile-meta-copy strong,
+.shell-profile-meta-copy span {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.shell-profile-meta-copy strong {
+    font-size: 0.84rem;
+}
+
+.shell-profile-meta-copy span {
+    color: #7f8aa3;
+    font-size: var(--text-xs);
+}
+
+.shell-profile-separator {
+    height: 1px;
+    margin: 0.35rem;
+    background: rgba(164, 178, 214, 0.12);
+}
+
+.shell-profile-action {
+    display: flex;
+    width: 100%;
+    min-height: 2.35rem;
+    align-items: center;
+    gap: 0.65rem;
+    padding: 0 0.7rem;
+    border: 0;
+    border-radius: var(--radius-md);
+    color: #cbd1df;
+    text-decoration: none;
+    background: transparent;
+    font-size: 0.82rem;
+    font-weight: 580;
+    cursor: pointer;
+}
+
+.shell-profile-action:hover {
+    color: #fff;
+    background: rgba(255, 255, 255, 0.055);
+}
+
+.shell-profile-action svg {
+    width: 0.95rem;
+    height: 0.95rem;
+}
+
+.shell-profile-action-danger {
+    color: #fca5a5;
+}
+
+.shell-sidebar {
+    position: sticky;
+    top: var(--shell-topbar-height);
+    z-index: 30;
+    display: flex;
+    height: calc(100svh - var(--shell-topbar-height));
+    min-width: 0;
+    flex-direction: column;
+    overflow-x: hidden;
+    overflow-y: auto;
+    border-right: 1px solid hsl(var(--border));
+    background: hsl(var(--sidebar-background));
+}
+
+.shell-sidebar-inner {
+    display: flex;
+    flex: 1;
+    flex-direction: column;
+    gap: 0.9rem;
+    padding: 0.85rem 0.7rem 1.25rem;
+}
+
+.shell-nav-section {
+    display: grid;
+    gap: 0.25rem;
+}
+
+.shell-nav-label {
+    min-height: 1.5rem;
+    margin: 0;
+    padding: 0 0.65rem;
+    color: hsl(var(--muted-foreground));
+    font-size: 0.72rem;
+    font-weight: 760;
+    letter-spacing: 0.11em;
+    line-height: 1.5rem;
+    text-transform: uppercase;
+    white-space: nowrap;
+}
+
+.shell-nav-list {
+    display: grid;
+    gap: 0.18rem;
+    margin: 0;
+    padding: 0;
+    list-style: none;
+}
+
+.shell-nav-link {
+    position: relative;
+    display: flex;
+    min-height: 3.15rem;
+    align-items: center;
+    gap: 0.72rem;
+    padding: 0 0.7rem;
+    border-radius: var(--radius-lg);
+    color: hsl(var(--sidebar-foreground));
+    font-size: var(--text-sm);
+    font-weight: 580;
+    text-decoration: none;
+    white-space: nowrap;
+    transition: color 140ms ease, background 140ms ease, box-shadow 140ms ease;
+}
+
+.shell-nav-link:hover {
+    color: hsl(var(--foreground));
+    background: hsl(var(--sidebar-accent) / 0.68);
+}
+
+.shell-nav-link[data-active="true"] {
+    color: hsl(var(--sidebar-primary));
+    background: hsl(var(--sidebar-accent));
+    box-shadow: inset 0 0 0 1px hsl(var(--sidebar-border) / 0.8);
+}
+
+.shell-nav-icon {
+    width: 1rem;
+    height: 1rem;
+    flex: 0 0 auto;
+    color: hsl(var(--muted-foreground));
+    stroke-width: 1.75;
+}
+
+.shell-nav-link[data-active="true"] .shell-nav-icon {
+    color: hsl(var(--sidebar-primary));
+}
+
+.shell-nav-text {
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.shell-location-wrap {
+    padding: 0 0.25rem;
+}
+
+.shell-location-static,
+.shell-location-select {
+    width: 100%;
+    height: 2.4rem;
+    border: 1px solid hsl(var(--sidebar-border));
+    border-radius: var(--radius-lg);
+    color: hsl(var(--sidebar-foreground));
+    background: hsl(var(--sidebar-accent) / 0.5);
+    font-size: 0.8rem;
+    font-weight: 620;
+}
+
+.shell-location-static {
+    display: flex;
+    align-items: center;
+    overflow: hidden;
+    padding: 0 0.7rem;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+/* The chevron is a real element now, not a background image, so the trigger
+   needs even padding rather than a right-hand gutter. */
+.shell-location-select {
+    padding: 0 0.7rem;
+    outline: none;
+}
+
+.app-shell[data-collapsed="true"] .shell-sidebar-inner {
+    padding-inline: 0.55rem;
+}
+
+.app-shell[data-collapsed="true"] .shell-nav-label,
+.app-shell[data-collapsed="true"] .shell-nav-text,
+.app-shell[data-collapsed="true"] .shell-location-wrap {
+    display: none;
+}
+
+.app-shell[data-collapsed="true"] .shell-nav-link {
+    justify-content: center;
+    padding: 0;
+}
+
+.app-shell[data-collapsed="true"] .shell-nav-icon {
+    width: 1.1rem;
+    height: 1.1rem;
+}
+
+/* Refined navigation shell: asset-led hierarchy, quieter surfaces, and a
+   single spacing owner (pages, not the shell content wrapper). */
+.app-shell-main {
+    background: hsl(var(--background));
+}
+
+.app-shell-toggle,
+.shell-icon-button {
+    color: hsl(var(--muted-foreground));
+}
+
+.app-shell-toggle:hover,
+.shell-icon-button:hover {
+    color: hsl(var(--foreground));
+    border-color: hsl(var(--border));
+    background: hsl(var(--muted) / 0.65);
+}
+
+.shell-topbar {
+    color: hsl(var(--foreground));
+    background: hsl(var(--background) / 0.92);
+    border-bottom-color: hsl(var(--border));
+    backdrop-filter: blur(16px);
+}
+
+.shell-brand,
+.shell-profile-email {
+    color: hsl(var(--foreground));
+}
+
+.shell-avatar {
+    color: hsl(var(--primary-foreground));
+    background: hsl(var(--primary));
+}
+
+.shell-profile-chevron,
+.shell-profile-meta-copy span,
+.shell-profile-action {
+    color: hsl(var(--muted-foreground));
+}
+
+.shell-profile-trigger:hover,
+.shell-profile[open] .shell-profile-trigger {
+    border-color: hsl(var(--border));
+    background: hsl(var(--muted) / 0.6);
+}
+
+.shell-profile-menu {
+    border-color: hsl(var(--border));
+    color: hsl(var(--popover-foreground));
+    background: hsl(var(--popover));
+    box-shadow: 0 18px 48px rgb(0 0 0 / 0.24);
+}
+
+.shell-profile-separator {
+    background: hsl(var(--border));
+}
+
+.shell-profile-action:hover {
+    color: hsl(var(--foreground));
+    background: hsl(var(--muted) / 0.6);
+}
+
+.shell-sidebar {
+    border-right-color: hsl(var(--sidebar-border));
+    background: hsl(var(--sidebar-background) / 0.72);
+}
+
+.shell-sidebar-inner {
+    gap: 0;
+    padding: 0.8rem 0.65rem 1.25rem;
+}
+
+.shell-nav-section {
+    gap: 0.35rem;
+    padding: 0.7rem 0;
+}
+
+.shell-nav-section + .shell-nav-section {
+    border-top: 1px solid hsl(var(--sidebar-border) / 0.7);
+}
+
+.shell-nav-label {
+    padding: 0 0.75rem;
+}
+
+.shell-nav-list {
+    gap: 0.22rem;
+}
+
+.shell-nav-link {
+    min-height: 3.15rem;
+    gap: 0.68rem;
+    padding: 0.25rem 0.65rem;
+    border: 1px solid transparent;
+    border-radius: var(--radius-lg);
+    color: hsl(var(--muted-foreground));
+    font-size: var(--text-sm);
+    font-weight: 620;
+}
+
+.shell-nav-link[data-active="true"] {
+    border-color: #c4c7cf;
+    color: hsl(230 25% 16%);
+    background: #ffffff;
+    box-shadow: 0 1px 3px rgb(15 23 42 / 0.12);
+}
+
+/* Inset kept the same in both themes so icons never change size with the
+   theme. It has to clear the white chip below, which dark mode paints behind
+   inactive icons — with rounded corners and overflow:hidden, artwork sitting
+   flush against it reads as clipped. */
+.shell-nav-icon {
+    display: grid;
+    width: 2.25rem;
+    height: 2.25rem;
+    flex: 0 0 auto;
+    padding: 0.25rem;
+    place-items: center;
+    overflow: hidden;
+    border: 0;
+    border-radius: 0;
+    background: transparent;
+    box-shadow: none;
+}
+
+.dark .shell-nav-link:not([data-active="true"]) .shell-nav-icon {
+    border-radius: var(--radius-md);
+    background: #ffffff;
+}
+
+.shell-nav-icon img {
+    width: 100%;
+    height: 100%;
+    min-width: 0;
+    min-height: 0;
+    object-fit: contain;
+    filter: var(--artwork-filter);
+    opacity: 0.9;
+    transition: opacity 140ms ease;
+}
+
+.shell-nav-link[data-active="true"] .shell-nav-icon {
+    border-color: transparent;
+    box-shadow: none;
+}
+
+.shell-nav-link[data-active="true"] .shell-nav-icon img,
+.shell-nav-link:hover .shell-nav-icon img {
+    opacity: 1;
+}
+
+.app-shell[data-collapsed="true"] .shell-nav-link {
+    padding: 0.25rem;
+}
+
+.app-shell[data-collapsed="true"] .shell-nav-icon {
+    width: 2.45rem;
+    height: 2.45rem;
+}
+
+@media (max-width: 767px) {
+    .app-shell-body,
+    .app-shell[data-collapsed="true"] .app-shell-body {
+        display: block;
+    }
+
+    .shell-sidebar {
+        position: fixed;
+        top: var(--shell-topbar-height);
+        left: 0;
+        width: min(82vw, 18rem);
+        transform: translateX(-102%);
+        box-shadow: 18px 0 50px rgba(0, 0, 0, 0.32);
+        transition: transform 180ms ease;
+    }
+
+    .app-shell[data-mobile-open="true"] .shell-sidebar {
+        transform: translateX(0);
+    }
+
+    .app-shell-backdrop {
+        position: fixed;
+        z-index: 20;
+        inset: var(--shell-topbar-height) 0 0;
+        display: block;
+        border: 0;
+        background: rgba(0, 0, 0, 0.5);
+        opacity: 0;
+        pointer-events: none;
+        transition: opacity 180ms ease;
+    }
+
+    .app-shell-backdrop[data-visible="true"] {
+        opacity: 1;
+        pointer-events: auto;
+    }
+
+    .shell-profile-email {
+        display: none;
+    }
+}
+
+@media (max-width: 440px) {
+    .shell-brand span {
+        display: none;
+    }
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .app-shell-body,
+    .shell-sidebar,
+    .shell-profile-chevron,
+    .shell-nav-link,
+    .app-shell-toggle,
+    .shell-icon-button {
+        transition: none;
+    }
+}

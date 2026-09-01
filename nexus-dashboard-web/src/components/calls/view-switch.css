@@ -1,0 +1,50 @@
+/* Segmented table/conversation toggle. Shared by Calls and the Callback
+   Queue, which previously each hand-rolled it with different markup. */
+
+.calls-view-switch {
+    display: inline-flex;
+    flex: 0 0 auto;
+    align-items: center;
+    gap: 0.15rem;
+    padding: 0.2rem;
+    border: 1px solid hsl(var(--border));
+    border-radius: var(--radius-lg);
+    background: hsl(var(--muted) / 0.42);
+}
+
+.calls-view-button {
+    display: inline-flex;
+    min-height: 2rem;
+    align-items: center;
+    gap: 0.4rem;
+    padding: 0 0.7rem;
+    border: 0;
+    border-radius: var(--radius-md);
+    color: hsl(var(--muted-foreground));
+    background: transparent;
+    font-size: 0.8rem;
+    font-weight: 650;
+    cursor: pointer;
+    transition: color 140ms ease, background 140ms ease, box-shadow 140ms ease;
+}
+
+.calls-view-button:hover {
+    color: hsl(var(--foreground));
+}
+
+.calls-view-button[aria-pressed="true"] {
+    color: hsl(var(--foreground));
+    background: hsl(var(--background));
+    box-shadow: 0 1px 2px hsl(230 40% 10% / 0.08);
+}
+
+.calls-view-button:focus-visible {
+    outline: 2px solid hsl(var(--ring) / 0.55);
+    outline-offset: 1px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .calls-view-button {
+        transition: none;
+    }
+}

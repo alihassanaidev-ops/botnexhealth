@@ -1,0 +1,117 @@
+.ui-dialog-layer {
+    position: fixed;
+    z-index: 90;
+    inset: 0;
+    display: grid;
+    place-items: center;
+    padding: 1rem;
+    overflow: auto;
+    overscroll-behavior: contain;
+    isolation: isolate;
+}
+
+.ui-dialog-backdrop {
+    position: fixed;
+    z-index: 0;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    border: 0;
+    background: rgba(3, 6, 15, 0.72);
+    backdrop-filter: blur(7px);
+    animation: ui-dialog-fade 150ms ease-out;
+}
+
+.ui-dialog-panel {
+    position: relative;
+    z-index: 1;
+    width: min(100%, 42rem);
+    max-height: calc(100dvh - 2rem);
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    border: 1px solid hsl(var(--border));
+    border-radius: var(--radius-xl);
+    background: hsl(var(--popover));
+    color: hsl(var(--popover-foreground));
+    box-shadow: 0 30px 90px rgba(0, 0, 0, 0.42);
+    padding: 1.35rem;
+    animation: ui-dialog-enter 170ms ease-out;
+}
+
+.ui-dialog-close {
+    position: absolute;
+    z-index: 2;
+    top: 0.75rem;
+    right: 0.75rem;
+    width: 2rem;
+    height: 2rem;
+    display: grid;
+    place-items: center;
+    padding: 0;
+    border: 0;
+    border-radius: var(--radius-sm);
+    color: hsl(var(--muted-foreground));
+    background: transparent;
+    cursor: pointer;
+}
+
+.ui-dialog-close:hover {
+    color: hsl(var(--foreground));
+    background: hsl(var(--accent));
+}
+
+.ui-dialog-close svg {
+    width: 1rem;
+    height: 1rem;
+}
+
+.ui-dialog-header {
+    padding-right: 2.5rem;
+    padding-bottom: 1rem;
+}
+
+.ui-dialog-title {
+    font-size: var(--text-lg);
+    font-weight: 720;
+    letter-spacing: -0.01em;
+}
+
+.ui-dialog-description {
+    margin-top: 0.35rem;
+    color: hsl(var(--muted-foreground));
+    font-size: var(--text-sm);
+    line-height: 1.5;
+}
+
+.ui-dialog-footer {
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: flex-end;
+    gap: 0.5rem;
+    padding-top: 1rem;
+}
+
+@keyframes ui-dialog-fade {
+    from { opacity: 0; }
+}
+
+@keyframes ui-dialog-enter {
+    from { opacity: 0; transform: scale(0.985); }
+}
+
+@media (max-width: 640px) {
+    .ui-dialog-layer {
+        padding: 0.5rem;
+    }
+
+    .ui-dialog-panel {
+        max-height: calc(100dvh - 1rem);
+    }
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .ui-dialog-backdrop,
+    .ui-dialog-panel {
+        animation: none;
+    }
+}

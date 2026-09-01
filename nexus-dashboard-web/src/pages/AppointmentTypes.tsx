@@ -1,11 +1,11 @@
 import { useEffect, useState, useCallback } from "react"
-import { Button } from "@/components/ui/button"
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
-import { Input } from "@/components/ui/input"
-import { Label } from "@/components/ui/label"
-import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog"
+import { Button } from "@/components/foundation/compat/button"
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/foundation/compat/table"
+import { Input } from "@/components/foundation/compat/input"
+import { Label } from "@/components/foundation/compat/label"
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/foundation/compat/dialog"
 import { toast } from "sonner"
-import { Checkbox } from "@/components/ui/checkbox"
+import { Checkbox } from "@/components/foundation/compat/checkbox"
 import { CalendarCheck, Plus, RefreshCcw, Trash2, Clock, Tag, Pencil, Users, MapPin } from "lucide-react"
 import { PageHeader } from "@/components/PageHeader"
 import type { CachedAppointmentType, CachedDescriptor, CachedOperatory, CachedProvider, SetupOverview } from "@/types"
@@ -391,8 +391,7 @@ export default function AppointmentTypes() {
     })
 
     return (
-        <div className="relative flex-1 space-y-4 bg-background p-8 pt-6">
-            <div className="fixed inset-0 overflow-hidden pointer-events-none"><div className="absolute -top-32 -right-32 w-[420px] h-[420px] bg-transparent dark:bg-violet-700/20 rounded-full blur-[100px]" /></div>
+        <div className="ui-page ui-page-stack">
             <PageHeader
                 icon={CalendarCheck}
                 title="Appointment Types"

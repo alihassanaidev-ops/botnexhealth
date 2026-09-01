@@ -1,57 +1,41 @@
-import { useState, useCallback, useEffect, useRef } from "react"
+import { useState, useCallback, useEffect, useRef, type ComponentProps } from "react"
 import { useNavigate, useSearchParams } from "react-router-dom"
 import {
     PhoneForwarded,
-    CalendarIcon,
     Search,
     ChevronLeft,
     ChevronRight,
     X,
     CheckCircle2,
     RefreshCcw,
-    Clock,
     CircleDot,
-    LayoutList,
-    MessagesSquare,
 } from "lucide-react"
+import callbackQueueArt from "@/assets/icons/presentation/callback-queue.png"
 import { PageHeader } from "@/components/PageHeader"
-import { format } from "date-fns"
-import type { DateRange } from "react-day-picker"
-import { Card, CardContent } from "@/components/ui/card"
 import { RevealablePhone } from "@/components/RevealablePhone"
-import { Button } from "@/components/ui/button"
-import { Input } from "@/components/ui/input"
-import { Skeleton } from "@/components/ui/skeleton"
-import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover"
-import { Calendar } from "@/components/ui/calendar"
+import { UiButton, UiInput, UiSelect, UiSkeleton } from "@/components/foundation/Primitives"
 import {
-    Select,
-    SelectContent,
-    SelectItem,
-    SelectTrigger,
-    SelectValue,
-} from "@/components/ui/select"
+    UiTable as Table,
+    UiTableBody as TableBody,
+    UiTableCell as TableCell,
+    UiTableHead as TableHead,
+    UiTableHeader as TableHeader,
+    UiTableRow as TableRow,
+} from "@/components/foundation/DataTable"
 import {
-    Table,
-    TableBody,
-    TableCell,
-    TableHead,
-    TableHeader,
-    TableRow,
-} from "@/components/ui/table"
-import {
-    Dialog,
-    DialogContent,
-    DialogHeader,
-    DialogTitle,
-} from "@/components/ui/dialog"
+    UiDialog as Dialog,
+    UiDialogContent as DialogContent,
+    UiDialogHeader as DialogHeader,
+    UiDialogTitle as DialogTitle,
+} from "@/components/foundation/Overlay"
 import { toast } from "sonner"
 import { useSSE } from "@/hooks/useSSE"
 import { listCallbacks } from "@/lib/callbacks-api"
 import { resolveCallback } from "@/lib/calls-api"
 import { listWorkflowStatuses } from "@/lib/workflow-status-api"
 import { ConversationView } from "@/components/calls/ConversationView"
-import { cn } from "@/lib/utils"
+import { ViewSwitch } from "@/components/calls/shared"
+import { DateRangeFilter } from "@/components/DateRangeFilter"
 import type { CallbackListItem, CallbacksListResponse, WorkflowStatus } from "@/types"
 
 // ── Constants ────────────────────────────────────────────────────────────────
@@ -59,6 +43,23 @@ import type { CallbackListItem, CallbacksListResponse, WorkflowStatus } from "@/
 const PAGE_SIZE = 25
 
 type ViewMode = "table" | "conversation"
+
+function Button({ variant = "default", ...props }: Omit<ComponentProps<typeof UiButton>, "variant"> & {
+    variant?: "default" | "outline" | "ghost"
+}) {
+    return <UiButton variant={variant === "default" ? "primary" : variant === "outline" ? "secondary" : "quiet"} {...props} />
+}
+
+const Input = UiInput
+const Skeleton = UiSkeleton
+
+function Card({ className = "", ...props }: ComponentProps<"section">) {
+    return <section className={`overflow-hidden rounded-2xl border border-border/80 bg-card shadow-sm ${className}`.trim()} {...props} />
+}
+
+function CardContent({ className = "", ...props }: ComponentProps<"div">) {
+    return <div className={className} {...props} />
+}
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -83,80 +84,6 @@ function formatDateTime(dateStr: string | null, timeStr: string | null): string 
     const ampm = hour >= 12 ? "PM" : "AM"
     const h12 = hour % 12 || 12
     return `${datePart} · ${h12}:${m} ${ampm}`
-}
-
-function parseDateString(value: string): Date | undefined {
-    if (!value) return undefined
-    const [year, month, day] = value.split("-").map(Number)
-    if (!year || !month || !day) return undefined
-    const parsed = new Date(year, month - 1, day)
-    return Number.isNaN(parsed.getTime()) ? undefined : parsed
-}
-
-function formatDateParam(value: Date): string {
-    return format(value, "yyyy-MM-dd")
-}
-
-// ── Date Range Filter ────────────────────────────────────────────────────────
-
-interface DateRangeFilterProps {
-    from: string
-    to: string
-    onChange: (next: { from: string; to: string }) => void
-}
-
-function DateRangeFilter({ from, to, onChange }: DateRangeFilterProps) {
-    const fromDate = parseDateString(from)
-    const toDate = parseDateString(to)
-    const selectedRange: DateRange | undefined = (fromDate || toDate)
-        ? { from: fromDate, to: toDate }
-        : undefined
-
-    const label = selectedRange?.from
-        ? selectedRange.to
-            ? `${format(selectedRange.from, "MMM d, yyyy")} - ${format(selectedRange.to, "MMM d, yyyy")}`
-            : format(selectedRange.from, "MMM d, yyyy")
-        : "Date range"
-
-    return (
-        <Popover>
-            <PopoverTrigger asChild>
-                <Button
-                    variant="outline"
-                    size="sm"
-                    className="h-8 w-[215px] justify-start text-left font-normal"
-                >
-                    <CalendarIcon className="mr-2 h-4 w-4" />
-                    <span className={cn(!selectedRange?.from && "text-muted-foreground")}>{label}</span>
-                </Button>
-            </PopoverTrigger>
-            <PopoverContent className="w-auto p-0" align="start">
-                <Calendar
-                    mode="range"
-                    numberOfMonths={2}
-                    selected={selectedRange}
-                    onSelect={(range) => onChange({
-                        from: range?.from ? formatDateParam(range.from) : "",
-                        to: range?.to ? formatDateParam(range.to) : "",
-                    })}
-                    initialFocus
-                />
-                {selectedRange?.from && (
-                    <div className="border-t p-2">
-                        <Button
-                            type="button"
-                            variant="ghost"
-                            size="sm"
-                            className="h-7 px-2 text-xs"
-                            onClick={() => onChange({ from: "", to: "" })}
-                        >
-                            Clear
-                        </Button>
-                    </div>
-                )}
-            </PopoverContent>
-        </Popover>
-    )
 }
 
 // ── Resolve Dialog ───────────────────────────────────────────────────────────
@@ -195,7 +122,7 @@ function ResolveDialog({ callbackItem, onClose, onResolved }: ResolveDialogProps
             <DialogContent className="max-w-md">
                 <DialogHeader>
                     <DialogTitle className="flex items-center gap-2">
-                        <CheckCircle2 className="h-5 w-5 text-green-600" />
+                        <CheckCircle2 className="h-5 w-5 text-green-600 dark:text-green-400" />
                         Resolve Callback
                     </DialogTitle>
                 </DialogHeader>
@@ -288,7 +215,7 @@ function CallbackRow({ item, onResolve, onClick }: CallbackRowProps) {
                 </span>
                 {item.booked_appointment_type_name && (
                     <div className="mt-0.5">
-                        <span className="inline-flex items-center gap-1 rounded-full bg-emerald-500/10 px-2 py-0.5 text-[10px] font-medium text-emerald-600 dark:text-emerald-400">
+                        <span className="inline-flex items-center gap-1 rounded-full bg-emerald-500/10 px-2 py-0.5 text-2xs font-medium text-emerald-600 dark:text-emerald-400">
                             Booked: {item.booked_appointment_type_name}
                         </span>
                     </div>
@@ -329,14 +256,14 @@ function CallbackRow({ item, onResolve, onClick }: CallbackRowProps) {
 
             <TableCell className="px-4">
                 {item.callback_resolved ? (
-                    <span className="inline-flex items-center gap-1 text-xs text-green-600 font-medium bg-green-500/10 px-2 py-0.5 rounded-full">
+                    <span className="inline-flex items-center gap-1 text-xs text-green-600 dark:text-green-400 font-medium bg-green-500/10 px-2 py-0.5 rounded-full">
                         <CheckCircle2 className="h-3 w-3" /> Resolved
                     </span>
                 ) : (
                     <Button
                         variant="outline"
                         size="sm"
-                        className="h-7 text-xs gap-1"
+                        className="text-xs gap-1"
                         onClick={(e) => { e.stopPropagation(); onResolve() }}
                     >
                         <CheckCircle2 className="h-3 w-3" /> Resolve
@@ -442,109 +369,54 @@ export default function Callbacks() {
     const to = Math.min((page + 1) * PAGE_SIZE, total)
 
     return (
-        <div className="relative flex-1 space-y-6 bg-background p-8 pt-6">
-            <div className="fixed inset-0 overflow-hidden pointer-events-none"><div className="absolute -top-32 -right-32 w-[420px] h-[420px] bg-transparent dark:bg-violet-700/20 rounded-full blur-[100px]" /></div>
+        <div className="ui-page ui-page-stack">
             <PageHeader
                 icon={PhoneForwarded}
-                title="Callback Queue"
+                art={callbackQueueArt}
+                title={
+                    <>
+                        Callback Queue
+                        {!loading && data && (
+                            <span className="page-header-count">({total.toLocaleString()})</span>
+                        )}
+                    </>
+                }
                 description="Track and manage patient callbacks that need follow-up."
                 actions={
-                    <>
-                        {!loading && data && (
-                            <div className="text-right">
-                                <p className="text-2xl font-bold tabular-nums">{total.toLocaleString()}</p>
-                                <p className="text-xs text-muted-foreground">
-                                    {resolvedFilter === "resolved" ? "resolved" : resolvedFilter === "all" ? "total" : "pending"}
-                                </p>
-                            </div>
-                        )}
-                        <div className="flex items-center rounded-lg border bg-muted/40 p-0.5">
-                            <button
-                                type="button"
-                                onClick={() => changeView("table")}
-                                aria-pressed={viewMode === "table"}
-                                className={cn(
-                                    "inline-flex items-center gap-1.5 rounded-md px-2.5 py-1 text-xs font-medium transition-colors",
-                                    viewMode === "table"
-                                        ? "bg-background text-foreground shadow-sm"
-                                        : "text-muted-foreground hover:text-foreground",
-                                )}
-                            >
-                                <LayoutList className="h-3.5 w-3.5" />
-                                <span className="hidden sm:inline">Table</span>
-                            </button>
-                            <button
-                                type="button"
-                                onClick={() => changeView("conversation")}
-                                aria-pressed={viewMode === "conversation"}
-                                className={cn(
-                                    "inline-flex items-center gap-1.5 rounded-md px-2.5 py-1 text-xs font-medium transition-colors",
-                                    viewMode === "conversation"
-                                        ? "bg-background text-foreground shadow-sm"
-                                        : "text-muted-foreground hover:text-foreground",
-                                )}
-                            >
-                                <MessagesSquare className="h-3.5 w-3.5" />
-                                <span className="hidden sm:inline">Conversations</span>
-                            </button>
-                        </div>
-                        <Button variant="outline" size="sm" onClick={fetchCallbacks} disabled={loading} className="gap-1.5">
-                            <RefreshCcw className={`h-3.5 w-3.5 ${loading ? "animate-spin" : ""}`} />
-                            Refresh
-                        </Button>
-                    </>
+                    <Button variant="outline" size="sm" onClick={fetchCallbacks} disabled={loading} className="gap-1.5">
+                        <RefreshCcw className={`h-3.5 w-3.5 ${loading ? "animate-spin" : ""}`} />
+                        Refresh
+                    </Button>
                 }
             />
 
             {/* Filters */}
             <div className="flex items-center justify-between">
-                <div className="flex flex-1 items-center space-x-2 overflow-x-auto pb-2 -mb-2">
-                    <div className="relative">
+                <div className="flex flex-1 flex-wrap items-center gap-2">
+                    <div className="relative w-[180px] shrink-0 lg:w-[250px]">
                         <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground pointer-events-none" />
                         <Input
                             placeholder="Search patient..."
                             value={search}
                             onChange={(e) => setSearch(e.target.value)}
-                            className="h-8 pl-8 w-[150px] lg:w-[250px]"
+                            className="h-8 w-full pl-8"
                         />
                     </div>
 
-                    <Select value={resolvedFilter} onValueChange={setResolvedFilter}>
-                        <SelectTrigger className="h-8 w-[150px]">
-                            <SelectValue placeholder="Status" />
-                        </SelectTrigger>
-                        <SelectContent>
-                            <SelectItem value="unresolved">
-                                <span className="flex items-center gap-1.5">
-                                    <CircleDot className="h-3 w-3 text-amber-500" /> Unresolved
-                                </span>
-                            </SelectItem>
-                            <SelectItem value="resolved">
-                                <span className="flex items-center gap-1.5">
-                                    <CheckCircle2 className="h-3 w-3 text-green-500" /> Resolved
-                                </span>
-                            </SelectItem>
-                            <SelectItem value="all">All</SelectItem>
-                        </SelectContent>
-                    </Select>
+                    <div className="w-[150px] shrink-0">
+                        <UiSelect value={resolvedFilter} onChange={(event) => setResolvedFilter(event.target.value)} uiSize="sm" aria-label="Status">
+                            <option value="unresolved">Unresolved</option>
+                            <option value="resolved">Resolved</option>
+                            <option value="all">All</option>
+                        </UiSelect>
+                    </div>
 
-                    <Select value={sortOrder} onValueChange={(v) => setSortOrder(v as "oldest" | "newest")}>
-                        <SelectTrigger className="h-8 w-[130px]">
-                            <SelectValue placeholder="Sort" />
-                        </SelectTrigger>
-                        <SelectContent>
-                            <SelectItem value="oldest">
-                                <span className="flex items-center gap-1.5">
-                                    <Clock className="h-3 w-3" /> Oldest first
-                                </span>
-                            </SelectItem>
-                            <SelectItem value="newest">
-                                <span className="flex items-center gap-1.5">
-                                    <Clock className="h-3 w-3" /> Newest first
-                                </span>
-                            </SelectItem>
-                        </SelectContent>
-                    </Select>
+                    <div className="w-[130px] shrink-0">
+                        <UiSelect value={sortOrder} onChange={(event) => setSortOrder(event.target.value as "oldest" | "newest")} uiSize="sm" aria-label="Sort">
+                            <option value="oldest">Oldest first</option>
+                            <option value="newest">Newest first</option>
+                        </UiSelect>
+                    </div>
 
                     <DateRangeFilter
                         from={dateFrom}
@@ -559,13 +431,14 @@ export default function Callbacks() {
                         <Button
                             variant="ghost"
                             onClick={clearFilters}
-                            className="h-8 px-2 lg:px-3 text-muted-foreground"
+                            className="px-2 lg:px-3 text-muted-foreground"
                         >
                             Reset
                             <X className="ml-2 h-4 w-4" />
                         </Button>
                     )}
                 </div>
+                <ViewSwitch value={viewMode} onChange={changeView} />
             </div>
 
             {/* Conversation (inbox) view */}
@@ -606,14 +479,14 @@ export default function Callbacks() {
                         <Table className="w-full text-sm">
                             <TableHeader className="border-b border-border bg-muted">
                                 <TableRow>
-                                    <TableHead className="px-4 py-3 text-left text-[11px] font-semibold text-muted-foreground uppercase tracking-wide w-10">Status</TableHead>
-                                    <TableHead className="px-4 py-3 text-left text-[11px] font-semibold text-muted-foreground uppercase tracking-wide">Patient</TableHead>
-                                    <TableHead className="px-4 py-3 text-left text-[11px] font-semibold text-muted-foreground uppercase tracking-wide whitespace-nowrap">Phone</TableHead>
-                                    <TableHead className="px-4 py-3 text-left text-[11px] font-semibold text-muted-foreground uppercase tracking-wide whitespace-nowrap">Date & Time</TableHead>
-                                    <TableHead className="px-4 py-3 text-left text-[11px] font-semibold text-muted-foreground uppercase tracking-wide whitespace-nowrap">Duration</TableHead>
-                                    <TableHead className="px-4 py-3 text-left text-[11px] font-semibold text-muted-foreground uppercase tracking-wide">Summary</TableHead>
-                                    <TableHead className="px-4 py-3 text-left text-[11px] font-semibold text-muted-foreground uppercase tracking-wide whitespace-nowrap">Next Action</TableHead>
-                                    <TableHead className="px-4 py-3 text-left text-[11px] font-semibold text-muted-foreground uppercase tracking-wide">Action</TableHead>
+                                    <TableHead className="px-4 py-3 text-left text-xs font-semibold text-muted-foreground uppercase tracking-wide w-10">Status</TableHead>
+                                    <TableHead className="px-4 py-3 text-left text-xs font-semibold text-muted-foreground uppercase tracking-wide">Patient</TableHead>
+                                    <TableHead className="px-4 py-3 text-left text-xs font-semibold text-muted-foreground uppercase tracking-wide whitespace-nowrap">Phone</TableHead>
+                                    <TableHead className="px-4 py-3 text-left text-xs font-semibold text-muted-foreground uppercase tracking-wide whitespace-nowrap">Date & Time</TableHead>
+                                    <TableHead className="px-4 py-3 text-left text-xs font-semibold text-muted-foreground uppercase tracking-wide whitespace-nowrap">Duration</TableHead>
+                                    <TableHead className="px-4 py-3 text-left text-xs font-semibold text-muted-foreground uppercase tracking-wide">Summary</TableHead>
+                                    <TableHead className="px-4 py-3 text-left text-xs font-semibold text-muted-foreground uppercase tracking-wide whitespace-nowrap">Next Action</TableHead>
+                                    <TableHead className="px-4 py-3 text-left text-xs font-semibold text-muted-foreground uppercase tracking-wide">Action</TableHead>
                                 </TableRow>
                             </TableHeader>
                             <TableBody>

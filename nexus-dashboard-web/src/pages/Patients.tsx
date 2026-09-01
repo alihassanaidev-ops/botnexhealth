@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react"
+import { useCallback, useEffect, useRef, useState, type ComponentProps } from "react"
 import {
     Users,
     Search,
@@ -12,25 +12,22 @@ import {
     Sparkles,
 } from "lucide-react"
 import { PageHeader } from "@/components/PageHeader"
-import { Card, CardContent } from "@/components/ui/card"
-import { Button } from "@/components/ui/button"
-import { Input } from "@/components/ui/input"
-import { Skeleton } from "@/components/ui/skeleton"
+import { UiButton, UiInput, UiSkeleton } from "@/components/foundation/Primitives"
 import {
-    Table,
-    TableBody,
-    TableCell,
-    TableHead,
-    TableHeader,
-    TableRow,
-} from "@/components/ui/table"
+    UiTable as Table,
+    UiTableBody as TableBody,
+    UiTableCell as TableCell,
+    UiTableHead as TableHead,
+    UiTableHeader as TableHeader,
+    UiTableRow as TableRow,
+} from "@/components/foundation/DataTable"
 import {
-    Dialog,
-    DialogContent,
-    DialogHeader,
-    DialogTitle,
-    DialogDescription,
-} from "@/components/ui/dialog"
+    UiDialog as Dialog,
+    UiDialogContent as DialogContent,
+    UiDialogHeader as DialogHeader,
+    UiDialogTitle as DialogTitle,
+    UiDialogDescription as DialogDescription,
+} from "@/components/foundation/Overlay"
 import { RevealablePhone } from "@/components/RevealablePhone"
 import { toast } from "sonner"
 import { useAuth } from "@/context/AuthContext"
@@ -44,8 +41,26 @@ import {
     type ContactsListResponse,
     type ContactDetail,
 } from "@/lib/contacts-api"
+import "./patients.css"
 
 const PAGE_SIZE = 25
+
+function Button({ variant = "default", ...props }: Omit<ComponentProps<typeof UiButton>, "variant"> & {
+    variant?: "default" | "outline" | "ghost"
+}) {
+    return <UiButton variant={variant === "default" ? "primary" : variant === "outline" ? "secondary" : "quiet"} {...props} />
+}
+
+const Input = UiInput
+const Skeleton = UiSkeleton
+
+function Card({ className = "", ...props }: ComponentProps<"section">) {
+    return <section className={`patients-surface ${className}`.trim()} {...props} />
+}
+
+function CardContent({ className = "", ...props }: ComponentProps<"div">) {
+    return <div className={className} {...props} />
+}
 
 function formatDate(value: string | null): string {
     if (!value) return "—"
@@ -111,7 +126,7 @@ function MergePicker({ primary, onClose, onMerged }: MergePickerProps) {
 
     return (
         <Dialog open onOpenChange={(o) => !o && onClose()}>
-            <DialogContent className="max-w-lg">
+            <DialogContent className="patients-merge-dialog max-w-lg">
                 <DialogHeader>
                     <DialogTitle className="flex items-center gap-2">
                         <Link2 className="h-5 w-5" /> Merge a duplicate into {primary.full_name ?? "this patient"}
@@ -120,17 +135,17 @@ function MergePicker({ primary, onClose, onMerged }: MergePickerProps) {
                         The selected record becomes part of this patient. Its calls are kept, and you can unmerge later.
                     </DialogDescription>
                 </DialogHeader>
-                <div className="relative">
+                <div className="patients-dialog-search">
                     <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground pointer-events-none" />
                     <Input
                         autoFocus
                         placeholder="Search patients by name…"
                         value={search}
                         onChange={(e) => setSearch(e.target.value)}
-                        className="h-9 pl-8"
+                        className="pl-8"
                     />
                 </div>
-                <div className="max-h-72 overflow-y-auto rounded-md border divide-y">
+                <div className="patients-merge-results">
                     {loading ? (
                         <div className="p-4 space-y-2">
                             {Array.from({ length: 3 }).map((_, i) => <Skeleton key={i} className="h-8 w-full" />)}
@@ -139,7 +154,7 @@ function MergePicker({ primary, onClose, onMerged }: MergePickerProps) {
                         <p className="p-4 text-sm text-muted-foreground text-center">No other patients found.</p>
                     ) : (
                         results.map((c) => (
-                            <div key={c.id} className="flex items-center justify-between gap-3 px-3 py-2">
+                            <div key={c.id} className="patients-merge-row">
                                 <div className="min-w-0">
                                     <p className="truncate text-sm font-medium">{c.full_name ?? "Unknown"}</p>
                                     <p className="text-xs text-muted-foreground">
@@ -149,7 +164,7 @@ function MergePicker({ primary, onClose, onMerged }: MergePickerProps) {
                                 <Button
                                     size="sm"
                                     variant="outline"
-                                    className="h-7 text-xs gap-1 shrink-0"
+                                    className="text-xs gap-1 shrink-0"
                                     disabled={merging !== null}
                                     onClick={() => handleMerge(c.id)}
                                 >
@@ -212,7 +227,7 @@ function PatientDetail({ contactId, onClose, onChanged }: PatientDetailProps) {
 
     return (
         <Dialog open={!!contactId} onOpenChange={(o) => !o && onClose()}>
-            <DialogContent className="max-w-2xl max-h-[85vh] overflow-y-auto">
+            <DialogContent className="patients-detail-dialog max-w-2xl">
                 {loading || !detail ? (
                     <div className="space-y-4 py-4">
                         <Skeleton className="h-10 w-48" />
@@ -229,7 +244,7 @@ function PatientDetail({ contactId, onClose, onChanged }: PatientDetailProps) {
                                 <span>
                                     {detail.full_name ?? "Unknown patient"}
                                     {detail.is_new_patient && (
-                                        <span className="ml-2 inline-flex items-center gap-1 rounded-full bg-blue-500/10 px-2 py-0.5 text-[11px] font-medium text-blue-600">
+                                        <span className="ml-2 inline-flex items-center gap-1 rounded-full bg-blue-500/10 px-2 py-0.5 text-xs font-medium text-blue-600 dark:text-blue-400">
                                             <Sparkles className="h-3 w-3" /> New
                                         </span>
                                     )}
@@ -251,13 +266,13 @@ function PatientDetail({ contactId, onClose, onChanged }: PatientDetailProps) {
                         </DialogHeader>
 
                         {/* Linked records */}
-                        <div className="rounded-lg border p-3">
+                        <div className="patients-detail-section">
                             <div className="mb-2 flex items-center justify-between">
                                 <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
                                     Linked records {detail.aliases.length > 0 && `(${detail.aliases.length})`}
                                 </p>
                                 {isAdmin && (
-                                    <Button variant="outline" size="sm" className="h-7 gap-1 text-xs" onClick={() => setShowMerge(true)}>
+                                    <Button variant="outline" size="sm" className="gap-1 text-xs" onClick={() => setShowMerge(true)}>
                                         <Link2 className="h-3 w-3" /> Merge duplicate
                                     </Button>
                                 )}
@@ -270,7 +285,7 @@ function PatientDetail({ contactId, onClose, onChanged }: PatientDetailProps) {
                             ) : (
                                 <div className="divide-y">
                                     {detail.aliases.map((a) => (
-                                        <div key={a.id} className="flex items-center justify-between gap-2 py-2">
+                                        <div key={a.id} className="patients-linked-row">
                                             <div className="min-w-0">
                                                 <p className="truncate text-sm">{a.full_name ?? "Unknown"}</p>
                                                 <p className="text-xs text-muted-foreground">{a.phone_masked ?? "no phone"}</p>
@@ -279,7 +294,7 @@ function PatientDetail({ contactId, onClose, onChanged }: PatientDetailProps) {
                                                 <Button
                                                     variant="ghost"
                                                     size="sm"
-                                                    className="h-7 gap-1 text-xs text-muted-foreground"
+                                                    className="gap-1 text-xs text-muted-foreground"
                                                     disabled={unmerging !== null}
                                                     onClick={() => handleUnmerge(a.id)}
                                                 >
@@ -303,14 +318,14 @@ function PatientDetail({ contactId, onClose, onChanged }: PatientDetailProps) {
                                     <p className="text-xs text-muted-foreground">No calls recorded.</p>
                                 ) : (
                                     detail.calls.map((c) => (
-                                        <div key={c.id} className="rounded-md border p-3">
+                                        <div key={c.id} className="patients-call-row">
                                             <div className="flex items-center justify-between gap-2">
                                                 <span className="text-xs font-medium text-muted-foreground">
                                                     {formatDateTime(c.created_at)}
                                                 </span>
                                                 <div className="flex flex-wrap gap-1">
                                                     {c.call_tags.map((t) => (
-                                                        <span key={t} className="rounded-full bg-muted px-2 py-0.5 text-[10px] font-medium text-muted-foreground">
+                                                        <span key={t} className="rounded-full bg-muted px-2 py-0.5 text-2xs font-medium text-muted-foreground">
                                                             {t.replace(/_/g, " ")}
                                                         </span>
                                                     ))}
@@ -397,7 +412,7 @@ export default function Patients() {
     const to = Math.min((page + 1) * PAGE_SIZE, total)
 
     return (
-        <div className="relative flex-1 space-y-6 bg-background p-8 pt-6">
+        <div className="ui-page ui-page-stack">
             <PageHeader
                 icon={Users}
                 title="Patients"
@@ -405,9 +420,9 @@ export default function Patients() {
                 actions={
                     <>
                         {!loading && data && (
-                            <div className="text-right">
-                                <p className="text-2xl font-bold tabular-nums">{total.toLocaleString()}</p>
-                                <p className="text-xs text-muted-foreground">patients</p>
+                            <div className="patients-header-total">
+                                <p>{total.toLocaleString()}</p>
+                                <span>patients</span>
                             </div>
                         )}
                         <Button variant="outline" size="sm" onClick={fetchContacts} disabled={loading} className="gap-1.5">
@@ -418,18 +433,18 @@ export default function Patients() {
                 }
             />
 
-            <div className="flex items-center gap-2">
-                <div className="relative">
+            <div className="patients-toolbar">
+                <div className="patients-search">
                     <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground pointer-events-none" />
                     <Input
                         placeholder="Search patient..."
                         value={search}
                         onChange={(e) => setSearch(e.target.value)}
-                        className="h-8 pl-8 w-[200px] lg:w-[300px]"
+                        className="w-full pl-8"
                     />
                 </div>
                 {search && (
-                    <Button variant="ghost" onClick={() => setSearch("")} className="h-8 px-2 text-muted-foreground">
+                    <Button variant="ghost" onClick={() => setSearch("")} className="patients-reset text-muted-foreground">
                         Reset <X className="ml-2 h-4 w-4" />
                     </Button>
                 )}
@@ -437,14 +452,14 @@ export default function Patients() {
 
             <Card>
                 <CardContent className="p-0">
-                    <div className="overflow-x-auto">
-                        <Table className="w-full text-sm">
-                            <TableHeader className="border-b border-border bg-muted">
+                    <div className="patients-table-scroll">
+                        <Table className="patients-table">
+                            <TableHeader>
                                 <TableRow>
-                                    <TableHead className="px-4 py-3 text-left text-[11px] font-semibold text-muted-foreground uppercase tracking-wide">Patient</TableHead>
-                                    <TableHead className="px-4 py-3 text-left text-[11px] font-semibold text-muted-foreground uppercase tracking-wide whitespace-nowrap">Phone</TableHead>
-                                    <TableHead className="px-4 py-3 text-left text-[11px] font-semibold text-muted-foreground uppercase tracking-wide whitespace-nowrap">Calls</TableHead>
-                                    <TableHead className="px-4 py-3 text-left text-[11px] font-semibold text-muted-foreground uppercase tracking-wide whitespace-nowrap">Last call</TableHead>
+                                    <TableHead>Patient</TableHead>
+                                    <TableHead className="whitespace-nowrap">Phone</TableHead>
+                                    <TableHead className="whitespace-nowrap">Calls</TableHead>
+                                    <TableHead className="whitespace-nowrap">Last call</TableHead>
                                 </TableRow>
                             </TableHeader>
                             <TableBody>
@@ -483,7 +498,7 @@ export default function Patients() {
                                                             {c.full_name ?? "Unknown"}
                                                         </span>
                                                         {c.alias_count > 0 && (
-                                                            <span className="ml-2 inline-flex items-center gap-1 rounded-full bg-muted px-1.5 py-0.5 text-[10px] text-muted-foreground">
+                                                            <span className="ml-2 inline-flex items-center gap-1 rounded-full bg-muted px-1.5 py-0.5 text-2xs text-muted-foreground">
                                                                 <Link2 className="h-2.5 w-2.5" /> {c.alias_count} linked
                                                             </span>
                                                         )}
@@ -508,7 +523,7 @@ export default function Patients() {
                     </div>
 
                     {!loading && total > 0 && (
-                        <div className="flex flex-col gap-3 border-t border-border px-4 py-3 sm:flex-row sm:items-center sm:justify-between">
+                        <div className="patients-pagination">
                             <p className="text-sm text-muted-foreground">
                                 Showing <span className="font-medium text-foreground">{from}–{to}</span> of{" "}
                                 <span className="font-medium text-foreground">{total.toLocaleString()}</span> patients

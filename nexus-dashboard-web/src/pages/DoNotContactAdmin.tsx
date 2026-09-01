@@ -10,9 +10,9 @@ import {
     ShieldOff,
 } from "lucide-react"
 import { PageHeader } from "@/components/PageHeader"
-import { Badge } from "@/components/ui/badge"
-import { Button } from "@/components/ui/button"
-import { Card, CardContent } from "@/components/ui/card"
+import { Badge } from "@/components/foundation/compat/badge"
+import { Button } from "@/components/foundation/compat/button"
+import { Card, CardContent } from "@/components/foundation/compat/card"
 import {
     Dialog,
     DialogContent,
@@ -20,17 +20,17 @@ import {
     DialogFooter,
     DialogHeader,
     DialogTitle,
-} from "@/components/ui/dialog"
-import { Input } from "@/components/ui/input"
+} from "@/components/foundation/compat/dialog"
+import { Input } from "@/components/foundation/compat/input"
 import {
     Select,
     SelectContent,
     SelectItem,
     SelectTrigger,
     SelectValue,
-} from "@/components/ui/select"
-import { Skeleton } from "@/components/ui/skeleton"
-import { Textarea } from "@/components/ui/textarea"
+} from "@/components/foundation/compat/select"
+import { Skeleton } from "@/components/foundation/compat/skeleton"
+import { Textarea } from "@/components/foundation/compat/textarea"
 import {
     Table,
     TableBody,
@@ -38,7 +38,7 @@ import {
     TableHead,
     TableHeader,
     TableRow,
-} from "@/components/ui/table"
+} from "@/components/foundation/compat/table"
 import {
     listInstitutionPortalLocations,
     type InstitutionPortalLocation,
@@ -134,7 +134,7 @@ function ChannelTag({
                 type="button"
                 variant="outline"
                 size="sm"
-                className="h-7 px-2 text-xs"
+                className="px-2 text-xs"
                 onClick={onRemove}
                 aria-label={`Remove ${CHANNEL_LABELS[entry.channel]} DNC tag`}
             >
@@ -253,10 +253,7 @@ export default function DoNotContactAdmin() {
     }
 
     return (
-        <div className="relative flex-1 space-y-6 bg-background p-8 pt-6">
-            <div className="pointer-events-none fixed inset-0 overflow-hidden">
-                <div className="absolute -right-32 -top-32 h-[420px] w-[420px] rounded-full bg-transparent blur-[100px] dark:bg-violet-700/20" />
-            </div>
+        <div className="ui-page ui-page-stack">
 
             <PageHeader
                 icon={ShieldOff}

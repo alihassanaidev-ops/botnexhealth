@@ -3,7 +3,7 @@ import { Loader2, CheckCircle2, XCircle, HelpCircle, RefreshCw } from "lucide-re
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import * as z from "zod";
-import { Button } from "@/components/ui/button";
+import { Button } from "@/components/foundation/compat/button";
 import {
     Form,
     FormControl,
@@ -11,22 +11,22 @@ import {
     FormItem,
     FormLabel,
     FormMessage,
-} from "@/components/ui/form";
+} from "@/components/foundation/compat/form";
 import {
     Select,
     SelectContent,
     SelectItem,
     SelectTrigger,
     SelectValue,
-} from "@/components/ui/select";
+} from "@/components/foundation/compat/select";
 import {
     Tooltip,
     TooltipContent,
     TooltipProvider,
     TooltipTrigger,
-} from "@/components/ui/tooltip";
-import { Input } from "@/components/ui/input";
-import { Badge } from "@/components/ui/badge";
+} from "@/components/foundation/compat/tooltip";
+import { Input } from "@/components/foundation/compat/input";
+import { Badge } from "@/components/foundation/compat/badge";
 import { toast } from "sonner";
 import api from "@/lib/api";
 import { verifyRetellAgent, listInstitutionTwilioPhoneNumbers } from "@/lib/admin-api";
@@ -105,7 +105,7 @@ function formatPhone(raw: string): string {
 
 function SectionCard({ title, description, children }: { title: string; description?: string; children: React.ReactNode }) {
     return (
-        <div className="space-y-4 rounded-xl border border-border bg-gradient-to-br from-card to-accent/25 p-6 shadow-sm">
+        <div className="space-y-4 rounded-xl border border-border bg-card p-5 shadow-sm">
             <div className="space-y-0.5">
                 <h3 className="text-base font-semibold leading-none tracking-tight">{title}</h3>
                 {description && <p className="text-sm text-muted-foreground">{description}</p>}
@@ -120,7 +120,7 @@ function FieldHint({ text }: { text: string }) {
         <TooltipProvider delayDuration={200}>
             <Tooltip>
                 <TooltipTrigger asChild>
-                    <HelpCircle className="inline h-3.5 w-3.5 ml-1.5 mb-0.5 text-muted-foreground/60 hover:text-muted-foreground cursor-help" />
+                    <HelpCircle className="inline h-3.5 w-3.5 ml-1.5 mb-0.5 text-muted-foreground hover:text-muted-foreground cursor-help" />
                 </TooltipTrigger>
                 <TooltipContent side="right" className="max-w-xs text-xs">{text}</TooltipContent>
             </Tooltip>
@@ -630,7 +630,7 @@ export function LocationForm({ institutionSlug, location, hasPms = true, pmsType
                                         </Button>
                                     </div>
                                     {agentVerificationStatus === "success" && (
-                                        <p className="text-sm font-medium text-green-600 flex items-center gap-1.5 mt-1.5">
+                                        <p className="text-sm font-medium text-green-600 dark:text-green-400 flex items-center gap-1.5 mt-1.5">
                                             <CheckCircle2 className="h-4 w-4 shrink-0" />
                                             Agent verified — this ID is active in Retell
                                         </p>
@@ -863,7 +863,7 @@ export function LocationForm({ institutionSlug, location, hasPms = true, pmsType
                 </form>
 
                 {/* Sticky Footer */}
-                <div className="fixed bottom-0 left-0 right-0 z-50 border-t border-border bg-gradient-to-r from-background/95 via-background/90 to-accent/40 backdrop-blur supports-[backdrop-filter]:bg-background/70">
+                <div className="fixed bottom-0 left-0 right-0 z-50 border-t border-border bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/85">
                     <div className="px-6 py-3 flex items-center justify-between gap-4 w-full">
                         <div className="flex items-center gap-2">
                             {isDirty && (

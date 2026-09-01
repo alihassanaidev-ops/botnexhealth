@@ -18,15 +18,15 @@ import { PageHeader } from "@/components/PageHeader"
 import { toast } from "sonner"
 import { Link } from "react-router-dom"
 
-import { Badge } from "@/components/ui/badge"
-import { Button } from "@/components/ui/button"
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
-import { Input } from "@/components/ui/input"
-import { Label } from "@/components/ui/label"
-import { Switch } from "@/components/ui/switch"
-import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs"
-import { Separator } from "@/components/ui/separator"
-import { CardsSkeleton } from "@/components/ui/skeletons"
+import { Badge } from "@/components/foundation/compat/badge"
+import { Button } from "@/components/foundation/compat/button"
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/foundation/compat/card"
+import { Input } from "@/components/foundation/compat/input"
+import { Label } from "@/components/foundation/compat/label"
+import { Switch } from "@/components/foundation/compat/switch"
+import { Tabs, TabsList, TabsTrigger } from "@/components/foundation/compat/tabs"
+import { Separator } from "@/components/foundation/compat/separator"
+import { CardsSkeleton } from "@/components/foundation/compat/skeletons"
 import { useInstitution } from "@/context/InstitutionContext"
 import {
     Dialog,
@@ -35,7 +35,7 @@ import {
     DialogFooter,
     DialogHeader,
     DialogTitle,
-} from "@/components/ui/dialog"
+} from "@/components/foundation/compat/dialog"
 import {
     listEmailTemplates,
     updateEmailTemplate,
@@ -248,7 +248,7 @@ export default function EmailTemplates() {
             )
 
         return (
-            <div className="space-y-6">
+            <div className="ui-page ui-page-stack">
                 <div>
                     <div className="flex items-center gap-2 mb-1">
                         <Link
@@ -257,7 +257,7 @@ export default function EmailTemplates() {
                         >
                             Settings
                         </Link>
-                        <span className="text-muted-foreground/50">/</span>
+                        <span className="text-muted-foreground">/</span>
                         <span className="text-sm font-medium">Email Templates</span>
                     </div>
                     <PageHeader

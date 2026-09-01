@@ -3,9 +3,9 @@ import { format, parseISO } from "date-fns"
 import { CalendarIcon } from "lucide-react"
 import type { DateRange } from "react-day-picker"
 
-import { Button } from "@/components/ui/button"
-import { Calendar } from "@/components/ui/calendar"
-import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover"
+import { Button } from "@/components/foundation/compat/button"
+import { Calendar } from "@/components/foundation/compat/calendar"
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/foundation/compat/popover"
 import { cn } from "@/lib/utils"
 import {
     allUpcomingRange,
@@ -79,7 +79,7 @@ export function UpcomingRangePicker({ value, onChange, className }: UpcomingRang
                 <Button
                     variant="outline"
                     size="sm"
-                    className={cn("h-9 gap-2 text-xs", className)}
+                    className={cn("gap-2 text-xs", className)}
                     aria-label="Filter by date range"
                 >
                     <CalendarIcon className="h-3.5 w-3.5" />
@@ -89,9 +89,9 @@ export function UpcomingRangePicker({ value, onChange, className }: UpcomingRang
             <PopoverContent align="start" className="flex w-auto flex-col p-0 sm:flex-row">
                 <div className="flex shrink-0 flex-row flex-wrap gap-1 border-b border-border/60 p-2 sm:flex-col sm:border-b-0 sm:border-r">
                     <Button
-                        variant={isAllUpcoming ? "secondary" : "ghost"}
+                        variant={isAllUpcoming ?"secondary" :"ghost"}
                         size="sm"
-                        className="h-8 justify-start px-3 text-xs font-medium"
+                        className="justify-start px-3 text-xs font-medium"
                         onClick={() => {
                             onChange(allUpcomingRange())
                             setOpen(false)
@@ -102,9 +102,9 @@ export function UpcomingRangePicker({ value, onChange, className }: UpcomingRang
                     {PRESETS.map((days) => (
                         <Button
                             key={days}
-                            variant={activePreset === days ? "secondary" : "ghost"}
+                            variant={activePreset === days ?"secondary" :"ghost"}
                             size="sm"
-                            className="h-8 justify-start px-3 text-xs font-medium"
+                            className="justify-start px-3 text-xs font-medium"
                             onClick={() => {
                                 onChange(nextNDaysRange(days))
                                 setOpen(false)

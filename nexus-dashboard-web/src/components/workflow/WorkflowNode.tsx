@@ -125,7 +125,7 @@ export function TriggerNodeCard({ data }: NodeProps<FlowNode>) {
                     <Icon className="h-4 w-4" />
                 </div>
                 <div className="min-w-0 flex-1">
-                    <div className="text-[10px] font-semibold uppercase tracking-wide text-primary/80">Trigger</div>
+                    <div className="text-2xs font-semibold uppercase tracking-wide text-primary/80">Trigger</div>
                     <div className="truncate text-sm font-medium">{meta.label}</div>
                     <p className="mt-0.5 truncate text-xs text-muted-foreground">{triggerSummary(data.trigger)}</p>
                 </div>
@@ -160,7 +160,7 @@ export function StepNodeCard({ data, selected }: NodeProps<FlowNode>) {
                     <div className="flex items-center gap-1.5">
                         <span className="truncate text-sm font-medium">{meta.label}</span>
                         {data.isEntry && (
-                            <span className="shrink-0 rounded bg-primary/10 px-1.5 py-0.5 text-[10px] font-medium text-primary">
+                            <span className="shrink-0 rounded bg-primary/10 px-1.5 py-0.5 text-2xs font-medium text-primary">
                                 Start
                             </span>
                         )}
@@ -170,7 +170,7 @@ export function StepNodeCard({ data, selected }: NodeProps<FlowNode>) {
             </div>
 
             {execution && ExecutionIcon && (
-                <div className={cn("flex h-7 items-center gap-1.5 border-t px-3 text-[11px] font-medium", execution.text)}>
+                <div className={cn("flex h-7 items-center gap-1.5 border-t px-3 text-xs font-medium", execution.text)}>
                     <ExecutionIcon className={cn("h-3.5 w-3.5", data.executionStatus === "running" && "animate-spin")} />
                     <span>{execution.label}</span>
                     {(data.executionAttempts ?? 0) > 1 && (

@@ -1,7 +1,7 @@
 import { useForm } from "react-hook-form"
 import { zodResolver } from "@hookform/resolvers/zod"
 import * as z from "zod"
-import { Button } from "@/components/ui/button"
+import { Button } from "@/components/foundation/compat/button"
 import {
     Form,
     FormControl,
@@ -9,15 +9,15 @@ import {
     FormItem,
     FormLabel,
     FormMessage,
-} from "@/components/ui/form"
-import { Input } from "@/components/ui/input"
+} from "@/components/foundation/compat/form"
+import { Input } from "@/components/foundation/compat/input"
 import {
     Select,
     SelectContent,
     SelectItem,
     SelectTrigger,
     SelectValue,
-} from "@/components/ui/select"
+} from "@/components/foundation/compat/select"
 import { toast } from "sonner"
 import api from "@/lib/api"
 

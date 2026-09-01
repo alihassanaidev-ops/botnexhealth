@@ -3,8 +3,8 @@ import { AuthProvider } from "@/context/AuthContext";
 import { NotificationProvider } from "@/context/NotificationContext";
 import { LocationProvider } from "@/context/LocationContext";
 import { InstitutionProvider } from "@/context/InstitutionContext";
-import { Toaster } from "@/components/ui/sonner";
-import { NotificationDialog } from "@/components/ui/notification-dialog";
+import { Toaster } from "@/components/foundation/compat/sonner";
+import { NotificationDialog } from "@/components/notification-dialog";
 
 export default function AppLayout() {
     return (

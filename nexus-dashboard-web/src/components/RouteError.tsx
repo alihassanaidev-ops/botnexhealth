@@ -1,7 +1,7 @@
 import { useEffect } from "react"
 import { useRouteError, useNavigate, isRouteErrorResponse } from "react-router-dom"
 import { AlertTriangle, RefreshCcw, Home } from "lucide-react"
-import { Button } from "@/components/ui/button"
+import { Button } from "@/components/foundation/compat/button"
 import { recoverFromChunkError } from "@/lib/chunk-reload"
 
 // A failed lazy-chunk import after a deploy surfaces here; these are the messages

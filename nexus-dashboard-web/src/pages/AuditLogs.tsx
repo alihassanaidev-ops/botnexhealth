@@ -7,13 +7,13 @@ import {
     TableHead,
     TableHeader,
     TableRow,
-} from "@/components/ui/table";
-import { Badge } from "@/components/ui/badge";
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+} from "@/components/foundation/compat/table";
+import { Badge } from "@/components/foundation/compat/badge";
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/foundation/compat/card";
 import { RefreshCw, ChevronLeft, ChevronRight, ShieldCheck } from "lucide-react";
 import { PageHeader } from "@/components/PageHeader";
-import { Button } from "@/components/ui/button";
-import { TableSkeleton } from "@/components/ui/skeletons";
+import { Button } from "@/components/foundation/compat/button";
+import { TableSkeleton } from "@/components/foundation/compat/skeletons";
 import { toast } from "sonner";
 
 import { listAuditLogs, AuditLog } from "@/lib/tenant-api";
@@ -62,21 +62,20 @@ export default function AuditLogs() {
     function renderActorBadge(actor: string) {
         switch (actor) {
             case "RETELL_AGENT":
-                return <Badge variant="outline" className="text-blue-600 border-blue-200 bg-blue-50">Automation</Badge>;
+                return <Badge variant="outline" className="text-blue-600 dark:text-blue-400 border-blue-200 bg-blue-50">Automation</Badge>;
             case "ADMIN":
                 return <Badge variant="outline" className="text-purple-600 border-purple-200 bg-purple-50">Super Admin</Badge>;
             case "SYSTEM":
                 return <Badge variant="outline" className="text-gray-600 border-gray-200 bg-gray-50">System</Badge>;
             case "API_CLIENT":
-                return <Badge variant="outline" className="text-orange-600 border-orange-200 bg-orange-50">API Client</Badge>;
+                return <Badge variant="outline" className="text-orange-600 dark:text-orange-400 border-orange-200 bg-orange-50">API Client</Badge>;
             default:
                 return <Badge variant="secondary">{actor}</Badge>;
         }
     }
 
     return (
-        <div className="relative space-y-6 bg-background">
-            <div className="fixed inset-0 overflow-hidden pointer-events-none"><div className="absolute -top-32 -right-32 w-[420px] h-[420px] bg-transparent dark:bg-violet-700/20 rounded-full blur-[100px]" /></div>
+        <div className="ui-page ui-page-stack">
             <PageHeader
                 icon={ShieldCheck}
                 title="Audit Logs"

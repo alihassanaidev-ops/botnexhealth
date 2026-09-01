@@ -13,11 +13,11 @@ import {
 import { PageHeader } from "@/components/PageHeader";
 import { toast } from "sonner";
 
-import { Button } from "@/components/ui/button";
-import { Card, CardContent } from "@/components/ui/card";
-import { Progress } from "@/components/ui/progress";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { Button } from "@/components/foundation/compat/button";
+import { Card, CardContent } from "@/components/foundation/compat/card";
+import { Progress } from "@/components/foundation/compat/progress";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/foundation/compat/select";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/foundation/compat/tooltip";
 import { getSetupOverview, triggerSync } from "@/lib/tenant-api";
 import type { SetupOverview as SetupOverviewData } from "@/types";
 import { useAuth } from "@/context/AuthContext";
@@ -161,7 +161,7 @@ export default function SetupOverview() {
     const locationName = overview?.location.name ?? null;
 
     return (
-        <div className="relative flex-1 space-y-6 bg-background p-8 pt-6">
+        <div className="ui-page ui-page-stack">
             <PageHeader
                 icon={ClipboardList}
                 title="Setup overview"
@@ -203,7 +203,7 @@ export default function SetupOverview() {
                                 </span>
                                 <Tooltip>
                                     <TooltipTrigger asChild>
-                                        <button type="button" className="text-muted-foreground/60 transition-colors hover:text-muted-foreground" aria-label="Setup details">
+                                        <button type="button" className="text-muted-foreground transition-colors hover:text-muted-foreground" aria-label="Setup details">
                                             <Info className="h-3.5 w-3.5" />
                                         </button>
                                     </TooltipTrigger>
@@ -237,10 +237,10 @@ export default function SetupOverview() {
                                 <div className="min-w-0 flex-1">
                                     <div className="flex items-center gap-1.5">
                                         <span className="font-medium">{step.title}</span>
-                                        {step.complete && <CheckCircle2 className="h-4 w-4 shrink-0 text-emerald-600" />}
+                                        {step.complete && <CheckCircle2 className="h-4 w-4 shrink-0 text-emerald-600 dark:text-emerald-400" />}
                                         <Tooltip>
                                             <TooltipTrigger asChild>
-                                                <button type="button" className="text-muted-foreground/60 transition-colors hover:text-muted-foreground" aria-label={`About ${step.title}`}>
+                                                <button type="button" className="text-muted-foreground transition-colors hover:text-muted-foreground" aria-label={`About ${step.title}`}>
                                                     <Info className="h-3.5 w-3.5" />
                                                 </button>
                                             </TooltipTrigger>

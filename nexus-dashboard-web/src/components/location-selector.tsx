@@ -6,14 +6,8 @@
  * a single active location (no switching to do).
  */
 
-import {
-    Select,
-    SelectContent,
-    SelectItem,
-    SelectTrigger,
-    SelectValue,
-} from "@/components/ui/select"
 import { useLocationContext } from "@/context/LocationContext"
+import { UiSelect } from "@/components/foundation/Primitives"
 
 export function LocationSelector() {
     const { locations, selectedLocationId, setSelectedLocationId, canSwitch, isLoading } =
@@ -26,7 +20,7 @@ export function LocationSelector() {
         return (
             <div
                 aria-label="Active location"
-                className="flex h-8 w-full items-center truncate rounded-md border border-sidebar-border bg-sidebar-accent/30 px-3 text-xs font-medium text-sidebar-foreground"
+                className="shell-location-static"
                 data-testid="location-selector"
                 title={locations[0].name}
             >
@@ -36,24 +30,17 @@ export function LocationSelector() {
     }
 
     return (
-        <Select
-            value={selectedLocationId ?? undefined}
-            onValueChange={setSelectedLocationId}
+        <UiSelect
+            aria-label="Active location"
+            className="shell-location-select"
+            data-testid="location-selector"
+            value={selectedLocationId ?? ""}
+            onChange={(event) => setSelectedLocationId(event.target.value)}
         >
-            <SelectTrigger
-                aria-label="Active location"
-                className="h-8 w-full text-xs"
-                data-testid="location-selector"
-            >
-                <SelectValue placeholder="Select location" />
-            </SelectTrigger>
-            <SelectContent>
-                {locations.map((loc) => (
-                    <SelectItem key={loc.id} value={loc.id}>
-                        {loc.name}
-                    </SelectItem>
-                ))}
-            </SelectContent>
-        </Select>
+            <option value="" disabled>Select location</option>
+            {locations.map((loc) => (
+                <option key={loc.id} value={loc.id}>{loc.name}</option>
+            ))}
+        </UiSelect>
     )
 }
