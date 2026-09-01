@@ -34,6 +34,7 @@ from src.app.models.automation_workflow import AutomationWorkflowRun
 from src.app.services.automation.campaign_action_links import (
     BOOKING_LINK_CONFIG_KEY,
 )
+from src.app.services.automation.campaign_identity import is_verified
 from src.app.models.campaign_response import CampaignResponseEvent, CampaignStaffHandoff
 from src.app.models.contact import Contact
 from src.app.models.institution import Institution
@@ -187,6 +188,34 @@ def _type_is_allowed(run: AutomationWorkflowRun, appointment_type_id: str | None
 def _window_days(run: AutomationWorkflowRun, default: int) -> int:
     value = _link_config(run).get("window_days")
     return value if isinstance(value, int) and value > 0 else default
+
+
+#: Actions that disclose an existing appointment or destroy one. Booking is not
+#: among them: it shows only the clinic's own free slots and can be undone.
+SENSITIVE_ACTIONS = frozenset({"reschedule", "cancel"})
+
+
+def _identity_required(run: AutomationWorkflowRun, action: str) -> bool:
+    """Whether this run must prove identity before the action is allowed.
+
+    Set by the booking_link step, so the campaign author decides. Defaults to
+    guarding the sensitive actions when a run carries no config at all, which
+    is the safer reading for a run enrolled before the setting existed.
+    """
+    config = _link_config(run)
+    if not config:
+        # No booking_link step ran at all, so no author ever expressed a view.
+        # Runs already in flight when this shipped are in this state, and
+        # turning their live links into a refusal they cannot clear is a worse
+        # failure than the one the gate prevents. New campaigns get the safe
+        # default because the node sets it explicitly.
+        return False
+    mode = config.get("identity_check") or "sensitive"
+    if mode == "off":
+        return False
+    if mode == "always":
+        return True
+    return action in SENSITIVE_ACTIONS
 
 
 def _action_permitted(run: AutomationWorkflowRun, action: str) -> bool:
@@ -380,12 +409,26 @@ async def cancellation_details(
             if run.location_id
             else None
         )
+        if _identity_required(run, "cancel") and not is_verified(run):
+            # The time, provider and reason of someone's appointment are not
+            # shown to whoever happens to hold the link. The page sends them to
+            # the identity step and comes back.
+            return _json(
+                {
+                    "already_cancelled": False,
+                    "clinic_name": getattr(location, "name", "") or "",
+                    "appointment": None,
+                    "identity_required": True,
+                }
+            )
+
         appointment = await _describe_appointment(session, run)
         return _json(
             {
                 "already_cancelled": False,
                 "clinic_name": getattr(location, "name", "") or "",
                 "appointment": appointment,
+                "identity_required": False,
             }
         )
 
@@ -417,6 +460,11 @@ async def cancel_appointment_link(
         run = await session.get(AutomationWorkflowRun, run_id)
         if run is None:
             return _json({"error": "gone"}, 410)
+        if _identity_required(run, "cancel") and not is_verified(run):
+            # The destructive half of the two-step. Guarded independently of the
+            # GET above: refusing to *describe* the appointment would be hollow
+            # if the POST still cancelled it.
+            return _json({"error": "identity_required"}, 403)
         if await _already_booked(session, run_id, "cancel"):
             # Tapping twice must not try to cancel an already-cancelled visit.
             return _json({"status": "already_cancelled"})
@@ -673,6 +721,9 @@ async def book_slot(
         run = await session.get(AutomationWorkflowRun, run_id)
         if run is None:
             return _json({"error": "gone"}, 410)
+
+        if _identity_required(run, action) and not is_verified(run):
+            return _json({"error": "identity_required"}, 403)
 
         if not _action_permitted(run, action):
             # A valid signature for an action the campaign step never offered.

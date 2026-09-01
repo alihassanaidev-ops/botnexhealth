@@ -897,6 +897,21 @@ class BookingLinkNode(BaseModel):
     #: Pin the booking to one provider. None lets the PMS choose.
     provider_id: str | None = None
 
+    #: When the patient must prove who they are before the link will act.
+    #:
+    #: The link identifies a *run*, and the run names a contact — but a phone
+    #: number reaches a household, not a person, and a number the clinic was
+    #: given a year ago may since have been reassigned. So possession of the
+    #: link is not by itself proof of identity.
+    #:
+    #: ``sensitive`` is the default because the actions differ in what they
+    #: cost when the wrong person acts. Booking a slot discloses nothing and
+    #: can be undone. Rescheduling and cancelling show the appointment's time,
+    #: provider and reason before they act, and a cancellation cannot be taken
+    #: back — so those ask first. ``always`` gates booking too; ``off`` suits a
+    #: campaign whose audience was verified some other way.
+    identity_check: Literal["off", "sensitive", "always"] = "sensitive"
+
     @model_validator(mode="after")
     def _no_duplicate_actions(self) -> "BookingLinkNode":
         if len(set(self.actions)) != len(self.actions):

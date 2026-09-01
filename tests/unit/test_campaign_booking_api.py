@@ -19,11 +19,15 @@ from src.app.pms.models import BookingWriteStatus
 from src.app.services.automation.campaign_action_links import make_action_token
 
 
-@pytest.fixture
-def client():
+def client_():
     app = FastAPI()
     app.include_router(router, prefix="/api")
     return TestClient(app)
+
+
+@pytest.fixture
+def client():
+    return client_()
 
 
 def _expired(action: str = "book") -> str:
@@ -480,3 +484,112 @@ class TestWorksOnBothPracticeSystems:
         _call(client, "GET", f"/api/campaigns/link/book/slots?token={token}", ctx)
         _s, _c, adapter, _b = ctx
         adapter.list_providers.assert_awaited()
+
+
+from src.app.services.automation.campaign_action_links import BOOKING_LINK_CONFIG_KEY
+from src.app.services.automation.campaign_identity import VERIFIED_KEY
+
+
+def _configured_run(identity_check="sensitive", verified=False):
+    """A run that a booking_link step actually configured."""
+    run = _run()
+    run.trigger_metadata = {
+        BOOKING_LINK_CONFIG_KEY: {
+            "actions": ["book", "reschedule", "cancel"],
+            "appointment_type_ids": [],
+            "window_days": 7,
+            "provider_id": None,
+            "identity_check": identity_check,
+            "node_id": "b1",
+        }
+    }
+    if verified:
+        run.trigger_metadata[VERIFIED_KEY] = True
+    return run
+
+
+class TestIdentityGate:
+    """Who may act, once a booking_link step has expressed a view."""
+
+    def test_cancel_does_not_describe_the_appointment_before_identity(self):
+        """Time, provider and reason are not shown to whoever holds the link."""
+        ctx = _ctx(run=_configured_run())
+        token = make_action_token("run-1", "cancel")
+        r = _call(
+            client_(), "GET",
+            f"/api/campaigns/link/cancel/appointment?token={token}", ctx,
+        )
+        body = r.json()
+        assert body["identity_required"] is True
+        assert body["appointment"] is None
+
+    def test_cancel_is_refused_before_identity(self):
+        """Refusing to describe it would be hollow if the POST still acted."""
+        ctx = _ctx(run=_configured_run())
+        token = make_action_token("run-1", "cancel")
+        r = _call(
+            client_(), "POST",
+            f"/api/campaigns/link/cancel/appointment?token={token}", ctx,
+        )
+        assert r.status_code == 403
+        assert r.json()["error"] == "identity_required"
+
+    def test_reschedule_is_refused_before_identity(self):
+        ctx = _ctx(run=_configured_run())
+        token = make_action_token("run-1", "reschedule")
+        r = _call(
+            client_(), "POST",
+            f"/api/campaigns/link/reschedule/slots?token={token}", ctx,
+            json={"slot_start": "2026-09-02T14:00:00Z"},
+        )
+        assert r.status_code == 403
+
+    def test_booking_is_not_gated_by_default(self):
+        """It discloses only the clinic's own free slots and can be undone."""
+        ctx = _ctx(run=_configured_run())
+        token = make_action_token("run-1", "book")
+        r = _call(
+            client_(), "POST", f"/api/campaigns/link/book/slots?token={token}", ctx,
+            json={"slot_start": "2026-09-02T14:00:00Z"},
+        )
+        assert r.status_code == 200
+
+    def test_always_gates_booking_too(self):
+        ctx = _ctx(run=_configured_run(identity_check="always"))
+        token = make_action_token("run-1", "book")
+        r = _call(
+            client_(), "POST", f"/api/campaigns/link/book/slots?token={token}", ctx,
+            json={"slot_start": "2026-09-02T14:00:00Z"},
+        )
+        assert r.status_code == 403
+
+    def _describe_stubbed(self, ctx, token):
+        # These cases pass the gate, so the endpoint goes on to describe the
+        # appointment. That query is not what is under test here.
+        with patch(
+            "src.app.api.routes.campaign_booking._describe_appointment",
+            AsyncMock(return_value=None),
+        ):
+            return _call(
+                client_(), "GET",
+                f"/api/campaigns/link/cancel/appointment?token={token}", ctx,
+            )
+
+    def test_off_lets_a_cancel_through(self):
+        """For a campaign whose audience was verified some other way."""
+        ctx = _ctx(run=_configured_run(identity_check="off"))
+        r = self._describe_stubbed(ctx, make_action_token("run-1", "cancel"))
+        assert r.json()["identity_required"] is False
+
+    def test_passing_the_gate_opens_the_action(self):
+        ctx = _ctx(run=_configured_run(verified=True))
+        r = self._describe_stubbed(ctx, make_action_token("run-1", "cancel"))
+        assert r.json()["identity_required"] is False
+
+    def test_a_run_from_before_the_setting_is_not_broken(self):
+        """No booking_link step ran, so no author expressed a view. Turning a
+        live link into a refusal the patient cannot clear is the worse
+        failure."""
+        ctx = _ctx(run=_run())  # no config at all
+        r = self._describe_stubbed(ctx, make_action_token("run-1", "cancel"))
+        assert r.json()["identity_required"] is False

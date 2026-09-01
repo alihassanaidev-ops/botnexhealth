@@ -692,6 +692,7 @@ class WorkflowStepDispatcher:
                     "appointment_type_ids": list(node.appointment_type_ids),
                     "window_days": node.window_days,
                     "provider_id": node.provider_id,
+                    "identity_check": node.identity_check,
                     "node_id": node.id,
                 }
                 metadata = dict(run.trigger_metadata or {})

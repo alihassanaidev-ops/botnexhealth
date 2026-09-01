@@ -59,6 +59,12 @@ ROUTES_BY_BOUNDARY: dict[str, tuple[str, ...]] = {
         # no merge-field placeholder a campaign author could scatter into copy.
         "GET /api/campaigns/link/register/details",
         "POST /api/campaigns/link/register",
+        # The identity step. Public like the rest — the patient arrives from a
+        # message with no session — and it is what the others lean on: this is
+        # where a person proves they are who the link assumes, before an action
+        # discloses an appointment or destroys one.
+        "GET /api/campaigns/link/identify/context",
+        "POST /api/campaigns/link/identify",
         "GET /livez",
         "GET /readyz",
         "POST /api/auth/login",
