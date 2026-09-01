@@ -17,6 +17,7 @@ from src.app.database import (
     is_database_initialized,
 )
 from src.app.models.dead_letter_event import DeadLetterEvent, DeadLetterStatus
+from src.app.models.institution_location import InstitutionLocation
 from src.app.services.retention_policy import default_dead_letter_raw_retain_until
 from src.app.services.sms_privacy import (
     payload_hash,
@@ -78,11 +79,34 @@ class DeadLetterService:
             )
         ).scalar_one_or_none()
 
+    async def get_for_update(self, event_id: str) -> DeadLetterEvent | None:
+        """Lock one event while an operator resolves it.
+
+        Replay reaches an external system. Holding the row lock across the
+        enqueue makes two concurrent button clicks serialize: the second sees
+        the first request's terminal status and cannot enqueue the payload a
+        second time.
+        """
+        return (
+            await self.session.execute(
+                select(DeadLetterEvent)
+                .where(DeadLetterEvent.id == event_id)
+                .with_for_update()
+            )
+        ).scalar_one_or_none()
+
     async def mark_discarded(
-        self, row: DeadLetterEvent, *, user_id: str | None
+        self,
+        row: DeadLetterEvent,
+        *,
+        user_id: str | None,
+        reason: str,
+        note: str | None = None,
     ) -> None:
         row.status = DeadLetterStatus.DISCARDED.value
         row.resolved_by_user_id = user_id
+        row.resolution_reason = reason
+        row.resolution_note = note
         row.resolved_at = datetime.now(timezone.utc)
         row.updated_at = datetime.now(timezone.utc)
 
@@ -118,6 +142,21 @@ async def capture_dead_letter(
             institution_id=institution_id,
             location_id=location_id,
         ) as session:
+            # Some older task call sites knew only their location. A row with a
+            # NULL institution_id is invisible to the clinic under the table's
+            # RLS policy, which made the operator screen silently omit exactly
+            # those failures. Resolve the owner before inserting instead of
+            # trusting every future caller to remember both ids.
+            if institution_id is None and location_id is not None:
+                resolved_institution_id = (
+                    await session.execute(
+                        select(InstitutionLocation.institution_id).where(
+                            InstitutionLocation.id == location_id
+                        )
+                    )
+                ).scalar_one_or_none()
+                if resolved_institution_id is not None:
+                    institution_id = str(resolved_institution_id)
             svc = DeadLetterService(session)
             await svc.capture(
                 source=source,

@@ -44,6 +44,18 @@ MUTATING_VERBS = {"post", "put", "patch", "delete"}
 #: Audited, but through a helper the endpoint calls. Verified by reading each
 #: one during the Item 39 review.
 AUDITED_VIA_HELPER: dict[str, str] = {
+    "dead_letter:discard_dead_letter_event": (
+        "_discard_dead_letter_event -> DEAD_LETTER_DISCARD"
+    ),
+    "institution_undeliverables:discard_institution_undeliverable": (
+        "_discard_dead_letter_event -> DEAD_LETTER_DISCARD"
+    ),
+    "dead_letter:replay_dead_letter_event": (
+        "_replay_dead_letter_event -> DEAD_LETTER_REPLAY"
+    ),
+    "institution_undeliverables:replay_institution_undeliverable": (
+        "_replay_dead_letter_event -> DEAD_LETTER_REPLAY"
+    ),
     "do_not_contact:remove_do_not_contact": "_audit_release → DO_NOT_CONTACT_RELEASE",
     "do_not_contact:release_do_not_contact_entry": (
         "_audit_release → DO_NOT_CONTACT_RELEASE"

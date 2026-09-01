@@ -52,7 +52,12 @@ from src.app.api.routes.twilio import router as twilio_router
 from src.app.api.routes.twilio_webhooks import router as twilio_webhooks_router
 from src.app.api.routes.sms import admin_router as admin_sms_router
 from src.app.api.routes.sms import institution_router as institution_sms_router
-from src.app.api.routes.dead_letter import router as dead_letter_router
+from src.app.api.routes.dead_letter import (
+    router as dead_letter_router,
+)
+from src.app.api.routes.institution_undeliverables import (
+    router as institution_dead_letter_router,
+)
 from src.app.api.routes.automation_workflows import router as automation_workflows_router
 from src.app.api.routes.quiet_hours_exceptions import router as quiet_hours_exceptions_router
 from src.app.api.routes.automation_templates import router as automation_templates_router
@@ -312,6 +317,7 @@ def create_app() -> FastAPI:
     app.include_router(admin_sms_router, prefix="/api")
     app.include_router(institution_sms_router, prefix="/api")
     app.include_router(dead_letter_router, prefix="/api")
+    app.include_router(institution_dead_letter_router, prefix="/api")
     app.include_router(automation_workflows_router, prefix="/api")
     app.include_router(quiet_hours_exceptions_router, prefix="/api")
     app.include_router(automation_templates_router, prefix="/api")

@@ -4,7 +4,7 @@ Status of the nine product decisions in Part 7 of [OUTSTANDING_SCOPE.md](OUTSTAN
 Each entry records the answer, who gave it, and what it changes in the build. Decisions that are
 still open name who they are waiting on.
 
-Last updated 2026-08-30.
+Last updated 2026-09-01.
 
 | # | Subject | Status | Blocks |
 |---|---|---|---|
@@ -14,9 +14,9 @@ Last updated 2026-08-30.
 | D | Recall re-enrolment cooldown | **Decided** | Item 22 |
 | E | What happens when a patient declines | **Decided** | Campaign 1 completeness |
 | F | Treatment-plan status and recall | **Decided** | Items 22, 25 |
-| G | Patient alerts: in or out | **Open · internal** | Item 25 |
-| H | Insurance fallback permanence | **Open · internal** | Item 27 |
-| I | Connector in-flight write recovery | **Open · internal** | Item 5 |
+| G | Patient alerts: in or out | **Decided** | Item 25 |
+| H | Insurance fallback permanence | **Decided** | Item 27 |
+| I | Connector in-flight write recovery | **Decided** | Item 5 |
 
 ---
 
@@ -120,9 +120,9 @@ failure — can be built either way, so this does not block starting.
 
 ---
 
-## G · Patient alerts — OPEN · INTERNAL
+## G · Patient alerts — DECIDED
 
-**Recommendation: out.** `PatientAlert` at `src/app/api/models.py:391` is `id`, `patient_id`,
+**Answer: out.** `PatientAlert` at `src/app/api/models.py:391` is `id`, `patient_id`,
 `note`, `disabled_at` — a **free-text note**, and the field on `Patient` is commented out at line
 443. Free text cannot safely gate outreach; you cannot reliably parse "do not call" out of a note,
 and it is clinical content. Remove the placeholder and record why. If staff want alerts visible,
@@ -130,9 +130,9 @@ that is a read-only dashboard field later, not an automation input.
 
 ---
 
-## H · Insurance fallback permanence — OPEN · INTERNAL
+## H · Insurance fallback permanence — DECIDED
 
-**Recommendation: permanent fallback**, because not every practice-management system behind
+**Answer: permanent fallback**, because not every practice-management system behind
 NexHealth exposes insurance data. Enforce the fallback condition in code rather than documenting it,
 and surface a "last reviewed" date so a list nobody has maintained is visibly stale rather than
 silently wrong. The voice agent reads this data live today, so Item 27's migration must not lose any
@@ -140,12 +140,13 @@ clinic-entered answer.
 
 ---
 
-## I · Connector in-flight write recovery — OPEN · INTERNAL
+## I · Connector in-flight write recovery — DECIDED
 
-**Recommendation: rely on Item 3's write identifier**, not a durable local record. It keeps patient
+**Answer: rely on Item 3's write identifier**, not a durable local record. It keeps patient
 data off the clinic's Windows machine entirely, and if Item 3 is built properly the identifier
 already sits in the practice database where a restarted Connector can look it up. A local store
 reintroduces encrypted PHI at rest on a machine we do not control. A small non-PHI marker locally is
 fine; patient data is not.
 
-Whichever way it goes, the scope doc requires the decision and its reasoning to be written down.
+This is what shipped with Item 5: the Connector reads back from the chart after a restart, with no
+durable local patient-data store.

@@ -365,6 +365,11 @@ ROUTES_BY_BOUNDARY: dict[str, tuple[str, ...]] = {
         # integration state is operational detail, and STAFF could read it until
         # then. Also carries the sync:read permission.
         "GET /api/institution/appointment-sync",
+        # Tenant operators see only rows admitted by dead_letter_events RLS;
+        # location admins are additionally pinned to their own location.
+        "GET /api/institution/undeliverables",
+        "POST /api/institution/undeliverables/{event_id}/discard",
+        "POST /api/institution/undeliverables/{event_id}/replay",
         "GET /api/automation/workflows/merge-fields",
         "GET /api/automation/workflows/llm-models",
         "GET /api/automation/workflows/{workflow_id}/launch-checklist",

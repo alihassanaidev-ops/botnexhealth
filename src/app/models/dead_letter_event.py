@@ -66,6 +66,11 @@ class DeadLetterEvent(Base):
     resolved_by_user_id: Mapped[str | None] = mapped_column(
         UUID(as_uuid=False), ForeignKey("users.id", ondelete="SET NULL"), nullable=True, index=True
     )
+    # A bounded category is safe to include in audit metadata. The optional
+    # note is free text and therefore treated as PHI: encrypted at rest and
+    # never copied into an audit row or log message.
+    resolution_reason: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    resolution_note_encrypted: Mapped[str | None] = mapped_column(Text, nullable=True)
 
     @property
     def redacted_payload(self) -> dict[str, Any] | None:
@@ -92,3 +97,11 @@ class DeadLetterEvent(Base):
     @raw_payload.setter
     def raw_payload(self, value: str | None) -> None:
         self.raw_payload_encrypted = encrypt_value(value) if value is not None else None
+
+    @property
+    def resolution_note(self) -> str | None:
+        return decrypt_value(self.resolution_note_encrypted)
+
+    @resolution_note.setter
+    def resolution_note(self, value: str | None) -> None:
+        self.resolution_note_encrypted = encrypt_value(value) if value is not None else None

@@ -58,6 +58,7 @@ const AppointmentSync = lazy(() => import("./pages/AppointmentSync"));
 const GroupDashboard = lazy(() => import("./pages/GroupDashboard"));
 const Groups = lazy(() => import("./pages/Groups"));
 const Campaigns = lazy(() => import("./pages/Campaigns"));
+const Undeliverables = lazy(() => import("./pages/Undeliverables"));
 const CampaignDetail = lazy(() => import("./pages/CampaignDetail"));
 const WorkflowTemplates = lazy(() => import("./pages/WorkflowTemplates"));
 const WorkflowBuilder = lazy(() => import("./pages/WorkflowBuilder"));
@@ -445,6 +446,14 @@ export const router = createBrowserRouter([
                         element: (
                             <RoleGuard allowed={["INSTITUTION_ADMIN"]}>
                                 <S><WorkflowVersions /></S>
+                            </RoleGuard>
+                        ),
+                    },
+                    {
+                        path: "undeliverables",
+                        element: (
+                            <RoleGuard allowed={["SUPER_ADMIN", "INSTITUTION_ADMIN", "LOCATION_ADMIN"]}>
+                                <S><Undeliverables /></S>
                             </RoleGuard>
                         ),
                     },

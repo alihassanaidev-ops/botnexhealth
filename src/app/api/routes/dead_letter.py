@@ -4,10 +4,11 @@ from __future__ import annotations
 
 import json
 from datetime import datetime
+from enum import Enum
 from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from sqlalchemy import func, select
 
 from src.app.api.deps import get_current_admin
@@ -20,6 +21,21 @@ from src.app.services.audit import log_audit
 from src.app.services.dead_letter import DeadLetterService
 
 router = APIRouter(prefix="/admin/dead-letter-events", tags=["Admin - Dead Letter Events"])
+
+
+class DismissalReason(str, Enum):
+    RESOLVED_ELSEWHERE = "resolved_elsewhere"
+    DUPLICATE = "duplicate"
+    NOT_ACTIONABLE = "not_actionable"
+    SUPERSEDED = "superseded"
+    OTHER = "other"
+
+
+class DiscardDeadLetterRequest(BaseModel):
+    reason: DismissalReason
+    # Free text may contain PHI. It is encrypted on the model and deliberately
+    # excluded from audit metadata.
+    note: str | None = Field(default=None, max_length=1000)
 
 
 class DeadLetterResponse(BaseModel):
@@ -36,6 +52,10 @@ class DeadLetterResponse(BaseModel):
     created_at: datetime
     updated_at: datetime
     resolved_at: datetime | None
+    resolution_reason: str | None
+    resolution_note: str | None
+    replay_supported: bool
+    originating_run_id: str | None
 
 
 class DeadLetterListResponse(BaseModel):
@@ -53,6 +73,23 @@ async def list_dead_letter_events(
     size: int = Query(50, ge=1, le=200),
     status_filter: str = Query(DeadLetterStatus.OPEN.value, alias="status"),
     source: str | None = None,
+) -> DeadLetterListResponse:
+    return await _list_dead_letter_events(
+        page=page,
+        size=size,
+        status_filter=status_filter,
+        source=source,
+        include_resolution_note=False,
+    )
+
+
+async def _list_dead_letter_events(
+    *,
+    page: int,
+    size: int,
+    status_filter: str,
+    source: str | None,
+    include_resolution_note: bool,
 ) -> DeadLetterListResponse:
     async with get_db_session() as session:
         filters = []
@@ -74,7 +111,10 @@ async def list_dead_letter_events(
             )
         ).scalars().all()
         return DeadLetterListResponse(
-            items=[_response(row) for row in rows],
+            items=[
+                _response(row, include_resolution_note=include_resolution_note)
+                for row in rows
+            ],
             total=total,
             page=page,
             size=size,
@@ -86,25 +126,61 @@ async def list_dead_letter_events(
 async def discard_dead_letter_event(
     event_id: str,
     current_admin: Annotated[User, Depends(get_current_admin)],
+    request: DiscardDeadLetterRequest,
+) -> DeadLetterResponse:
+    return await _discard_dead_letter_event(
+        event_id=event_id,
+        current_user=current_admin,
+        request=request,
+        include_resolution_note=False,
+    )
+
+
+async def _discard_dead_letter_event(
+    *,
+    event_id: str,
+    current_user: User,
+    request: DiscardDeadLetterRequest,
+    include_resolution_note: bool,
 ) -> DeadLetterResponse:
     async with get_db_session() as session:
         svc = DeadLetterService(session)
-        row = await svc.get_open(event_id)
+        row = await svc.get_for_update(event_id)
         if not row:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Open dead-letter event not found")
-        await svc.mark_discarded(row, user_id=str(current_admin.id))
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Undeliverable event not found")
+        if row.status == DeadLetterStatus.DISCARDED.value:
+            # A repeated request is a no-op. This also makes a browser retry
+            # after a lost response converge on the state already written.
+            return _response(row, include_resolution_note=include_resolution_note)
+        if row.status != DeadLetterStatus.OPEN.value:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="Only an open undeliverable event can be dismissed",
+            )
+        note = request.note.strip() if request.note and request.note.strip() else None
+        await svc.mark_discarded(
+            row,
+            user_id=str(current_user.id),
+            reason=request.reason.value,
+            note=note,
+        )
         await log_audit(
             actor=AuditActor.ADMIN,
             action=AuditAction.DEAD_LETTER_DISCARD,
             target_resource=f"dead_letter:{row.id}",
             outcome=AuditOutcome.SUCCESS,
-            metadata={"source": row.source, "event_type": row.event_type},
+            metadata={
+                "source": row.source,
+                "event_type": row.event_type,
+                "reason": request.reason.value,
+                "note_recorded": note is not None,
+            },
             institution_id=str(row.institution_id) if row.institution_id else None,
-            user_id=str(current_admin.id),
+            user_id=str(current_user.id),
             location_id=str(row.location_id) if row.location_id else None,
         )
         await session.commit()
-        return _response(row)
+        return _response(row, include_resolution_note=include_resolution_note)
 
 
 @router.post(
@@ -119,14 +195,42 @@ async def replay_dead_letter_event(
     event_id: str,
     current_admin: Annotated[User, Depends(get_current_admin)],
 ) -> DeadLetterResponse:
+    return await _replay_dead_letter_event(
+        event_id=event_id,
+        current_user=current_admin,
+        include_resolution_note=False,
+    )
+
+
+async def _replay_dead_letter_event(
+    *,
+    event_id: str,
+    current_user: User,
+    include_resolution_note: bool,
+) -> DeadLetterResponse:
     async with get_db_session() as session:
         svc = DeadLetterService(session)
-        row = await svc.get_open(event_id)
+        row = await svc.get_for_update(event_id)
         if not row:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Open dead-letter event not found")
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Undeliverable event not found")
+        if row.status == DeadLetterStatus.REPLAYED.value:
+            # Idempotent response for a repeated click/request. The row lock
+            # means a concurrent request gets here only after the first one has
+            # committed, so it never enqueues the payload twice.
+            return _response(row, include_resolution_note=include_resolution_note)
+        if row.status != DeadLetterStatus.OPEN.value:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="Only an open undeliverable event can be retried",
+            )
+        if not _replay_supported(row):
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=f"Replay is not supported for {row.source}:{row.event_type}",
+            )
 
         await _replay(row)
-        await svc.mark_replayed(row, user_id=str(current_admin.id))
+        await svc.mark_replayed(row, user_id=str(current_user.id))
         await log_audit(
             actor=AuditActor.ADMIN,
             action=AuditAction.DEAD_LETTER_REPLAY,
@@ -134,22 +238,23 @@ async def replay_dead_letter_event(
             outcome=AuditOutcome.SUCCESS,
             metadata={"source": row.source, "event_type": row.event_type},
             institution_id=str(row.institution_id) if row.institution_id else None,
-            user_id=str(current_admin.id),
+            user_id=str(current_user.id),
             location_id=str(row.location_id) if row.location_id else None,
         )
         await session.commit()
-        return _response(row)
+        return _response(row, include_resolution_note=include_resolution_note)
 
 
 async def _replay(row: DeadLetterEvent) -> None:
     raw = row.raw_payload
-    payload = _raw_payload(row)
     if row.source == "sms_task" and row.event_type == "send_sms_message":
+        payload = _raw_payload(row)
         from src.app.tasks.sms import send_sms_message
 
         send_sms_message.apply_async(kwargs=payload, queue="notifications_default")
         return
     if row.source == "notification_task" and row.event_type == "send_call_notification":
+        payload = _raw_payload(row)
         from src.app.tasks.notifications import send_call_notification
 
         send_call_notification.apply_async(kwargs=payload, queue="notifications_default")
@@ -158,6 +263,20 @@ async def _replay(row: DeadLetterEvent) -> None:
         from src.app.retell.webhooks import handle_retell_webhook
 
         await handle_retell_webhook(body=raw.encode("utf-8"))
+        return
+    if row.source == "workflow_dispatch" and row.event_type == "dispatch_workflow_timer":
+        payload = _raw_payload(row)
+        from src.app.tasks.automation_workflow import dispatch_workflow_timer
+
+        dispatch_workflow_timer.apply_async(
+            kwargs={
+                "timer_id": payload["timer_id"],
+                "institution_id": str(row.institution_id),
+                "location_id": str(row.location_id) if row.location_id else None,
+                "run_id": payload["run_id"],
+            },
+            queue="workflow",
+        )
         return
     raise HTTPException(
         status_code=status.HTTP_409_CONFLICT,
@@ -178,7 +297,13 @@ def _raw_payload(row: DeadLetterEvent) -> dict[str, Any]:
     return payload
 
 
-def _response(row: DeadLetterEvent) -> DeadLetterResponse:
+def _response(
+    row: DeadLetterEvent,
+    *,
+    include_resolution_note: bool = False,
+) -> DeadLetterResponse:
+    payload = row.redacted_payload or {}
+    originating_run_id = payload.get("run_id") or payload.get("workflow_run_id")
     return DeadLetterResponse(
         id=str(row.id),
         source=row.source,
@@ -193,4 +318,28 @@ def _response(row: DeadLetterEvent) -> DeadLetterResponse:
         created_at=row.created_at,
         updated_at=row.updated_at,
         resolved_at=row.resolved_at,
+        resolution_reason=row.resolution_reason,
+        # Platform admins are intentionally excluded from PHI surfaces. The
+        # bounded reason is safe globally; a tenant operator's free-text note
+        # is returned only through the tenant-scoped route.
+        resolution_note=row.resolution_note if include_resolution_note else None,
+        replay_supported=_replay_supported(row),
+        originating_run_id=(
+            str(originating_run_id) if originating_run_id is not None else None
+        ),
     )
+
+
+def _replay_supported(row: DeadLetterEvent) -> bool:
+    if row.status != DeadLetterStatus.OPEN.value or not row.raw_payload_encrypted:
+        return False
+    supported = {
+        ("sms_task", "send_sms_message"),
+        ("notification_task", "send_call_notification"),
+        ("retell_webhook", "retell_webhook"),
+        ("workflow_dispatch", "dispatch_workflow_timer"),
+    }
+    # Retell has used more than one event_type label over time; source plus a
+    # retained raw webhook is sufficient because the handler re-verifies its
+    # own durable idempotency record.
+    return (row.source, row.event_type) in supported or row.source == "retell_webhook"

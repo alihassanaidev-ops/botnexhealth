@@ -135,6 +135,7 @@ def test_every_role_is_mapped() -> None:
 EXPECTED_PERMISSION_ROUTES: dict[str, Permission] = {
     "GET /api/institution/appointment-sync": Permission.SYNC_READ,
     "POST /api/admin/dead-letter-events/{event_id}/replay": Permission.WRITE_REPLAY,
+    "POST /api/institution/undeliverables/{event_id}/replay": Permission.WRITE_REPLAY,
     "POST /api/compliance/quiet-hours/exceptions": Permission.CAMPAIGN_CONFIGURE,
     "PATCH /api/compliance/quiet-hours/exceptions/{exception_id}": (
         Permission.CAMPAIGN_CONFIGURE

@@ -34,6 +34,7 @@ import {
     ClipboardList,
     Layers,
     Tag,
+    TriangleAlert,
 } from "lucide-react"
 import { Link, useLocation } from "react-router-dom"
 import { useAuth } from "@/context/AuthContext"
@@ -92,6 +93,11 @@ const adminNav: NavItemDef[] = [
         url: "/admin/audit-logs",
         icon: ShieldCheck,
     },
+    {
+        title: "Undeliverables",
+        url: "/undeliverables",
+        icon: TriangleAlert,
+    },
 ]
 
 const institutionAdminNav: NavItemDef[] = [
@@ -146,6 +152,11 @@ const institutionAdminNav: NavItemDef[] = [
         url: "/institution-admin/quiet-hours-exceptions",
         icon: CalendarOff,
     },
+    {
+        title: "Undeliverables",
+        url: "/undeliverables",
+        icon: TriangleAlert,
+    },
 ]
 
 const locationAdminNav: NavItemDef[] = [
@@ -179,6 +190,11 @@ const locationAdminNav: NavItemDef[] = [
         title: "Appointment Sync",
         url: "/institution-admin/appointment-sync",
         icon: CalendarClock,
+    },
+    {
+        title: "Undeliverables",
+        url: "/undeliverables",
+        icon: TriangleAlert,
     },
 ]
 
