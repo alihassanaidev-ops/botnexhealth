@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react"
-import { useSearchParams } from "react-router-dom"
+import { useNavigate, useSearchParams } from "react-router-dom"
 
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
@@ -43,6 +43,7 @@ type Phase = "loading" | "asking" | "cancelling" | "done" | "error"
 
 export default function CancelLink() {
     const [params] = useSearchParams()
+    const navigate = useNavigate()
     const token = params.get("token") ?? ""
 
     const [phase, setPhase] = useState<Phase>("loading")
@@ -62,6 +63,15 @@ export default function CancelLink() {
             .then((d) => {
                 if (cancelled) return
                 if (d.clinic_name) setClinic(d.clinic_name)
+                if (d.identity_required) {
+                    // The appointment is deliberately withheld until they prove
+                    // who they are. Send them through and come straight back.
+                    navigate(
+                        `/book/identify?token=${token}&next=/book/cancel`,
+                        { replace: true },
+                    )
+                    return
+                }
                 setAppointment(d.appointment)
                 setPhase(d.already_cancelled ? "done" : "asking")
             })
@@ -83,7 +93,7 @@ export default function CancelLink() {
         return () => {
             cancelled = true
         }
-    }, [token])
+    }, [token, navigate])
 
     async function confirmCancel() {
         setPhase("cancelling")

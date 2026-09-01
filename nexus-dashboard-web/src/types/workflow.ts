@@ -266,6 +266,8 @@ export interface BookingLinkNode {
     appointment_type_ids: string[]
     window_days: number
     provider_id?: string | null
+    /** When the patient must prove who they are before the link will act. */
+    identity_check: "off" | "sensitive" | "always"
 }
 
 /**

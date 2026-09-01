@@ -94,6 +94,8 @@ export async function bookSlot(
 
 export type CancellationDetails = {
     already_cancelled: boolean
+    /** True when the patient must pass the identity step before seeing this. */
+    identity_required?: boolean
     clinic_name: string
     appointment: {
         start: string
@@ -169,4 +171,54 @@ export async function registerPatient(
         { params: { token } },
     )
     return data
+}
+
+export type IdentityContext = {
+    clinic_name: string
+    /** How the campaign reached them. Used for wording, never to prefill. */
+    arrived_by: "sms" | "email" | "unknown"
+    verified: boolean
+    attempts_remaining: number
+}
+
+export type IdentityRequest = {
+    full_name: string
+    date_of_birth: string
+    phone?: string
+    email?: string
+}
+
+export type IdentityOutcome = {
+    status: "verified" | "not_matched" | "locked"
+    message?: string
+    attempts_remaining?: number
+}
+
+export async function fetchIdentityContext(token: string): Promise<IdentityContext> {
+    const { data } = await client.get<IdentityContext>(
+        "/campaigns/link/identify/context",
+        { params: { token } },
+    )
+    return data
+}
+
+export async function identifyPatient(
+    token: string,
+    body: IdentityRequest,
+): Promise<IdentityOutcome> {
+    try {
+        const { data } = await client.post<IdentityOutcome>(
+            "/campaigns/link/identify",
+            body,
+            { params: { token } },
+        )
+        return data
+    } catch (err) {
+        // 429 carries the locked outcome as a normal result, not an error: the
+        // page needs to show its message rather than a generic failure.
+        const res = (err as { response?: { status?: number; data?: IdentityOutcome } })
+            ?.response
+        if (res?.status === 429 && res.data) return res.data
+        throw err
+    }
 }

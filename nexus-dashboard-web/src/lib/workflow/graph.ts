@@ -557,6 +557,10 @@ export function createNode(type: NodeType, id: string): WorkflowNode {
                 appointment_type_ids: [],
                 window_days: 7,
                 provider_id: null,
+                // Reschedule and cancel ask; booking does not. Booking shows
+                // only the clinic's own free slots and can be undone, while a
+                // cancellation cannot.
+                identity_check: "sensitive",
             }
         case "patient_registration":
             return {

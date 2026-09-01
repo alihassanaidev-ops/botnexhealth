@@ -15,6 +15,7 @@ import BrandLoader from "@/components/BrandLoader";
 import Login from "./pages/Login";
 import BookingLink from "./pages/BookingLink";
 import CancelLink from "./pages/CancelLink";
+import IdentifyPatient from "./pages/IdentifyPatient";
 import RegisterPatient from "./pages/RegisterPatient";
 import SetPassword from "./pages/SetPassword";
 
@@ -84,6 +85,14 @@ export const router = createBrowserRouter([
         // times, and it must never act just because the link was opened.
         path: "/book/cancel",
         element: <CancelLink />,
+        errorElement: <RouteError />,
+    },
+    {
+        // The identity step. Sits in front of an action that would disclose an
+        // appointment or destroy one, and sends the patient on to ?next= once
+        // they are through.
+        path: "/book/identify",
+        element: <IdentifyPatient />,
         errorElement: <RouteError />,
     },
     {

@@ -1777,6 +1777,31 @@ function BookingLinkFields({
                 </p>
             </Field>
 
+            <Field label="Identity check">
+                <Select
+                    value={node.identity_check}
+                    disabled={readOnly}
+                    onValueChange={(value) =>
+                        update({ identity_check: value as BookingLinkNode["identity_check"] })
+                    }
+                >
+                    <SelectTrigger><SelectValue /></SelectTrigger>
+                    <SelectContent>
+                        <SelectItem value="sensitive">
+                            Before rescheduling or cancelling
+                        </SelectItem>
+                        <SelectItem value="always">Before any action</SelectItem>
+                        <SelectItem value="off">Never</SelectItem>
+                    </SelectContent>
+                </Select>
+                <p className="text-xs text-muted-foreground mt-1">
+                    A link reaches a phone, not a person — households share numbers and
+                    old numbers get reassigned. When this is on, the patient confirms
+                    their name, date of birth and a phone or email before the link shows
+                    an appointment or changes one.
+                </p>
+            </Field>
+
             <Field label="How far ahead to offer">
                 <Input
                     type="number"

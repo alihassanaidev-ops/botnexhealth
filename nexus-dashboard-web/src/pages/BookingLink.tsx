@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react"
-import { useParams, useSearchParams } from "react-router-dom"
+import { useNavigate, useParams, useSearchParams } from "react-router-dom"
 
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
@@ -81,6 +81,7 @@ function byDay(slots: SlotOption[]) {
 
 export default function BookingLink() {
     const { action } = useParams<{ action: string }>()
+    const navigate = useNavigate()
     const [params] = useSearchParams()
     const token = params.get("token") ?? ""
 
@@ -142,6 +143,16 @@ export default function BookingLink() {
             .catch((err) => {
                 if (cancelled) return
                 const status = err?.response?.status
+                if (status === 403 && err?.response?.data?.error === "identity_required") {
+                    // Reschedule moves a real appointment, so the campaign can
+                    // require the patient to prove who they are first. Send
+                    // them through the gate and back to this same page.
+                    navigate(
+                        `/book/identify?token=${token}&next=/book/${linkAction}`,
+                        { replace: true },
+                    )
+                    return
+                }
                 // Three different things, and the patient can act on each
                 // differently. Telling someone their link is broken when the
                 // clinic's system is simply unreachable sends them chasing a
