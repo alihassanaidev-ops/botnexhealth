@@ -371,15 +371,32 @@ function TriggerForm({
                     </>
                 )}
                 {trigger.type === "recall_scan" && (
-                    <Field label="Recall interval (months)">
-                        <Input
-                            type="number"
-                            min={1}
-                            value={trigger.recall_interval_months}
-                            disabled={readOnly}
-                            onChange={(e) => onChange({ ...trigger, recall_interval_months: toInt(e.target.value, 1) })}
-                        />
-                    </Field>
+                    <>
+                        <Field label="Recall interval (months)">
+                            <Input
+                                type="number"
+                                min={1}
+                                value={trigger.recall_interval_months}
+                                disabled={readOnly}
+                                onChange={(e) => onChange({ ...trigger, recall_interval_months: toInt(e.target.value, 1) })}
+                            />
+                        </Field>
+                        <Field label="Recall cooldown (days)">
+                            <Input
+                                type="number"
+                                min={1}
+                                max={730}
+                                value={trigger.recall_reenrollment_cooldown_days ?? 90}
+                                disabled={readOnly}
+                                onChange={(e) =>
+                                    onChange({
+                                        ...trigger,
+                                        recall_reenrollment_cooldown_days: toInt(e.target.value, 90),
+                                    })
+                                }
+                            />
+                        </Field>
+                    </>
                 )}
                 {(trigger.type === "manual" || trigger.type === "bulk_import") && (
                     <p className="text-sm text-muted-foreground">

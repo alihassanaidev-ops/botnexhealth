@@ -186,6 +186,25 @@ def _apply_required_setup_fields(
                 if isinstance(node, dict) and node.get("type") == "booking_link":
                     node["window_days"] = int(days)
             continue
+        if field_id == "recall_reenrollment_cooldown_days":
+            days = _positive_number(
+                setup_options.get(field_id, setup_field.get("default", 90)),
+                field_id,
+                integer=True,
+            )
+            if definition.get("trigger", {}).get("type") == "recall_scan":
+                definition["trigger"]["recall_reenrollment_cooldown_days"] = int(days)
+            continue
+        if field_id == "recall_booking_window_days":
+            days = _positive_number(
+                setup_options.get(field_id, setup_field.get("default", 30)),
+                field_id,
+                integer=True,
+            )
+            for node in definition.get("nodes", []):
+                if isinstance(node, dict) and node.get("type") == "booking_link":
+                    node["window_days"] = int(days)
+            continue
         if field_id == "appointment_reasons":
             reasons = _string_list(setup_options.get(field_id))
             if setup_field.get("required") and not reasons:
@@ -733,22 +752,216 @@ _APPOINTMENT_CONFIRMATION_48H: dict[str, Any] = {
     "compliance": {"content_class": "transactional_care", "consent_required": True},
 }
 
+_RECALL_REPLY_MAPPINGS: list[dict[str, Any]] = [
+    {
+        "tokens": ["BOOKED", "SCHEDULED", "I BOOKED", "DONE"],
+        "context_updates": {"recall_reply": "booked"},
+    },
+    {
+        "tokens": [
+            "R",
+            "RESCHEDULE",
+            "RE-SCHEDULE",
+            "REBOOK",
+            "MOVE",
+            "CHANGE APPOINTMENT",
+        ],
+        "context_updates": {"recall_reply": "reschedule_requested"},
+        "handoff_reason": "reschedule_requested",
+    },
+    {
+        "tokens": ["CALL", "CALL ME", "CALLBACK", "STAFF", "HUMAN", "PERSON", "HELP"],
+        "context_updates": {"recall_reply": "staff_requested"},
+        "handoff_reason": "patient_asks_for_staff",
+    },
+]
+
 _RECALL_SMS_6MONTH: dict[str, Any] = {
     "schema_version": "1.0",
-    "trigger": {"type": "recall_scan", "recall_interval_months": 6},
-    "entry_node_id": "sms-recall",
+    "trigger": {
+        "type": "recall_scan",
+        "recall_interval_months": 6,
+        "recall_reenrollment_cooldown_days": 90,
+        "filter": {
+            "kind": "group",
+            "op": "and",
+            "children": [
+                {
+                    "kind": "rule",
+                    "field": "recall_due_date",
+                    "op": "before",
+                    "value": "now+P1D",
+                },
+                {
+                    "kind": "rule",
+                    "field": "recall_type_name",
+                    "op": "is_not_empty",
+                },
+                {
+                    "kind": "rule",
+                    "field": "has_active_treatment_plan",
+                    "op": "eq",
+                    "value": False,
+                },
+            ],
+        },
+    },
+    "pms_context_fields": [
+        "recall_due_date",
+        "recall_type_name",
+        "has_active_treatment_plan",
+    ],
+    "entry_node_id": "configure-recall-booking-link",
     "nodes": [
         {
-            "type": "send_sms",
-            "id": "sms-recall",
-            "body_template": (
-                "Hi {{patient_first_name}}, {{clinic_name}} shows you are due for routine "
-                "hygiene care around {{recall_due_date}}. Book here: {{booking_link}} or "
-                "call {{location_phone}}. Reply STOP to opt out."
-            ),
-            "next_node_id": "exit-sent",
+            "type": "booking_link",
+            "id": "configure-recall-booking-link",
+            "actions": ["book"],
+            "window_days": 30,
+            "identity_check": "sensitive",
+            "next_node_id": "sms-recall-1",
         },
-        {"type": "exit", "id": "exit-sent", "outcome": "recall_sent"},
+        {
+            "type": "send_sms",
+            "id": "sms-recall-1",
+            "body_template": (
+                "Hi {{patient_first_name}}, {{clinic_name}} shows you are due for "
+                "{{recall_type_name}} around {{recall_due_date}}. Book here: "
+                "{{booking_link}}. Already scheduled or need a different time? Reply R "
+                "or call {{location_phone}}. Reply STOP to opt out."
+            ),
+            "next_node_id": "wait-recall-reply-1",
+        },
+        {
+            "type": "wait",
+            "id": "wait-recall-reply-1",
+            "wait_for": {
+                "type": "sms_reply",
+                "response_window_seconds": 604800,
+                "response_mappings": _RECALL_REPLY_MAPPINGS,
+            },
+            "next_node_id": "check-recall-reply-1",
+        },
+        {
+            "type": "condition",
+            "id": "check-recall-reply-1",
+            "rules": [{"field": "recall_reply", "op": "is_not_null"}],
+            "true_next_node_id": "route-recall-reply",
+            "false_next_node_id": "sms-recall-2",
+        },
+        {
+            "type": "send_sms",
+            "id": "sms-recall-2",
+            "body_template": (
+                "Reminder from {{clinic_name}}: you are due for {{recall_type_name}}. "
+                "You can choose a visit time here: {{booking_link}}. If you already "
+                "booked or need help moving a visit, reply R or call {{location_phone}}. "
+                "Reply STOP to opt out."
+            ),
+            "next_node_id": "wait-recall-reply-2",
+        },
+        {
+            "type": "wait",
+            "id": "wait-recall-reply-2",
+            "wait_for": {
+                "type": "sms_reply",
+                "response_window_seconds": 604800,
+                "response_mappings": _RECALL_REPLY_MAPPINGS,
+            },
+            "next_node_id": "check-recall-reply-2",
+        },
+        {
+            "type": "condition",
+            "id": "check-recall-reply-2",
+            "rules": [{"field": "recall_reply", "op": "is_not_null"}],
+            "true_next_node_id": "route-recall-reply",
+            "false_next_node_id": "mark-recall-no-response",
+        },
+        {
+            "type": "switch",
+            "id": "route-recall-reply",
+            "subject": "recall_reply",
+            "cases": [
+                {
+                    "label": "Booked",
+                    "filter": {
+                        "kind": "rule",
+                        "field": "recall_reply",
+                        "op": "eq",
+                        "value": "booked",
+                    },
+                    "next_node_id": "mark-recall-booked",
+                },
+                {
+                    "label": "Reschedule requested",
+                    "filter": {
+                        "kind": "rule",
+                        "field": "recall_reply",
+                        "op": "eq",
+                        "value": "reschedule_requested",
+                    },
+                    "next_node_id": "mark-recall-reschedule-requested",
+                },
+                {
+                    "label": "Staff requested",
+                    "filter": {
+                        "kind": "rule",
+                        "field": "recall_reply",
+                        "op": "eq",
+                        "value": "staff_requested",
+                    },
+                    "next_node_id": "mark-recall-staff-requested",
+                },
+            ],
+            "default_next_node_id": "mark-recall-staff-requested",
+        },
+        {
+            "type": "update_patient_status",
+            "id": "mark-recall-booked",
+            "status": "recall_patient_reported_booked",
+            "note_template": (
+                "Patient replied that they booked after the {{recall_type_name}} "
+                "recall outreach due around {{recall_due_date}}."
+            ),
+            "next_node_id": "exit-booked",
+        },
+        {
+            "type": "update_patient_status",
+            "id": "mark-recall-reschedule-requested",
+            "status": "recall_reschedule_requested",
+            "note_template": (
+                "Patient replied to the {{recall_type_name}} recall outreach asking "
+                "for help moving or scheduling a visit."
+            ),
+            "next_node_id": "exit-reschedule-requested",
+        },
+        {
+            "type": "update_patient_status",
+            "id": "mark-recall-staff-requested",
+            "status": "recall_staff_requested",
+            "note_template": (
+                "Patient replied to the {{recall_type_name}} recall outreach and "
+                "needs staff follow-up."
+            ),
+            "next_node_id": "exit-staff-handoff",
+        },
+        {
+            "type": "update_patient_status",
+            "id": "mark-recall-no-response",
+            "status": "recall_no_response",
+            "note_template": (
+                "No reply was received after the {{recall_type_name}} recall SMS ladder."
+            ),
+            "next_node_id": "exit-no-response",
+        },
+        {"type": "exit", "id": "exit-booked", "outcome": "booked"},
+        {
+            "type": "exit",
+            "id": "exit-reschedule-requested",
+            "outcome": "reschedule_requested",
+        },
+        {"type": "exit", "id": "exit-staff-handoff", "outcome": "staff_handoff"},
+        {"type": "exit", "id": "exit-no-response", "outcome": "no_response"},
     ],
     "compliance": {"content_class": "recall", "consent_required": True},
 }
@@ -1696,41 +1909,89 @@ _ALL_TEMPLATES: dict[str, CampaignTemplate] = {
         definition=_RECALL_SMS_6MONTH,
         metadata=_metadata(
             category="recall",
-            goal="Bring overdue hygiene recall patients back onto the schedule.",
-            outcome_labels=["recall_sent", "booked"],
+            goal="Bring overdue recall patients back onto the schedule while excluding active treatment plans.",
+            outcome_labels=[
+                "booked",
+                "reschedule_requested",
+                "staff_handoff",
+                "no_response",
+            ],
             supported_channels=["sms"],
             required_readiness_checks=[
                 "location",
                 "nexhealth_patient_recalls",
+                "pms_recall_types",
+                "pms_treatment_plans",
                 "sms",
                 "booking_link",
                 "consent",
+                "quiet_hours",
+                "response_handling",
+                "staff_handoff",
             ],
             required_merge_fields=[
                 "patient_first_name",
                 "clinic_name",
+                "recall_type_name",
                 "recall_due_date",
                 "booking_link",
                 "location_phone",
             ],
             content_class="recall",
-            audience="Patients due or overdue for 6-month hygiene recall with no future appointment",
+            audience="Patients due or overdue for recall with no future appointment and no active treatment plan",
             eligibility=[
                 "PMS supports patient_recalls",
+                "PMS supplies recall type and treatment-plan context",
+                "recall due date is today or in the past",
+                "recall type name is present",
+                "patient has no active treatment plan",
                 "no future appointment",
                 "patient is not suppressed",
                 "SMS consent exists",
+                "patient has not been enrolled in this recall workflow in the last 90 days",
             ],
             handoff_reason="patient_asks_for_staff",
-            analytics={"recall_sent": "sent", "booked": "booked"},
+            analytics={
+                "booked": "booked",
+                "reschedule_requested": "handoff",
+                "staff_handoff": "handoff",
+                "no_response": "no_response",
+                "sms_opt_out": "opt_out",
+            },
             sample_context={
                 "patient_first_name": "Jordan",
                 "clinic_name": "Riverside Dental",
+                "recall_type_name": "Hygiene",
                 "recall_due_date": "August 15, 2026",
                 "booking_link": "https://book.example.com/r/jordan",
                 "location_phone": "(555) 010-2211",
             },
-            pms_capabilities=["patient_recalls"],
+            setup_fields=[
+                {
+                    "id": "recall_reenrollment_cooldown_days",
+                    "label": "Recall cooldown (days)",
+                    "type": "number",
+                    "required": True,
+                    "default": 90,
+                },
+                {
+                    "id": "recall_booking_window_days",
+                    "label": "Booking window (days)",
+                    "type": "number",
+                    "required": True,
+                    "default": 30,
+                },
+            ],
+            copy_variants=[
+                {"id": "standard", "label": "Standard recall"},
+                {"id": "short", "label": "Short recall"},
+            ],
+            pms_capabilities=[
+                "patient_recalls",
+                "recall_types",
+                "treatment_plans",
+                "appointment_booking",
+            ],
         ),
         tags=["recall", "sms"],
     ),
@@ -2281,6 +2542,7 @@ _ALL_TEMPLATES: dict[str, CampaignTemplate] = {
 
 LAUNCH_TEMPLATE_IDS: tuple[str, ...] = (
     "appointment-reminder-24h",
+    "recall-sms-6month",
     "surgery-pre-appointment-confirmation",
     "post-op-followup-after-confirmation",
     "sales-qualification",

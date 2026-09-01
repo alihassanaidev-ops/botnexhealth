@@ -3243,6 +3243,8 @@ def scan_recall_workflows(self) -> dict:
 # shared API key is not saturated when many institutions scan on the same beat.
 _RECALL_PACING_MIN_SECONDS = 0.5
 _RECALL_PACING_MAX_SECONDS = 2.0
+_RECALL_DEFAULT_COOLDOWN_DAYS = 90
+_FUTURE_APPOINTMENT_STATUSES = ("scheduled", "booked", "booked_waiting", "pending")
 
 
 def _recall_patient_id(recall: dict) -> str | None:
@@ -3280,6 +3282,85 @@ def _recall_is_due(recall: dict, *, now: datetime) -> bool:
     if due.tzinfo is None:
         due = due.replace(tzinfo=timezone.utc)
     return due <= now
+
+
+def _recall_cooldown_days(candidate: dict) -> int:
+    workflow = candidate.get("workflow")
+    if workflow is None or not getattr(workflow, "definition", None):
+        return _RECALL_DEFAULT_COOLDOWN_DAYS
+    try:
+        definition = WorkflowDefinition.model_validate(workflow.definition)
+    except Exception:
+        return _RECALL_DEFAULT_COOLDOWN_DAYS
+    if definition.trigger.type != "recall_scan":
+        return _RECALL_DEFAULT_COOLDOWN_DAYS
+    return int(
+        getattr(
+            definition.trigger,
+            "recall_reenrollment_cooldown_days",
+            _RECALL_DEFAULT_COOLDOWN_DAYS,
+        )
+        or _RECALL_DEFAULT_COOLDOWN_DAYS
+    )
+
+
+async def _has_recent_recall_enrollment(
+    session: Any,
+    *,
+    institution_id: str,
+    workflow_id: str,
+    patient_id: str,
+    now: datetime,
+    cooldown_days: int,
+) -> bool:
+    from sqlalchemy import select as sa_select
+
+    cutoff = now - timedelta(days=cooldown_days)
+    result = await session.execute(
+        sa_select(AutomationWorkflowRun.id)
+        .where(
+            AutomationWorkflowRun.institution_id == institution_id,
+            AutomationWorkflowRun.workflow_id == workflow_id,
+            AutomationWorkflowRun.trigger_type == "recall_scan",
+            AutomationWorkflowRun.trigger_ref_type == "recall",
+            AutomationWorkflowRun.trigger_ref_id == patient_id,
+            AutomationWorkflowRun.created_at >= cutoff,
+        )
+        .limit(1)
+    )
+    return result.scalar_one_or_none() is not None
+
+
+async def _patient_has_future_appointment(
+    session: Any,
+    *,
+    institution_id: str,
+    location_id: str,
+    patient_id: str,
+    contact_id: str | None,
+    now: datetime,
+) -> bool:
+    from sqlalchemy import or_, select as sa_select
+
+    from src.app.models.appointment_working_set import AppointmentWorkingSet
+
+    patient_clauses = [AppointmentWorkingSet.nexhealth_patient_id == patient_id]
+    if contact_id:
+        patient_clauses.append(AppointmentWorkingSet.contact_id == contact_id)
+
+    result = await session.execute(
+        sa_select(AppointmentWorkingSet.id)
+        .where(
+            AppointmentWorkingSet.institution_id == institution_id,
+            AppointmentWorkingSet.location_id == location_id,
+            AppointmentWorkingSet.status.in_(_FUTURE_APPOINTMENT_STATUSES),
+            AppointmentWorkingSet.start_time.is_not(None),
+            AppointmentWorkingSet.start_time >= now,
+            or_(*patient_clauses),
+        )
+        .limit(1)
+    )
+    return result.scalar_one_or_none() is not None
 
 
 async def _scan_recall_async() -> dict:
@@ -3431,6 +3512,25 @@ async def _enroll_recalls_for_institution(
                         "recall_period": period,
                     }
 
+                    contact_row = await session.execute(
+                        sa_select(Contact).where(
+                            Contact.institution_id == institution_id,
+                            Contact.nexhealth_patient_id == patient_id,
+                        )
+                    )
+                    contact = contact_row.scalar_one_or_none()
+                    contact_id = str(contact.id) if contact else None
+
+                    if await _patient_has_future_appointment(
+                        session,
+                        institution_id=institution_id,
+                        location_id=str(location.id),
+                        patient_id=patient_id,
+                        contact_id=contact_id,
+                        now=now,
+                    ):
+                        continue
+
                     matched_workflows: list[tuple[dict, dict[str, Any]]] = []
                     for wf in location_workflows:
                         allowed_fields = _workflow_pms_context_fields(wf)
@@ -3471,21 +3571,28 @@ async def _enroll_recalls_for_institution(
                         ):
                             continue
 
+                        cooldown_days = _recall_cooldown_days(wf)
+                        if await _has_recent_recall_enrollment(
+                            session,
+                            institution_id=institution_id,
+                            workflow_id=wf["workflow_id"],
+                            patient_id=patient_id,
+                            now=now,
+                            cooldown_days=cooldown_days,
+                        ):
+                            continue
+
                         matched_workflows.append((wf, trigger_metadata))
 
                     if not matched_workflows:
                         continue
 
-                    contact_row = await session.execute(
-                        sa_select(Contact).where(
-                            Contact.institution_id == institution_id,
-                            Contact.nexhealth_patient_id == patient_id,
-                        )
-                    )
-                    contact = contact_row.scalar_one_or_none()
-                    contact_id = str(contact.id) if contact else None
-
                     for wf, trigger_metadata in matched_workflows:
+                        cooldown_days = _recall_cooldown_days(wf)
+                        trigger_metadata = {
+                            **trigger_metadata,
+                            "recall_reenrollment_cooldown_days": cooldown_days,
+                        }
                         key = make_recall_idempotency_key(
                             wf["version_id"], patient_id, period
                         )

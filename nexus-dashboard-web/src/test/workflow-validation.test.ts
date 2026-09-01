@@ -269,6 +269,19 @@ describe("workflow validation", () => {
         expect(issues.some((i) => i.message.includes("Recall interval"))).toBe(true)
     })
 
+    it("flags an invalid recall re-enrollment cooldown", () => {
+        const def = base()
+        def.trigger = {
+            type: "recall_scan",
+            recall_interval_months: 6,
+            recall_reenrollment_cooldown_days: 0,
+        }
+
+        const issues = validateDefinition(def)
+
+        expect(issues.some((i) => i.message.includes("Recall cooldown"))).toBe(true)
+    })
+
     it("flags patient status triggers without statuses", () => {
         const def = base()
         def.trigger = { type: "patient_status_changed", statuses: [] }

@@ -294,6 +294,12 @@ def _cm(session):
     return cm
 
 
+def _scalar_result(value=None):
+    result = MagicMock()
+    result.scalar_one_or_none.return_value = value
+    return result
+
+
 @pytest.mark.asyncio
 async def test_scan_recall_async_enrolls_due_patients():
     # One active recall workflow for one institution.
@@ -301,7 +307,7 @@ async def test_scan_recall_async_enrolls_due_patients():
     scan_session = _make_session(workflows=[wf])
 
     # Institution-scoped session: get(Institution) truthy, one configured location,
-    # then a contact lookup per due patient (all None → contact_id None but still enrolls).
+    # then contact/future-appointment/cooldown checks per due patient.
     inst_session = AsyncMock()
     inst_session.get = AsyncMock(return_value=MagicMock())  # Institution present
     location = MagicMock()
@@ -310,11 +316,22 @@ async def test_scan_recall_async_enrolls_due_patients():
     location.nexhealth_location_id = "nexloc-1"
     loc_result = MagicMock()
     loc_result.scalars.return_value.all.return_value = [location]
-    contact_result = MagicMock()
-    contact_result.scalar_one_or_none.return_value = None
-    # 1 locations query + 3 contact lookups (one per due recall)
+    contact_result = _scalar_result(None)
+    future_result = _scalar_result(None)
+    cooldown_result = _scalar_result(None)
     inst_session.execute = AsyncMock(
-        side_effect=[loc_result, contact_result, contact_result, contact_result]
+        side_effect=[
+            loc_result,
+            contact_result,
+            future_result,
+            cooldown_result,
+            contact_result,
+            future_result,
+            cooldown_result,
+            contact_result,
+            future_result,
+            cooldown_result,
+        ]
     )
 
     recalls = [
@@ -359,6 +376,13 @@ async def test_scan_recall_async_enrolls_due_patients():
         c.kwargs["kwargs"]["trigger_ref_type"] == "recall"
         for c in mock_task.apply_async.call_args_list
     )
+    assert all(
+        c.kwargs["kwargs"]["trigger_metadata"][
+            "recall_reenrollment_cooldown_days"
+        ]
+        == 90
+        for c in mock_task.apply_async.call_args_list
+    )
 
 
 @pytest.mark.asyncio
@@ -401,9 +425,19 @@ async def test_scan_recall_applies_declared_patient_communication_context_filter
     location.nexhealth_location_id = "nexloc-1"
     loc_result = MagicMock()
     loc_result.scalars.return_value.all.return_value = [location]
-    contact_result = MagicMock()
-    contact_result.scalar_one_or_none.return_value = None
-    inst_session.execute = AsyncMock(side_effect=[loc_result, contact_result])
+    contact_result = _scalar_result(None)
+    future_result = _scalar_result(None)
+    cooldown_result = _scalar_result(None)
+    inst_session.execute = AsyncMock(
+        side_effect=[
+            loc_result,
+            contact_result,
+            future_result,
+            cooldown_result,
+            contact_result,
+            future_result,
+        ]
+    )
 
     adapter = AsyncMock()
     adapter.source = "nexhealth"
@@ -467,8 +501,109 @@ async def test_scan_recall_applies_declared_patient_communication_context_filter
         "recall_type_name": "Hygiene",
         "treatment_plan_statuses": [],
         "has_active_treatment_plan": False,
+        "recall_reenrollment_cooldown_days": 90,
     }
     assert "treatment_plans" not in kwargs["trigger_metadata"]
+
+
+@pytest.mark.asyncio
+async def test_scan_recall_skips_patients_with_future_appointments():
+    wf = _make_workflow(trigger_type="recall_scan", version_id="ver-1")
+    scan_session = _make_session(workflows=[wf])
+
+    inst_session = AsyncMock()
+    inst_session.get = AsyncMock(return_value=MagicMock())
+    location = MagicMock()
+    location.id = "loc-1"
+    location.nexhealth_subdomain = "sub"
+    location.nexhealth_location_id = "nexloc-1"
+    loc_result = MagicMock()
+    loc_result.scalars.return_value.all.return_value = [location]
+    inst_session.execute = AsyncMock(
+        side_effect=[
+            loc_result,
+            _scalar_result(None),
+            _scalar_result("future-appt-1"),
+        ]
+    )
+
+    adapter = AsyncMock()
+    adapter.source = "nexhealth"
+    adapter.list_patient_recalls = AsyncMock(
+        return_value=[{"patient_id": "p1", "recall_id": 7, "date_due": "2020-01-01"}]
+    )
+    adapter.list_recall_types = AsyncMock(return_value=[])
+    adapter.close = AsyncMock()
+
+    with (
+        patch(
+            "src.app.tasks.automation_workflow.get_system_db_session",
+            side_effect=[_cm(scan_session), _cm(inst_session)],
+        ),
+        patch(
+            "src.app.pms.nexhealth.adapter.NexHealthAdapter.create",
+            AsyncMock(return_value=adapter),
+        ),
+        patch(
+            "src.app.tasks.automation_workflow.enroll_and_start_workflow_run"
+        ) as mock_task,
+    ):
+        mock_task.apply_async = MagicMock()
+        result = await _scan_recall_async()
+
+    assert result["enrolled"] == 0
+    mock_task.apply_async.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_scan_recall_skips_patients_inside_reenrollment_cooldown():
+    wf = _make_workflow(trigger_type="recall_scan", version_id="ver-1")
+    wf.definition["trigger"]["recall_reenrollment_cooldown_days"] = 90
+    scan_session = _make_session(workflows=[wf])
+
+    inst_session = AsyncMock()
+    inst_session.get = AsyncMock(return_value=MagicMock())
+    location = MagicMock()
+    location.id = "loc-1"
+    location.nexhealth_subdomain = "sub"
+    location.nexhealth_location_id = "nexloc-1"
+    loc_result = MagicMock()
+    loc_result.scalars.return_value.all.return_value = [location]
+    inst_session.execute = AsyncMock(
+        side_effect=[
+            loc_result,
+            _scalar_result(None),
+            _scalar_result(None),
+            _scalar_result("recent-run-1"),
+        ]
+    )
+
+    adapter = AsyncMock()
+    adapter.source = "nexhealth"
+    adapter.list_patient_recalls = AsyncMock(
+        return_value=[{"patient_id": "p1", "recall_id": 7, "date_due": "2020-01-01"}]
+    )
+    adapter.list_recall_types = AsyncMock(return_value=[])
+    adapter.close = AsyncMock()
+
+    with (
+        patch(
+            "src.app.tasks.automation_workflow.get_system_db_session",
+            side_effect=[_cm(scan_session), _cm(inst_session)],
+        ),
+        patch(
+            "src.app.pms.nexhealth.adapter.NexHealthAdapter.create",
+            AsyncMock(return_value=adapter),
+        ),
+        patch(
+            "src.app.tasks.automation_workflow.enroll_and_start_workflow_run"
+        ) as mock_task,
+    ):
+        mock_task.apply_async = MagicMock()
+        result = await _scan_recall_async()
+
+    assert result["enrolled"] == 0
+    mock_task.apply_async.assert_not_called()
 
 
 @pytest.mark.asyncio
@@ -494,7 +629,13 @@ async def test_scan_recall_skips_when_declared_treatment_context_cannot_be_read(
     location.nexhealth_location_id = "nexloc-1"
     loc_result = MagicMock()
     loc_result.scalars.return_value.all.return_value = [location]
-    inst_session.execute = AsyncMock(return_value=loc_result)
+    inst_session.execute = AsyncMock(
+        side_effect=[
+            loc_result,
+            _scalar_result(None),
+            _scalar_result(None),
+        ]
+    )
 
     adapter = AsyncMock()
     adapter.source = "nexhealth"

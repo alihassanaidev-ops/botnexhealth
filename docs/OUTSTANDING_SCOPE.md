@@ -1260,8 +1260,8 @@ the same encryption and data-minimisation treatment used for patient contact rec
 
 # Part 3 · The four campaigns
 
-Two of the four campaign types are live and working well. The other two are placeholders, and one
-does not exist.
+The Platform-side launch templates are built. The remaining Part 3 gap is running Overdue Recall
+for GoTracker clinics only after history-sync completeness can be proven.
 
 ---
 
@@ -1269,20 +1269,10 @@ does not exist.
 
 ### Description
 
-Two of the four contracted campaigns exist only as two-step placeholders. They need building to the
-same standard as the two that are live.
+The two Platform-side campaign templates that were only placeholders are now built to launchable
+depth. This section is retained only as context for Item 23 and outcome reporting.
 
 ### Context and expected behaviour
-
-Two campaigns are genuinely live, complete and working — a pre-appointment confirmation campaign and
-a post-visit follow-up campaign. Each is around fifteen to twenty steps and handles the full range of
-real patient behaviour: repeated attempts when nobody answers, every kind of answer a patient might
-give, requests to be called back at a specific time, requests to reschedule, cancellations, opt-outs,
-and giving up cleanly on someone unreachable.
-
-The Reminder and Recall campaigns exist as templates but contain **two steps each**: send one message,
-then stop. They have no retry, no reply handling, no branching, and no meaningful outcomes. They are
-not switched on for clinics.
 
 Expected behaviour, per campaign:
 
@@ -1296,45 +1286,41 @@ product.
 **Overdue Recall** — finds patients with no visit in a configured period and no future appointment,
 and re-engages them to book. Unlike the others, its subject is a patient rather than an appointment,
 and it runs as a periodic scan rather than in response to an event. Its goal is a booking, so it
-depends on Item 11. On NexHealth clinics its eligibility must come from the practice software's own
-recall information rather than from guessing based on last-visit dates — which depends on Item 26.
+depends on signed booking links. On NexHealth clinics its eligibility comes from the practice
+software's own recall type, recall due date and treatment-plan context rather than guessing based on
+last-visit dates.
 
 ### Current implementation status
 
-**Not implemented beyond placeholders.** Ten campaign templates exist in total; two are switched on
-for clinics. Of the remaining eight, the Reminder and Recall templates are the two-step versions
-described above.
+**Implemented for the Platform launch-template path.** `appointment-reminder-24h` re-checks live
+appointment state before every patient-directed send, configures confirm/reschedule links, waits for
+SMS replies, confirms through `update_appointment`, and routes reschedule/cancel/staff asks to
+staff-follow-up outcomes.
+
+`recall-sms-6month` now uses Item 25 data through `recall_type_name`, `recall_due_date` and
+`has_active_treatment_plan`. It excludes active treatment-plan patients from generic recall,
+suppresses patients who already have a future appointment, applies the 90-day re-enrolment cooldown,
+configures a signed booking link, handles booked/reschedule/staff replies, and records distinct
+terminal outcomes.
 
 ### Remaining work
 
-- Rebuild both to the depth of the two live campaigns: attempt ladders, reply handling, branching on
-  every realistic answer, clean terminal outcomes that reporting can group by.
-- For Reminder: independent activation and configuration, and mandatory re-checking against live
-  practice data before every send.
-- For Recall: enrolment through the periodic scan on both kinds of clinic, booking through Item 11,
-  and a cooldown so an unresponsive patient is not re-enrolled endlessly — see **Decision D**.
-- Make the recall scan processable in batches, resumable if interrupted, and rate-limited, so that
-  scanning a large patient list cannot flood the system or the practice software.
-- Switch both campaigns on for clinics — **as the final step**.
+No remaining Platform template work for Item 22. GoTracker recall enrolment and history-sync refusal
+remain Item 23.
 
 ### Watch out for
 
-**Switching these on must be the last thing you do in Part 3.** Several of the currently-hidden
-templates use booking links, which nothing generates until Item 12, and Recall's whole purpose is
-booking, which does not exist until Item 11. Enabling them earlier sends patients messages with
-missing links and campaigns that cannot achieve anything.
+**GoTracker recall activation still waits on Item 23.** A broad recall scan against incomplete
+history can tell recently seen patients they are overdue.
 
 ### Acceptance criteria
 
-- Reminder is switched on and configured independently of Confirmation, with its own runs.
+- Reminder is configured independently of Confirmation, with its own runs.
 - A Reminder is never sent for an appointment that has been cancelled or moved, verified by test.
-- Recall enrols correctly on both kinds of clinic and books through the booking step.
-- Recall does not re-enrol an unresponsive patient until the agreed cooldown has passed.
-- A recall scan over a large patient list runs in batches, survives interruption, and does not
-  overwhelm the practice software.
-- Both campaigns handle no-answer, every reply type, opt-out and unreachable, with distinct recorded
-  outcomes.
-- Neither is switched on until Items 11, 12 and 13 are complete.
+- Recall enrols from NexHealth recall records and signed booking links.
+- Recall does not re-enrol a patient until the agreed 90-day cooldown has passed.
+- Both templates handle no-answer, reply, opt-out and handoff paths with distinct recorded outcomes.
+- GoTracker-specific recall activation is held for Item 23.
 
 ---
 
@@ -1522,7 +1508,8 @@ API, not a complete view of staff-created PMS chart alerts.
 
 The Recall campaign's eligibility rules require the practice software's own recall information —
 recall records, recall types, treatment plan context and visit history — rather than guessing from
-last-visit dates. This family is now in place and unblocks the Overdue Recall half of Item 22.
+last-visit dates. This family is now in place and is used by the Overdue Recall launch template from
+Item 22.
 
 ### Implementation notes
 
@@ -2406,17 +2393,16 @@ what gets built. Raise them early; several block work in the first stages.
 | **A** | How is campaign-attributed revenue calculated? Per-appointment-type values can be configured per clinic, but the rule must be agreed and displayed. | Item 37 | Internal, then confirm with client |
 | **B** | When a booking is accepted but not yet written to a GoTracker practice, should the campaign pause and wait for confirmation, or finish and hand the patient to staff? This changes the campaign design and what the patient is told. | Items 4, 11 | Client |
 | **C** | Which sources may submit sales enquiries? Connecting arbitrary third-party systems is out of scope, so the permitted list must be agreed before the intake route is built. | Item 24 | Client |
-| **D** | How long must pass before an unresponsive patient can be enrolled in a new recall cycle? | Item 22 | Client |
 | **E** | When a patient declines a confirmation, should anything happen automatically beyond recording it — cancel the appointment, create a staff task, offer a rebooking? | Campaign 1 completeness | Client |
-| **F** | Should a patient's treatment-plan status change the recall message they receive, or determine whether they are enrolled at all? | Items 22, 25 | Client |
 | **G** | Patient alerts were started and abandoned. In or out? | Item 25 | Internal |
 | **H** | For clinics whose practice software does not expose insurance data, does the manually-maintained local list remain the permanent source? | Item 27 | Internal |
 | **I** | For the Connector: keep a durable local record of in-flight writes, or rely on the write identifier alone? Pick one and record why. | Item 5 | Internal |
 
 **Already resolved — no action needed.** The limit on how often a single patient may be contacted
 across all campaigns is **built and working**: a cap of three contacts per rolling seven days,
-counted across every campaign for that clinic, not per campaign. Confirm the default value with the
-client if you wish, but no implementation work remains.
+counted across every campaign for that clinic, not per campaign. Decision D is answered for Item 22
+as a 90-day recall re-enrolment cooldown. Decision F is answered for generic recall by excluding
+patients with an active treatment plan rather than changing their copy.
 
 ---
 
@@ -2492,8 +2478,8 @@ reason a human can act on — and no patient is ever told "confirmed" before it 
 suppression) · **Item 13** (enforce readiness at publish)
 
 ### Stage 4 · Complete the four campaigns
-**Item 22** (Reminder and Recall) · **Item 23** (Recall on GoTracker) · **Item 21** (enquiry store) ·
-**Item 24** (Sales Qualification) · *then, last,* switch the new campaigns on for clinics
+**Item 23** (Recall on GoTracker) · *then, last,* switch GoTracker recall on for clinics once the
+history-sync guard is in place
 
 ### Stage 5 · Practice-software data coverage
 Independent of Stages 2–4 and can run in parallel with a second developer. This order matters — the

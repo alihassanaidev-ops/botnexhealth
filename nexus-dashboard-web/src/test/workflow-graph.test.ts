@@ -261,7 +261,10 @@ describe("workflow graph — factories", () => {
     })
     it("createTrigger yields sensible defaults", () => {
         expect(createTrigger("appointment_offset")).toMatchObject({ offset_hours: -24 })
-        expect(createTrigger("recall_scan")).toMatchObject({ recall_interval_months: 6 })
+        expect(createTrigger("recall_scan")).toMatchObject({
+            recall_interval_months: 6,
+            recall_reenrollment_cooldown_days: 90,
+        })
         expect(createTrigger("manual").type).toBe("manual")
         expect(createTrigger("bulk_import").type).toBe("bulk_import")
         expect(createTrigger("enquiry_received").type).toBe("enquiry_received")

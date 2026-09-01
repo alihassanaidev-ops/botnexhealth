@@ -41,6 +41,7 @@ def test_template_definition_is_valid_workflow_schema(template_id: str) -> None:
 def test_priority_dental_templates_present() -> None:
     assert set(TEMPLATES.keys()) == {
         "appointment-reminder-24h",
+        "recall-sms-6month",
         "surgery-pre-appointment-confirmation",
         "post-op-followup-after-confirmation",
         "sales-qualification",
@@ -48,7 +49,7 @@ def test_priority_dental_templates_present() -> None:
 
 
 def test_list_templates_returns_all() -> None:
-    assert len(list_templates()) == 4
+    assert len(list_templates()) == 5
 
 
 def test_get_template_known_id() -> None:
@@ -183,6 +184,127 @@ def test_appointment_reminder_setup_controls_timing_windows() -> None:
     assert nodes["wait-retry-2"]["wait_for"]["response_window_seconds"] == 2 * 60 * 60
     assert "delay" not in nodes["wait-retry-1"]
     assert "delay" not in nodes["wait-retry-2"]
+
+
+def test_overdue_recall_template_is_launchable_with_item25_eligibility() -> None:
+    template = TEMPLATES["recall-sms-6month"]
+    nodes = {node["id"]: node for node in template.definition["nodes"]}
+
+    assert template.trigger_type == "recall_scan"
+    assert template.definition["entry_node_id"] == "configure-recall-booking-link"
+    assert template.definition["pms_context_fields"] == [
+        "recall_due_date",
+        "recall_type_name",
+        "has_active_treatment_plan",
+    ]
+    assert template.definition["trigger"]["recall_reenrollment_cooldown_days"] == 90
+    assert template.definition["trigger"]["filter"] == {
+        "kind": "group",
+        "op": "and",
+        "children": [
+            {
+                "kind": "rule",
+                "field": "recall_due_date",
+                "op": "before",
+                "value": "now+P1D",
+            },
+            {
+                "kind": "rule",
+                "field": "recall_type_name",
+                "op": "is_not_empty",
+            },
+            {
+                "kind": "rule",
+                "field": "has_active_treatment_plan",
+                "op": "eq",
+                "value": False,
+            },
+        ],
+    }
+
+    link = nodes["configure-recall-booking-link"]
+    assert link["type"] == "booking_link"
+    assert link["actions"] == ["book"]
+    assert link["window_days"] == 30
+
+    sms_nodes = [node for node in nodes.values() if node["type"] == "send_sms"]
+    assert {node["id"] for node in sms_nodes} == {"sms-recall-1", "sms-recall-2"}
+    for node in sms_nodes:
+        assert "{{recall_type_name}}" in node["body_template"]
+        assert "{{booking_link}}" in node["body_template"]
+        assert "Reply STOP" in node["body_template"]
+    assert "{{recall_due_date}}" in nodes["sms-recall-1"]["body_template"]
+    assert "Reply R" in nodes["sms-recall-1"]["body_template"]
+
+
+def test_overdue_recall_reply_waits_route_to_handoff_statuses() -> None:
+    nodes = {node["id"]: node for node in TEMPLATES["recall-sms-6month"].definition["nodes"]}
+
+    for wait_id, condition_id in (
+        ("wait-recall-reply-1", "check-recall-reply-1"),
+        ("wait-recall-reply-2", "check-recall-reply-2"),
+    ):
+        wait = nodes[wait_id]
+        assert wait["wait_for"]["type"] == "sms_reply"
+        assert wait["next_node_id"] == condition_id
+        mapped_values = {
+            mapping["context_updates"].get("recall_reply")
+            for mapping in wait["wait_for"]["response_mappings"]
+        }
+        assert mapped_values == {
+            "booked",
+            "reschedule_requested",
+            "staff_requested",
+        }
+        assert any(
+            mapping.get("handoff_reason") == "reschedule_requested"
+            for mapping in wait["wait_for"]["response_mappings"]
+        )
+        assert any(
+            mapping.get("handoff_reason") == "patient_asks_for_staff"
+            for mapping in wait["wait_for"]["response_mappings"]
+        )
+
+    route_targets = {
+        case["label"]: case["next_node_id"]
+        for case in nodes["route-recall-reply"]["cases"]
+    }
+    assert route_targets == {
+        "Booked": "mark-recall-booked",
+        "Reschedule requested": "mark-recall-reschedule-requested",
+        "Staff requested": "mark-recall-staff-requested",
+    }
+    assert nodes["mark-recall-reschedule-requested"]["status"] == (
+        "recall_reschedule_requested"
+    )
+    assert nodes["mark-recall-staff-requested"]["next_node_id"] == (
+        "exit-staff-handoff"
+    )
+    assert nodes["route-recall-reply"]["default_next_node_id"] == (
+        "mark-recall-staff-requested"
+    )
+
+
+def test_overdue_recall_setup_controls_cooldown_and_booking_window() -> None:
+    definition = instantiate_definition(
+        TEMPLATES["recall-sms-6month"],
+        setup_options={
+            "recall_reenrollment_cooldown_days": 120,
+            "recall_booking_window_days": 45,
+        },
+    )
+    nodes = {node["id"]: node for node in definition["nodes"]}
+
+    assert definition["trigger"]["recall_reenrollment_cooldown_days"] == 120
+    assert nodes["configure-recall-booking-link"]["window_days"] == 45
+
+
+def test_overdue_recall_setup_rejects_invalid_cooldown() -> None:
+    with pytest.raises(ValueError, match="recall_reenrollment_cooldown_days"):
+        instantiate_definition(
+            TEMPLATES["recall-sms-6month"],
+            setup_options={"recall_reenrollment_cooldown_days": 0},
+        )
 
 
 def test_surgery_confirmation_template_marks_confirmed_status() -> None:
@@ -528,7 +650,7 @@ def test_campaign_template_response_from_template() -> None:
 def test_list_route_returns_all_templates() -> None:
     user = MagicMock()
     result = asyncio.run(list_campaign_templates(user))
-    assert len(result) == 4
+    assert len(result) == 5
 
 
 # ---------------------------------------------------------------------------
@@ -749,7 +871,6 @@ def test_hidden_templates_are_not_instantiable() -> None:
     with pytest.raises(HTTPException) as exc_info:
         asyncio.run(instantiate_template("unscheduled-treatment-followup", user))
 
-    assert get_template("recall-sms-6month") is None
     assert exc_info.value.status_code == 404
     assert exc_info.value.detail == "Template not found"
 
