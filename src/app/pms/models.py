@@ -24,6 +24,22 @@ class UniversalPatient(BaseModel):
     extra: dict = {}  # PMS-specific data (upcoming_appts, procedures, etc.)
 
 
+class UniversalPatientPage(BaseModel):
+    """One bounded page read directly from the configured PMS.
+
+    Cursors are deliberately opaque to API consumers. NexHealth supplies real
+    cursor values; GoTracker uses its Synchronizer page number. The adapter is
+    the only layer that needs to understand either representation.
+    """
+
+    items: list[UniversalPatient] = Field(default_factory=list)
+    total: int | None = None
+    next_cursor: str | None = None
+    previous_cursor: str | None = None
+    has_next_page: bool = False
+    has_previous_page: bool = False
+
+
 class UniversalProvider(BaseModel):
     id: str
     source: str
@@ -43,7 +59,6 @@ class UniversalAppointmentType(BaseModel):
     source_id: str  # raw PMS ID for API calls
     source_metadata: dict = {}
     # NexHealth: {"nh_appt_type_id": ..., "descriptor_ids": [...]}
-
 
 
 class UniversalOperatory(BaseModel):

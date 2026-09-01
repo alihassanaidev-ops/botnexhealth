@@ -20,6 +20,7 @@ from src.app.pms.models import (
     UniversalLocation,
     UniversalOperatory,
     UniversalPatient,
+    UniversalPatientPage,
     UniversalProvider,
     UniversalSlot,
 )
@@ -33,30 +34,38 @@ class PMSAdapter(ABC):
     # --- Patients ---
 
     @abstractmethod
-    async def search_patients(self, query: str, **kwargs: Any) -> list[UniversalPatient]:
-        ...
+    async def search_patients(
+        self, query: str, **kwargs: Any
+    ) -> list[UniversalPatient]: ...
+
+    async def browse_patients(
+        self,
+        *,
+        cursor: str | None = None,
+        page_size: int = 25,
+        name: str | None = None,
+        status: str = "active",
+    ) -> UniversalPatientPage:
+        """Return one provider page without accumulating the full roster."""
+        raise NotImplementedError("This PMS does not support patient browsing")
 
     @abstractmethod
-    async def create_patient(self, req: PatientCreateRequest) -> dict[str, Any]:
-        ...
+    async def create_patient(self, req: PatientCreateRequest) -> dict[str, Any]: ...
 
     # --- Appointment Types ---
 
     @abstractmethod
-    async def list_appointment_types(self) -> list[UniversalAppointmentType]:
-        ...
+    async def list_appointment_types(self) -> list[UniversalAppointmentType]: ...
 
     # --- Providers ---
 
     @abstractmethod
-    async def list_providers(self) -> list[UniversalProvider]:
-        ...
+    async def list_providers(self) -> list[UniversalProvider]: ...
 
     # --- Operatories ---
 
     @abstractmethod
-    async def list_operatories(self) -> list[UniversalOperatory]:
-        ...
+    async def list_operatories(self) -> list[UniversalOperatory]: ...
 
     # --- Slots ---
 
@@ -69,8 +78,7 @@ class PMSAdapter(ABC):
         appointment_type_id: str | None = None,
         operatory_ids: list[str] | None = None,
         tz_offset: str | None = None,
-    ) -> list[UniversalSlot]:
-        ...
+    ) -> list[UniversalSlot]: ...
 
     async def find_available_slots(
         self,
@@ -100,18 +108,15 @@ class PMSAdapter(ABC):
     # --- Booking ---
 
     @abstractmethod
-    async def book_appointment(self, req: BookingRequest) -> BookingResult:
-        ...
+    async def book_appointment(self, req: BookingRequest) -> BookingResult: ...
 
     @abstractmethod
-    async def cancel_appointment(self, appointment_id: str) -> BookingResult:
-        ...
+    async def cancel_appointment(self, appointment_id: str) -> BookingResult: ...
 
     @abstractmethod
     async def reschedule_appointment(
         self, old_appointment_id: str, new_booking: BookingRequest
-    ) -> BookingResult:
-        ...
+    ) -> BookingResult: ...
 
     async def reschedule_appointment_v2(
         self, old_appointment_id: str, new_booking: BookingRequest
@@ -138,18 +143,15 @@ class PMSAdapter(ABC):
     # --- Locations ---
 
     @abstractmethod
-    async def list_locations(self) -> list[UniversalLocation]:
-        ...
+    async def list_locations(self) -> list[UniversalLocation]: ...
 
     @abstractmethod
-    async def get_location(self, location_id: str) -> UniversalLocation | None:
-        ...
+    async def get_location(self, location_id: str) -> UniversalLocation | None: ...
 
     # --- Setup ---
 
     @abstractmethod
-    async def get_setup_steps(self) -> list[SetupStep]:
-        ...
+    async def get_setup_steps(self) -> list[SetupStep]: ...
 
     # --- Cleanup ---
 
@@ -162,8 +164,7 @@ class SupportsAppointmentTypeCreation(ABC):
     """Optional: PMS supports creating appointment types (e.g. NexHealth)."""
 
     @abstractmethod
-    async def list_pms_descriptors(self) -> list[dict]:
-        ...
+    async def list_pms_descriptors(self) -> list[dict]: ...
 
     @abstractmethod
     async def create_appointment_type(
@@ -175,8 +176,7 @@ class SupportsAppointmentTypeCreation(ABC):
         provider_ids: list[str] | None = None,
         operatory_ids: list[str] | None = None,
         bookable_online: bool | None = None,
-    ) -> UniversalAppointmentType:
-        ...
+    ) -> UniversalAppointmentType: ...
 
     @abstractmethod
     async def update_appointment_type(
@@ -188,12 +188,10 @@ class SupportsAppointmentTypeCreation(ABC):
         provider_ids: list[str] | None = None,
         operatory_ids: list[str] | None = None,
         bookable_online: bool | None = None,
-    ) -> UniversalAppointmentType:
-        ...
+    ) -> UniversalAppointmentType: ...
 
     @abstractmethod
-    async def delete_appointment_type(self, appointment_type_id: str) -> None:
-        ...
+    async def delete_appointment_type(self, appointment_type_id: str) -> None: ...
 
 
 class SupportsAvailabilityLinking(ABC):
@@ -208,8 +206,7 @@ class SupportsAvailabilityLinking(ABC):
         days: list[str],
         start_time: str,
         end_time: str,
-    ) -> dict[str, Any]:
-        ...
+    ) -> dict[str, Any]: ...
 
     @abstractmethod
     async def update_availability(
@@ -221,12 +218,10 @@ class SupportsAvailabilityLinking(ABC):
         end_time: str | None = None,
         operatory_id: str | None = None,
         active: bool | None = None,
-    ) -> dict:
-        ...
+    ) -> dict: ...
 
     @abstractmethod
-    async def list_availabilities(self, **kwargs: Any) -> list[dict]:
-        ...
+    async def list_availabilities(self, **kwargs: Any) -> list[dict]: ...
 
 
 class SupportsWorkingWindowOverrides(ABC):
@@ -238,8 +233,7 @@ class SupportsWorkingWindowOverrides(ABC):
     """
 
     @abstractmethod
-    async def list_availabilities(self, **kwargs: Any) -> list[dict]:
-        ...
+    async def list_availabilities(self, **kwargs: Any) -> list[dict]: ...
 
     @abstractmethod
     async def update_availability(
@@ -251,17 +245,14 @@ class SupportsWorkingWindowOverrides(ABC):
         end_time: str | None = None,
         operatory_id: str | None = None,
         active: bool | None = None,
-    ) -> dict:
-        ...
+    ) -> dict: ...
 
     @abstractmethod
-    async def clear_availability_override(self, availability_id: str) -> dict:
-        ...
+    async def clear_availability_override(self, availability_id: str) -> dict: ...
 
 
 class SupportsAppointmentConfirmation(ABC):
     """Optional: PMS supports marking an appointment confirmed."""
 
     @abstractmethod
-    async def confirm_appointment(self, appointment_id: str) -> BookingResult:
-        ...
+    async def confirm_appointment(self, appointment_id: str) -> BookingResult: ...

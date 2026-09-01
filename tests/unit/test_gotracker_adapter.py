@@ -98,6 +98,87 @@ async def test_patient_search_pushes_identity_filters_to_synchronizer() -> None:
 
 
 @pytest.mark.asyncio
+async def test_patient_browse_fetches_one_provider_page_only() -> None:
+    client = FakeGoTrackerClient()
+    client.responses.append(
+        {
+            "code": True,
+            "data": [
+                {
+                    "ContactId": 603,
+                    "FirstName": "Kiro",
+                    "LastName": "Yt",
+                    "IsActive": True,
+                    "IsPatient": True,
+                    "ModifiedTimeStamp": "2026-09-01T10:00:00Z",
+                }
+            ],
+            "pagination": {
+                "total": 401,
+                "page_size": 200,
+                "has_next_page": True,
+            },
+        }
+    )
+
+    page = await _adapter(client).browse_patients(
+        cursor="2", name="Kiro", status="active"
+    )
+
+    assert [patient.id for patient in page.items] == ["gt-603"]
+    assert page.items[0].extra == {
+        "raw": {"ContactId": 603, "IsActive": True},
+        "inactive": False,
+        "updated_at": "2026-09-01T10:00:00Z",
+    }
+    assert page.total == 401
+    assert page.next_cursor == "3"
+    assert page.previous_cursor == "1"
+    assert client.calls == [
+        {
+            "method": "GET",
+            "path": "/api/patients/getAllContacts",
+            "params": {"page": 2, "name": "Kiro", "isActive": "true"},
+            "json": None,
+        }
+    ]
+
+
+@pytest.mark.asyncio
+async def test_patient_browse_excludes_explicit_non_patients() -> None:
+    client = FakeGoTrackerClient()
+    client.responses.append(
+        {
+            "data": [
+                {"ContactId": 1, "FirstName": "Patient", "IsPatient": True},
+                {"ContactId": 2, "FirstName": "Vendor", "IsPatient": False},
+            ]
+        }
+    )
+
+    page = await _adapter(client).browse_patients(status="all")
+
+    assert [patient.id for patient in page.items] == ["gt-1"]
+
+
+@pytest.mark.asyncio
+async def test_patient_browse_rejects_an_unbounded_synchronizer_response() -> None:
+    client = FakeGoTrackerClient()
+    client.responses.append(
+        {
+            "code": True,
+            "data": [
+                {"ContactId": contact_id, "IsPatient": True}
+                for contact_id in range(1, 202)
+            ],
+        }
+    )
+
+    with pytest.raises(GoTrackerAPIError, match="unbounded patient page"):
+        await _adapter(client).browse_patients()
+
+
+@pytest.mark.asyncio
 async def test_working_windows_use_stable_ids_and_override_endpoints() -> None:
     client = FakeGoTrackerClient()
     client.responses.extend(
@@ -206,7 +287,9 @@ async def test_closed_working_period_is_display_only_and_never_patchable() -> No
     assert windows[0]["id"] == "closed:2026-09-01:3:3:00:00:00:09:00:00"
 
     with pytest.raises(ValueError, match="cannot be updated"):
-        await adapter.update_availability(windows[0]["id"], appointment_type_ids=["gt-1"])
+        await adapter.update_availability(
+            windows[0]["id"], appointment_type_ids=["gt-1"]
+        )
 
     assert len(client.calls) == 1
 
@@ -513,7 +596,7 @@ async def test_get_patient_returns_only_upcoming_appointment_context() -> None:
                     "AppointmentTime": "10:00:00",
                     "ProviderId": 2,
                     "StatusId": 3,
-                }
+                },
             ],
         }
     )
@@ -661,7 +744,9 @@ async def test_update_appointment_uses_snake_case_consumer_endpoint() -> None:
 
 
 @pytest.mark.asyncio
-async def test_reschedule_appointment_patches_existing_without_type_or_end_time() -> None:
+async def test_reschedule_appointment_patches_existing_without_type_or_end_time() -> (
+    None
+):
     client = FakeGoTrackerClient()
     adapter = _adapter(client)
 

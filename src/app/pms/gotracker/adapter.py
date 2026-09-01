@@ -32,6 +32,7 @@ from src.app.pms.models import (
     UniversalLocation,
     UniversalOperatory,
     UniversalPatient,
+    UniversalPatientPage,
     UniversalProvider,
     UniversalSlot,
 )
@@ -83,7 +84,9 @@ class GoTrackerAdapter(
 
     # ── Patients ─────────────────────────────────────────────────────────
 
-    async def search_patients(self, query: str, **kwargs: Any) -> list[UniversalPatient]:
+    async def search_patients(
+        self, query: str, **kwargs: Any
+    ) -> list[UniversalPatient]:
         # The Synchronizer indexes contact filters.  Searching a locally fetched
         # first page misses newer patients when the clinic has more contacts
         # than that page holds (the list is oldest-first).
@@ -119,6 +122,81 @@ class GoTrackerAdapter(
             params["date_of_birth"] = date_of_birth
         return await self._fetch_all(
             "GET", "/api/patients/getAllContacts", params=params, max_items=max_items
+        )
+
+    async def browse_patients(
+        self,
+        *,
+        cursor: str | None = None,
+        page_size: int = 25,
+        name: str | None = None,
+        status: str = "active",
+    ) -> UniversalPatientPage:
+        """Proxy exactly one Synchronizer page.
+
+        The deployed Synchronizer owns its page size (currently 200). We do not
+        call ``_fetch_all`` here: even when a clinic has hundreds of thousands
+        of contacts this request holds only one provider page in memory.
+        """
+        del page_size  # Provider-controlled; retained in the universal contract.
+        try:
+            page = int(cursor or "1")
+        except ValueError as exc:
+            raise ValueError("Invalid GoTracker patient cursor") from exc
+        if page < 1 or page > 1_000_000:
+            raise ValueError("Invalid GoTracker patient cursor")
+
+        params: dict[str, Any] = {"page": page}
+        if name:
+            params["name"] = name
+        if status == "active":
+            params["isActive"] = "true"
+        elif status == "inactive":
+            params["isActive"] = "false"
+        elif status != "all":
+            raise ValueError(f"Unsupported patient status filter: {status!r}")
+
+        raw = await self._client.request(
+            "GET", "/api/patients/getAllContacts", params=params
+        )
+        rows = raw.get("data") if isinstance(raw.get("data"), list) else []
+        if len(rows) > 200:
+            raise GoTrackerAPIError(
+                "Synchronizer returned an unbounded patient page; "
+                "server-side pagination is required"
+            )
+        provider_returned = len(rows)
+        # Tracker's Contact table also carries vendors and other people. Only
+        # an explicit false is excluded, preserving older payloads that omit
+        # IsPatient entirely.
+        rows = [
+            row
+            for row in rows
+            if isinstance(row, dict)
+            and not _is_explicit_false(
+                _first(row, "IsPatient", "is_patient", default=True)
+            )
+        ]
+        total = _page_total(raw)
+        provider_page_size = _page_size(raw) or 200
+        if provider_page_size > 200:
+            raise GoTrackerAPIError(
+                "Synchronizer advertised an unsafe patient page size"
+            )
+        has_next = _page_has_next(
+            raw,
+            page=page,
+            provider_page_size=provider_page_size,
+            returned=provider_returned,
+            total=total,
+        )
+        return UniversalPatientPage(
+            items=[mappers.to_patient(row) for row in rows],
+            total=total,
+            next_cursor=str(page + 1) if has_next else None,
+            previous_cursor=str(page - 1) if page > 1 else None,
+            has_next_page=has_next,
+            has_previous_page=page > 1,
         )
 
     async def create_patient(self, req: PatientCreateRequest) -> dict[str, Any]:
@@ -263,7 +341,9 @@ class GoTrackerAdapter(
             body["bookable_online"] = bookable_online
         if descriptor_ids is not None:
             if len(descriptor_ids) > 1:
-                raise ValueError("GoTracker appointment types can link to only one reason.")
+                raise ValueError(
+                    "GoTracker appointment types can link to only one reason."
+                )
             body["reason_ids"] = _strip_ids(descriptor_ids)
         if provider_ids is not None:
             body["provider_ids"] = _strip_ids(provider_ids)
@@ -321,9 +401,7 @@ class GoTrackerAdapter(
             params["provider_ids"] = str(mappers.strip(provider_id))
         if operatory_ids:
             raw_ids = [mappers.strip(value) for value in operatory_ids]
-            params["operatory_ids"] = ",".join(
-                str(value) for value in raw_ids if value
-            )
+            params["operatory_ids"] = ",".join(str(value) for value in raw_ids if value)
 
         raw = await self._client.request(
             "GET", "/api/scheduling/working_hours", params=params
@@ -345,19 +423,26 @@ class GoTrackerAdapter(
         raw_id = mappers.strip(availability_id)
         if raw_id and raw_id.startswith("closed:"):
             raise ValueError("Derived closed periods cannot be updated.")
-        if any(value is not None for value in (days, start_time, end_time, operatory_id, active)):
+        if any(
+            value is not None
+            for value in (days, start_time, end_time, operatory_id, active)
+        ):
             raise ValueError(
                 "GoTracker working windows are PMS-owned; only appointment-type overrides can be updated."
             )
         if appointment_type_ids is None:
-            raise ValueError("appointment_type_ids is required for a GoTracker override.")
+            raise ValueError(
+                "appointment_type_ids is required for a GoTracker override."
+            )
 
         raw = await self._client.request(
             "PATCH",
             f"/api/scheduling/working_hours/{raw_id}",
             json={"appointment_type_ids": _strip_ids(appointment_type_ids)},
         )
-        return _to_working_window(_data_object(raw, fallback_id=mappers.strip(availability_id)))
+        return _to_working_window(
+            _data_object(raw, fallback_id=mappers.strip(availability_id))
+        )
 
     async def clear_availability_override(self, availability_id: str) -> dict:
         """Remove a cloud override and expose Tracker's standing type links again."""
@@ -368,7 +453,9 @@ class GoTrackerAdapter(
             "DELETE",
             f"/api/scheduling/working_hours/{raw_id}/override",
         )
-        return _to_working_window(_data_object(raw, fallback_id=mappers.strip(availability_id)))
+        return _to_working_window(
+            _data_object(raw, fallback_id=mappers.strip(availability_id))
+        )
 
     # ── Slots ────────────────────────────────────────────────────────────
 
@@ -407,12 +494,15 @@ class GoTrackerAdapter(
                 if isinstance(provider_id, list)
                 else [mappers.strip(provider_id)]
             )
-            params["provider_ids"] = ",".join(str(item) for item in raw_provider_ids if item)
+            params["provider_ids"] = ",".join(
+                str(item) for item in raw_provider_ids if item
+            )
         if appointment_type_id:
             params["appointment_type_id"] = mappers.strip(appointment_type_id)
         if operatory_ids:
             params["operatory_ids"] = ",".join(
-                str(item) for item in (mappers.strip(value) for value in operatory_ids)
+                str(item)
+                for item in (mappers.strip(value) for value in operatory_ids)
                 if item
             )
         if tz_offset:
@@ -529,7 +619,9 @@ class GoTrackerAdapter(
         )
         return data if item_id == raw_id else None
 
-    async def list_patient_recalls(self, *, max_items: int = 500) -> list[dict[str, Any]]:
+    async def list_patient_recalls(
+        self, *, max_items: int = 500
+    ) -> list[dict[str, Any]]:
         return await self._fetch_all(
             "GET",
             "/api/patients/recalls",
@@ -560,7 +652,9 @@ class GoTrackerAdapter(
             body["provenance"] = req.provenance
 
         try:
-            raw = await self._client.request("POST", "/api/appointments/book", json=body)
+            raw = await self._client.request(
+                "POST", "/api/appointments/book", json=body
+            )
             result = mappers.to_booking_result(raw, success=True)
             if not result.appointment_type_id and req.appointment_type_id:
                 result.appointment_type_id = req.appointment_type_id
@@ -833,15 +927,74 @@ def _strip_ids(values: list[str] | None) -> list[str]:
     return [stripped for value in values if (stripped := mappers.strip(value))]
 
 
-def _first(raw: dict[str, Any], *keys: str) -> Any:
+def _first(raw: dict[str, Any], *keys: str, default: Any = None) -> Any:
     for key in keys:
         value = raw.get(key)
         if value is not None:
             return value
+    return default
+
+
+def _pagination_object(raw: dict[str, Any]) -> dict[str, Any]:
+    for key in ("pagination", "page_info", "meta"):
+        value = raw.get(key)
+        if isinstance(value, dict):
+            return value
+    return {}
+
+
+def _is_explicit_false(value: Any) -> bool:
+    if value is False or value == 0:
+        return True
+    return isinstance(value, str) and value.strip().lower() in {"false", "0", "no"}
+
+
+def _integer_field(raw: dict[str, Any], *keys: str) -> int | None:
+    for source in (raw, _pagination_object(raw)):
+        for key in keys:
+            value = source.get(key)
+            if isinstance(value, bool):
+                continue
+            try:
+                parsed = int(value)
+            except (TypeError, ValueError):
+                continue
+            if parsed >= 0:
+                return parsed
     return None
 
 
-def _data_object(raw: dict[str, Any], *, fallback_id: str | None = None) -> dict[str, Any]:
+def _page_total(raw: dict[str, Any]) -> int | None:
+    return _integer_field(raw, "count", "total", "total_count", "total_items")
+
+
+def _page_size(raw: dict[str, Any]) -> int | None:
+    return _integer_field(raw, "per_page", "page_size", "limit")
+
+
+def _page_has_next(
+    raw: dict[str, Any],
+    *,
+    page: int,
+    provider_page_size: int,
+    returned: int,
+    total: int | None,
+) -> bool:
+    page_info = _pagination_object(raw)
+    for key in ("has_next_page", "has_next", "has_more"):
+        value = page_info.get(key, raw.get(key))
+        if isinstance(value, bool):
+            return value
+    if total is not None:
+        return page * provider_page_size < total
+    # The Synchronizer's deployed list contract uses fixed 200-row pages. A
+    # full page may have a successor; a short page is terminal.
+    return returned >= provider_page_size
+
+
+def _data_object(
+    raw: dict[str, Any], *, fallback_id: str | None = None
+) -> dict[str, Any]:
     data = raw.get("data") if isinstance(raw.get("data"), dict) else raw
     if fallback_id is not None and data.get("id") is None:
         data = {**data, "id": fallback_id}

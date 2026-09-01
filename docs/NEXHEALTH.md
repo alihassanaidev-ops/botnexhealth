@@ -106,6 +106,34 @@ and active state but preserves that local visibility preference; hidden
 operatories remain visible on the Operatories setup page and are filtered out of
 appointment-type and scheduling selections.
 
+## Live patient directory
+
+The clinic-facing Patients page is a bounded server-to-server read, not a full
+local-roster query and never a browser-to-NexHealth request. The dashboard calls
+`GET /api/v1/pms/patients/page` with an explicit local `location_id`; the backend
+resolves the institution credential, calls NexHealth, masks phone/email, audits
+the read, and returns one page.
+
+For stable v3 the adapter passes `location_strict=true`, `non_patient=false`, an
+explicit inactive filter, and at most 100 records. It follows neither cursor on
+the caller's behalf: `page_info.start_cursor` / `end_cursor` become opaque
+previous/next tokens, so each click makes exactly one NexHealth list request and
+memory is bounded by the requested page. Active patients are the default;
+inactive and all-record views are explicit UI filters.
+
+GoTracker uses the same one-request rule against the Synchronizer's fixed
+200-record pages. Responses or advertised page sizes above that bound are
+rejected rather than forwarded or silently accumulated. A missing or disabled
+Synchronizer pagination contract therefore fails closed instead of turning a
+directory request into an unbounded roster load.
+
+This does not remove the local `Contact` / `PatientWorkingSet` projection. That
+projection remains the durable identity and workflow working set used for call
+history, campaign eligibility, webhook handling, and outage tolerance. A live
+directory row links to Contact history when the corresponding PMS id has already
+been projected; otherwise it remains visible as a current PMS record without
+inventing a second person identity or writing local state during a GET.
+
 ## Slot search and booking
 
 Raw bookable slots come from a contract-aware path: legacy v2 calls

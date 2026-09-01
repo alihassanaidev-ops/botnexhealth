@@ -81,6 +81,50 @@ export interface ContactsFilters {
     lifecycle?: "lead" | "contact" | "patient"
 }
 
+export interface LivePatientListItem {
+    pms_patient_id: string
+    source: "nexhealth" | "gotracker" | string
+    first_name: string
+    last_name: string
+    full_name: string
+    inactive: boolean
+    email_masked: string | null
+    phone_masked: string | null
+    pms_updated_at: string | null
+    pms_last_sync_time: string | null
+    contact_id: string | null
+}
+
+export interface LivePatientPage {
+    source: string
+    fetched_at: string
+    total: number | null
+    returned: number
+    items: LivePatientListItem[]
+    next_cursor: string | null
+    previous_cursor: string | null
+    has_next_page: boolean
+    has_previous_page: boolean
+}
+
+export interface LivePatientFilters {
+    locationId: string
+    cursor?: string | null
+    pageSize?: number
+    search?: string
+    patientStatus?: "active" | "inactive" | "all"
+}
+
+export async function listLivePatients(filters: LivePatientFilters): Promise<LivePatientPage> {
+    const params = new URLSearchParams({ location_id: filters.locationId })
+    if (filters.cursor) params.set("cursor", filters.cursor)
+    if (filters.pageSize !== undefined) params.set("page_size", String(filters.pageSize))
+    if (filters.search) params.set("search", filters.search)
+    if (filters.patientStatus) params.set("patient_status", filters.patientStatus)
+    const { data } = await api.get<LivePatientPage>(`/v1/pms/patients/page?${params.toString()}`)
+    return data
+}
+
 export async function listContacts(filters: ContactsFilters = {}): Promise<ContactsListResponse> {
     const params = new URLSearchParams()
     if (filters.limit !== undefined) params.set("limit", String(filters.limit))

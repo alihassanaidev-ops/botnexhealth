@@ -193,6 +193,80 @@ async def test_list_patients_uses_cursor_pagination_for_stable_v3(
 
 
 @pytest.mark.asyncio
+async def test_browse_patients_fetches_only_one_strict_location_page(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    adapter = _make_adapter(api_contract="stable_v3")
+    calls: list[dict] = []
+
+    async def fake_request(client, method, path, params=None, json=None):
+        calls.append(params or {})
+        return {
+            "data": [
+                {
+                    "id": "pat-1",
+                    "first_name": "Sam",
+                    "last_name": "Lee",
+                    "inactive": False,
+                    "updated_at": "2026-09-01T10:00:00Z",
+                }
+            ],
+            "count": 75,
+            "page_info": {
+                "has_next_page": True,
+                "has_previous_page": False,
+                "start_cursor": "first-1",
+                "end_cursor": "last-1",
+            },
+        }
+
+    monkeypatch.setattr(adapter_module, "handle_nexhealth_request", fake_request)
+
+    page = await adapter.browse_patients(page_size=25, name="Sam", status="active")
+
+    assert [patient.id for patient in page.items] == ["nh-pat-1"]
+    assert page.total == 75
+    assert page.next_cursor == "next:last-1"
+    assert page.previous_cursor is None
+    assert page.items[0].extra["inactive"] is False
+    assert calls == [
+        {
+            "subdomain": "test-subdomain",
+            "location_id": "test-location",
+            "per_page": 25,
+            "location_strict": True,
+            "non_patient": False,
+            "sort": "id",
+            "name": "Sam",
+            "inactive": False,
+        }
+    ]
+
+
+@pytest.mark.asyncio
+async def test_browse_patients_uses_next_cursor_without_following_it(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    adapter = _make_adapter(api_contract="stable_v3")
+    calls: list[dict] = []
+
+    async def fake_request(client, method, path, params=None, json=None):
+        calls.append(params or {})
+        return {
+            "data": [],
+            "page_info": {"has_next_page": False, "has_previous_page": True},
+        }
+
+    monkeypatch.setattr(adapter_module, "handle_nexhealth_request", fake_request)
+
+    await adapter.browse_patients(cursor="next:last-1", status="all")
+
+    assert len(calls) == 1
+    assert calls[0]["end_cursor"] == "last-1"
+    assert "inactive" not in calls[0]
+
+
+@pytest.mark.asyncio
 async def test_has_provider_appointments_scans_multiple_pages(
     monkeypatch: pytest.MonkeyPatch,
 ):
@@ -1164,7 +1238,9 @@ async def test_reschedule_v2_patches_existing_for_supported_stable_v3_pms(
             }
         }
 
-    monkeypatch.setattr(adapter, "_validate_selected_slot_before_booking", fake_validate)
+    monkeypatch.setattr(
+        adapter, "_validate_selected_slot_before_booking", fake_validate
+    )
     monkeypatch.setattr(adapter_module, "handle_nexhealth_request", fake_request)
 
     result = await adapter.reschedule_appointment_v2("old-1", _booking_request())
@@ -1361,8 +1437,10 @@ async def test_v3_skips_the_provider_embedded_fallback_when_direct_returns_rows(
     async def fake_request(_client, method, path, *, params=None, json=None, **kwargs):
         paths.append(path)
         if path == "/working_hours":
-            return {"data": [{"id": 1, "begin_time": "09:00", "end_time": "17:00"}],
-                    "page_info": {"has_next_page": False}}
+            return {
+                "data": [{"id": 1, "begin_time": "09:00", "end_time": "17:00"}],
+                "page_info": {"has_next_page": False},
+            }
         return {"data": [], "count": 0}
 
     monkeypatch.setattr(adapter_module, "handle_nexhealth_request", fake_request)
@@ -1406,7 +1484,10 @@ async def test_v2_always_merges_both_sources(
     async def fake_request(_client, method, path, *, params=None, json=None, **kwargs):
         paths.append(path)
         if path == "/availabilities":
-            return {"data": [{"id": 1, "begin_time": "09:00", "end_time": "17:00"}], "count": 1}
+            return {
+                "data": [{"id": 1, "begin_time": "09:00", "end_time": "17:00"}],
+                "count": 1,
+            }
         return {"data": [], "count": 0}
 
     monkeypatch.setattr(adapter_module, "handle_nexhealth_request", fake_request)

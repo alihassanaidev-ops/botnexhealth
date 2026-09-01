@@ -39,6 +39,7 @@ from src.app.pms.models import (
     UniversalLocation,
     UniversalOperatory,
     UniversalPatient,
+    UniversalPatientPage,
     UniversalProvider,
     UniversalSlot,
 )
@@ -358,9 +359,11 @@ class NexHealthAdapter(
         internal_institution_id = getattr(institution, "id", None)
         internal_location_id = getattr(location, "id", None)
         if internal_institution_id and internal_location_id:
-            direct_reschedule_pms_name = await cls._direct_reschedule_pms_name_for_location(
-                institution_id=str(internal_institution_id),
-                location_id=str(internal_location_id),
+            direct_reschedule_pms_name = (
+                await cls._direct_reschedule_pms_name_for_location(
+                    institution_id=str(internal_institution_id),
+                    location_id=str(internal_location_id),
+                )
             )
         adapter = cls(
             client,
@@ -531,6 +534,72 @@ class NexHealthAdapter(
         if not isinstance(patient, dict) or not patient.get("id"):
             return None
         return mappers.to_patient(patient)
+
+    async def browse_patients(
+        self,
+        *,
+        cursor: str | None = None,
+        page_size: int = 25,
+        name: str | None = None,
+        status: str = "active",
+    ) -> UniversalPatientPage:
+        """Proxy one NexHealth patient page using stable-v3 cursors.
+
+        ``location_strict`` is essential: without it NexHealth may search the
+        whole EHR even though a location_id was supplied. Non-patient contacts
+        are excluded, while inactive records are explicit rather than inherited
+        from an upstream default that has changed before.
+        """
+        params = self._default_params()
+        params.update(
+            {
+                "per_page": min(max(page_size, 1), 100),
+                "location_strict": True,
+                "non_patient": False,
+                "sort": "id",
+            }
+        )
+        if name:
+            params["name"] = name
+        if status == "active":
+            params["inactive"] = False
+        elif status == "inactive":
+            params["inactive"] = True
+        elif status != "all":
+            raise ValueError(f"Unsupported patient status filter: {status!r}")
+
+        if cursor:
+            direction, separator, value = cursor.partition(":")
+            if not separator or not value or direction not in {"next", "previous"}:
+                raise ValueError("Invalid NexHealth patient cursor")
+            params["end_cursor" if direction == "next" else "start_cursor"] = value
+
+        raw = await handle_nexhealth_request(
+            self._client, "GET", "/patients", params=params
+        )
+        rows = extract_list_items(raw, collection_key="patients")
+        page_info = extract_page_info(raw)
+        has_next = bool(page_info.get("has_next_page"))
+        has_previous = bool(page_info.get("has_previous_page"))
+        end_cursor = page_info.get("end_cursor")
+        start_cursor = page_info.get("start_cursor")
+        total = raw.get("count") if isinstance(raw.get("count"), int) else None
+        return UniversalPatientPage(
+            items=[mappers.to_patient(row) for row in rows],
+            total=total,
+            next_cursor=(
+                f"next:{end_cursor}"
+                if has_next and end_cursor not in (None, "")
+                else None
+            ),
+            previous_cursor=(
+                f"previous:{start_cursor}"
+                if has_previous and start_cursor not in (None, "")
+                else None
+            ),
+            has_next_page=has_next and end_cursor not in (None, ""),
+            has_previous_page=has_previous and start_cursor not in (None, ""),
+        )
 
     async def list_patients(
         self,
@@ -811,7 +880,10 @@ class NexHealthAdapter(
                 # `/recalls` does not exist — it 404s on BOTH v2 and v3. The real
                 # route is `/patient_recalls`; verified live, 8,862 rows for one
                 # clinic. This call had never succeeded.
-                self._client, "GET", "/patient_recalls", params=p
+                self._client,
+                "GET",
+                "/patient_recalls",
+                params=p,
             )
 
         return await fetch_all_pages(
@@ -1546,8 +1618,8 @@ class NexHealthAdapter(
         # 2,036, with the embedded path supplying the rest. Skipping it there
         # silently loses a third of the schedule. On v3 /working_hours is a
         # superset, so the fallback is pure cost.
-        skip_fallback = (
-            self._api_contract is NexHealthAPIContract.STABLE_V3 and bool(direct_items)
+        skip_fallback = self._api_contract is NexHealthAPIContract.STABLE_V3 and bool(
+            direct_items
         )
         provider_items: list[dict] = []
         if not skip_fallback:

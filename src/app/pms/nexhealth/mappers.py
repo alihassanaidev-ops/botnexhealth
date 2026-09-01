@@ -31,6 +31,11 @@ def to_patient(raw: dict) -> UniversalPatient:
     insurance_coverages = raw.get("insurance_coverages") or []
 
     extra: dict[str, Any] = {}
+    extra["inactive"] = bool(raw.get("inactive", False))
+    if raw.get("updated_at") not in (None, ""):
+        extra["updated_at"] = str(raw["updated_at"])
+    if raw.get("last_sync_time") not in (None, ""):
+        extra["last_sync_time"] = str(raw["last_sync_time"])
     if upcoming:
         extra["upcoming_appointments"] = [
             {
@@ -110,13 +115,17 @@ def to_provider(raw: dict) -> UniversalProvider:
             operatory_ids.append(_pid(op_id))
         for apt in avail.get("appointment_types") or []:
             apt_id = apt.get("id")
-            if apt_id and not any(a.get("id") == _pid(apt_id) for a in appointment_types):
-                appointment_types.append({
-                    "id": _pid(apt_id),
-                    "name": apt.get("name"),
-                    "minutes": apt.get("minutes"),
-                    "bookable_online": apt.get("bookable_online"),
-                })
+            if apt_id and not any(
+                a.get("id") == _pid(apt_id) for a in appointment_types
+            ):
+                appointment_types.append(
+                    {
+                        "id": _pid(apt_id),
+                        "name": apt.get("name"),
+                        "minutes": apt.get("minutes"),
+                        "bookable_online": apt.get("bookable_online"),
+                    }
+                )
 
     return UniversalProvider(
         id=_pid(raw.get("id")),

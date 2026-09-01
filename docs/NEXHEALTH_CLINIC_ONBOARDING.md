@@ -141,6 +141,20 @@ as a migration:
 Do not assume a webhook created by the platform key can be managed by the
 clinic-owned key.
 
+### 7. Verify Patient Browsing Separately
+
+Open the clinic-facing Patients page with each location selected. The page reads
+one current page directly from NexHealth through the backend, defaults to active
+patients, and should expose working Next/Previous controls when NexHealth returns
+more rows. This check proves current directory access; it does **not** prove that
+NexHealth's Synchronizer has finished importing all historical PMS patients.
+
+Webhook registration, Synchronizer read health, and historical projection
+backfill are separate readiness signals. A clinic may browse the rows NexHealth
+currently has while the local workflow projection is still catching up; do not
+enable campaigns whose audience depends on a complete history until their
+projection/reconciliation readiness check passes.
+
 ## Switching Credential Modes
 
 ### Platform Key to Clinic-Owned Key
