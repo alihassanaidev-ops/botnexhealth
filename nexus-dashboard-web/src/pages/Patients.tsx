@@ -247,7 +247,11 @@ function MergePicker({ primary, onClose, onMerged }: MergePickerProps) {
         const t = setTimeout(async () => {
             setLoading(true)
             try {
-                const res = await listContacts({ limit: 10, search: search || undefined })
+                const res = await listContacts({
+                    limit: 10,
+                    search: search || undefined,
+                    directory: "contacts",
+                })
                 if (!cancelled) setResults(res.items.filter((c) => c.id !== primary.id))
             } catch {
                 if (!cancelled) setResults([])
@@ -465,48 +469,51 @@ function PersonDetail({ contactId, mode, onClose, onChanged }: PersonDetailProps
                             </div>
                         )}
 
-                        {/* Linked records */}
-                        <div className="rounded-lg border p-3">
-                            <div className="mb-2 flex items-center justify-between">
-                                <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
-                                    Linked records {detail.aliases.length > 0 && `(${detail.aliases.length})`}
-                                </p>
-                                {isAdmin && (
-                                    <Button variant="outline" size="sm" className="h-7 gap-1 text-xs" onClick={() => setShowMerge(true)}>
-                                        <Link2 className="h-3 w-3" /> Merge duplicate
-                                    </Button>
+                        {/* PMS patient identity is owned by the source system. Local
+                            merge/unmerge is only available for non-PMS contacts. */}
+                        {detail.lifecycle !== "patient" && (
+                            <div className="rounded-lg border p-3">
+                                <div className="mb-2 flex items-center justify-between">
+                                    <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+                                        Linked records {detail.aliases.length > 0 && `(${detail.aliases.length})`}
+                                    </p>
+                                    {isAdmin && (
+                                        <Button variant="outline" size="sm" className="h-7 gap-1 text-xs" onClick={() => setShowMerge(true)}>
+                                            <Link2 className="h-3 w-3" /> Merge duplicate
+                                        </Button>
+                                    )}
+                                </div>
+                                {detail.aliases.length === 0 ? (
+                                    <p className="text-xs text-muted-foreground">
+                                        No linked records. Merge a duplicate if the same person appears under another entry
+                                        (e.g. a different phone or a name typo).
+                                    </p>
+                                ) : (
+                                    <div className="divide-y">
+                                        {detail.aliases.map((a) => (
+                                            <div key={a.id} className="flex items-center justify-between gap-2 py-2">
+                                                <div className="min-w-0">
+                                                    <p className="truncate text-sm">{a.full_name ?? "Unknown"}</p>
+                                                    <p className="text-xs text-muted-foreground">{a.phone_masked ?? "no phone"}</p>
+                                                </div>
+                                                {isAdmin && (
+                                                    <Button
+                                                        variant="ghost"
+                                                        size="sm"
+                                                        className="h-7 gap-1 text-xs text-muted-foreground"
+                                                        disabled={unmerging !== null}
+                                                        onClick={() => handleUnmerge(a.id)}
+                                                    >
+                                                        <Link2Off className="h-3 w-3" />
+                                                        {unmerging === a.id ? "…" : "Unmerge"}
+                                                    </Button>
+                                                )}
+                                            </div>
+                                        ))}
+                                    </div>
                                 )}
                             </div>
-                            {detail.aliases.length === 0 ? (
-                                <p className="text-xs text-muted-foreground">
-                                    No linked records. Merge a duplicate if the same person appears under another entry
-                                    (e.g. a different phone or a name typo).
-                                </p>
-                            ) : (
-                                <div className="divide-y">
-                                    {detail.aliases.map((a) => (
-                                        <div key={a.id} className="flex items-center justify-between gap-2 py-2">
-                                            <div className="min-w-0">
-                                                <p className="truncate text-sm">{a.full_name ?? "Unknown"}</p>
-                                                <p className="text-xs text-muted-foreground">{a.phone_masked ?? "no phone"}</p>
-                                            </div>
-                                            {isAdmin && (
-                                                <Button
-                                                    variant="ghost"
-                                                    size="sm"
-                                                    className="h-7 gap-1 text-xs text-muted-foreground"
-                                                    disabled={unmerging !== null}
-                                                    onClick={() => handleUnmerge(a.id)}
-                                                >
-                                                    <Link2Off className="h-3 w-3" />
-                                                    {unmerging === a.id ? "…" : "Unmerge"}
-                                                </Button>
-                                            )}
-                                        </div>
-                                    ))}
-                                </div>
-                            )}
-                        </div>
+                        )}
 
                         {/* Call history */}
                         <div>
@@ -542,7 +549,7 @@ function PersonDetail({ contactId, mode, onClose, onChanged }: PersonDetailProps
                     </>
                 )}
             </DialogContent>
-            {showMerge && detail && (
+            {showMerge && detail && detail.lifecycle !== "patient" && (
                 <MergePicker
                     primary={detail}
                     onClose={() => setShowMerge(false)}

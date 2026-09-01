@@ -181,7 +181,7 @@ contact in the institution. Visibility is granted per-contact via the
 | `/group/*` | **GROUP_ADMIN only** |
 | `/institution/setup`, `/institution/statuses` | INSTITUTION_ADMIN, LOCATION_ADMIN |
 | `/institution/email-templates`, `/custom-fields`, `/notification-recipients`, dashboard mutations | **INSTITUTION_ADMIN only** |
-| `/institution/contacts` (create/update/merge) | INSTITUTION_ADMIN, LOCATION_ADMIN |
+| `/institution/contacts` (create/update; merge non-PMS contacts only) | INSTITUTION_ADMIN, LOCATION_ADMIN |
 | `/institution/sms` | all 3 institution roles |
 | `/institution/*` portal (reads) | all 3 institution roles + `require_location_scope()` |
 | `/institution/calls/{id}/notes` | all 3 institution roles (see §3.5) |

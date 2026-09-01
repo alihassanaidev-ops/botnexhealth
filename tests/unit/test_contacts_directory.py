@@ -169,3 +169,35 @@ async def test_manual_contact_requires_a_reachable_identifier():
         )
     assert exc.value.status_code == 422
 
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("pms_side", ["primary", "alias"])
+async def test_merge_rejects_any_pms_linked_record(monkeypatch, pms_side):
+    primary = _contact(
+        id="primary-1",
+        nexhealth_patient_id="pms-primary" if pms_side == "primary" else None,
+    )
+    alias = _contact(
+        id="alias-1",
+        nexhealth_patient_id="pms-alias" if pms_side == "alias" else None,
+    )
+    session = _Session([])
+    monkeypatch.setattr(route, "get_db_session", lambda: _Context(session))
+    monkeypatch.setattr(
+        route,
+        "_scoped_contact",
+        AsyncMock(side_effect=[primary, alias]),
+    )
+
+    original = inspect.unwrap(route.merge_contact)
+    with pytest.raises(route.HTTPException) as exc:
+        await original(
+            request=MagicMock(),
+            contact_id=primary.id,
+            body=route.MergeRequest(alias_id=alias.id),
+            current_user=_user(),
+        )
+
+    assert exc.value.status_code == 409
+    assert "practice system" in exc.value.detail
+    assert session.commit.await_count == 0

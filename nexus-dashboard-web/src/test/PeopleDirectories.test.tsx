@@ -143,6 +143,23 @@ describe("Contacts and Patients directories", () => {
         ))
     })
 
+    it("does not offer local merge controls for a PMS patient", async () => {
+        const user = userEvent.setup()
+        vi.mocked(api.getContact).mockResolvedValue({
+            ...DETAIL,
+            lifecycle: "patient",
+            lead_status: null,
+            pms_last_synced_at: "2026-09-01T09:55:00Z",
+        })
+
+        render(<Patients />)
+        await user.click(await screen.findByText("Dana Reyes"))
+        await waitFor(() => expect(api.getContact).toHaveBeenCalledWith("contact-1"))
+
+        expect(screen.queryByRole("button", { name: /merge duplicate/i })).not.toBeInTheDocument()
+        expect(screen.queryByRole("button", { name: /unmerge/i })).not.toBeInTheDocument()
+    })
+
     it("creates a contact in the selected location with explicit consent", async () => {
         const user = userEvent.setup()
         render(<Contacts />)

@@ -4,7 +4,8 @@ Institution-facing person directory with Contacts and Patients projections.
 ``Contact`` is the one local identity row. The relationship directory selects
 people without a PMS id (leads and callers); the patient directory selects only
 people linked by signed NexHealth/GoTracker projection events. Both show call
-history and let administrators merge/unmerge duplicates.
+history, but manual identity merging is restricted to non-PMS contacts. Patient
+identity remains authoritative in NexHealth/GoTracker and the underlying PMS.
 
 Merge is non-destructive: an absorbed contact becomes an *alias*
 (``merged_into_id`` points at the primary) and its Calls are never reassigned,
@@ -697,6 +698,15 @@ async def merge_contact(
     async with get_db_session() as session:
         primary = await _scoped_contact(session, contact_id, current_user)
         alias = await _scoped_contact(session, body.alias_id, current_user)
+
+        if primary.nexhealth_patient_id or alias.nexhealth_patient_id:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=(
+                    "PMS-linked patient records cannot be merged here. "
+                    "Resolve patient duplicates in the practice system."
+                ),
+            )
 
         if primary.merged_into_id is not None:
             raise HTTPException(
