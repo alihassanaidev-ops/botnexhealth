@@ -23,6 +23,7 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, Field
 
 from src.app.api.deps import get_current_institution_user
+from src.app.api.permissions import Permission, require_permission
 from src.app.database import get_db_session
 from src.app.models.audit_log import AuditAction, AuditActor
 from src.app.models.institution_location import InstitutionLocation
@@ -135,7 +136,10 @@ async def list_exceptions(
 
 
 @router.post(
-    "", response_model=QuietHoursExceptionResponse, status_code=status.HTTP_201_CREATED
+    "",
+    response_model=QuietHoursExceptionResponse,
+    status_code=status.HTTP_201_CREATED,
+    dependencies=[Depends(require_permission(Permission.CAMPAIGN_CONFIGURE))],
 )
 @audit(
     AuditAction.CAMPAIGN_COMPLIANCE_UPDATE,
@@ -174,7 +178,11 @@ async def create_exception(
         return QuietHoursExceptionResponse.from_model(row)
 
 
-@router.patch("/{exception_id}", response_model=QuietHoursExceptionResponse)
+@router.patch(
+    "/{exception_id}",
+    response_model=QuietHoursExceptionResponse,
+    dependencies=[Depends(require_permission(Permission.CAMPAIGN_CONFIGURE))],
+)
 @audit(
     AuditAction.CAMPAIGN_COMPLIANCE_UPDATE,
     resource=lambda *args, **kwargs: (
@@ -200,7 +208,11 @@ async def update_exception(
         return QuietHoursExceptionResponse.from_model(row)
 
 
-@router.delete("/{exception_id}", status_code=status.HTTP_204_NO_CONTENT)
+@router.delete(
+    "/{exception_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+    dependencies=[Depends(require_permission(Permission.CAMPAIGN_CONFIGURE))],
+)
 @audit(
     AuditAction.CAMPAIGN_COMPLIANCE_UPDATE,
     resource=lambda *args, **kwargs: (

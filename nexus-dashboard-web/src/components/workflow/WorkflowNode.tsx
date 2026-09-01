@@ -23,16 +23,22 @@ function truncate(text: string, max = 44): string {
 /** One-line summary of a step for the node card. */
 function stepSummary(node: WfNode): string {
     switch (node.type) {
-        case "wait":
-            if (node.wait_for.type === "sms_reply") {
-                return `SMS reply · ${humanizeSeconds(node.wait_for.response_window_seconds ?? 259200)} window`
+        case "wait": {
+            const waitFor = node.wait_for
+            if (waitFor.type === "sms_reply") {
+                return `SMS reply · ${humanizeSeconds(waitFor.response_window_seconds ?? 259200)} window`
             }
-            if (node.wait_for.delay.delay_type === "duration") return humanizeSeconds(node.wait_for.delay.duration_seconds)
-            if (node.wait_for.delay.delay_type === "appointment_relative") {
-                const direction = node.wait_for.delay.offset_seconds < 0 ? "before" : "after"
-                return `${humanizeSeconds(Math.abs(node.wait_for.delay.offset_seconds))} ${direction} appointment`
+            if (waitFor.type === "email_reply") {
+                return `Email reply · ${humanizeSeconds(waitFor.response_window_seconds ?? 604800)} window`
             }
-            return `${node.wait_for.delay.offset_days} day(s) @ ${node.wait_for.delay.time_of_day}`
+            const delay = waitFor.delay
+            if (delay.delay_type === "duration") return humanizeSeconds(delay.duration_seconds)
+            if (delay.delay_type === "appointment_relative") {
+                const direction = delay.offset_seconds < 0 ? "before" : "after"
+                return `${humanizeSeconds(Math.abs(delay.offset_seconds))} ${direction} appointment`
+            }
+            return `${delay.offset_days} day(s) @ ${delay.time_of_day}`
+        }
         case "drip":
             return `${node.batch_size} every ${humanizeSeconds(node.interval_seconds)}`
         case "send_sms":
@@ -106,6 +112,8 @@ function triggerSummary(t: WorkflowTrigger): string {
             return `Internal status: ${t.statuses.join(", ")}`
         case "sms_reply":
             return t.tokens?.length ? `Matches: ${t.tokens.join(", ")}` : "Any inbound SMS"
+        case "email_reply":
+            return t.tokens?.length ? `Matches: ${t.tokens.join(", ")}` : "Any inbound email"
     }
 }
 

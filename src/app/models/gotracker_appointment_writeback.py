@@ -90,6 +90,18 @@ class GoTrackerAppointmentWriteback(Base):
     )
     step_id: Mapped[str | None] = mapped_column(String(120), nullable=True)
 
+    #: What kind of thing decided on this write (Item 34). The run id alone
+    #: cannot answer it: a patient booking through a campaign link carries one
+    #: too, and "the campaign did it" is the wrong answer in that case.
+    actor: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    #: The identifier following the interaction that caused this, carried
+    #: through to the Cloud Service's own record so the trail survives the
+    #: boundary rather than stopping at it.
+    trace_id: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
+    #: Why, when the structured fields cannot say — an operator's stated reason
+    #: for overriding, most usefully.
+    reason: Mapped[str | None] = mapped_column(Text, nullable=True)
+
     action: Mapped[str] = mapped_column(String(32), nullable=False)
     status: Mapped[str] = mapped_column(
         String(32),

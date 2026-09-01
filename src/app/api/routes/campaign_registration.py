@@ -35,6 +35,8 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
 from src.app.database import get_system_db_session
+from src.app.models.audit_log import AuditAction, AuditActor, AuditOutcome
+from src.app.services.audit import log_audit_background
 from src.app.models.automation_workflow import AutomationWorkflowRun
 from src.app.models.campaign_response import CampaignResponseEvent
 from src.app.models.contact import Contact
@@ -241,6 +243,18 @@ async def register_patient(
                 "practice software refused patient creation run=%s", run_id
             )
             return _json({"error": "could_not_register"}, 502)
+
+        # A new record in the clinic's practice software, created from a public
+        # form. If anything in this system deserves a durable trace, it is this.
+        log_audit_background(
+            actor=AuditActor.API_CLIENT,
+            action=AuditAction.CREATE_PATIENT,
+            target_resource=f"campaign_run:{run.id}:register",
+            outcome=AuditOutcome.SUCCESS,
+            institution_id=str(run.institution_id),
+            location_id=str(run.location_id) if run.location_id else None,
+            metadata={"source": "campaign_registration_link"},
+        )
 
         contact.nexhealth_patient_id = str(patient_id)
         if not contact.date_of_birth:

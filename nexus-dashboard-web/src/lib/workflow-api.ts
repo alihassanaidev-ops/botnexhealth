@@ -89,6 +89,24 @@ export interface PhoneCountryRegion {
     calling_code: string
 }
 
+/** One PMS appointment disposition, served from the backend PMS status catalog. */
+export interface PmsAppointmentStatus {
+    id: number
+    /** Stable snake_case key — what the runtime writes as `appointment_status`. */
+    key: string
+    label: string
+    /** PMS-neutral meaning: booked | waiting | late | cancelled | no_show | pending. */
+    semantics: string
+    readable: boolean
+    writable: boolean
+    description: string
+}
+
+export interface PmsAppointmentStatusCatalog {
+    pms: string
+    statuses: PmsAppointmentStatus[]
+}
+
 // ---- Workflows ----
 export async function listWorkflows(): Promise<AutomationWorkflow[]> {
     const { data } = await api.get<AutomationWorkflow[]>("/automation/workflows")
@@ -206,6 +224,20 @@ export async function listNodeCapabilities(): Promise<WorkflowNodeCapabilitiesRe
 export async function listPhoneCountryRegions(): Promise<PhoneCountryRegion[]> {
     const { data } = await api.get<PhoneCountryRegion[]>("/automation/workflows/phone-country-regions")
     return data
+}
+
+/**
+ * PMS appointment disposition catalog. Served rather than hardcoded so labels,
+ * semantics and writability live in one place (`src/app/pms/gotracker/statuses.py`).
+ */
+export async function listPmsAppointmentStatuses(
+    pms = "gotracker",
+): Promise<PmsAppointmentStatus[]> {
+    const { data } = await api.get<PmsAppointmentStatusCatalog>(
+        "/automation/workflows/pms-appointment-statuses",
+        { params: { pms } },
+    )
+    return data.statuses
 }
 
 /**

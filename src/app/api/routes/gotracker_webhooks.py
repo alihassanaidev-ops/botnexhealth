@@ -23,7 +23,7 @@ from src.app.models.gotracker_webhook_event import (
 from src.app.models.institution import Institution
 from src.app.models.institution_location import InstitutionLocation
 from src.app.pms.gotracker.mappers import pid as gotracker_id
-from src.app.pms.gotracker.statuses import is_non_attending_status
+from src.app.pms.gotracker.statuses import is_non_attending_status, status_label
 from src.app.services.dead_letter import capture_dead_letter
 from src.app.services.retention_policy import default_gotracker_webhook_raw_retain_until
 from src.app.services.sms_privacy import (
@@ -1415,19 +1415,8 @@ def _appointment_reasons(
 
 
 def _gotracker_status_label(status_id: str | None) -> str | None:
-    if not status_id:
-        return None
-    return {
-        "1": "booked",
-        "2": "booked_waiting",
-        "3": "cancelled",
-        "4": "late",
-        "5": "no_show",
-        "6": "office_cancel",
-        "7": "pending",
-        "8": "short_cancel",
-        "9": "waiting",
-    }.get(str(status_id), str(status_id))
+    """Thin alias kept for call-site readability. The map lives in the PMS layer."""
+    return status_label(status_id)
 
 
 def _string_list(value: Any) -> list[str]:

@@ -44,6 +44,8 @@ from sqlalchemy import select
 
 from src.app.api.rate_limit import limiter
 from src.app.database import get_system_db_session
+from src.app.models.audit_log import AuditAction, AuditActor, AuditOutcome
+from src.app.services.audit import log_audit_background
 from src.app.models.enquiry_intake_source import EnquiryIntakeSource, hash_intake_token
 from src.app.services.automation.enquiry_intake_service import intake_enquiry
 
@@ -245,6 +247,19 @@ async def intake(
             # which are this person's contact details.
             logger.exception("enquiry intake failed source=%s", source_id)
             return _json({"error": "unavailable"}, 503)
+
+        # Which credential landed which lead, and when. Without it a clinic
+        # cannot answer "where did this person come from" after the fact, and a
+        # leaked token's activity would be indistinguishable from the form's.
+        log_audit_background(
+            actor=AuditActor.API_CLIENT,
+            action=AuditAction.CAMPAIGN_CREATE,
+            target_resource=f"enquiry_intake_source:{source_id}",
+            outcome=AuditOutcome.SUCCESS,
+            institution_id=institution_id,
+            location_id=location_id,
+            metadata={"source": source_name or "external_form", "signed": bool(secret)},
+        )
 
         row = await session.get(EnquiryIntakeSource, source_id)
         if row is not None:

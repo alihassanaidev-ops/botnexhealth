@@ -553,6 +553,11 @@ class GoTrackerAdapter(
             body["end_time"] = req.slot_end
         if req.note:
             body["note"] = req.note
+        if req.provenance:
+            # Item 34: the trail has to survive the boundary. Sent as its own
+            # key rather than folded into the note, which is free text a human
+            # edits and a parser should never depend on.
+            body["provenance"] = req.provenance
 
         try:
             raw = await self._client.request("POST", "/api/appointments/book", json=body)

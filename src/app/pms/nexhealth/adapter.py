@@ -43,6 +43,7 @@ from src.app.pms.models import (
     UniversalSlot,
 )
 from src.app.pms.nexhealth import mappers
+from src.app.services.sms_privacy import safe_error_summary
 
 if TYPE_CHECKING:
     from src.app.models.institution import Institution
@@ -704,7 +705,11 @@ class NexHealthAdapter(
 
             return False
         except Exception as e:
-            logger.warning(f"Failed to check provider appointments: {e}")
+            # Item 39: a NexHealth error quotes the request and response, both
+            # of which carry patient records. Summarised, never interpolated.
+            logger.warning(
+                "Failed to check provider appointments: %s", safe_error_summary(e)
+            )
             return True  # safe fallback — don't hide slots
 
     async def get_appointment(self, appointment_id: str) -> dict[str, Any] | None:

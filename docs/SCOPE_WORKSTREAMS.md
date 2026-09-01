@@ -47,6 +47,9 @@ part of this backlog; the section *What doesn't compress* is where the schedule 
 | **7** · Complete the connection health screen | GoTracker operations & health | `8665f7b` | Five missing fields plus a findings panel, all over data that was already being collected. The conflict count it needed arrived with Item 2 |
 | **10** · Operator runbooks for the GoTracker path | GoTracker operations & health | `724d982` | RB-1 to RB-5, each tied to an alarm from Item 6, plus a test that checks the runbooks against the source so they cannot quietly drift out of date |
 | **9** · Sign the messages the Connector sends | GoTracker operations & health | `00699ca` + `f88aa62` | HMAC over the request body, with a three-mode transition and enforcement **shipping off** — turning it on before the fleet has updated would drop every clinic still sending unsigned |
+| **39** · Privacy and audit review | Security, audit & RBAC | `a5d5ee4` + `13b48f5` (Cloud Service) | Three log sites were leaking patient records through raw exception interpolation — a NexHealth error quotes patient records, a Retell verification error quotes the transcript. 185 mutating endpoints classified; the six changing a location's operating hours had no record, and those decide when a patient may be contacted. Coverage is now enforced repo-wide rather than remembered |
+| **34** · Record what caused each write | Security, audit & RBAC | `4b4f030` (Cloud Service) | `actor`, `trace_id` and `reason` on every queued write, carried into the Cloud Service's record. Run and step were already there; **actor** was the gap, since a patient acting on a campaign link carries a run id too. The Item 12 booking path wrote into a practice with no provenance row at all |
+| **33** · Permissions for high-consequence actions | Security, audit & RBAC | Cloud Service audit fix | Four named permissions layered over the existing tenant check. Sync status was open to STAFF and returns patient names — narrowed and audited. Enforcement not built on the Cloud Service: one admin principal, so a permission would distinguish nobody; its admin actions were unlogged entirely and are audited there instead |
 | **17** · Stop calling a service that is failing | Reliability & throughput | `cf65b51c` | Redis-backed breaker per service per clinic; every transition decided in Lua so racing workers cannot disagree. Half-open admits one probe held by a `SET NX` token with its own TTL, so a worker dying mid-probe costs one cooldown rather than wedging the breaker shut. Refused work is held on a timer, reusing the quiet-hours path — no run fails because a supplier had an outage. Only the caller decides what counts as a failure: a 4xx is a bad request, not a sick service |
 | **18** · Limit how fast and how many messages and calls go out | Reliability & throughput | `30091b14` | A call slot is a **lease with an expiry**, not a counter — the doc's warning about a lost decrement is structurally impossible, since every acquire prunes what has lapsed. Slots are re-labelled to the provider's call id once placed, which is the only name the outcome handler has. Deliberately not released on the ambiguous timeout: the call may be live. Per-clinic ceiling (overridable on `Institution.outbound_call_limit`) plus per-provider send rates |
 | **20** · Quiet-hours exceptions | Reliability & throughput | `9cc22fb` | One table for date, patient and message-class exceptions; NULL means "applies regardless", most specific wins, weighted so a patient's own preference always outranks a clinic rule. An exception **replaces** the day's window rather than intersecting it, which is what lets a 7am reminder go out before the doors open. Save-time validation runs the real evaluator rather than re-deriving the rule, so the check cannot drift from what the engine does. Creates the compliance-settings endpoint Item 32's audit was reserved for |
@@ -204,16 +207,21 @@ outranks Tier 2 — the contracted work is still more valuable, and still more b
 
 ---
 
-# WS7 · Security, audit & RBAC
+# WS7 · Security, audit & RBAC — ◐ 4 of 5 COMPLETE
 **5 items · ≈ 5 days · Platform (+ all three systems for the review) · TIER 3**
+
+Only Item 40 remains, and it cannot start: it is remediation of penetration-test findings, and
+no test has been booked. Its size is unknown until one runs. The half of it that *can* be done
+now — agreeing how findings are received, prioritised and owned across three codebases, before
+the report lands rather than after — has not been done either.
 
 | # | Item | Size | Notes |
 |---|---|---|---|
 | **40** | Respond to penetration-test findings | 2d | Unknown until the test runs. Agree intake and tracking **before** it starts |
 | **32** ✅ | Record who changed a campaign — **done, `7572ca4`** | 1d | Was the only privileged area with zero audit coverage. 18 state-changing endpoints now audited with durable records; enrolment and template instantiation were gaps the doc did not name |
-| **33** | Permissions for high-consequence actions | 0.5d | Four permissions. Gate write-replay and conflict-resolution *above* ordinary campaign editing |
-| **34** | Record what caused each write to a practice's records | 0.5d | Trace identifier exists but never reaches the queued write. This is what makes a duplicate-booking investigation possible |
-| **39** | Privacy and audit review | 1d | A review pass, not a feature. Would not pass today — run it *after* 32, 33 and 34 |
+| **33** ✅ | Permissions for high-consequence actions — **done** | 0.5d | Four permissions with an explicit role map; STAFF hold none. Sync status narrowed to admins and audited. The Cloud Service audits its admin actions rather than gating them — one admin principal, so a permission would distinguish nobody. Revisit at a second admin |
+| **34** ✅ | Record what caused each write — **done**, + `4b4f030` | 0.5d | `actor`, `trace_id` and `reason` on every queued write, carried into the Cloud Service's record and shown on the sync-status screen. Actor is the part a run id cannot answer: a patient acting on a campaign link carries one too |
+| **39** ✅ | Privacy and audit review — **done**, + `a5d5ee4` `13b48f5` | 1d | Platform passes with 29 stated exceptions, none touching patient contact. Three log sites sanitised; audit coverage now enforced repo-wide. Cloud Service and Connector passes ran their side. [PRIVACY_AUDIT_REVIEW.md](PRIVACY_AUDIT_REVIEW.md) |
 
 ---
 

@@ -20,7 +20,7 @@ needs four more things, each answering a specific failure:
   patient and has consented to nothing.
 
 Revision ID: 20260901_enquiry_lead_fields
-Revises: 20260831_quiet_hours_exceptions
+Revises: 20260901_write_provenance
 """
 
 from __future__ import annotations
@@ -28,7 +28,7 @@ from __future__ import annotations
 from alembic import op
 
 revision = "20260901_enquiry_lead_fields"
-down_revision = "20260831_quiet_hours_exceptions"
+down_revision = "20260901_write_provenance"
 branch_labels = None
 depends_on = None
 

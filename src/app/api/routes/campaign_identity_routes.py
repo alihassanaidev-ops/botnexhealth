@@ -33,6 +33,8 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
 from src.app.database import get_system_db_session
+from src.app.models.audit_log import AuditAction, AuditActor, AuditOutcome
+from src.app.services.audit import log_audit_background
 from src.app.models.automation_workflow import AutomationWorkflowRun
 from src.app.models.campaign_response import (
     CampaignResponseEvent,
@@ -208,6 +210,27 @@ async def identify(
             phone=(body.phone or "").strip() or None,
             email=(body.email or "").strip() or None,
             run=run,
+        )
+
+        # Recorded whichever way it went. A gate that logs only its successes
+        # cannot answer the question it exists for: whether somebody sat there
+        # guessing at a patient's date of birth.
+        log_audit_background(
+            actor=AuditActor.API_CLIENT,
+            action=AuditAction.READ_PATIENT,
+            target_resource=f"campaign_run:{run_id}:identify",
+            outcome=(
+                AuditOutcome.SUCCESS if outcome.ok else AuditOutcome.FAILURE
+            ),
+            institution_id=str(run.institution_id),
+            location_id=str(run.location_id) if run.location_id else None,
+            metadata={
+                "source": "campaign_identity",
+                "status": outcome.status,
+                # The internal reason, never returned to the page.
+                "reason": outcome.reason,
+                "attempts_used": attempts_used(run),
+            },
         )
 
         if outcome.ok and outcome.patient_id:

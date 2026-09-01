@@ -28,10 +28,11 @@ _NOW = datetime(2026, 7, 10, 12, 0, 0, tzinfo=timezone.utc)
 # ---------------------------------------------------------------------------
 
 
-def _make_workflow(trigger_type="callback_requested", version_id="ver-1"):
+def _make_workflow(trigger_type="callback_requested", version_id="ver-1", location_id=None):
     wf = MagicMock()
     wf.id = "wf-1"
     wf.institution_id = "inst-1"
+    wf.location_id = location_id
     wf.status = AutomationWorkflowStatus.ACTIVE.value
     wf.trigger_type = trigger_type
     wf.current_version_id = version_id
