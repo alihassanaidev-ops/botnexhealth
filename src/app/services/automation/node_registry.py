@@ -48,6 +48,10 @@ NODE_CAPABILITIES: dict[str, NodeCapability] = {
     "update_gotracker_appointment": NodeCapability(
         "update_gotracker_appointment", ("next_node_id",)
     ),
+    "booking_link": NodeCapability("booking_link", ("next_node_id",)),
+    "patient_registration": NodeCapability(
+        "patient_registration", ("next_node_id",)
+    ),
     "json_mapper": NodeCapability("json_mapper", ("next_node_id",)),
     "llm": NodeCapability("llm", ("next_node_id",)),
     "condition": NodeCapability(

@@ -19,6 +19,8 @@ EXPECTED_NODE_TYPES = {
     "update_patient_status",
     "update_appointment",
     "update_gotracker_appointment",
+    "booking_link",
+    "patient_registration",
     "json_mapper",
     "llm",
     "condition",
