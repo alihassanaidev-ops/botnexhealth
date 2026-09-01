@@ -22,7 +22,7 @@ part of this backlog; the section *What doesn't compress* is where the schedule 
 | Split across both | **12 items** |
 | Blocked on a product decision | **1 item partially** (Item 37 on deferred Decision A); Decision B still gates WS4 template policy/copy |
 | Gated on something other than code | **16 items** — see *What doesn't compress* |
-| **Delivered so far** | **27 of 47**, plus Item 24 part-built — see *Delivered so far* |
+| **Delivered so far** | **28 of 47** — see *Delivered so far* |
 | **Workstreams complete** | **WS2, WS6**; WS3 owes half of Item 15; WS7 owes Item 40 |
 
 ---
@@ -43,6 +43,7 @@ part of this backlog; the section *What doesn't compress* is where the schedule 
 | **1** · Check the clinic's schedule before writing | GoTracker booking safety | `b066a8d` | Patient-resolves + slot-free re-checked on the same connection immediately before the write. Cancelled statuses release their slot; touching boundaries are not overlaps |
 | **2** · A conflict outcome for writes | GoTracker booking safety | `4adc67c` | Third terminal status — never re-queued however many attempts remain. Own webhook action. Surfaced per-location on `/api/admin/sync_status` as `conflicts` / `failed` / `oldest_unwritten`. An admin can still re-queue deliberately |
 | **4** · Report pending honestly | GoTracker booking safety | `0d096f2` + `af01334` | Platform half landed first, as the doc requires. Booking response and appointment reads carry `write_status` (`pending`/`written`/`failed`/`conflict`) + `foreign_id`, separate from `status`; PMS-origin rows read as `written`. Campaign run-history visibility is surfaced by Item 11 |
+| **24** · Sales Qualification campaign | The four campaigns | `ecd1861` `db98a99` `a6e8932` `09e1986` `2f39b99` + `157b6e94` | Intake, patient conversion and the lead workspace were already in. `157b6e94` adds the missing `enquiry_received` trigger, enrollment from signed intake and manual staff entry, the Sales Qualification launch template, Retell SMS setup, registration and provider-locked booking links, lead status side effects, merge fields and sales analytics coverage |
 | **5** · Recover in-flight writes after Connector restart | GoTracker booking safety | `305ed2d` | Item 3's read-back applied to patient creation too. No local state, so **Decision I fell away instead of being answered** — the decision log's recommendation was to avoid a durable local record, and that is what shipped |
 | **8** · Mapping review before live bookings | GoTracker operations & health | `a9fda29` | Writes that reach a patient are refused until a named person has reviewed the mapping. Reads and agent sync are deliberately not gated — a half-onboarded clinic can still be looked at and talked to, it just cannot have appointments written into it |
 | **6** · Alert when a connection is unhealthy | GoTracker operations & health | `e178162` + `c1ed593` + `07afeb2` + `94d46e7` | Nine conditions evaluated every five minutes, collapsed into three CloudWatch alarms. Suppressed when the clinic is genuinely closed, so a practice with its lights off overnight does not page anyone |
@@ -155,7 +156,7 @@ Shipped as backend `20260831-94d46e7` on staging and production. Test counts at 
 **8 items · ≈ 9 days · Platform backend (+ builder UI) · TIER 1**
 
 **Remaining: the branching half of Item 15.** Item 11's engine/builder capability is delivered;
-WS4 still needs the campaign templates to use it.
+WS4 Item 22 still needs the campaign templates to use it.
 
 Where the silent failures live. Everything here is in this repo.
 
@@ -175,15 +176,16 @@ Where the silent failures live. Everything here is in this repo.
 # WS4 · The four campaigns
 **3 items · ≈ 10 days · Platform + campaign design · TIER 2**
 
-**Item 24 is part-built**: intake, patient conversion and the lead workspace are in; the trigger and
-the campaign template are not.
+**Item 24 is delivered**: intake, patient conversion, the lead workspace, the `enquiry_received`
+trigger and the Sales Qualification template are in.
 
-Two campaigns are live and good. Two are two-step placeholders and one does not exist.
+Two campaigns are live and good. Two are still shallow placeholders. Sales Qualification now exists
+as a launch template but still needs clinic-specific setup before activation.
 
 | # | Item | Size | Notes |
 |---|---|---|---|
 | **22** | Build out Appointment Reminder and Overdue Recall | 5d | Rebuild both to the depth of the live campaigns (~15–20 steps each). Reminder must re-check live practice data before every send. **Switching them on is the last action in this workstream.** Needs Items 12, 13, 25 and the new Item 11 booking node wired into the templates; Decision B still controls the pending-branch copy/path |
-| **24** ◐ | Build the Sales Qualification campaign — **intake and conversion done, `ecd1861` `db98a99` `a6e8932` `09e1986` `2f39b99`** | 4d | Was "does not exist in any form"; three of its five parts now do. **Intake**: a per-form credential a clinic issues itself, posted to by its own site or a hosted builder, with tolerant extraction of the answers array so a Typeform payload does not have to be reshaped first — plus staff entry by hand through the same path, so dedup and consent cannot diverge between the two. **Patient conversion**: the registration form and `create_patient`, which both adapters already implemented and only the voice agent could reach. **Working the lead**: a list, a stage derived from whether a practice-software record exists, and encrypted notes. **Remaining: the trigger and the template** — nothing enrols a landed lead into a campaign yet, and `BulkImportTrigger` is still a literal nothing implements. Decision C answered (signed webhook), and its open half answered too (staff may enter by hand) |
+| **24** ✅ | Build the Sales Qualification campaign — **done, `ecd1861` `db98a99` `a6e8932` `09e1986` `2f39b99` + `157b6e94`** | 4d | Intake, patient conversion and the lead workspace were already in. The last gap is now closed: `enquiry_received` workflows enroll from signed intake and manual staff entry, the launch template runs Retell SMS qualification, qualified leads receive registration and provider-locked booking links, and outcomes update lead status / DNC / analytics. Decision C is answered: signed webhook plus staff manual entry through the same intake path |
 | **23** | Run Overdue Recall for GoTracker clinics | 1d | Must refuse to run on a clinic whose history sync is incomplete — otherwise it tells last month's patients they haven't been seen in two years |
 
 ---
@@ -337,9 +339,9 @@ Nothing else competes with this.
 Things that fail without telling anyone, plus the two blockers (11, 12) that half the remaining
 feature work sits behind.
 
-**Tier 2 · Contracted features not yet built.** Items **25, 26, 22, 23, 21, 24, 27, 28, 31, 29**.
-Two campaigns and four NexHealth data families. The largest volume of work, and the most visible to
-the client.
+**Tier 2 · Contracted features not yet built.** Items **25, 26, 22, 23, 27, 28, 31, 29**.
+The remaining campaign build-out, GoTracker recall rollout, and NexHealth data families. This is now
+the largest visible block of client-facing work.
 
 **Tier 3 · Operator tooling and resilience.** Items **7, 8, 36, 33, 34, 17, 18, 20, 19, 9, 37**.
 Makes the product supportable and survivable rather than merely functional.
@@ -376,15 +378,15 @@ agent reads today), Item 31 (silently changing offered slots on live clinics), a
 
 # Suggested first moves on this branch
 
-Everything below is Platform-side, in this repo, unblocked, and in dependency order.
+Everything below is Platform-side, in this repo, and in dependency order.
 
-1. **Item 4 — Platform half.** Handle `pending` as an outcome distinct from success and failure, and
-   fix the message that always claims success. The doc explicitly requires our side to land before
-   the Cloud Service starts sending the status. *(Confirm Decision B first — it shapes the campaign
-   behaviour and WS4 pending-branch copy, though the plumbing can be built either way.)*
-2. **Item 32 — campaign audit.** No dependencies, closes a genuine compliance gap, pure backend.
-3. **Item 12 — link generation.** Currently unsafe, and blocks Items 13 and 22.
-4. **Item 14 + 15 — text retry and delivery receipts.** Build 14 with the provider idempotency key
-   in the same change; 15 is small and independent.
-5. **Item 25 — Patient Communication family.** Start the second lane here if there is a second
-   developer; it is the prerequisite for Item 22 being any good.
+1. **Item 25 — Patient Communication family.** This is the best next move because Item 22's overdue
+   recall quality depends on better patient communication / recall history.
+2. **Item 22 — Appointment Reminder + Overdue Recall.** Start with the Appointment Reminder half if
+   Item 25 is not ready; build Overdue Recall after Item 25 so recall targeting is not weak.
+3. **Item 23 — Run Overdue Recall for GoTracker clinics.** Do this after Item 22, with a hard refusal
+   when history sync is incomplete.
+4. **Item 15 — delivery-failure branching.** The receipt ingestion is done; the remaining work is
+   run-state support for branching after a hard delivery failure.
+5. **Item 37 — outcome reporting.** Item 24 now unblocks enquiries-qualified reporting, but Decision A
+   still gates the revenue slice.
