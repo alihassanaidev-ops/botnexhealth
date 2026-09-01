@@ -34,7 +34,7 @@ from fastapi import APIRouter, Query
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
-from src.app.database import get_system_db_session
+from src.app.database import get_campaign_link_db_session
 from src.app.models.audit_log import AuditAction, AuditActor, AuditOutcome
 from src.app.services.audit import log_audit_background
 from src.app.models.automation_workflow import AutomationWorkflowRun
@@ -133,9 +133,7 @@ async def registration_details(
         return verified
     run_id = verified
 
-    async with get_system_db_session(
-        "campaign_booking_link", external_id=run_id
-    ) as session:
+    async with get_campaign_link_db_session(run_id) as session:
         run = await session.get(AutomationWorkflowRun, run_id)
         if run is None:
             return _json({"error": "gone"}, 410)
@@ -144,9 +142,7 @@ async def registration_details(
             if run.location_id
             else None
         )
-        contact = (
-            await session.get(Contact, run.contact_id) if run.contact_id else None
-        )
+        contact = await session.get(Contact, run.contact_id) if run.contact_id else None
         if location is None or contact is None:
             return _json({"error": "unavailable"}, 503)
 
@@ -180,9 +176,7 @@ async def register_patient(
     if gender not in GENDERS:
         return _json({"error": "invalid_gender"}, 400)
 
-    async with get_system_db_session(
-        "campaign_booking_link", external_id=run_id
-    ) as session:
+    async with get_campaign_link_db_session(run_id) as session:
         run = await session.get(AutomationWorkflowRun, run_id)
         if run is None:
             return _json({"error": "gone"}, 410)
@@ -193,9 +187,7 @@ async def register_patient(
             if run.location_id
             else None
         )
-        contact = (
-            await session.get(Contact, run.contact_id) if run.contact_id else None
-        )
+        contact = await session.get(Contact, run.contact_id) if run.contact_id else None
         if institution is None or location is None or contact is None:
             return _json({"error": "unavailable"}, 503)
 
@@ -208,7 +200,9 @@ async def register_patient(
         if not provider_id:
             # The step is what names the provider a self-registered patient is
             # filed under. Without it there is nothing safe to guess.
-            logger.warning("registration link has no provider configured run=%s", run_id)
+            logger.warning(
+                "registration link has no provider configured run=%s", run_id
+            )
             return _json({"error": "unavailable"}, 503)
 
         first_name = _clean(body.first_name) or _clean(contact.first_name)
@@ -239,9 +233,7 @@ async def register_patient(
 
         patient_id = result.get("patient_id")
         if not result.get("success") or not patient_id:
-            logger.warning(
-                "practice software refused patient creation run=%s", run_id
-            )
+            logger.warning("practice software refused patient creation run=%s", run_id)
             return _json({"error": "could_not_register"}, 502)
 
         # A new record in the clinic's practice software, created from a public

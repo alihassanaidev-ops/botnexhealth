@@ -28,7 +28,7 @@ from uuid import uuid4
 from fastapi import APIRouter, Query, Request
 from fastapi.responses import PlainTextResponse
 
-from src.app.database import get_system_db_session
+from src.app.database import get_campaign_link_db_session
 from src.app.models.audit_log import AuditAction, AuditActor, AuditOutcome
 from src.app.models.automation_workflow import AutomationWorkflowRun
 from src.app.models.campaign_response import CampaignResponseEvent, CampaignStaffHandoff
@@ -99,9 +99,7 @@ async def follow_campaign_link(
         # The action is signed, so this means the path and token disagree.
         return _reply(_INVALID_TEXT, 400)
 
-    async with get_system_db_session(
-        "campaign_action_link", external_id=run_id
-    ) as session:
+    async with get_campaign_link_db_session(run_id) as session:
         run = await session.get(AutomationWorkflowRun, run_id)
         if run is None:
             return _reply(_GONE_TEXT, 410)

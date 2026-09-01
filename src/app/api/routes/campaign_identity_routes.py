@@ -32,7 +32,7 @@ from fastapi import APIRouter, Query, Request
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
-from src.app.database import get_system_db_session
+from src.app.database import get_campaign_link_db_session
 from src.app.models.audit_log import AuditAction, AuditActor, AuditOutcome
 from src.app.services.audit import log_audit_background
 from src.app.models.automation_workflow import AutomationWorkflowRun
@@ -135,9 +135,7 @@ async def identity_context(
         return verified
     run_id, _action = verified
 
-    async with get_system_db_session(
-        "campaign_booking_link", external_id=run_id
-    ) as session:
+    async with get_campaign_link_db_session(run_id) as session:
         run = await session.get(AutomationWorkflowRun, run_id)
         if run is None:
             return _json({"error": "gone"}, 410)
@@ -146,9 +144,7 @@ async def identity_context(
             if run.location_id
             else None
         )
-        contact = (
-            await session.get(Contact, run.contact_id) if run.contact_id else None
-        )
+        contact = await session.get(Contact, run.contact_id) if run.contact_id else None
         return _json(
             IdentityContext(
                 clinic_name=getattr(location, "name", "") or "",
@@ -171,9 +167,7 @@ async def identify(
         return verified
     run_id, action = verified
 
-    async with get_system_db_session(
-        "campaign_booking_link", external_id=run_id
-    ) as session:
+    async with get_campaign_link_db_session(run_id) as session:
         run = await session.get(AutomationWorkflowRun, run_id)
         if run is None:
             return _json({"error": "gone"}, 410)
@@ -191,9 +185,7 @@ async def identify(
             if run.location_id
             else None
         )
-        contact = (
-            await session.get(Contact, run.contact_id) if run.contact_id else None
-        )
+        contact = await session.get(Contact, run.contact_id) if run.contact_id else None
         if institution is None or location is None:
             return _json({"error": "unavailable"}, 503)
 
@@ -219,9 +211,7 @@ async def identify(
             actor=AuditActor.API_CLIENT,
             action=AuditAction.READ_PATIENT,
             target_resource=f"campaign_run:{run_id}:identify",
-            outcome=(
-                AuditOutcome.SUCCESS if outcome.ok else AuditOutcome.FAILURE
-            ),
+            outcome=(AuditOutcome.SUCCESS if outcome.ok else AuditOutcome.FAILURE),
             institution_id=str(run.institution_id),
             location_id=str(run.location_id) if run.location_id else None,
             metadata={

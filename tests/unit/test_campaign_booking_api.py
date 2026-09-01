@@ -131,7 +131,8 @@ def _call(client, method, path, ctx, json=None):
     session, cm, adapter, booked = ctx
     with (
         patch(
-            "src.app.api.routes.campaign_booking.get_system_db_session", return_value=cm
+            "src.app.api.routes.campaign_booking.get_campaign_link_db_session",
+            return_value=cm,
         ),
         patch(
             "src.app.api.routes.campaign_booking.get_adapter_for_institution_location",

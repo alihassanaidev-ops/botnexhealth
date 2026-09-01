@@ -4,6 +4,7 @@ import { useNavigate, useSearchParams } from "react-router-dom"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import {
+    campaignLinkGoneMessage,
     cancelAppointment,
     fetchCancellation,
     type CancellationDetails,
@@ -46,18 +47,16 @@ export default function CancelLink() {
     const navigate = useNavigate()
     const token = params.get("token") ?? ""
 
-    const [phase, setPhase] = useState<Phase>("loading")
+    const [phase, setPhase] = useState<Phase>(token ? "loading" : "error")
     const [clinic, setClinic] = useState("the clinic")
     const [appointment, setAppointment] =
         useState<CancellationDetails["appointment"]>(null)
-    const [message, setMessage] = useState("")
+    const [message, setMessage] = useState(
+        token ? "" : "This link isn't valid. Please contact the clinic directly.",
+    )
 
     useEffect(() => {
-        if (!token) {
-            setMessage("This link isn't valid. Please contact the clinic directly.")
-            setPhase("error")
-            return
-        }
+        if (!token) return
         let cancelled = false
         fetchCancellation(token)
             .then((d) => {
@@ -80,13 +79,12 @@ export default function CancelLink() {
                 const status = err?.response?.status
                 const reason = err?.response?.data?.error
                 setMessage(
-                    status === 410
-                        ? "This link has expired. Please contact the clinic and they'll help you."
-                        : reason === "no_appointment"
+                    campaignLinkGoneMessage(err)
+                        ?? (reason === "no_appointment"
                           ? "There's no appointment on this link to cancel. Please contact the clinic."
                           : status === 503
                             ? "We can't reach the clinic's system right now. Please try again shortly."
-                            : "This link isn't valid. Please contact the clinic directly.",
+                            : "This link isn't valid. Please contact the clinic directly."),
                 )
                 setPhase("error")
             })

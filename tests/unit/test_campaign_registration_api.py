@@ -139,7 +139,7 @@ def _contact(pms_id=None):
 class TestRegistration:
     def _post(self, client, session, adapter, body=None):
         with patch(
-            "src.app.api.routes.campaign_registration.get_system_db_session"
+            "src.app.api.routes.campaign_registration.get_campaign_link_db_session"
         ) as db, patch(
             "src.app.api.routes.campaign_registration."
             "get_adapter_for_institution_location",

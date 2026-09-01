@@ -6,6 +6,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import {
+    campaignLinkGoneMessage,
     GENDERS,
     fetchRegistrationDetails,
     registerPatient,
@@ -33,9 +34,11 @@ export default function RegisterPatient() {
     const [params] = useSearchParams()
     const token = params.get("token") ?? ""
 
-    const [phase, setPhase] = useState<Phase>("loading")
+    const [phase, setPhase] = useState<Phase>(token ? "loading" : "error")
     const [clinic, setClinic] = useState("the clinic")
-    const [message, setMessage] = useState("")
+    const [message, setMessage] = useState(
+        token ? "" : "This link isn't valid. Please contact the clinic directly.",
+    )
 
     const [firstName, setFirstName] = useState("")
     const [lastName, setLastName] = useState("")
@@ -46,11 +49,7 @@ export default function RegisterPatient() {
     const [invalid, setInvalid] = useState("")
 
     useEffect(() => {
-        if (!token) {
-            setMessage("This link isn't valid. Please contact the clinic directly.")
-            setPhase("error")
-            return
-        }
+        if (!token) return
         let cancelled = false
         fetchRegistrationDetails(token)
             .then((d) => {
@@ -68,11 +67,10 @@ export default function RegisterPatient() {
                 if (cancelled) return
                 const status = err?.response?.status
                 setMessage(
-                    status === 410
-                        ? "This link has expired. Please contact the clinic and they'll help you."
-                        : status === 503
+                    campaignLinkGoneMessage(err)
+                        ?? (status === 503
                           ? "We can't reach the clinic's system right now. Please try again shortly."
-                          : "This link isn't valid. Please contact the clinic directly.",
+                          : "This link isn't valid. Please contact the clinic directly."),
                 )
                 setPhase("error")
             })

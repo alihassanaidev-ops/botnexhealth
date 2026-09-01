@@ -439,6 +439,14 @@ through `enquiry_trigger_service.py` with PHI-light trigger metadata. The Sales
 Qualification launch template uses that trigger, a Retell SMS conversation,
 patient registration, and a restricted booking link.
 
+Patient action links are authenticated by a signed, expiring token that names one
+workflow run and action. Because the token does not expose tenant scope, the database
+first permits a SELECT-only lookup of that exact run through
+`campaign_link_lookup`; the application then reopens the working session with the
+resolved institution and location. Public-link routes must use
+`get_campaign_link_db_session` after verifying the signature—an ordinary system
+session has no workflow-run visibility under RLS.
+
 The `appointment-reminder-24h` launch template is a separate Appointment
 Reminder campaign, not a stage of the confirmation campaign. It uses an
 `appointment_offset` trigger with attending/scheduled status eligibility, records

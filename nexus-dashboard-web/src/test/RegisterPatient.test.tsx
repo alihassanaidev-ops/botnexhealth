@@ -102,10 +102,19 @@ describe("RegisterPatient", () => {
 
     it("tells the patient an expired link expired", async () => {
         vi.mocked(api.fetchRegistrationDetails).mockRejectedValue({
-            response: { status: 410 },
+            response: { status: 410, data: { error: "expired" } },
         })
         renderAt()
         expect(await screen.findByText(/expired/i)).toBeInTheDocument()
+    })
+
+    it("does not call a withdrawn link expired", async () => {
+        vi.mocked(api.fetchRegistrationDetails).mockRejectedValue({
+            response: { status: 410, data: { error: "gone" } },
+        })
+        renderAt()
+        expect(await screen.findByText(/no longer active/i)).toBeInTheDocument()
+        expect(screen.queryByText(/expired/i)).not.toBeInTheDocument()
     })
 
     it("never shows why the practice software refused", async () => {

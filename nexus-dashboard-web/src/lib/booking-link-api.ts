@@ -12,6 +12,22 @@ const client = axios.create({
     baseURL: import.meta.env.VITE_API_URL || "http://localhost:8000/api",
 })
 
+const EXPIRED_LINK_MESSAGE =
+    "This link has expired. Please contact the clinic and they'll help you."
+const INACTIVE_LINK_MESSAGE =
+    "This link is no longer active. Please contact the clinic and they'll help you."
+
+/** Return patient-safe copy for the two distinct HTTP 410 link states. */
+export function campaignLinkGoneMessage(error: unknown): string | null {
+    const response = (error as {
+        response?: { status?: number; data?: { error?: string } }
+    })?.response
+    if (response?.status !== 410) return null
+    return response.data?.error === "expired"
+        ? EXPIRED_LINK_MESSAGE
+        : INACTIVE_LINK_MESSAGE
+}
+
 export type SlotOption = {
     start: string
     end: string

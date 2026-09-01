@@ -29,14 +29,13 @@ def _validate_uuid_or_empty(value: str | None) -> str:
         UUID(str(value))
         return str(value)
     except (ValueError, TypeError, AttributeError):
-        logger.warning(
-            "Invalid UUID in RLS context: %r — treating as empty", value
-        )
+        logger.warning("Invalid UUID in RLS context: %r — treating as empty", value)
         return ""
 
 
 class Base(DeclarativeBase):
     """Base class for SQLAlchemy models."""
+
     pass
 
 
@@ -75,9 +74,7 @@ class RlsContext:
             location_id=(
                 str(user.location_id) if getattr(user, "location_id", None) else None
             ),
-            group_id=(
-                str(user.group_id) if getattr(user, "group_id", None) else None
-            ),
+            group_id=(str(user.group_id) if getattr(user, "group_id", None) else None),
         )
 
     @classmethod
@@ -175,9 +172,7 @@ async def apply_rls_context(session: AsyncSession, context: RlsContext | None) -
             "external_id": (
                 context.external_id if context and context.external_id else ""
             ),
-            "group_id": (
-                _validate_uuid_or_empty(context.group_id) if context else ""
-            ),
+            "group_id": (_validate_uuid_or_empty(context.group_id) if context else ""),
         },
     )
 
@@ -366,6 +361,48 @@ async def get_system_db_session(
     ):
         async with get_db_session() as session:
             yield session
+
+
+@asynccontextmanager
+async def get_campaign_link_db_session(
+    run_id: str,
+) -> AsyncGenerator[AsyncSession, None]:
+    """Open the tenant-scoped session authorized by a signed campaign run.
+
+    Public campaign links do not know an institution before their run is read,
+    while the workflow tables correctly require one under RLS.  Resolve only
+    the exact run named by ``app.external_id`` under the narrow lookup policy,
+    then reopen the working session with that run's institution/location scope.
+
+    Callers must verify the action-token signature before using this helper.
+    An unknown run deliberately yields the lookup-scoped session so the normal
+    ``session.get(..., run_id)`` path returns ``None`` without widening access.
+    """
+    async with get_system_db_session(
+        "campaign_link_lookup",
+        external_id=run_id,
+    ) as lookup_session:
+        scope = (
+            await lookup_session.execute(
+                text(
+                    "SELECT institution_id::text AS institution_id, "
+                    "location_id::text AS location_id "
+                    "FROM automation_workflow_runs WHERE id::text = :run_id"
+                ),
+                {"run_id": run_id},
+            )
+        ).one_or_none()
+        if scope is None:
+            yield lookup_session
+            return
+
+    async with get_system_db_session(
+        "celery",
+        institution_id=scope.institution_id,
+        location_id=scope.location_id,
+        external_id=f"campaign_link:{run_id}",
+    ) as session:
+        yield session
 
 
 @asynccontextmanager

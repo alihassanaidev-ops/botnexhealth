@@ -68,7 +68,8 @@ def _get(client, action, token, *, run=None, confirm_ok=True):
         return_value=MagicMock(success=confirm_ok)
     )
     with patch(
-        "src.app.api.routes.campaign_links.get_system_db_session", return_value=ctx
+        "src.app.api.routes.campaign_links.get_campaign_link_db_session",
+        return_value=ctx,
     ), patch(
         "src.app.api.routes.campaign_links.get_adapter_for_institution_location",
         AsyncMock(return_value=adapter),

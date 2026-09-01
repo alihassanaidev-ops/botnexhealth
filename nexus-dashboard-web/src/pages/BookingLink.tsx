@@ -6,6 +6,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { AppointmentTypePicker } from "@/components/booking/AppointmentTypePicker"
 import {
     bookSlot,
+    campaignLinkGoneMessage,
     fetchAppointmentTypes,
     fetchSlots,
     type AppointmentTypeOption,
@@ -85,7 +86,7 @@ export default function BookingLink() {
     const [params] = useSearchParams()
     const token = params.get("token") ?? ""
 
-    const [phase, setPhase] = useState<Phase>("loading")
+    const [phase, setPhase] = useState<Phase>(token ? "loading" : "error")
     const [data, setData] = useState<SlotsResponse | null>(null)
     const [chosen, setChosen] = useState<SlotOption | null>(null)
     const [types, setTypes] = useState<AppointmentTypeOption[]>([])
@@ -95,7 +96,9 @@ export default function BookingLink() {
     const [outcome, setOutcome] = useState<"booked" | "pending" | null>(null)
     // What was actually booked, held so the confirmation can name it back.
     const [confirmedSlot, setConfirmedSlot] = useState<SlotOption | null>(null)
-    const [message, setMessage] = useState("")
+    const [message, setMessage] = useState(
+        token ? "" : "This link isn't valid. Please contact the clinic directly.",
+    )
 
     const linkAction = (action === "reschedule" ? "reschedule" : "book") as LinkAction
     const isReschedule = linkAction === "reschedule"
@@ -117,14 +120,10 @@ export default function BookingLink() {
 
     useEffect(() => {
         let cancelled = false
-        if (!token) {
-            setMessage("This link isn't valid. Please contact the clinic directly.")
-            setPhase("error")
-            return
-        }
+        if (!token) return
         // Re-running for a filter change must not blank the page — the patient
         // keeps the times they are looking at until the new ones arrive.
-        setRefreshing(true)
+        queueMicrotask(() => !cancelled && setRefreshing(true))
         fetchSlots(linkAction, token, {
             appointmentTypeId: typeId ?? undefined,
             days: rangeDays,
@@ -158,11 +157,10 @@ export default function BookingLink() {
                 // clinic's system is simply unreachable sends them chasing a
                 // problem they cannot fix.
                 setMessage(
-                    status === 410
-                        ? "This link has expired. Please contact the clinic and they'll help you."
-                        : status === 503
+                    campaignLinkGoneMessage(err)
+                        ?? (status === 503
                           ? "We can't load available times right now. Please try again shortly, or contact the clinic."
-                          : "This link isn't valid. Please contact the clinic directly.",
+                          : "This link isn't valid. Please contact the clinic directly."),
                 )
                 setPhase("error")
             })
@@ -170,7 +168,7 @@ export default function BookingLink() {
         return () => {
             cancelled = true
         }
-    }, [linkAction, token, typeId, rangeDays])
+    }, [linkAction, token, typeId, rangeDays, navigate])
 
     const days = useMemo(
         () => byDay(data?.slots ?? []),

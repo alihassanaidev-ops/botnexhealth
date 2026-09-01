@@ -28,7 +28,7 @@ from fastapi import APIRouter, Query, Request
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
-from src.app.database import get_system_db_session
+from src.app.database import get_campaign_link_db_session
 from src.app.models.audit_log import AuditAction, AuditActor, AuditOutcome
 from src.app.models.automation_workflow import AutomationWorkflowRun
 from src.app.services.automation.campaign_action_links import (
@@ -410,9 +410,7 @@ async def cancellation_details(
     if token_action != "cancel":
         return _json({"error": "invalid"}, 400)
 
-    async with get_system_db_session(
-        "campaign_booking_link", external_id=run_id
-    ) as session:
+    async with get_campaign_link_db_session(run_id) as session:
         run = await session.get(AutomationWorkflowRun, run_id)
         if run is None:
             return _json({"error": "gone"}, 410)
@@ -470,9 +468,7 @@ async def cancel_appointment_link(
     if token_action != "cancel":
         return _json({"error": "invalid"}, 400)
 
-    async with get_system_db_session(
-        "campaign_booking_link", external_id=run_id
-    ) as session:
+    async with get_campaign_link_db_session(run_id) as session:
         run = await session.get(AutomationWorkflowRun, run_id)
         if run is None:
             return _json({"error": "gone"}, 410)
@@ -557,9 +553,7 @@ async def list_appointment_types(
         return verified
     run_id, _ = verified
 
-    async with get_system_db_session(
-        "campaign_booking_link", external_id=run_id
-    ) as session:
+    async with get_campaign_link_db_session(run_id) as session:
         run = await session.get(AutomationWorkflowRun, run_id)
         if run is None:
             return _json({"error": "gone"}, 410)
@@ -608,9 +602,7 @@ async def list_slots(
         return verified
     run_id, _ = verified
 
-    async with get_system_db_session(
-        "campaign_booking_link", external_id=run_id
-    ) as session:
+    async with get_campaign_link_db_session(run_id) as session:
         run = await session.get(AutomationWorkflowRun, run_id)
         if run is None:
             return _json({"error": "gone"}, 410)
@@ -733,9 +725,7 @@ async def book_slot(
         return verified
     run_id, _ = verified
 
-    async with get_system_db_session(
-        "campaign_booking_link", external_id=run_id
-    ) as session:
+    async with get_campaign_link_db_session(run_id) as session:
         run = await session.get(AutomationWorkflowRun, run_id)
         if run is None:
             return _json({"error": "gone"}, 410)
