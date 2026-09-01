@@ -33,7 +33,7 @@ from uuid import uuid4
 
 from sqlalchemy import select
 
-from src.app.models.campaign_enquiry import CampaignEnquiry, EnquiryStatus
+from src.app.models.campaign_enquiry import EnquiryStatus
 from src.app.models.contact import Contact
 from src.app.models.sms_consent import (
     ConsentBasis,
@@ -49,7 +49,9 @@ logger = logging.getLogger(__name__)
 
 @dataclass
 class IntakeResult:
-    enquiry: CampaignEnquiry
+    #: A lead is a contact. Named ``enquiry`` still because that is what the
+    #: caller asked to record, not because it is a different kind of row.
+    enquiry: Contact
     #: False when an earlier submission already created this one.
     created: bool
     #: True when the lead was matched to somebody already in the records.
@@ -87,49 +89,54 @@ async def intake_enquiry(
         email=email,
     )
     if existing is not None:
-        # Resubmission. Fill blanks rather than overwrite: the later form may
-        # know a phone the first did not, but a staff member's notes must not
-        # be flattened by an automated repost.
+        # Already known — as a lead, a previous caller, or a patient. Fill
+        # blanks rather than overwrite: a later form may know a phone the first
+        # did not, but an automated repost must not flatten a staff note or
+        # downgrade somebody who has since been registered.
         _fill_blanks(existing, first_name=first_name, last_name=last_name,
                      email=email, phone=phone, external_ref=external_ref)
+        if existing.lead_status is None and existing.nexhealth_patient_id is None:
+            existing.lead_status = EnquiryStatus.NEW.value
+            existing.lead_source = existing.lead_source or source
         await _record_consent(
             session,
             institution_id=institution_id,
-            location_id=location_id or existing.location_id,
+            location_id=location_id,
             phone=phone or existing.phone,
             email=email or existing.email,
             channels=consent_channels,
             wording=consent_wording,
         )
-        return IntakeResult(enquiry=existing, created=False)
+        return IntakeResult(
+            enquiry=existing,
+            created=False,
+            # True when the person we matched is already in the practice
+            # software, which is what tells the caller not to register them.
+            matched_existing_contact=bool(existing.nexhealth_patient_id),
+        )
 
-    enquiry = CampaignEnquiry(
-        id=str(uuid4()),
+    contact = Contact(
         institution_id=institution_id,
-        location_id=location_id,
-        intake_key=intake_key,
-        source=source,
         first_name=(first_name or None),
         last_name=(last_name or None),
-        status=EnquiryStatus.NEW.value,
+        full_name=" ".join(p for p in (first_name, last_name) if p).strip() or None,
+        # No practice-software id. That single fact is what makes this a lead
+        # rather than a patient, so nothing here invents one.
+        nexhealth_patient_id=None,
+        is_new_patient=True,
+        lead_source=source,
+        lead_status=EnquiryStatus.NEW.value,
+        intake_key=intake_key,
         attribution=attribution or None,
         external_ref=external_ref,
     )
     # Through the setters, so the hashes are written with the values.
-    enquiry.email = email
-    enquiry.phone = phone
+    contact.email = email
+    contact.phone = phone
     if notes:
-        enquiry.notes = notes
+        contact.notes = notes
 
-    contact = await _find_contact(
-        session, institution_id=institution_id, phone=phone, email=email
-    )
-    if contact is not None:
-        # Already known. Recorded now so the conversion step never creates a
-        # second patient for somebody the practice already has.
-        enquiry.contact_id = str(contact.id)
-
-    session.add(enquiry)
+    session.add(contact)
     await session.flush()
 
     await _record_consent(
@@ -141,9 +148,7 @@ async def intake_enquiry(
         channels=consent_channels,
         wording=consent_wording,
     )
-    return IntakeResult(
-        enquiry=enquiry, created=True, matched_existing_contact=contact is not None
-    )
+    return IntakeResult(enquiry=contact, created=True, matched_existing_contact=False)
 
 
 async def _find_existing(
@@ -153,37 +158,43 @@ async def _find_existing(
     intake_key: str,
     phone: str | None,
     email: str | None,
-) -> CampaignEnquiry | None:
-    """The intake key first, then either identifier.
+) -> Contact | None:
+    """The intake key first, then either identifier — across every contact.
 
-    The key is authoritative because the submitter controls it and it is what
-    makes a repost idempotent. The hashes are the fallback for the same person
-    arriving twice through different forms, which is the common case.
+    This is the part that got better by collapsing the two tables. An arriving
+    lead used to be compared only against other enquiries, so somebody the
+    practice had known for years came in as new. Now the same submission is
+    matched against everybody: patients, previous callers and earlier leads
+    alike, and the "already a patient" case falls out of the same lookup rather
+    than needing a second one.
     """
     row = (
         await session.execute(
-            select(CampaignEnquiry).where(
-                CampaignEnquiry.institution_id == institution_id,
-                CampaignEnquiry.intake_key == intake_key,
+            select(Contact).where(
+                Contact.institution_id == institution_id,
+                Contact.intake_key == intake_key,
             )
         )
-    ).scalar_one_or_none()
+    ).scalars().first()
     if row is not None:
         return row
 
     phone_h = hash_phone(phone) if phone else None
     email_h = hash_email(email) if email else None
     for column, value in (
-        (CampaignEnquiry.phone_hash, phone_h),
-        (CampaignEnquiry.email_hash, email_h),
+        (Contact.phone_hash, phone_h),
+        (Contact.email_hash, email_h),
     ):
         if not value:
             continue
         row = (
             await session.execute(
-                select(CampaignEnquiry).where(
-                    CampaignEnquiry.institution_id == institution_id,
+                select(Contact).where(
+                    Contact.institution_id == institution_id,
                     column == value,
+                    # An alias points at the record it was merged into;
+                    # matching one attaches the lead to a superseded row.
+                    Contact.merged_into_id.is_(None),
                 )
             )
         ).scalars().first()
@@ -192,28 +203,8 @@ async def _find_existing(
     return None
 
 
-async def _find_contact(
-    session: Any, *, institution_id: str, phone: str | None, email: str | None
-) -> Contact | None:
-    """Is this lead already somebody the practice knows?"""
-    phone_h = hash_phone(phone) if phone else None
-    if not phone_h:
-        return None
-    return (
-        await session.execute(
-            select(Contact).where(
-                Contact.institution_id == institution_id,
-                Contact.phone_hash == phone_h,
-                # An alias points at the record it was merged into; matching one
-                # would attach the lead to a record staff already superseded.
-                Contact.merged_into_id.is_(None),
-            )
-        )
-    ).scalars().first()
-
-
 def _fill_blanks(
-    enquiry: CampaignEnquiry,
+    enquiry: Contact,
     *,
     first_name: str | None,
     last_name: str | None,

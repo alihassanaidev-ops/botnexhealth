@@ -11,7 +11,8 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from src.app.models.campaign_enquiry import CampaignEnquiry, EnquiryStatus
+from src.app.models.campaign_enquiry import EnquiryStatus
+from src.app.models.contact import Contact
 from src.app.models.sms_consent import ConsentBasis, ConsentRecord, ConsentStatus
 from src.app.services.automation.enquiry_intake_service import intake_enquiry
 from src.app.services.sms_privacy import hash_email, hash_phone
@@ -54,7 +55,7 @@ class TestRecordingALead:
         e = result.enquiry
         assert e.phone_hash == hash_phone("+1 (505) 482-1234")
         assert e.email_hash == hash_email("Dana@example.com")
-        assert e.status == EnquiryStatus.NEW.value
+        assert e.lead_status == EnquiryStatus.NEW.value
 
     async def test_a_lead_can_arrive_with_only_an_email(self):
         """A form that asks for nothing else still has to be workable."""
@@ -86,8 +87,8 @@ class TestRecordingALead:
 @pytest.mark.asyncio
 class TestRecognisingSomeoneWeHave:
     async def test_the_same_intake_key_does_not_create_a_second(self):
-        existing = CampaignEnquiry(id="e1", institution_id="inst-1",
-                                   intake_key="form-1", source="webhook")
+        existing = Contact(id="e1", institution_id="inst-1",
+                           intake_key="form-1", lead_source="webhook")
         session = _Session([existing])
         result = await intake_enquiry(session, **BASE, phone="5054821234")
         assert not result.created
@@ -95,8 +96,8 @@ class TestRecognisingSomeoneWeHave:
 
     async def test_the_same_phone_through_a_different_form_is_matched(self):
         """Email-only dedup misses this; it is the common case."""
-        existing = CampaignEnquiry(id="e1", institution_id="inst-1",
-                                   intake_key="other", source="webhook")
+        existing = Contact(id="e1", institution_id="inst-1",
+                           intake_key="other", lead_source="webhook")
         session = _Session([None, existing])
         result = await intake_enquiry(
             session, institution_id="inst-1", intake_key="form-2",
@@ -107,8 +108,8 @@ class TestRecognisingSomeoneWeHave:
     async def test_a_resubmission_fills_blanks_without_flattening_them(self):
         """A repost may know a phone the first did not — but must not wipe
         anything a person has since entered."""
-        existing = CampaignEnquiry(id="e1", institution_id="inst-1",
-                                   intake_key="form-1", source="webhook")
+        existing = Contact(id="e1", institution_id="inst-1",
+                           intake_key="form-1", lead_source="webhook")
         existing.first_name = "Dana"
         session = _Session([existing])
         await intake_enquiry(
@@ -117,14 +118,25 @@ class TestRecognisingSomeoneWeHave:
         assert existing.first_name == "Dana"   # not overwritten
         assert existing.last_name == "Reyes"   # filled in
 
-    async def test_a_lead_who_is_already_a_patient_is_linked_not_duplicated(self):
-        """Converting without this check is how a practice gets two charts."""
-        contact = MagicMock()
-        contact.id = "c-9"
-        session = _Session([None, None, contact])
+    async def test_a_lead_who_is_already_a_patient_is_returned_not_duplicated(self):
+        """Collapsing the tables is what makes this one lookup instead of two.
+
+        The enquiry used to be compared only against other enquiries, so
+        somebody the practice had known for years arrived as new and then
+        needed a second query to notice. Now the same match finds them.
+        """
+        patient = Contact(id="c-9", institution_id="inst-1")
+        patient.nexhealth_patient_id = "nh-42"
+        patient.phone = "5054821234"
+        session = _Session([None, patient])
         result = await intake_enquiry(session, **BASE, phone="5054821234")
+
+        assert not result.created
         assert result.matched_existing_contact
-        assert result.enquiry.contact_id == "c-9"
+        assert result.enquiry is patient
+        # Untouched: an enquiry must not demote an existing patient to a lead.
+        assert result.enquiry.nexhealth_patient_id == "nh-42"
+        assert result.enquiry.lead_status is None
 
 
 @pytest.mark.asyncio

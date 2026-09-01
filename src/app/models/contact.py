@@ -19,12 +19,12 @@ from datetime import datetime
 from uuid import uuid4
 
 from sqlalchemy import Boolean, DateTime, ForeignKey, Index, String, Text, UniqueConstraint, func
-from sqlalchemy.dialects.postgresql import UUID
+from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from src.app.database import Base
 from src.app.models.institution import decrypt_value, encrypt_value
-from src.app.services.sms_privacy import hash_phone
+from src.app.services.sms_privacy import hash_email, hash_phone
 
 
 class Contact(Base):
@@ -71,9 +71,32 @@ class Contact(Base):
 
     # Phone hash for caller-ID lookups (keyed HMAC-SHA256, not reversible)
     phone_hash: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    #: The same for email. Either identifier can find somebody, because a lead
+    #: often arrives with only one of them.
+    email_hash: Mapped[str | None] = mapped_column(String(64), nullable=True)
 
-    # PMS link
+    # PMS link. This one field is the whole definition: a contact that has it
+    # is a patient, a contact that does not is not one yet.
     nexhealth_patient_id: Mapped[str | None] = mapped_column(String(128), nullable=True)
+
+    # ── Lead fields ────────────────────────────────────────────────────────
+    # A lead is not a second kind of person, it is a contact we have not
+    # registered yet. These describe how they arrived and how far they have
+    # got; all NULL for a contact created by an inbound call, which is not a
+    # lead and never was.
+    lead_source: Mapped[str | None] = mapped_column(String(80), nullable=True)
+    #: NULL means "not a lead" rather than being a status of its own.
+    lead_status: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    #: Supplied by whatever submitted them; makes a resubmission idempotent.
+    intake_key: Mapped[str | None] = mapped_column(String(160), nullable=True)
+    #: Campaign, medium, referrer, UTM — structured, because attribution is
+    #: notorious for vanishing the moment a lead converts.
+    attribution: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
+    #: The submitting platform's own id, for reconciling against their system.
+    external_ref: Mapped[str | None] = mapped_column(String(160), nullable=True)
+    #: Free text for whoever is working them. Encrypted with the rest: a note
+    #: about somebody enquiring at a dental practice says why they enquired.
+    notes_encrypted: Mapped[str | None] = mapped_column(Text, nullable=True)
 
     # Manual identity linking (no-PMS tenants). When set, this Contact is an
     # *alias* of the primary Contact it points at: a staff member merged two
@@ -130,6 +153,16 @@ class Contact(Base):
     @email.setter
     def email(self, value: str | None) -> None:
         self.email_encrypted = encrypt_value(value)
+        # Written by the same setter as the value, so the two cannot drift.
+        self.email_hash = hash_email(value) if value else None
+
+    @property
+    def notes(self) -> str | None:
+        return decrypt_value(self.notes_encrypted)
+
+    @notes.setter
+    def notes(self, value: str | None) -> None:
+        self.notes_encrypted = encrypt_value(value)
 
     @property
     def phone(self) -> str | None:

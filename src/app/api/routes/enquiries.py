@@ -34,7 +34,7 @@ from src.app.api.deps import get_current_institution_admin
 from src.app.api.rate_limit import RATE_READ, RATE_WRITE, limiter
 from src.app.database import get_db_session_dep
 from src.app.models.audit_log import AuditAction, AuditActor
-from src.app.models.campaign_enquiry import CampaignEnquiry, EnquiryStatus
+from src.app.models.campaign_enquiry import EnquiryStatus
 from src.app.models.contact import Contact
 from src.app.models.user import User
 from src.app.services.audit_decorator import audit
@@ -61,17 +61,18 @@ def _mask_email(email: str | None) -> str | None:
     return f"{head}{'*' * max(len(local) - 1, 1)}@{domain}"
 
 
-def _stage(row: CampaignEnquiry) -> Stage:
-    """One fact decides it: is there a record in the practice software.
+def _stage(row: Contact) -> Stage:
+    """One sentence: a contact with a practice-software id is a patient.
 
-    Ordered most-progressed first, so a booked lead does not read as merely
-    registered.
+    Ordered most-progressed first, so somebody who booked does not read as
+    merely registered. Derived every time rather than stored, so it cannot
+    contradict the record it describes.
     """
-    if row.status == EnquiryStatus.BOOKED.value:
+    if row.lead_status == EnquiryStatus.BOOKED.value:
         return "booked"
-    if row.contact_id:
+    if row.nexhealth_patient_id:
         return "registered"
-    if row.status in (EnquiryStatus.NEW.value,):
+    if row.lead_status in (None, EnquiryStatus.NEW.value):
         return "lead"
     return "contacted"
 
@@ -138,6 +139,18 @@ class EnquiryCreated(BaseModel):
     matched_existing_contact: bool
 
 
+class EnquiryEnrol(BaseModel):
+    workflow_id: str
+
+
+class EnquiryEnrolled(BaseModel):
+    enquiry: "EnquiryDetail"
+    run_id: str
+    contact_id: str
+    #: False when this enquiry was already in this campaign.
+    created: bool
+
+
 class EnquiryUpdate(BaseModel):
     notes: str | None = None
     status: str | None = Field(default=None)
@@ -149,17 +162,17 @@ def _institution_id(user: User) -> str:
     return str(user.institution_id)
 
 
-def _item(row: CampaignEnquiry) -> EnquiryListItem:
+def _item(row: Contact) -> EnquiryListItem:
     return EnquiryListItem(
         id=str(row.id),
         first_name=row.first_name,
         last_name=row.last_name,
         phone_masked=mask_phone(row.phone) if row.phone else None,
         email_masked=_mask_email(row.email),
-        status=row.status,
+        status=row.lead_status or EnquiryStatus.NEW.value,
         stage=_stage(row),
-        source=row.source,
-        contact_id=str(row.contact_id) if row.contact_id else None,
+        source=row.lead_source or "unknown",
+        contact_id=str(row.id) if row.nexhealth_patient_id else None,
         has_notes=bool(row.notes_encrypted),
         created_at=row.created_at,
         updated_at=row.updated_at,
@@ -180,10 +193,19 @@ async def list_enquiries(
 ) -> EnquiryListResponse:
     """The leads that have landed, newest first."""
     institution_id = _institution_id(current_user)
-    conditions = [CampaignEnquiry.institution_id == institution_id]
+    conditions = [
+        Contact.institution_id == institution_id,
+        # Primary records only; an alias rolls up into what it was merged into.
+        Contact.merged_into_id.is_(None),
+        # This screen is the lead workspace, not the whole contact list. A
+        # contact created by an inbound call has no lead_status and belongs on
+        # Patients; one that came from an enquiry belongs here, and stays here
+        # after registering so whoever was working them can see it landed.
+        Contact.lead_status.isnot(None),
+    ]
 
     if status_filter:
-        conditions.append(CampaignEnquiry.status == status_filter)
+        conditions.append(Contact.lead_status == status_filter)
 
     if search:
         term = search.strip()
@@ -194,27 +216,27 @@ async def list_enquiries(
         phone_h = hash_phone(term)
         email_h = hash_email(term) if "@" in term else None
         clauses = [
-            CampaignEnquiry.first_name.ilike(f"{term}%"),
-            CampaignEnquiry.last_name.ilike(f"{term}%"),
+            Contact.first_name.ilike(f"{term}%"),
+            Contact.last_name.ilike(f"{term}%"),
         ]
         if phone_h:
-            clauses.append(CampaignEnquiry.phone_hash == phone_h)
+            clauses.append(Contact.phone_hash == phone_h)
         if email_h:
-            clauses.append(CampaignEnquiry.email_hash == email_h)
+            clauses.append(Contact.email_hash == email_h)
         conditions.append(or_(*clauses))
 
     total = (
         await session.execute(
-            select(func.count()).select_from(CampaignEnquiry).where(*conditions)
+            select(func.count()).select_from(Contact).where(*conditions)
         )
     ).scalar() or 0
 
     rows = (
         (
             await session.execute(
-                select(CampaignEnquiry)
+                select(Contact)
                 .where(*conditions)
-                .order_by(CampaignEnquiry.created_at.desc())
+                .order_by(Contact.created_at.desc())
                 .limit(limit)
                 .offset(offset)
             )
@@ -293,6 +315,78 @@ async def create_enquiry(
     )
 
 
+@router.post("/{enquiry_id}/enrol", response_model=EnquiryEnrolled)
+@limiter.limit(RATE_WRITE)
+@audit(
+    AuditAction.CAMPAIGN_ENROLL,
+    resource=lambda *a, **kw: f"campaign_enquiry:{kw.get('enquiry_id', '?')}:enrol",
+    actor=AuditActor.ADMIN,
+)
+async def enrol_enquiry(
+    request: Request,
+    enquiry_id: str,
+    data: EnquiryEnrol,
+    current_user: _InstitutionUser,
+    session: _Session,
+) -> EnquiryEnrolled:
+    """Put a lead into a campaign.
+
+    Nothing is created here any more. A lead *is* a contact, so the run binds
+    the record that already exists — which is the point of collapsing the two
+    tables: there is no conversion step to get wrong, and no moment where the
+    same person exists twice under different ids.
+    """
+    from src.app.models.automation_workflow import AutomationWorkflow
+    from src.app.services.automation.enrollment_service import (
+        AutomationWorkflowEnrollmentService,
+    )
+
+    institution_id = _institution_id(current_user)
+    row = await _load(session, enquiry_id, institution_id)
+
+    workflow = (
+        await session.execute(
+            select(AutomationWorkflow).where(
+                AutomationWorkflow.id == data.workflow_id,
+                AutomationWorkflow.institution_id == institution_id,
+            )
+        )
+    ).scalar_one_or_none()
+    if workflow is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Campaign not found")
+    if workflow.status != "active" or not workflow.current_version_id:
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            "That campaign isn't published, so nothing would run.",
+        )
+
+    contact_id = str(row.id)
+    location_id = str(workflow.location_id) if workflow.location_id else None
+    run, created = await AutomationWorkflowEnrollmentService(session).enroll(
+        institution_id=institution_id,
+        workflow_id=str(workflow.id),
+        workflow_version_id=str(workflow.current_version_id),
+        contact_id=contact_id,
+        location_id=location_id,
+        trigger_type=workflow.trigger_type,
+        trigger_ref_type="campaign_enquiry",
+        trigger_ref_id=str(row.id),
+        # Enrolling the same lead in the same campaign twice is a mis-click,
+        # not a second attempt.
+        idempotency_key=f"enquiry:{row.id}:{workflow.id}",
+    )
+    if row.lead_status in (None, EnquiryStatus.NEW.value):
+        row.lead_status = EnquiryStatus.ENGAGED.value
+    await session.flush()
+
+    return EnquiryEnrolled(
+        enquiry=_detail(row),
+        run_id=str(run.id),
+        contact_id=contact_id,
+        created=created,
+    )
+
+
 @router.get("/{enquiry_id}", response_model=EnquiryDetail)
 @limiter.limit(RATE_READ)
 async def get_enquiry(
@@ -324,7 +418,7 @@ async def update_enquiry(
     if data.status is not None:
         if data.status not in {s.value for s in EnquiryStatus}:
             raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "Unknown status")
-        row.status = data.status
+        row.lead_status = data.status
     if data.notes is not None:
         # Empty string clears; None means "not supplied", so a status-only
         # update cannot silently wipe somebody's notes.
@@ -333,23 +427,23 @@ async def update_enquiry(
     return _detail(row)
 
 
-def _detail(row: CampaignEnquiry) -> EnquiryDetail:
+def _detail(row: Contact) -> EnquiryDetail:
     return EnquiryDetail(
         **_item(row).model_dump(),
         notes=row.notes,
         attribution=row.attribution,
         external_ref=row.external_ref,
-        intake_key=row.intake_key,
-        location_id=str(row.location_id) if row.location_id else None,
+        intake_key=row.intake_key or "",
+        location_id=None,
     )
 
 
 async def _load(session: AsyncSession, enquiry_id: str, institution_id: str):
     row = (
         await session.execute(
-            select(CampaignEnquiry).where(
-                CampaignEnquiry.id == enquiry_id,
-                CampaignEnquiry.institution_id == institution_id,
+            select(Contact).where(
+                Contact.id == enquiry_id,
+                Contact.institution_id == institution_id,
             )
         )
     ).scalar_one_or_none()
