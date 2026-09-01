@@ -65,7 +65,7 @@ async def apply_sms_delivery_receipt(
         return None
 
     async with get_system_db_session(
-        "sms_delivery_receipt",
+        "celery",
         institution_id=institution_id,
         external_id=message_sid,
     ) as session:

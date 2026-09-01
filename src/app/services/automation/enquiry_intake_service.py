@@ -33,8 +33,7 @@ from uuid import uuid4
 
 from sqlalchemy import select
 
-from src.app.models.campaign_enquiry import EnquiryStatus
-from src.app.models.contact import Contact
+from src.app.models.contact import Contact, LeadStatus
 from src.app.models.sms_consent import (
     ConsentBasis,
     ConsentChannel,
@@ -96,7 +95,7 @@ async def intake_enquiry(
         _fill_blanks(existing, first_name=first_name, last_name=last_name,
                      email=email, phone=phone, external_ref=external_ref)
         if existing.lead_status is None and existing.nexhealth_patient_id is None:
-            existing.lead_status = EnquiryStatus.NEW.value
+            existing.lead_status = LeadStatus.NEW.value
             existing.lead_source = existing.lead_source or source
         await _record_consent(
             session,
@@ -125,7 +124,7 @@ async def intake_enquiry(
         nexhealth_patient_id=None,
         is_new_patient=True,
         lead_source=source,
-        lead_status=EnquiryStatus.NEW.value,
+        lead_status=LeadStatus.NEW.value,
         intake_key=intake_key,
         attribution=attribution or None,
         external_ref=external_ref,

@@ -98,17 +98,17 @@ patient are not three tables that must be converted between:
 
 The dashboard deliberately exposes only two person directories. **Contacts**
 is the relationship workspace for non-PMS people (leads and callers), including
-manual entry, consent, notes and call history. **Patients** contains only
-PMS-linked people and is shown only to PMS-connected tenants. It reads the local
-projection maintained by signed NexHealth/GoTracker patient webhooks rather
-than making a live vendor request for every page view. That keeps paging and
-location scope deterministic and leaves the directory usable during a vendor
-outage; the PMS remains the system of record.
+manual entry, consent, notes and call history. Staff can promote a lead to a
+relationship contact; only successful PMS registration may make it a patient.
+**Patients** is a live, cursor-paged server-to-server view of the connected
+NexHealth or GoTracker source, with active/inactive filtering. The PMS remains
+the patient system of record and the API never loads the whole directory into
+memory.
 
 The former `/enquiries` page redirects to `/contacts`. The legacy
-`campaign_enquiries` table and `/institution/enquiries` API remain temporarily
-for expand/contract and campaign compatibility, but active intake creates or
-matches `Contact` rows. When a location admin enters a contact manually, the
+`/institution/enquiries` API remains as a compatibility view over contacts, but
+the duplicate `campaign_enquiries` store has been backfilled and removed.
+Active intake creates or matches `Contact` rows. When a location admin enters a contact manually, the
 backend pins it to their assigned location and creates the same
 `ContactLocationAccess` grant used by webhook and call ingestion.
 

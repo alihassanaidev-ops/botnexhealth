@@ -16,6 +16,7 @@ Identity Model:
 from __future__ import annotations
 
 from datetime import datetime
+from enum import Enum
 from uuid import uuid4
 
 from sqlalchemy import Boolean, DateTime, ForeignKey, Index, String, Text, UniqueConstraint, func
@@ -25,6 +26,18 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 from src.app.database import Base
 from src.app.models.institution import decrypt_value, encrypt_value
 from src.app.services.sms_privacy import hash_email, hash_phone
+
+
+class LeadStatus(str, Enum):
+    """Working state while a person is still a lead."""
+
+    NEW = "new"
+    ENGAGED = "engaged"
+    QUALIFIED = "qualified"
+    NOT_QUALIFIED = "not_qualified"
+    UNREACHABLE = "unreachable"
+    BOOKED = "booked"
+    HANDED_TO_STAFF = "handed_to_staff"
 
 
 class Contact(Base):

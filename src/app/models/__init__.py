@@ -19,7 +19,7 @@ from src.app.models.appointment_working_set import (  # noqa: F401 — model reg
 )
 from src.app.models.call import Call, CallDirection, CallStatus, PatientStatus
 from src.app.models.call_note import MAX_NOTE_LENGTH, CallNote
-from src.app.models.campaign_enquiry import CampaignEnquiry, EnquiryStatus
+from src.app.models.contact import Contact, LeadStatus
 from src.app.models.campaign_response import (  # noqa: F401 — model registration
     CampaignResponseEvent,
     CampaignStaffHandoff,
@@ -83,7 +83,6 @@ from src.app.models.call_metrics_daily import (  # noqa: F401 — model registra
     CallMetricsDaily,
     NULL_LOCATION_SENTINEL,
 )
-from src.app.models.contact import Contact
 from src.app.models.contact_location_access import ContactLocationAccess
 from src.app.models.custom_field import (
     CustomFieldDefinition,
@@ -156,8 +155,7 @@ from src.app.models.retell_sms import (  # noqa: F401 — model registration
 )
 
 __all__ = [
-    "CampaignEnquiry",
-    "EnquiryStatus",
+    "LeadStatus",
     "Institution",
     "InstitutionGroup",
     "WorkflowStatus",

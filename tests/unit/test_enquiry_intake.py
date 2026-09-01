@@ -11,7 +11,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from src.app.models.campaign_enquiry import EnquiryStatus
+from src.app.models.contact import LeadStatus
 from src.app.models.contact import Contact
 from src.app.models.sms_consent import ConsentBasis, ConsentRecord, ConsentStatus
 from src.app.services.automation.enquiry_intake_service import intake_enquiry
@@ -55,7 +55,7 @@ class TestRecordingALead:
         e = result.enquiry
         assert e.phone_hash == hash_phone("+1 (505) 482-1234")
         assert e.email_hash == hash_email("Dana@example.com")
-        assert e.lead_status == EnquiryStatus.NEW.value
+        assert e.lead_status == LeadStatus.NEW.value
 
     async def test_a_lead_can_arrive_with_only_an_email(self):
         """A form that asks for nothing else still has to be workable."""

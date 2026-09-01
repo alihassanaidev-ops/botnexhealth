@@ -168,7 +168,11 @@ export async function createContact(body: ContactCreate): Promise<ContactCreateR
 
 export async function updateContact(
     contactId: string,
-    body: { notes?: string | null; lead_status?: string },
+    body: {
+        notes?: string | null
+        lead_status?: string
+        lifecycle?: "lead" | "contact"
+    },
 ): Promise<ContactDetail> {
     const { data } = await api.patch<ContactDetail>(
         `/institution/contacts/${contactId}`,

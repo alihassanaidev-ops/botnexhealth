@@ -171,6 +171,50 @@ async def test_manual_contact_requires_a_reachable_identifier():
 
 
 @pytest.mark.asyncio
+async def test_lead_can_be_promoted_to_contact_without_creating_another_row(monkeypatch):
+    contact = _contact(lead_status="qualified")
+    session = _Session([])
+    monkeypatch.setattr(route, "get_db_session", lambda: _Context(session))
+    monkeypatch.setattr(route, "_scoped_contact", AsyncMock(return_value=contact))
+    monkeypatch.setattr(
+        route,
+        "_load_contact_detail",
+        AsyncMock(return_value=_detail()),
+    )
+
+    original = inspect.unwrap(route.update_contact)
+    await original(
+        request=MagicMock(),
+        contact_id=contact.id,
+        data=route.ContactUpdateRequest(lifecycle="contact"),
+        current_user=_user(),
+    )
+
+    assert contact.lead_status is None
+    assert session.commit.await_count == 1
+
+
+@pytest.mark.asyncio
+async def test_patient_lifecycle_cannot_be_overwritten_locally(monkeypatch):
+    patient = _contact(nexhealth_patient_id="pms-1", lead_status=None)
+    session = _Session([])
+    monkeypatch.setattr(route, "get_db_session", lambda: _Context(session))
+    monkeypatch.setattr(route, "_scoped_contact", AsyncMock(return_value=patient))
+
+    original = inspect.unwrap(route.update_contact)
+    with pytest.raises(route.HTTPException) as exc:
+        await original(
+            request=MagicMock(),
+            contact_id=patient.id,
+            data=route.ContactUpdateRequest(lifecycle="contact"),
+            current_user=_user(),
+        )
+
+    assert exc.value.status_code == 409
+    assert session.commit.await_count == 0
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("pms_side", ["primary", "alias"])
 async def test_merge_rejects_any_pms_linked_record(monkeypatch, pms_side):
     primary = _contact(

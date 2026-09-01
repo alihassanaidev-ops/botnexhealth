@@ -213,13 +213,13 @@ function ManualEnrollDialog({ campaign, onClose, onEnrolled }: ManualEnrollDialo
         setEnrolling(contact.id)
         try {
             const run = await enrollContactInCampaign(campaign.id, contact.id, campaign.location_id)
-            toast.success(`${contact.full_name ?? "Patient"} enrolled`)
+            toast.success(`${contact.full_name ?? "Contact"} enrolled`)
             onEnrolled(run)
             onClose()
         } catch (error) {
             const detail = (error as { response?: { data?: { detail?: string } } })
                 ?.response?.data?.detail
-            toast.error(detail ?? "Failed to enroll patient")
+            toast.error(detail ?? "Failed to enroll contact")
         } finally {
             setEnrolling(null)
         }
@@ -231,17 +231,17 @@ function ManualEnrollDialog({ campaign, onClose, onEnrolled }: ManualEnrollDialo
                 <DialogHeader>
                     <DialogTitle className="flex items-center gap-2">
                         <UserPlus className="h-5 w-5" />
-                        Enroll patient
+                        Enroll contact
                     </DialogTitle>
                     <DialogDescription>
-                        Start {campaign.name} for one existing patient.
+                        Start {campaign.name} for a lead, contact, or patient.
                     </DialogDescription>
                 </DialogHeader>
                 <div className="relative">
                     <Search className="pointer-events-none absolute left-2.5 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
                     <Input
                         autoFocus
-                        placeholder="Search patients by name"
+                        placeholder="Search by name"
                         value={search}
                         onChange={(event) => setSearch(event.target.value)}
                         className="pl-8"
@@ -255,18 +255,28 @@ function ManualEnrollDialog({ campaign, onClose, onEnrolled }: ManualEnrollDialo
                             ))}
                         </div>
                     ) : results.length === 0 ? (
-                        <p className="p-6 text-center text-sm text-muted-foreground">No patients found.</p>
+                        <p className="p-6 text-center text-sm text-muted-foreground">No contacts found.</p>
                     ) : (
                         <ul className="divide-y divide-border">
                             {results.map((contact) => (
                                 <li key={contact.id} className="flex items-center justify-between gap-3 px-4 py-3">
                                     <div className="min-w-0">
                                         <p className="truncate text-sm font-medium">
-                                            {contact.full_name ?? "Unnamed patient"}
+                                            {contact.full_name ?? "Unnamed contact"}
                                         </p>
-                                        <p className="text-xs text-muted-foreground">
-                                            {contact.phone_masked ?? "No phone on file"}
-                                        </p>
+                                        <div className="mt-1 flex flex-wrap items-center gap-1.5">
+                                            <Badge variant={contact.lifecycle === "patient" ? "default" : "secondary"} className="capitalize">
+                                                {contact.lifecycle}
+                                            </Badge>
+                                            <span className="text-xs text-muted-foreground">
+                                                {contact.phone_masked ?? contact.email_masked ?? "No contact details"}
+                                            </span>
+                                            {contact.lead_status && (
+                                                <span className="text-xs text-muted-foreground">
+                                                    · {label(contact.lead_status)}
+                                                </span>
+                                            )}
+                                        </div>
                                     </div>
                                     <Button
                                         size="sm"

@@ -19,6 +19,7 @@ import asyncio
 import logging
 
 from src.app.database import (
+    get_superadmin_system_db_session,
     get_system_db_session,
     init_database,
     is_database_initialized,
@@ -55,18 +56,32 @@ def sweep_email_identities(self, *, limit: int = _SWEEP_LIMIT) -> dict:
 
 
 async def _sweep_async(*, limit: int) -> dict:
+    from src.app.models.email_sending_identity import EmailSendingIdentity
     from src.app.services.email.identity_service import EmailIdentityService
 
     checked = 0
     transitions: dict[str, int] = {}
 
-    # Runs under the celery RLS context, which spans institutions — the sweep is
-    # platform-wide by design.
-    async with get_system_db_session("celery") as session:
-        service = EmailIdentityService(session)
-        identities = await service.due_for_check(limit=limit)
+    # Enumerate routing metadata globally, then refresh each identity inside its
+    # owning institution. A bare celery context is intentionally not a
+    # cross-tenant escape hatch under RLS.
+    async with get_superadmin_system_db_session("email_identity_sweep") as session:
+        identities = await EmailIdentityService(session).due_for_check(limit=limit)
+        candidates = [
+            (str(identity.id), str(identity.institution_id))
+            for identity in identities
+        ]
 
-        for identity in identities:
+    for identity_id, institution_id in candidates:
+        async with get_system_db_session(
+            "celery",
+            institution_id=institution_id,
+            external_id=f"email_identity:{identity_id}",
+        ) as session:
+            service = EmailIdentityService(session)
+            identity = await session.get(EmailSendingIdentity, identity_id)
+            if identity is None:
+                continue
             before = identity.status
             try:
                 await service.refresh(identity)
@@ -75,6 +90,7 @@ async def _sweep_async(*, limit: int) -> dict:
                 logger.warning(
                     "could not refresh sending identity %s: %s", identity.domain, exc
                 )
+                await session.rollback()
                 continue
 
             checked += 1
@@ -105,7 +121,7 @@ async def _sweep_async(*, limit: int) -> dict:
                         identity.domain,
                     )
 
-        await session.commit()
+            await session.commit()
 
     logger.info(
         "email identity sweep complete: checked=%d transitions=%s", checked, transitions

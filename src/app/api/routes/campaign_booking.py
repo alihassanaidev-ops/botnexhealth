@@ -993,9 +993,9 @@ async def book_slot(
             "booked_provider_name": getattr(chosen, "provider_name", "") or "",
         }
         if not pending and contact.lead_status is not None:
-            from src.app.models.campaign_enquiry import EnquiryStatus
+            from src.app.models.contact import LeadStatus
 
-            contact.lead_status = EnquiryStatus.BOOKED.value
+            contact.lead_status = LeadStatus.BOOKED.value
 
         session.add(
             CampaignResponseEvent(

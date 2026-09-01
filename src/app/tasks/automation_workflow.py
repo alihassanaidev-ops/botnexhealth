@@ -10,7 +10,6 @@ from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from src.app.database import (
-    get_superadmin_system_db_session,
     get_system_db_session,
     init_database,
     is_database_initialized,
@@ -154,7 +153,12 @@ _GOTRACKER_WRITEBACK_SWEEP_BATCH = 25
 
 def _superadmin_system_session(external_id: str):
     """DB session that can see every institution for trusted global scans."""
-    return get_superadmin_system_db_session(external_id)
+    return get_system_db_session(
+        "user",
+        role="SUPER_ADMIN",
+        user_id="00000000-0000-0000-0000-000000000000",
+        external_id=external_id,
+    )
 
 
 def _ensure_db() -> None:
@@ -550,7 +554,9 @@ async def _sweep_nexhealth_completed_visits_async() -> dict:
 
     completed: list[dict] = []
 
-    async with get_system_db_session("celery") as session:
+    # This is a trusted platform-wide maintenance sweep. Tenant contexts are
+    # deliberately unable to enumerate another clinic's appointments.
+    async with _superadmin_system_session("nexhealth_post_visit_sweep") as session:
         rows = (
             (await session.execute(completed_visit_candidates_query(window_start, now)))
             .unique()
@@ -3371,7 +3377,9 @@ async def _scan_recall_async() -> dict:
         AutomationWorkflowStatus,
     )
 
-    async with get_system_db_session("celery", external_id="recall_scanner") as session:
+    # Enumerate only workflow routing metadata globally; each institution is
+    # processed below in its own tenant-scoped session.
+    async with _superadmin_system_session("recall_scanner") as session:
         result = await session.execute(
             sa_select(AutomationWorkflow).where(
                 AutomationWorkflow.status == AutomationWorkflowStatus.ACTIVE.value,

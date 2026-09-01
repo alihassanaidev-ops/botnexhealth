@@ -1165,9 +1165,9 @@ def test_do_not_call_status_writes_dnc_suppression() -> None:
 
 
 def test_update_patient_status_updates_lead_status_when_contact_is_a_lead() -> None:
-    from src.app.models.campaign_enquiry import EnquiryStatus
+    from src.app.models.contact import LeadStatus
 
-    contact = SimpleNamespace(phone="+15551234567", lead_status=EnquiryStatus.NEW.value)
+    contact = SimpleNamespace(phone="+15551234567", lead_status=LeadStatus.NEW.value)
     session = _make_session()
     session.get = AsyncMock(return_value=contact)
     rt = _make_runtime()
@@ -1179,21 +1179,21 @@ def test_update_patient_status_updates_lead_status_when_contact_is_a_lead() -> N
     run.contact_id = "contact-1"
     node = UpdatePatientStatusNode(
         id="status-qualified",
-        status=EnquiryStatus.QUALIFIED.value,
+        status=LeadStatus.QUALIFIED.value,
         next_node_id="exit-1",
     )
 
     asyncio.run(dispatcher._apply_status_side_effects(run, node))
 
-    assert contact.lead_status == EnquiryStatus.QUALIFIED.value
+    assert contact.lead_status == LeadStatus.QUALIFIED.value
 
 
 def test_do_not_call_status_maps_leads_to_not_qualified_and_suppresses_sms() -> None:
-    from src.app.models.campaign_enquiry import EnquiryStatus
+    from src.app.models.contact import LeadStatus
 
     contact = SimpleNamespace(
         phone="+15551234567",
-        lead_status=EnquiryStatus.QUALIFIED.value,
+        lead_status=LeadStatus.QUALIFIED.value,
     )
     session = _make_session()
     session.get = AsyncMock(return_value=contact)
@@ -1219,7 +1219,7 @@ def test_do_not_call_status_maps_leads_to_not_qualified_and_suppresses_sms() -> 
     ):
         asyncio.run(dispatcher._apply_status_side_effects(run, node))
 
-    assert contact.lead_status == EnquiryStatus.NOT_QUALIFIED.value
+    assert contact.lead_status == LeadStatus.NOT_QUALIFIED.value
     compliance.set_do_not_contact.assert_awaited_once()
 
 

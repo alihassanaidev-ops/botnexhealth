@@ -34,8 +34,7 @@ from src.app.api.deps import get_current_institution_admin
 from src.app.api.rate_limit import RATE_READ, RATE_WRITE, limiter
 from src.app.database import get_db_session_dep
 from src.app.models.audit_log import AuditAction, AuditActor
-from src.app.models.campaign_enquiry import EnquiryStatus
-from src.app.models.contact import Contact
+from src.app.models.contact import Contact, LeadStatus
 from src.app.models.user import User
 from src.app.services.audit_decorator import audit
 from src.app.services.automation.enquiry_intake_service import intake_enquiry
@@ -72,11 +71,11 @@ def _stage(row: Contact) -> Stage:
     merely registered. Derived every time rather than stored, so it cannot
     contradict the record it describes.
     """
-    if row.lead_status == EnquiryStatus.BOOKED.value:
+    if row.lead_status == LeadStatus.BOOKED.value:
         return "booked"
     if row.nexhealth_patient_id:
         return "registered"
-    if row.lead_status in (None, EnquiryStatus.NEW.value):
+    if row.lead_status in (None, LeadStatus.NEW.value):
         return "lead"
     return "contacted"
 
@@ -173,7 +172,7 @@ def _item(row: Contact) -> EnquiryListItem:
         last_name=row.last_name,
         phone_masked=mask_phone(row.phone) if row.phone else None,
         email_masked=_mask_email(row.email),
-        status=row.lead_status or EnquiryStatus.NEW.value,
+        status=row.lead_status or LeadStatus.NEW.value,
         stage=_stage(row),
         source=row.lead_source or "unknown",
         contact_id=str(row.id) if row.nexhealth_patient_id else None,
@@ -409,8 +408,8 @@ async def enrol_enquiry(
         # not a second attempt.
         idempotency_key=f"enquiry:{row.id}:{workflow.id}",
     )
-    if row.lead_status in (None, EnquiryStatus.NEW.value):
-        row.lead_status = EnquiryStatus.ENGAGED.value
+    if row.lead_status in (None, LeadStatus.NEW.value):
+        row.lead_status = LeadStatus.ENGAGED.value
     await session.flush()
 
     return EnquiryEnrolled(
@@ -450,7 +449,7 @@ async def update_enquiry(
     """Write down what happened, or move the lead along."""
     row = await _load(session, enquiry_id, _institution_id(current_user))
     if data.status is not None:
-        if data.status not in {s.value for s in EnquiryStatus}:
+        if data.status not in {s.value for s in LeadStatus}:
             raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "Unknown status")
         row.lead_status = data.status
     if data.notes is not None:

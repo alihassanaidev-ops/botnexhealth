@@ -38,8 +38,7 @@ from src.app.api.routes.calls import (
 from src.app.database import get_db_session
 from src.app.models.audit_log import AuditAction, AuditActor, AuditOutcome
 from src.app.models.call import Call
-from src.app.models.campaign_enquiry import EnquiryStatus
-from src.app.models.contact import Contact
+from src.app.models.contact import Contact, LeadStatus
 from src.app.models.contact_location_access import ContactLocationAccess
 from src.app.models.institution_location import InstitutionLocation
 from src.app.models.patient_working_set import PatientWorkingSet
@@ -159,6 +158,7 @@ class ContactCreateResponse(BaseModel):
 class ContactUpdateRequest(BaseModel):
     notes: str | None = Field(default=None, max_length=4000)
     lead_status: str | None = Field(default=None, max_length=32)
+    lifecycle: Literal["lead", "contact"] | None = None
 
 
 class PhoneRevealResponse(BaseModel):
@@ -428,7 +428,10 @@ async def _load_contact_detail(contact_id: str, current_user: User) -> ContactDe
         aliases = (
             (
                 await session.execute(
-                    select(Contact).where(Contact.merged_into_id == contact.id)
+                    select(Contact).where(
+                        Contact.institution_id == str(current_user.institution_id),
+                        Contact.merged_into_id == contact.id,
+                    )
                 )
             )
             .scalars()
@@ -440,7 +443,10 @@ async def _load_contact_detail(contact_id: str, current_user: User) -> ContactDe
             (
                 await session.execute(
                     select(Call)
-                    .where(Call.contact_id.in_(member_ids))
+                    .where(
+                        Call.institution_id == str(current_user.institution_id),
+                        Call.contact_id.in_(member_ids),
+                    )
                     .order_by(desc(Call.created_at))
                     .limit(200)
                 )
@@ -613,18 +619,33 @@ async def update_contact(
     data: ContactUpdateRequest,
     current_user: Annotated[User, Depends(get_current_institution_or_location_admin)],
 ) -> ContactDetail:
-    """Update relationship notes or a lead's working status."""
+    """Update notes, lead status, or promote a lead to a relationship contact.
+
+    Patient is not accepted here: only a successful PMS registration can set
+    ``nexhealth_patient_id`` and therefore create patient lifecycle state.
+    """
     async with get_db_session() as session:
         contact = await _scoped_contact(session, contact_id, current_user)
         if "notes" in data.model_fields_set:
             contact.notes = (data.notes or "").strip() or None
         if "lead_status" in data.model_fields_set:
-            if data.lead_status not in {value.value for value in EnquiryStatus}:
+            if data.lead_status is None or data.lead_status not in {
+                value.value for value in LeadStatus
+            }:
                 raise HTTPException(
                     status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
                     detail="Unknown contact status",
                 )
             contact.lead_status = data.lead_status
+        if "lifecycle" in data.model_fields_set and data.lifecycle is not None:
+            if contact.nexhealth_patient_id:
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail="Patient lifecycle is owned by the connected PMS",
+                )
+            contact.lead_status = (
+                LeadStatus.NEW.value if data.lifecycle == "lead" else None
+            )
         await session.commit()
     return await _load_contact_detail(contact_id, current_user)
 

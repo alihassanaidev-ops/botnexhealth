@@ -394,7 +394,9 @@ class NexHealthAdapter(
             from src.app.models.nexhealth_sync_status import NexHealthSyncStatus
 
             async with get_system_db_session(
-                "nexhealth_direct_reschedule_capability",
+                "celery",
+                institution_id=institution_id,
+                location_id=location_id,
                 external_id=location_id,
             ) as session:
                 row = (

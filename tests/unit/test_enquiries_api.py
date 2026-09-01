@@ -17,7 +17,7 @@ from fastapi.testclient import TestClient
 from src.app.api.deps import get_current_institution_admin
 from src.app.api.routes.enquiries import _mask_email, _stage, router
 from src.app.database import get_db_session_dep
-from src.app.models.campaign_enquiry import EnquiryStatus
+from src.app.models.contact import LeadStatus
 from src.app.models.contact import Contact
 
 BASE = "/api/institution/enquiries"
@@ -36,7 +36,7 @@ def _enquiry(**over):
         institution_id="inst-1",
         intake_key="form-1",
         lead_source="typeform",
-        lead_status=EnquiryStatus.NEW.value,
+        lead_status=LeadStatus.NEW.value,
         created_at=datetime.now(timezone.utc),
         updated_at=datetime.now(timezone.utc),
     )
@@ -100,7 +100,7 @@ class TestStageIsDerived:
         assert _stage(_enquiry()) == "lead"
 
     def test_a_worked_enquiry_is_contacted(self):
-        assert _stage(_enquiry(lead_status=EnquiryStatus.ENGAGED.value)) == "contacted"
+        assert _stage(_enquiry(lead_status=LeadStatus.ENGAGED.value)) == "contacted"
 
     def test_a_pms_record_makes_them_registered(self):
         """The one fact that decides it."""
@@ -109,13 +109,13 @@ class TestStageIsDerived:
     def test_booked_outranks_registered(self):
         """A booked lead must not read as merely registered."""
         row = _enquiry(
-            nexhealth_patient_id="nh-1", lead_status=EnquiryStatus.BOOKED.value
+            nexhealth_patient_id="nh-1", lead_status=LeadStatus.BOOKED.value
         )
         assert _stage(row) == "booked"
 
     def test_it_cannot_drift_from_the_link(self):
         """Nothing stores the stage, so nothing can contradict it."""
-        row = _enquiry(lead_status=EnquiryStatus.QUALIFIED.value)
+        row = _enquiry(lead_status=LeadStatus.QUALIFIED.value)
         assert _stage(row) == "contacted"
         row.nexhealth_patient_id = "nh-9"
         assert _stage(row) == "registered"
@@ -211,7 +211,7 @@ class TestWorkingALead:
         row = _enquiry()
         r = _client(_session(one=row)).patch(f"{BASE}/e1", json={"status": "vibes"})
         assert r.status_code == 422
-        assert row.lead_status == EnquiryStatus.NEW.value
+        assert row.lead_status == LeadStatus.NEW.value
 
     def test_another_clinics_lead_is_not_found(self):
         r = _client(_session(one=None)).patch(f"{BASE}/e999", json={"notes": "x"})

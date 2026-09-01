@@ -263,10 +263,10 @@ class TestBooking:
         sender.assert_not_awaited()
 
     def test_confirmed_booking_marks_a_lead_booked(self, client):
-        from src.app.models.campaign_enquiry import EnquiryStatus
+        from src.app.models.contact import LeadStatus
 
         token = make_action_token("run-1", "book")
-        ctx = _ctx(lead_status=EnquiryStatus.QUALIFIED.value)
+        ctx = _ctx(lead_status=LeadStatus.QUALIFIED.value)
 
         r = _call(
             client,
@@ -278,15 +278,15 @@ class TestBooking:
 
         assert r.status_code == 200
         session, _cm, _adapter, _b = ctx
-        assert session.contact.lead_status == EnquiryStatus.BOOKED.value
+        assert session.contact.lead_status == LeadStatus.BOOKED.value
 
     def test_pending_booking_write_does_not_mark_a_lead_booked(self, client):
-        from src.app.models.campaign_enquiry import EnquiryStatus
+        from src.app.models.contact import LeadStatus
 
         token = make_action_token("run-1", "book")
         ctx = _ctx(
             write_status=BookingWriteStatus.PENDING.value,
-            lead_status=EnquiryStatus.QUALIFIED.value,
+            lead_status=LeadStatus.QUALIFIED.value,
         )
 
         r = _call(
@@ -299,7 +299,7 @@ class TestBooking:
 
         assert r.status_code == 200
         session, _cm, _adapter, _b = ctx
-        assert session.contact.lead_status == EnquiryStatus.QUALIFIED.value
+        assert session.contact.lead_status == LeadStatus.QUALIFIED.value
 
     def test_the_client_cannot_choose_the_booking_parameters(self, client):
         """It sends a start time; the server books the slot it found itself."""

@@ -17,8 +17,11 @@ from __future__ import annotations
 import asyncio
 import logging
 
+from sqlalchemy import text
+
 from src.app.config import settings
 from src.app.database import (
+    get_superadmin_system_db_session,
     get_system_db_session,
     init_database,
     is_database_initialized,
@@ -118,6 +121,7 @@ async def _handle_one(queue_message: dict, store) -> bool:  # noqa: ANN001
         storage_key_for,
     )
     from src.app.services.email.inbound_router import InboundEmailRouter
+    from src.app.services.email.reply_address import find_reply_address, parse_reply_address
 
     notification = parse_notification(queue_message.get("Body") or "")
     if notification is None:
@@ -142,7 +146,34 @@ async def _handle_one(queue_message: dict, store) -> bool:  # noqa: ANN001
         dict.fromkeys([*parsed.to_addresses, *notification.recipients])
     )
 
-    async with get_system_db_session("celery") as session:
+    # The signed reply address identifies a tenant by an abbreviated id. Resolve
+    # that narrow routing fact globally, then do all PHI reads/writes inside the
+    # tenant scope. Invalid/unattributed mail stays in the global intake table.
+    institution_id = None
+    route_address = find_reply_address(parsed.all_recipients)
+    route = parse_reply_address(route_address) if route_address else None
+    if route is not None:
+        async with get_superadmin_system_db_session(
+            f"inbound_email_route:{notification.message_id}"
+        ) as lookup_session:
+            institution = await InboundEmailRouter(lookup_session)._resolve_institution(
+                route
+            )
+            if institution is not None:
+                institution_id = str(institution.id)
+
+    context = (
+        get_system_db_session(
+            "celery",
+            institution_id=institution_id,
+            external_id=f"inbound_email:{notification.message_id}",
+        )
+        if institution_id
+        else get_system_db_session(
+            "celery", external_id=f"inbound_email:{notification.message_id}"
+        )
+    )
+    async with context as session:
         result = await InboundEmailRouter(session).route(
             parsed,
             provider_message_id=notification.message_id,
@@ -313,7 +344,28 @@ async def _forward_async(inbound_message_id: str) -> dict:
         get_patient_email_sender_for,
     )
 
-    async with get_system_db_session("celery") as session:
+    # The inbound queue table is visible to the worker so it can discover the
+    # owner. Reopen under that owner before reading body/identity/thread data.
+    async with get_system_db_session(
+        "celery", external_id=f"forward_lookup:{inbound_message_id}"
+    ) as lookup_session:
+        scope = await lookup_session.execute(
+            text(
+                "SELECT institution_id::text, location_id::text "
+                "FROM inbound_email_messages WHERE id::text = :message_id"
+            ),
+            {"message_id": inbound_message_id},
+        )
+        scope = scope.one_or_none()
+    if scope is None or not scope[0]:
+        return {"skipped": "message not found or unattributed"}
+
+    async with get_system_db_session(
+        "celery",
+        institution_id=scope[0],
+        location_id=scope[1],
+        external_id=f"forward:{inbound_message_id}",
+    ) as session:
         message = await session.get(InboundEmailMessage, inbound_message_id)
         if message is None or not message.institution_id:
             return {"skipped": "message not found or unattributed"}

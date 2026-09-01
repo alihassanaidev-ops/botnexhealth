@@ -1360,11 +1360,11 @@ class WorkflowStepDispatcher:
             if (
                 result_code == "booked"
                 and contact is not None
-                and contact.lead_status is not None
+                and getattr(contact, "lead_status", None) is not None
             ):
-                from src.app.models.campaign_enquiry import EnquiryStatus
+                from src.app.models.contact import LeadStatus
 
-                contact.lead_status = EnquiryStatus.BOOKED.value
+                contact.lead_status = LeadStatus.BOOKED.value
             await self.runtime.complete_step(
                 step,
                 result_code=result_code,
@@ -2301,7 +2301,7 @@ class WorkflowStepDispatcher:
         if not run.contact_id:
             return
 
-        from src.app.models.campaign_enquiry import EnquiryStatus
+        from src.app.models.contact import LeadStatus
         from src.app.models.contact import Contact
         from src.app.models.sms_consent import ConsentSource, DncScope
         from src.app.services.sms_compliance import SmsComplianceService
@@ -2310,12 +2310,12 @@ class WorkflowStepDispatcher:
         if contact is None:
             return
 
-        lead_statuses = {member.value for member in EnquiryStatus}
+        lead_statuses = {member.value for member in LeadStatus}
         if getattr(contact, "lead_status", None) is not None:
             if node.status in lead_statuses:
                 contact.lead_status = node.status
             elif node.status == "do_not_call_requested":
-                contact.lead_status = EnquiryStatus.NOT_QUALIFIED.value
+                contact.lead_status = LeadStatus.NOT_QUALIFIED.value
 
         if node.status != "do_not_call_requested":
             return

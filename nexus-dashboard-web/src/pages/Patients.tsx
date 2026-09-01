@@ -350,6 +350,7 @@ function PersonDetail({ contactId, mode, onClose, onChanged }: PersonDetailProps
     const [unmerging, setUnmerging] = useState<string | null>(null)
     const [notes, setNotes] = useState("")
     const [savingNotes, setSavingNotes] = useState(false)
+    const [changingLifecycle, setChangingLifecycle] = useState(false)
 
     const load = useCallback(async () => {
         if (!contactId) return
@@ -395,6 +396,21 @@ function PersonDetail({ contactId, mode, onClose, onChanged }: PersonDetailProps
             toast.error(e instanceof Error ? e.message : "Couldn't save notes")
         } finally {
             setSavingNotes(false)
+        }
+    }
+
+    async function promoteToContact() {
+        if (!detail || detail.lifecycle !== "lead") return
+        setChangingLifecycle(true)
+        try {
+            const updated = await updateContact(detail.id, { lifecycle: "contact" })
+            setDetail(updated)
+            toast.success("Lead converted to contact")
+            onChanged()
+        } catch (e) {
+            toast.error(e instanceof Error ? e.message : "Couldn't convert lead")
+        } finally {
+            setChangingLifecycle(false)
         }
     }
 
@@ -446,6 +462,17 @@ function PersonDetail({ contactId, mode, onClose, onChanged }: PersonDetailProps
                             {detail.email_masked && <span className="text-xs text-muted-foreground">· {detail.email_masked}</span>}
                             {detail.lifecycle === "patient" && detail.pms_last_synced_at && (
                                 <span className="text-xs text-muted-foreground">· PMS synced {formatDateTime(detail.pms_last_synced_at)}</span>
+                            )}
+                            {isAdmin && detail.lifecycle === "lead" && (
+                                <Button
+                                    size="sm"
+                                    variant="outline"
+                                    className="h-7"
+                                    disabled={changingLifecycle}
+                                    onClick={() => void promoteToContact()}
+                                >
+                                    {changingLifecycle ? "Converting…" : "Convert to contact"}
+                                </Button>
                             )}
                         </div>
 

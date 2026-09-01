@@ -141,7 +141,7 @@ def test_verified_form_validates_with_subaccount_token():
 
     assert form["To"] == "+16475550001"
     assert captured["token"] == "tok_subaccount"
-    resolver.resolve_auth_token.assert_awaited_once_with("+16475550001", "+14165551234")
+    resolver.resolve_auth_token.assert_awaited_once_with("+16475550001")
 
 
 def test_verified_form_falls_back_to_platform_token():
@@ -178,6 +178,43 @@ def test_verified_form_falls_back_to_platform_token():
         asyncio.run(_verified_form(request))
 
     assert captured["token"] == "tok_platform"
+
+
+def test_verified_form_checks_from_number_for_outbound_callback():
+    """Status callbacks own the From number, not the destination in To."""
+    request = _make_request({"To": "+14165551234", "From": "+16475550001"})
+    resolver = MagicMock()
+    resolver.resolve_auth_token = AsyncMock(
+        side_effect=["tok_platform", "tok_subaccount"]
+    )
+    db = MagicMock(return_value=_session_cm(AsyncMock()))
+
+    with (
+        patch("src.app.api.routes.twilio_webhooks.settings") as settings_mock,
+        patch(
+            "src.app.api.routes.twilio_webhooks.get_system_db_session",
+            db,
+        ),
+        patch(
+            "src.app.api.routes.twilio_webhooks.TenantTwilioCredentialResolver",
+            return_value=resolver,
+        ),
+        patch(
+            "src.app.api.routes.twilio_webhooks.RequestValidator"
+        ) as validator,
+    ):
+        settings_mock.twillio_api_secret = "tok_platform"
+        validator.return_value.validate.return_value = True
+        asyncio.run(_verified_form(request))
+
+    assert [call.kwargs["external_id"] for call in db.call_args_list] == [
+        "+14165551234",
+        "+16475550001",
+    ]
+    assert resolver.resolve_auth_token.await_args_list[-1].args == (
+        "+16475550001",
+    )
+    validator.assert_called_once_with("tok_subaccount")
 
 
 def test_verified_form_rejects_bad_signature():

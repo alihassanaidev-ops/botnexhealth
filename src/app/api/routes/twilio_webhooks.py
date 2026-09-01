@@ -474,12 +474,21 @@ async def _verified_form(request: Request) -> dict[str, Any]:
     # for whichever candidate maps to a provisioned location; fall back to the
     # platform token when the number belongs to no sub-account (behavior
     # unchanged for tenants without sub-account credentials).
-    async with get_system_db_session(
-        "twilio_signature", external_id=_field(form, "To")
-    ) as session:
-        auth_token = await TenantTwilioCredentialResolver(session).resolve_auth_token(
-            _field(form, "To"), _field(form, "From")
-        )
+    auth_token = None
+    # RLS exposes only the location whose number exactly matches external_id.
+    # Inbound messages are owned by To; outbound status callbacks by From, so
+    # each candidate needs its own exact lookup context.
+    for candidate in (_field(form, "To"), _field(form, "From")):
+        if not candidate:
+            continue
+        async with get_system_db_session(
+            "twilio_lookup", external_id=candidate
+        ) as session:
+            auth_token = await TenantTwilioCredentialResolver(
+                session
+            ).resolve_auth_token(candidate)
+        if auth_token and auth_token != settings.twillio_api_secret:
+            break
 
     signature = request.headers.get("X-Twilio-Signature")
     validator = RequestValidator(auth_token or settings.twillio_api_secret)
