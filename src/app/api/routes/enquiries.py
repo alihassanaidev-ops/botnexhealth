@@ -23,6 +23,7 @@ from __future__ import annotations
 import logging
 from datetime import datetime
 from typing import Annotated, Literal
+from uuid import uuid4
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from pydantic import BaseModel, Field
@@ -37,6 +38,7 @@ from src.app.models.campaign_enquiry import CampaignEnquiry, EnquiryStatus
 from src.app.models.contact import Contact
 from src.app.models.user import User
 from src.app.services.audit_decorator import audit
+from src.app.services.automation.enquiry_intake_service import intake_enquiry
 from src.app.services.sms_privacy import hash_email, hash_phone, mask_phone
 
 logger = logging.getLogger(__name__)
@@ -104,6 +106,36 @@ class EnquiryDetail(EnquiryListItem):
     external_ref: str | None
     intake_key: str
     location_id: str | None
+
+
+class EnquiryCreate(BaseModel):
+    """A lead entered by hand.
+
+    Staff take enquiries that never touch a form — somebody rings, or walks in,
+    or a referral arrives by email. Decision C left this open; without it those
+    people either go in a notebook or go nowhere.
+    """
+
+    first_name: str | None = None
+    last_name: str | None = None
+    phone: str | None = None
+    email: str | None = None
+    notes: str | None = None
+    location_id: str | None = None
+    #: What the person actually agreed to, asked rather than assumed. A staff
+    #: member who did not ask should not be able to imply it by saving a form.
+    consent_sms: bool = False
+    consent_email: bool = False
+    consent_wording: str | None = None
+
+
+class EnquiryCreated(BaseModel):
+    enquiry: "EnquiryDetail"
+    #: False when this person was already on the list. Surfaced rather than
+    #: silently deduplicated, so whoever typed it knows why no new row appeared.
+    created: bool
+    #: True when they turn out to already exist in the practice software.
+    matched_existing_contact: bool
 
 
 class EnquiryUpdate(BaseModel):
@@ -200,6 +232,67 @@ async def list_enquiries(
     return EnquiryListResponse(items=items, total=total, limit=limit, offset=offset)
 
 
+@router.post("", response_model=EnquiryCreated, status_code=status.HTTP_201_CREATED)
+@limiter.limit(RATE_WRITE)
+@audit(
+    AuditAction.CAMPAIGN_CREATE,
+    resource=lambda *a, **kw: "campaign_enquiry:manual",
+    actor=AuditActor.ADMIN,
+)
+async def create_enquiry(
+    request: Request,
+    data: EnquiryCreate,
+    current_user: _InstitutionUser,
+    session: _Session,
+) -> EnquiryCreated:
+    """Enter a lead by hand.
+
+    Goes through the same intake path a form does, rather than inserting a row
+    directly, so deduplication against existing leads and patients and the
+    recording of consent behave identically whichever way somebody arrived.
+    Two paths that write the same table by different rules is how one of them
+    ends up wrong.
+    """
+    institution_id = _institution_id(current_user)
+    phone = (data.phone or "").strip() or None
+    email = (data.email or "").strip() or None
+    if not phone and not email:
+        raise HTTPException(
+            status.HTTP_422_UNPROCESSABLE_ENTITY,
+            "A phone number or an email address is needed to reach them.",
+        )
+
+    consent_channels = tuple(
+        channel
+        for channel, agreed in (("sms", data.consent_sms), ("email", data.consent_email))
+        if agreed
+    )
+
+    result = await intake_enquiry(
+        session,
+        institution_id=institution_id,
+        # Ours, and unique per entry: a staff member has no submission id to
+        # give, and reusing anything derived from the details would make a
+        # second genuine enquiry from the same person look like a duplicate.
+        intake_key=f"manual:{uuid4()}",
+        source="manual",
+        location_id=data.location_id,
+        first_name=(data.first_name or "").strip() or None,
+        last_name=(data.last_name or "").strip() or None,
+        email=email,
+        phone=phone,
+        notes=data.notes,
+        consent_channels=consent_channels,
+        consent_wording=data.consent_wording,
+    )
+    await session.flush()
+    return EnquiryCreated(
+        enquiry=_detail(result.enquiry),
+        created=result.created,
+        matched_existing_contact=result.matched_existing_contact,
+    )
+
+
 @router.get("/{enquiry_id}", response_model=EnquiryDetail)
 @limiter.limit(RATE_READ)
 async def get_enquiry(
@@ -209,14 +302,7 @@ async def get_enquiry(
     session: _Session,
 ) -> EnquiryDetail:
     row = await _load(session, enquiry_id, _institution_id(current_user))
-    return EnquiryDetail(
-        **_item(row).model_dump(),
-        notes=row.notes,
-        attribution=row.attribution,
-        external_ref=row.external_ref,
-        intake_key=row.intake_key,
-        location_id=str(row.location_id) if row.location_id else None,
-    )
+    return _detail(row)
 
 
 @router.patch("/{enquiry_id}", response_model=EnquiryDetail)
@@ -244,6 +330,10 @@ async def update_enquiry(
         # update cannot silently wipe somebody's notes.
         row.notes = data.notes or None
     await session.flush()
+    return _detail(row)
+
+
+def _detail(row: CampaignEnquiry) -> EnquiryDetail:
     return EnquiryDetail(
         **_item(row).model_dump(),
         notes=row.notes,

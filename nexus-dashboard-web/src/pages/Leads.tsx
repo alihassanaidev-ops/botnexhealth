@@ -6,6 +6,7 @@ import { Card, CardContent } from "@/components/ui/card"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import {
+    createEnquiry,
     getEnquiry,
     listEnquiries,
     updateEnquiry,
@@ -53,6 +54,14 @@ export default function Leads() {
     const [loading, setLoading] = useState(true)
     const [error, setError] = useState("")
 
+    const [adding, setAdding] = useState(false)
+    const [form, setForm] = useState({
+        first_name: "", last_name: "", phone: "", email: "", notes: "",
+        consent_sms: false,
+    })
+    const [addError, setAddError] = useState("")
+    const [addNote, setAddNote] = useState("")
+
     const [open, setOpen] = useState<EnquiryDetail | null>(null)
     const [notes, setNotes] = useState("")
     const [saving, setSaving] = useState(false)
@@ -78,6 +87,40 @@ export default function Leads() {
         void refresh()
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [stage])
+
+    async function submitNew() {
+        if (!form.phone.trim() && !form.email.trim()) {
+            setAddError("Add a phone number or an email address so they can be reached.")
+            return
+        }
+        setAddError("")
+        setAddNote("")
+        try {
+            const result = await createEnquiry({
+                first_name: form.first_name.trim() || undefined,
+                last_name: form.last_name.trim() || undefined,
+                phone: form.phone.trim() || undefined,
+                email: form.email.trim() || undefined,
+                notes: form.notes.trim() || undefined,
+                consent_sms: form.consent_sms,
+                consent_wording: form.consent_sms ? "Agreed when speaking to staff" : undefined,
+            })
+            // Told rather than silently deduplicated: otherwise whoever typed
+            // it sees nothing happen and types it again.
+            setAddNote(
+                result.created
+                    ? "Added."
+                    : "That person is already on your list — opened instead of added again.",
+            )
+            setForm({ first_name: "", last_name: "", phone: "", email: "", notes: "", consent_sms: false })
+            setAdding(false)
+            await refresh()
+            setOpen(result.enquiry)
+            setNotes(result.enquiry.notes ?? "")
+        } catch {
+            setAddError("Couldn't save that enquiry.")
+        }
+    }
 
     async function openLead(id: string) {
         const detail = await getEnquiry(id)
@@ -105,6 +148,9 @@ export default function Leads() {
             />
 
             <div className="flex flex-wrap items-center gap-2">
+                <Button size="sm" onClick={() => setAdding((v) => !v)}>
+                    {adding ? "Cancel" : "Add enquiry"}
+                </Button>
                 {STAGES.map((s) => (
                     <Button
                         key={s.value}
@@ -128,6 +174,55 @@ export default function Leads() {
                     </Button>
                 </div>
             </div>
+
+            {addNote && <p className="text-sm text-muted-foreground">{addNote}</p>}
+
+            {adding && (
+                <Card>
+                    <CardContent className="space-y-3 pt-6">
+                        <div className="grid gap-3 sm:grid-cols-2">
+                            <div className="space-y-1.5">
+                                <Label htmlFor="fn">First name</Label>
+                                <Input id="fn" value={form.first_name}
+                                    onChange={(e) => setForm({ ...form, first_name: e.target.value })} />
+                            </div>
+                            <div className="space-y-1.5">
+                                <Label htmlFor="ln">Last name</Label>
+                                <Input id="ln" value={form.last_name}
+                                    onChange={(e) => setForm({ ...form, last_name: e.target.value })} />
+                            </div>
+                            <div className="space-y-1.5">
+                                <Label htmlFor="ph">Phone</Label>
+                                <Input id="ph" value={form.phone}
+                                    onChange={(e) => setForm({ ...form, phone: e.target.value })} />
+                            </div>
+                            <div className="space-y-1.5">
+                                <Label htmlFor="em">Email</Label>
+                                <Input id="em" value={form.email}
+                                    onChange={(e) => setForm({ ...form, email: e.target.value })} />
+                            </div>
+                        </div>
+                        <div className="space-y-1.5">
+                            <Label htmlFor="new-notes">Notes</Label>
+                            <textarea id="new-notes" rows={2} value={form.notes}
+                                className="w-full rounded-md border bg-background p-2 text-sm"
+                                placeholder="What they asked about"
+                                onChange={(e) => setForm({ ...form, notes: e.target.value })} />
+                        </div>
+                        <label className="flex items-center gap-2 text-sm">
+                            <input type="checkbox" checked={form.consent_sms}
+                                onChange={(e) => setForm({ ...form, consent_sms: e.target.checked })} />
+                            They agreed we can text them
+                        </label>
+                        <p className="text-xs text-muted-foreground">
+                            Only tick this if they actually said so — it is what allows a
+                            campaign to text them later.
+                        </p>
+                        {addError && <p className="text-sm text-destructive" role="alert">{addError}</p>}
+                        <Button size="sm" onClick={submitNew}>Save enquiry</Button>
+                    </CardContent>
+                </Card>
+            )}
 
             <Card>
                 <CardContent className="pt-6">

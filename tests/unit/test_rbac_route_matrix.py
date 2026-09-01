@@ -272,6 +272,7 @@ ROUTES_BY_BOUNDARY: dict[str, tuple[str, ...]] = {
         # until staff or a campaign assigns one, so scoping reads by location
         # would hide exactly the ones needing attention.
         "GET /api/institution/enquiries",
+        "POST /api/institution/enquiries",
         "GET /api/institution/enquiries/{enquiry_id}",
         "PATCH /api/institution/enquiries/{enquiry_id}",
         "GET /api/institution/enquiry-sources",

@@ -80,8 +80,10 @@ existing sequencing advice to build the Patient Communication family first.
 that the clinic's own site (or a form provider they control) posts to. No per-source adapters, no
 OAuth flows to third-party CRMs. Simplifies the item considerably.
 
-**Still open (minor).** Whether staff can also enter an enquiry by hand in the dashboard. It is a
-small addition and a common request during onboarding; worth confirming before Item 24 starts.
+**Also decided.** Staff can enter an enquiry by hand. It goes through the same intake path a form
+does rather than inserting a row directly, so deduplication and consent recording behave identically
+whichever way somebody arrived — two paths writing one table by different rules is how one of them
+ends up wrong. Consent is asked for explicitly and never implied by the act of saving the form.
 
 ---
 

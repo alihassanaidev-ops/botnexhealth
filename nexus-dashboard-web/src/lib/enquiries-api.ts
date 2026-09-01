@@ -57,3 +57,27 @@ export async function updateEnquiry(
     const { data } = await api.patch<EnquiryDetail>(`${BASE}/${id}`, body)
     return data
 }
+
+export type EnquiryCreate = {
+    first_name?: string
+    last_name?: string
+    phone?: string
+    email?: string
+    notes?: string
+    location_id?: string | null
+    consent_sms?: boolean
+    consent_email?: boolean
+    consent_wording?: string
+}
+
+export type EnquiryCreated = {
+    enquiry: EnquiryDetail
+    /** False when this person was already on the list. */
+    created: boolean
+    matched_existing_contact: boolean
+}
+
+export async function createEnquiry(body: EnquiryCreate): Promise<EnquiryCreated> {
+    const { data } = await api.post<EnquiryCreated>(BASE, body)
+    return data
+}

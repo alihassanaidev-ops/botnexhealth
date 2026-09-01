@@ -50,7 +50,18 @@ def _enquiry(**over):
 
 def _session(rows=None, one=None, total=None):
     session = AsyncMock()
-    session.flush = AsyncMock()
+    added: list = []
+    session.add = MagicMock(side_effect=added.append)
+
+    async def _flush():
+        # A real flush applies the column defaults; a newly built enquiry has
+        # no timestamps until then, and the response model requires them.
+        for obj in added:
+            for field in ("created_at", "updated_at"):
+                if getattr(obj, field, None) is None:
+                    setattr(obj, field, datetime.now(timezone.utc))
+
+    session.flush = AsyncMock(side_effect=_flush)
     rows = rows if rows is not None else []
     queue = [total if total is not None else len(rows)]
 
@@ -58,10 +69,16 @@ def _session(rows=None, one=None, total=None):
         result = MagicMock()
         result.scalar.return_value = queue.pop(0) if queue else 0
         result.scalars.return_value.all.return_value = rows
+        # intake_enquiry looks people up with .scalars().first(); without this
+        # it receives a MagicMock and treats it as an existing lead.
+        result.scalars.return_value.first.return_value = one
         result.scalar_one_or_none.return_value = one
         return result
 
     session.execute = AsyncMock(side_effect=_execute)
+    # Exposed so a test can inspect what was written without replacing
+    # session.add, which would disconnect the flush above.
+    session.added = added
     return session
 
 
@@ -200,3 +217,72 @@ class TestWorkingALead:
         row.notes = "Rang twice, wants Saturday"
         r = _client(_session(one=row)).get(f"{BASE}/e1")
         assert r.json()["notes"] == "Rang twice, wants Saturday"
+
+
+class TestManualEntry:
+    """Staff take enquiries that never touch a form — somebody rings, or walks in."""
+
+    def _post(self, session, body):
+        return _client(session).post(BASE, json=body)
+
+    def test_a_lead_can_be_entered_by_hand(self):
+        session = _session(one=None)
+        r = self._post(session, {"first_name": "Dana", "phone": "+15054821234"})
+        assert r.status_code == 201
+        assert r.json()["created"] is True
+
+    def test_it_is_marked_as_manual_not_as_a_form(self):
+        """So a clinic can tell which of its channels actually produces leads."""
+        session = _session(one=None)
+        r = self._post(session, {"phone": "+15054821234"})
+        assert r.json()["enquiry"]["source"] == "manual"
+
+    def test_someone_with_no_way_to_be_reached_is_refused(self):
+        r = self._post(_session(one=None), {"first_name": "Dana"})
+        assert r.status_code == 422
+
+    def test_an_email_only_lead_is_accepted(self):
+        r = self._post(_session(one=None), {"email": "dana@example.com"})
+        assert r.status_code == 201
+
+    def test_notes_can_be_captured_at_entry(self):
+        """The reason the call is being written down at all."""
+        session = _session(one=None)
+        r = self._post(session, {"phone": "+15054821234", "notes": "Asked about implants"})
+        assert r.json()["enquiry"]["notes"] == "Asked about implants"
+
+    def test_nothing_is_claimed_about_consent_that_was_not_ticked(self):
+        """A staff member who did not ask must not imply it by saving a form."""
+        from src.app.models.sms_consent import ConsentRecord
+
+        session = _session(one=None)
+        self._post(session, {"phone": "+15054821234"})
+        assert [o for o in session.added if isinstance(o, ConsentRecord)] == []
+
+    def test_a_declared_opt_in_is_recorded(self):
+        from src.app.models.sms_consent import ConsentRecord
+
+        session = _session(one=None)
+        self._post(session, {
+            "phone": "+15054821234", "consent_sms": True,
+            "consent_wording": "Said yes on the phone",
+        })
+        records = [o for o in session.added if isinstance(o, ConsentRecord)]
+        assert len(records) == 1
+        assert records[0].reason == "Said yes on the phone"
+
+    def test_an_existing_lead_is_reported_rather_than_duplicated(self):
+        """Surfaced, not silent: whoever typed it needs to know why no new row
+        appeared, or they will type it again."""
+        existing = _enquiry(id="already-here")
+        session = _session(one=existing)
+        r = self._post(session, {"phone": "+15054821234"})
+        assert r.status_code == 201
+        assert r.json()["created"] is False
+        assert r.json()["enquiry"]["id"] == "already-here"
+
+    def test_a_user_with_no_institution_is_refused(self):
+        r = _client(_session(), user=_user(institution_id=None)).post(
+            BASE, json={"phone": "+15054821234"}
+        )
+        assert r.status_code == 400

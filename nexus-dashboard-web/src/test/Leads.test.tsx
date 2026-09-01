@@ -12,6 +12,7 @@ vi.mock("@/lib/enquiries-api", async () => {
         listEnquiries: vi.fn(),
         getEnquiry: vi.fn(),
         updateEnquiry: vi.fn(),
+        createEnquiry: vi.fn(),
     }
 })
 
@@ -42,6 +43,9 @@ describe("Leads", () => {
         })
         vi.mocked(api.getEnquiry).mockResolvedValue(DETAIL)
         vi.mocked(api.updateEnquiry).mockResolvedValue({ ...DETAIL, notes: "Rang twice" })
+        vi.mocked(api.createEnquiry).mockResolvedValue({
+            enquiry: DETAIL, created: true, matched_existing_contact: false,
+        })
     })
 
     it("lists the leads that landed", async () => {
@@ -136,5 +140,64 @@ describe("Leads", () => {
         })
         render(<Leads />)
         expect(await screen.findByText(/No enquiries yet/i)).toBeInTheDocument()
+    })
+
+    it("can enter an enquiry by hand", async () => {
+        const user = userEvent.setup()
+        render(<Leads />)
+        await screen.findByText("Dana Reyes")
+
+        await user.click(screen.getByRole("button", { name: "Add enquiry" }))
+        await user.type(screen.getByLabelText("Phone"), "+15054821234")
+        await user.click(screen.getByRole("button", { name: "Save enquiry" }))
+
+        await waitFor(() =>
+            expect(api.createEnquiry).toHaveBeenCalledWith(
+                expect.objectContaining({ phone: "+15054821234" }),
+            ),
+        )
+    })
+
+    it("will not save someone with no way to reach them", async () => {
+        const user = userEvent.setup()
+        render(<Leads />)
+        await screen.findByText("Dana Reyes")
+
+        await user.click(screen.getByRole("button", { name: "Add enquiry" }))
+        await user.type(screen.getByLabelText("First name"), "Dana")
+        await user.click(screen.getByRole("button", { name: "Save enquiry" }))
+
+        expect(api.createEnquiry).not.toHaveBeenCalled()
+        expect(await screen.findByRole("alert")).toBeInTheDocument()
+    })
+
+    it("does not claim consent that was not ticked", async () => {
+        const user = userEvent.setup()
+        render(<Leads />)
+        await screen.findByText("Dana Reyes")
+
+        await user.click(screen.getByRole("button", { name: "Add enquiry" }))
+        await user.type(screen.getByLabelText("Phone"), "+15054821234")
+        await user.click(screen.getByRole("button", { name: "Save enquiry" }))
+
+        await waitFor(() => expect(api.createEnquiry).toHaveBeenCalled())
+        const body = vi.mocked(api.createEnquiry).mock.calls[0][0]
+        expect(body.consent_sms).toBe(false)
+        expect(body.consent_wording).toBeUndefined()
+    })
+
+    it("says so when the person was already on the list", async () => {
+        vi.mocked(api.createEnquiry).mockResolvedValue({
+            enquiry: DETAIL, created: false, matched_existing_contact: false,
+        })
+        const user = userEvent.setup()
+        render(<Leads />)
+        await screen.findByText("Dana Reyes")
+
+        await user.click(screen.getByRole("button", { name: "Add enquiry" }))
+        await user.type(screen.getByLabelText("Phone"), "+15054821234")
+        await user.click(screen.getByRole("button", { name: "Save enquiry" }))
+
+        expect(await screen.findByText(/already on your list/i)).toBeInTheDocument()
     })
 })
