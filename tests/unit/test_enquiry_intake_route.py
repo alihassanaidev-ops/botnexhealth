@@ -90,10 +90,11 @@ def _post(
         async def __aexit__(self, *a):
             return False
 
+    db = MagicMock(return_value=_Ctx())
     with (
         patch(
             "src.app.api.routes.enquiry_intake.get_system_db_session",
-            return_value=_Ctx(),
+            db,
         ),
         patch(
             "src.app.api.routes.enquiry_intake.intake_enquiry",
@@ -116,10 +117,20 @@ def _post(
     if capture is not None:
         capture["trigger_service"] = trigger_service
         capture["enqueue"] = enqueue_spy
+        capture["db"] = db
     return response, spy
 
 
 class TestCredential:
+    def test_lookup_rls_is_scoped_to_the_exact_token_hash(self, client):
+        capture = {}
+        r, _ = _post(client, {"email": "a@b.com"}, capture=capture)
+
+        assert r.status_code == 202
+        first = capture["db"].call_args_list[0]
+        assert first.args == ("enquiry_intake_lookup",)
+        assert first.kwargs["external_id"] == hash_intake_token(TOKEN)
+
     def test_an_unknown_token_is_refused(self, client):
         r, _ = _post(client, {"email": "a@b.com"}, source=None)
         assert r.status_code == 401

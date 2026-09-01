@@ -62,6 +62,11 @@ router = APIRouter(prefix="/enquiries", tags=["Enquiry Intake"])
 #: tables intake needs, in exactly one institution.
 INTAKE_CONTEXT = "enquiry_intake"
 
+#: Before the token is resolved there is no institution to scope by. This
+#: context can only SELECT the source row whose token hash is in external_id;
+#: the migration deliberately grants it nothing else.
+INTAKE_LOOKUP_CONTEXT = "enquiry_intake_lookup"
+
 #: Generous for a form post and far below anything that would strain the worker.
 MAX_BODY_BYTES = 64 * 1024
 
@@ -168,9 +173,12 @@ async def intake(
 
     token_hash = hash_intake_token(token)
 
-    # Resolved before any tenant context exists, so this read runs as the
-    # intake context with no institution — the source row is what supplies one.
-    async with get_system_db_session(INTAKE_CONTEXT, external_id="lookup") as session:
+    # Resolved before any tenant context exists. The exact token hash is the
+    # only row the lookup RLS policy permits; the source row then supplies the
+    # tenant context used for every subsequent read and write.
+    async with get_system_db_session(
+        INTAKE_LOOKUP_CONTEXT, external_id=token_hash
+    ) as session:
         source = (
             (
                 await session.execute(

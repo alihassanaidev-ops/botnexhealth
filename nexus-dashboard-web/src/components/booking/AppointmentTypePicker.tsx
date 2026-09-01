@@ -19,11 +19,13 @@ export function AppointmentTypePicker({
     value,
     onChange,
     disabled,
+    allowAny = true,
 }: {
     types: AppointmentTypeOption[]
     value: string | null
     onChange: (id: string | null) => void
     disabled?: boolean
+    allowAny?: boolean
 }) {
     const [open, setOpen] = useState(false)
     const [query, setQuery] = useState("")
@@ -59,7 +61,11 @@ export function AppointmentTypePicker({
                     aria-label="Appointment type"
                 >
                     <span className="truncate">
-                        {chosen ? chosen.name : "Any appointment type"}
+                        {chosen
+                            ? chosen.name
+                            : allowAny
+                              ? "Any appointment type"
+                              : "Choose appointment type"}
                     </span>
                     <span aria-hidden className="ml-2 opacity-50">▾</span>
                 </Button>
@@ -79,16 +85,18 @@ export function AppointmentTypePicker({
                 )}
 
                 <div className="max-h-64 overflow-y-auto py-1">
-                    <button
-                        type="button"
-                        className="w-full text-left px-3 py-2.5 text-sm hover:bg-accent"
-                        onClick={() => {
-                            onChange(null)
-                            setOpen(false)
-                        }}
-                    >
-                        Any appointment type
-                    </button>
+                    {allowAny && (
+                        <button
+                            type="button"
+                            className="w-full text-left px-3 py-2.5 text-sm hover:bg-accent"
+                            onClick={() => {
+                                onChange(null)
+                                setOpen(false)
+                            }}
+                        >
+                            Any appointment type
+                        </button>
+                    )}
 
                     {filtered.map((type) => (
                         <button

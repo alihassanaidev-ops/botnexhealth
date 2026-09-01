@@ -16,6 +16,7 @@ from fastapi.testclient import TestClient
 
 from src.app.api.routes.campaign_registration import router
 from src.app.services.automation.campaign_action_links import (
+    BOOKING_LINK_CONFIG_KEY,
     REGISTRATION_CONFIG_KEY,
     make_action_token,
 )
@@ -54,10 +55,9 @@ class TestTokenHandling:
         r = client.post(f"/api/campaigns/link/register?token={_expired()}", json=_body())
         assert r.status_code == 410
 
-    def test_a_booking_token_cannot_register_a_patient(self, client):
-        """The action is inside the signed payload for exactly this reason."""
+    def test_a_non_booking_action_cannot_register_a_patient(self, client):
         r = client.post(
-            f"/api/campaigns/link/register?token={_token('book')}", json=_body()
+            f"/api/campaigns/link/register?token={_token('cancel')}", json=_body()
         )
         assert r.status_code == 400
 
@@ -112,16 +112,17 @@ def _session_with(contact, run, institution=MagicMock(), location=MagicMock()):
     return session
 
 
-def _run(config=None):
+def _run(config=None, *, booking=False):
     run = MagicMock()
     run.id = "run-1"
     run.institution_id = "inst-1"
     run.location_id = "loc-1"
     run.workflow_id = "wf-1"
     run.contact_id = "contact-1"
-    run.trigger_metadata = (
-        {REGISTRATION_CONFIG_KEY: config} if config is not None else None
-    )
+    metadata = {REGISTRATION_CONFIG_KEY: config} if config is not None else {}
+    if booking:
+        metadata[BOOKING_LINK_CONFIG_KEY] = {"actions": ["book"]}
+    run.trigger_metadata = metadata or None
     return run
 
 
@@ -137,7 +138,7 @@ def _contact(pms_id=None):
 
 
 class TestRegistration:
-    def _post(self, client, session, adapter, body=None):
+    def _post(self, client, session, adapter, body=None, *, action="register"):
         with patch(
             "src.app.api.routes.campaign_registration.get_campaign_link_db_session"
         ) as db, patch(
@@ -148,7 +149,7 @@ class TestRegistration:
             db.return_value.__aenter__.return_value = session
             db.return_value.__aexit__.return_value = False
             return client.post(
-                f"/api/campaigns/link/register?token={_token()}",
+                f"/api/campaigns/link/register?token={_token(action)}",
                 json=body or _body(),
             )
 
@@ -166,6 +167,33 @@ class TestRegistration:
         assert r.json()["status"] == "registered"
         # The whole point: the booking step that follows has something to book.
         assert contact.nexhealth_patient_id == "nh-4242"
+
+    def test_a_booking_token_can_register_when_both_nodes_configured_the_run(self, client):
+        contact = _contact()
+        session = _session_with(
+            contact,
+            _run({"provider_id": "prov-7"}, booking=True),
+        )
+        adapter = MagicMock()
+        adapter.create_patient = AsyncMock(
+            return_value={"success": True, "patient_id": "nh-4242", "message": "ok"}
+        )
+
+        r = self._post(client, session, adapter, action="book")
+
+        assert r.status_code == 200
+        assert contact.nexhealth_patient_id == "nh-4242"
+
+    def test_a_booking_token_cannot_register_without_a_booking_node(self, client):
+        contact = _contact()
+        session = _session_with(contact, _run({"provider_id": "prov-7"}))
+        adapter = MagicMock()
+        adapter.create_patient = AsyncMock()
+
+        r = self._post(client, session, adapter, action="book")
+
+        assert r.status_code == 400
+        adapter.create_patient.assert_not_awaited()
 
     def test_the_configured_provider_is_used(self, client):
         """provider_id is a clinic decision, never the patient's."""
@@ -191,6 +219,7 @@ class TestRegistration:
         self._post(client, session, adapter, _body(email="new@example.com"))
 
         assert adapter.create_patient.await_args.args[0].email == "new@example.com"
+        assert contact.email == "new@example.com"
 
     def test_an_already_linked_contact_is_not_duplicated(self, client):
         """Reopening the link must not create a second record for one person."""

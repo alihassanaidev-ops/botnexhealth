@@ -439,6 +439,13 @@ through `enquiry_trigger_service.py` with PHI-light trigger metadata. The Sales
 Qualification launch template uses that trigger, a Retell SMS conversation,
 patient registration, and a restricted booking link.
 
+The public form token cannot be institution-scoped until its source has been
+resolved. Its first database read therefore uses `enquiry_intake_lookup`, a
+SELECT-only RLS context whose `external_id` is the exact token hash. After that
+single row supplies the institution and location, intake reopens under the
+ordinary tenant-scoped `enquiry_intake` context for contact, consent, workflow
+enrolment, and `last_used_at` writes.
+
 Patient action links are authenticated by a signed, expiring token that names one
 workflow run and action. Because the token does not expose tenant scope, the database
 first permits a SELECT-only lookup of that exact run through
@@ -446,6 +453,16 @@ first permits a SELECT-only lookup of that exact run through
 resolved institution and location. Public-link routes must use
 `get_campaign_link_db_session` after verifying the signature—an ordinary system
 session has no workflow-run visibility under RLS.
+
+The booking page reads its constraints from the run before it asks a PMS for
+availability. A non-empty appointment-type set is a closed set: the page does
+not offer “Any,” and both slot reads and booking writes reject a missing or
+different type. The configured day window is also a server-side ceiling. When
+the run contact has no `nexhealth_patient_id`, the page does not offer slots
+yet: an existing patient is resolved through the same exact-one-match identity
+gate used by the Retell handler, while a new patient is created using the
+provider captured by the `patient_registration` node and then returned to the
+same booking link. A contact already linked to a PMS patient skips this choice.
 
 The `appointment-reminder-24h` launch template is a separate Appointment
 Reminder campaign, not a stage of the confirmation campaign. It uses an

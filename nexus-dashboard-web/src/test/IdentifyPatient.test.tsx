@@ -57,7 +57,9 @@ describe("IdentifyPatient", () => {
         const user = userEvent.setup()
         renderPage()
         await user.click(await screen.findByRole("button", { name: /new patient/i }))
-        expect(navigate).toHaveBeenCalledWith(expect.stringContaining("/book/register"))
+        expect(navigate).toHaveBeenCalledWith(
+            expect.stringMatching(/\/book\/register\?.*next=%2Fbook%2Fcancel/),
+        )
     })
 
     it("prefills nothing the patient is meant to be proving", async () => {

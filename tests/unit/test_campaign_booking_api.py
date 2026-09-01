@@ -18,6 +18,7 @@ from src.app.api.routes.campaign_booking import router
 from src.app.pms.models import BookingWriteStatus
 from src.app.services.automation.campaign_action_links import (
     BOOKING_LINK_CONFIG_KEY,
+    REGISTRATION_CONFIG_KEY,
     make_action_token,
 )
 from src.app.services.automation.campaign_identity import VERIFIED_KEY
@@ -109,6 +110,8 @@ def _ctx(
             return False
 
     adapter = AsyncMock()
+    adapter.list_appointment_types = AsyncMock(return_value=[])
+    adapter.list_providers = AsyncMock(return_value=[])
     default = [_slot()] if slots is None else slots
     if isinstance(default, list) and default and isinstance(default[0], list):
         # a sequence of results, one per successive search
@@ -616,14 +619,20 @@ class TestWorksOnBothPracticeSystems:
         adapter.list_providers.assert_awaited()
 
 
-def _configured_run(identity_check="sensitive", verified=False, provider_id=None):
+def _configured_run(
+    identity_check="sensitive",
+    verified=False,
+    provider_id=None,
+    appointment_type_ids=None,
+    window_days=7,
+):
     """A run that a booking_link step actually configured."""
     run = _run()
     run.trigger_metadata = {
         BOOKING_LINK_CONFIG_KEY: {
             "actions": ["book", "reschedule", "cancel"],
-            "appointment_type_ids": [],
-            "window_days": 7,
+            "appointment_type_ids": appointment_type_ids or [],
+            "window_days": window_days,
             "provider_id": provider_id,
             "identity_check": identity_check,
             "node_id": "b1",
@@ -753,6 +762,112 @@ class TestConfiguredProvider:
             adapter.find_available_slots.await_args.kwargs["provider_id"]
             == "prov-locked"
         )
+
+
+class TestConfiguredAppointmentTypes:
+    def test_page_context_preserves_the_closed_type_set(self):
+        token = make_action_token("run-1", "book")
+        run = _configured_run(appointment_type_ids=["exam"])
+        ctx = _ctx(run=run, contact_pms_id=None)
+        _session, _cm, adapter, _b = ctx
+        exam = MagicMock()
+        exam.source_id = "exam"
+        exam.id = "fallback-exam"
+        exam.name = "New patient exam"
+        exam.duration_minutes = 60
+        hidden = MagicMock()
+        hidden.source_id = "implant"
+        hidden.id = "fallback-implant"
+        hidden.name = "Implant"
+        hidden.duration_minutes = 90
+        adapter.list_appointment_types = AsyncMock(return_value=[exam, hidden])
+
+        r = _call(
+            client_(),
+            "GET",
+            f"/api/campaigns/link/book/appointment-types?token={token}",
+            ctx,
+        )
+
+        assert r.status_code == 200
+        assert r.json()["selection_required"] is True
+        assert r.json()["patient_resolution_required"] is True
+        assert [item["id"] for item in r.json()["appointment_types"]] == ["exam"]
+
+    def test_page_context_exposes_registration_only_when_that_node_ran(self):
+        token = make_action_token("run-1", "book")
+        run = _configured_run()
+        run.trigger_metadata[REGISTRATION_CONFIG_KEY] = {"provider_id": "prov-7"}
+
+        r = _call(
+            client_(),
+            "GET",
+            f"/api/campaigns/link/book/appointment-types?token={token}",
+            _ctx(run=run, contact_pms_id=None),
+        )
+
+        assert r.status_code == 200
+        assert r.json()["registration_available"] is True
+
+    def test_restricted_link_requires_a_type_before_searching(self):
+        token = make_action_token("run-1", "book")
+        ctx = _ctx(run=_configured_run(appointment_type_ids=["exam", "cleaning"]))
+
+        r = _call(
+            client_(),
+            "GET",
+            f"/api/campaigns/link/book/slots?token={token}",
+            ctx,
+        )
+
+        assert r.status_code == 400
+        assert r.json()["error"] == "appointment_type_required"
+        _session, _cm, adapter, _b = ctx
+        adapter.find_available_slots.assert_not_awaited()
+
+    def test_restricted_link_rejects_a_type_the_node_did_not_offer(self):
+        token = make_action_token("run-1", "book")
+        ctx = _ctx(run=_configured_run(appointment_type_ids=["exam"]))
+
+        r = _call(
+            client_(),
+            "GET",
+            f"/api/campaigns/link/book/slots?token={token}&appointment_type_id=implant",
+            ctx,
+        )
+
+        assert r.status_code == 403
+        assert r.json()["error"] == "appointment_type_not_offered"
+
+    def test_restricted_link_searches_only_the_selected_offered_type(self):
+        token = make_action_token("run-1", "book")
+        ctx = _ctx(run=_configured_run(appointment_type_ids=["exam"]))
+
+        r = _call(
+            client_(),
+            "GET",
+            f"/api/campaigns/link/book/slots?token={token}&appointment_type_id=exam",
+            ctx,
+        )
+
+        assert r.status_code == 200
+        _session, _cm, adapter, _b = ctx
+        assert adapter.find_available_slots.await_args.kwargs["appointment_type_id"] == "exam"
+
+    def test_workflow_window_caps_the_live_pms_query(self):
+        token = make_action_token("run-1", "book")
+        ctx = _ctx(run=_configured_run(window_days=14))
+
+        r = _call(
+            client_(),
+            "GET",
+            f"/api/campaigns/link/book/slots?token={token}&days=30",
+            ctx,
+        )
+
+        assert r.status_code == 200
+        _session, _cm, adapter, _b = ctx
+        assert adapter.find_available_slots.await_args.kwargs["days"] == 14
 
     def test_booking_recheck_uses_the_provider_chosen_by_the_workflow(self):
         token = make_action_token("run-1", "book")

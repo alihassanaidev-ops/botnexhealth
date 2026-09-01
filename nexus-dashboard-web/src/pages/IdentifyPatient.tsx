@@ -165,7 +165,9 @@ export default function IdentifyPatient() {
                                     className="w-full"
                                     variant="outline"
                                     onClick={() =>
-                                        navigate(`/book/register?token=${token}`)
+                                        navigate(
+                                            `/book/register?token=${token}${next ? `&next=${encodeURIComponent(next)}` : ""}`,
+                                        )
                                     }
                                 >
                                     I'm a new patient

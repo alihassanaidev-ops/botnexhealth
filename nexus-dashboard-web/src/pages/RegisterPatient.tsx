@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react"
-import { useSearchParams } from "react-router-dom"
+import { useNavigate, useSearchParams } from "react-router-dom"
 
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
@@ -32,7 +32,9 @@ const DOB_RE = /^\d{4}-\d{2}-\d{2}$/
 
 export default function RegisterPatient() {
     const [params] = useSearchParams()
+    const navigate = useNavigate()
     const token = params.get("token") ?? ""
+    const next = params.get("next") ?? ""
 
     const [phase, setPhase] = useState<Phase>(token ? "loading" : "error")
     const [clinic, setClinic] = useState("the clinic")
@@ -148,10 +150,21 @@ export default function RegisterPatient() {
                         )}
 
                         {phase === "done" && (
-                            <p className="text-sm text-muted-foreground">
-                                Thanks — you're registered with {clinic}. You can book an
-                                appointment from the link in your message.
-                            </p>
+                            <div className="space-y-4">
+                                <p className="text-sm text-muted-foreground">
+                                    Thanks — you're registered with {clinic}.
+                                </p>
+                                {next && (
+                                    <Button
+                                        className="w-full"
+                                        onClick={() =>
+                                            navigate(`${next}?token=${token}`, { replace: true })
+                                        }
+                                    >
+                                        Choose an appointment
+                                    </Button>
+                                )}
+                            </div>
                         )}
 
                         {(phase === "form" || busy) && (

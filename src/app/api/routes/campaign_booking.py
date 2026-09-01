@@ -33,6 +33,7 @@ from src.app.models.audit_log import AuditAction, AuditActor, AuditOutcome
 from src.app.models.automation_workflow import AutomationWorkflowRun
 from src.app.services.automation.campaign_action_links import (
     BOOKING_LINK_CONFIG_KEY,
+    REGISTRATION_CONFIG_KEY,
 )
 from src.app.services.automation.campaign_identity import is_verified
 from src.app.models.campaign_response import CampaignResponseEvent, CampaignStaffHandoff
@@ -542,6 +543,25 @@ class AppointmentTypeOption(BaseModel):
     duration_minutes: int | None = None
 
 
+class BookingPageContext(BaseModel):
+    appointment_types: list[AppointmentTypeOption] = Field(default_factory=list)
+    #: When true the workflow chose a closed set and "Any" is not a valid
+    #: selection. The server enforces the same rule on slot reads and writes.
+    selection_required: bool = False
+    #: A lead has no PMS id yet. The page must ask whether to match an existing
+    #: record or create a new one before it offers times.
+    patient_resolution_required: bool = False
+    registration_available: bool = False
+    identity_required: bool = False
+    clinic_name: str = ""
+    window_days: int = DEFAULT_DAYS
+
+
+def _registration_available(run: AutomationWorkflowRun) -> bool:
+    config = (run.trigger_metadata or {}).get(REGISTRATION_CONFIG_KEY)
+    return isinstance(config, dict) and bool(config.get("provider_id"))
+
+
 @router.get("/{action}/appointment-types")
 async def list_appointment_types(
     action: str,
@@ -565,6 +585,9 @@ async def list_appointment_types(
         )
         if institution is None or location is None:
             return _json({"error": "unavailable"}, 503)
+        if not _action_permitted(run, action):
+            return _json({"error": "action_not_offered"}, 403)
+        contact = await session.get(Contact, run.contact_id) if run.contact_id else None
         try:
             adapter = await get_adapter_for_institution_location(institution, location)
             types = await adapter.list_appointment_types()
@@ -573,9 +596,10 @@ async def list_appointment_types(
             return _json({"error": "unavailable"}, 503)
 
     allowed = _allowed_type_ids(run)
+    identity_required = _identity_required(run, action) and not is_verified(run)
     return _json(
-        {
-            "appointment_types": [
+        BookingPageContext(
+            appointment_types=[
                 AppointmentTypeOption(
                     id=t.source_id or t.id,
                     name=t.name,
@@ -583,8 +607,18 @@ async def list_appointment_types(
                 ).model_dump()
                 for t in types
                 if not allowed or str(t.source_id or t.id) in allowed
-            ]
-        }
+            ],
+            selection_required=bool(allowed),
+            patient_resolution_required=(
+                action == "book"
+                and contact is not None
+                and not contact.nexhealth_patient_id
+            ),
+            registration_available=_registration_available(run),
+            identity_required=identity_required,
+            clinic_name=getattr(location, "name", "") or "",
+            window_days=min(MAX_DAYS, _window_days(run, DEFAULT_DAYS)),
+        ).model_dump()
     )
 
 
@@ -594,7 +628,7 @@ async def list_slots(
     token: str = Query(..., description="Signed per-run action token"),
     appointment_type_id: str | None = Query(None),
     start_date: str | None = Query(None, description="ISO date to search from"),
-    days: int = Query(DEFAULT_DAYS, ge=1, le=MAX_DAYS),
+    days: int | None = Query(None, ge=1, le=MAX_DAYS),
 ) -> JSONResponse:
     """Offer what the clinic actually has free, for this run's patient."""
     verified = _verify(action, token)
@@ -606,6 +640,18 @@ async def list_slots(
         run = await session.get(AutomationWorkflowRun, run_id)
         if run is None:
             return _json({"error": "gone"}, 410)
+
+        if _identity_required(run, action) and not is_verified(run):
+            return _json({"error": "identity_required"}, 403)
+
+        if not _action_permitted(run, action):
+            return _json({"error": "action_not_offered"}, 403)
+
+        allowed = _allowed_type_ids(run)
+        if allowed and appointment_type_id is None:
+            return _json({"error": "appointment_type_required"}, 400)
+        if not _type_is_allowed(run, appointment_type_id):
+            return _json({"error": "appointment_type_not_offered"}, 403)
 
         if await _already_booked(session, run_id, action):
             return _json(SlotsResponse(already_booked=True).model_dump())
@@ -626,10 +672,10 @@ async def list_slots(
                 run,
                 appointment_type_id=appointment_type_id,
                 start_date=start_date,
-                # An explicit ?days= still wins so the pre-booking re-check can
-                # narrow the search; the node's window is the default when the
-                # patient's page does not ask for one.
-                days=days or _window_days(run, DEFAULT_DAYS),
+                # The workflow's window is a ceiling, not merely a UI default:
+                # a crafted request must not widen the PMS query beyond what
+                # the campaign author configured.
+                days=min(days or MAX_DAYS, _window_days(run, DEFAULT_DAYS)),
             )
         except Exception:
             logger.exception("slot search failed for run=%s", run_id)

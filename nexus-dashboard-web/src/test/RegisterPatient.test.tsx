@@ -24,9 +24,9 @@ const details = {
     already_registered: false,
 }
 
-function renderAt(token = "run-1.register.999.sig") {
+function renderAt(token = "run-1.register.999.sig", next = "") {
     return render(
-        <MemoryRouter initialEntries={[`/book/register?token=${token}`]}>
+        <MemoryRouter initialEntries={[`/book/register?token=${token}${next ? `&next=${encodeURIComponent(next)}` : ""}`]}>
             <RegisterPatient />
         </MemoryRouter>,
     )
@@ -98,6 +98,17 @@ describe("RegisterPatient", () => {
         renderAt()
         expect(await screen.findByText(/You're all set/)).toBeInTheDocument()
         expect(screen.queryByRole("button", { name: "Continue" })).not.toBeInTheDocument()
+    })
+
+    it("continues to booking after registration when the booking link sent them", async () => {
+        const user = userEvent.setup()
+        renderAt("run-1.book.999.sig", "/book/book")
+        await screen.findByDisplayValue("Dana")
+        await user.type(screen.getByLabelText("Date of birth"), "1988-04-02")
+        await user.click(screen.getByRole("button", { name: "Female" }))
+        await user.click(screen.getByRole("button", { name: "Continue" }))
+
+        expect(await screen.findByRole("button", { name: /choose an appointment/i })).toBeInTheDocument()
     })
 
     it("tells the patient an expired link expired", async () => {

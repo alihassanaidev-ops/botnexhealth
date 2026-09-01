@@ -10,6 +10,7 @@ import {
     fetchAppointmentTypes,
     fetchSlots,
     type AppointmentTypeOption,
+    type BookingPageContext,
     type LinkAction,
     type SlotOption,
     type SlotsResponse,
@@ -32,7 +33,7 @@ const RANGE_OPTIONS = [
  * and no state is worth a spinner the patient has to wait through twice.
  */
 
-type Phase = "loading" | "choosing" | "booking" | "done" | "error"
+type Phase = "loading" | "patient" | "choosing" | "booking" | "done" | "error"
 
 /**
  * Times are rendered from the wall clock the practice software returns, not by
@@ -90,6 +91,7 @@ export default function BookingLink() {
     const [data, setData] = useState<SlotsResponse | null>(null)
     const [chosen, setChosen] = useState<SlotOption | null>(null)
     const [types, setTypes] = useState<AppointmentTypeOption[]>([])
+    const [context, setContext] = useState<BookingPageContext | null>(null)
     const [typeId, setTypeId] = useState<string | null>(null)
     const [rangeDays, setRangeDays] = useState(7)
     const [refreshing, setRefreshing] = useState(false)
@@ -103,24 +105,62 @@ export default function BookingLink() {
     const linkAction = (action === "reschedule" ? "reschedule" : "book") as LinkAction
     const isReschedule = linkAction === "reschedule"
 
-    // Types are a property of the clinic, not of the filters — fetched once.
+    // Load the server-owned constraints before asking the PMS for slots. A
+    // failed context request must never degrade to an unrestricted booking.
     useEffect(() => {
         if (!token) return
         let cancelled = false
         fetchAppointmentTypes(linkAction, token)
-            .then((t) => !cancelled && setTypes(t))
-            .catch(() => {
-                /* The picker simply stays on "any"; it is not worth an error
-                   screen when the patient can still book. */
+            .then((ctx) => {
+                if (cancelled) return
+                if (ctx.identity_required) {
+                    navigate(
+                        `/book/identify?token=${token}&next=/book/${linkAction}`,
+                        { replace: true },
+                    )
+                    return
+                }
+                setContext(ctx)
+                setTypes(ctx.appointment_types)
+                setRangeDays(Math.min(7, ctx.window_days))
+                if (ctx.patient_resolution_required) {
+                    setPhase("patient")
+                    return
+                }
+                if (ctx.selection_required && ctx.appointment_types.length === 0) {
+                    setMessage(
+                        "The appointment types configured for this link are not available. Please contact the clinic.",
+                    )
+                    setPhase("error")
+                    return
+                }
+                setTypeId(
+                    ctx.selection_required && ctx.appointment_types.length === 1
+                        ? ctx.appointment_types[0].id
+                        : null,
+                )
+                setPhase("choosing")
+            })
+            .catch((err) => {
+                if (cancelled) return
+                const status = err?.response?.status
+                setMessage(
+                    campaignLinkGoneMessage(err)
+                        ?? (status === 503
+                          ? "We can't load the clinic's booking options right now. Please try again shortly."
+                          : "This link isn't valid. Please contact the clinic directly."),
+                )
+                setPhase("error")
             })
         return () => {
             cancelled = true
         }
-    }, [linkAction, token])
+    }, [linkAction, token, navigate])
 
     useEffect(() => {
         let cancelled = false
-        if (!token) return
+        if (!token || !context || context.patient_resolution_required) return
+        if (context.selection_required && !typeId) return
         // Re-running for a filter change must not blank the page — the patient
         // keeps the times they are looking at until the new ones arrive.
         queueMicrotask(() => !cancelled && setRefreshing(true))
@@ -168,12 +208,21 @@ export default function BookingLink() {
         return () => {
             cancelled = true
         }
-    }, [linkAction, token, typeId, rangeDays, navigate])
+    }, [linkAction, token, typeId, rangeDays, navigate, context])
 
     const days = useMemo(
         () => byDay(data?.slots ?? []),
         [data],
     )
+
+    const rangeOptions = useMemo(() => {
+        const maximum = context?.window_days ?? 7
+        const candidates = RANGE_OPTIONS.filter((option) => option.days <= maximum)
+        if (!candidates.some((option) => option.days === maximum)) {
+            candidates.push({ days: maximum, label: `Next ${maximum} days` })
+        }
+        return candidates
+    }, [context?.window_days])
 
     async function confirm() {
         if (!chosen) return
@@ -212,7 +261,10 @@ export default function BookingLink() {
                 if (fresh && data) {
                     setData({ ...data, slots: fresh })
                 } else {
-                    const refreshed = await fetchSlots(linkAction, token).catch(() => null)
+                    const refreshed = await fetchSlots(linkAction, token, {
+                        appointmentTypeId: typeId ?? undefined,
+                        days: rangeDays,
+                    }).catch(() => null)
                     if (refreshed) setData(refreshed)
                 }
                 setPhase("choosing")
@@ -223,7 +275,7 @@ export default function BookingLink() {
         }
     }
 
-    const clinic = data?.clinic_name || "the clinic"
+    const clinic = data?.clinic_name || context?.clinic_name || "the clinic"
     const chosenTypeName = types.find((t) => t.id === typeId)?.name ?? null
 
     return (
@@ -236,11 +288,13 @@ export default function BookingLink() {
                                 ? outcome === "pending"
                                     ? "Almost done"
                                     : "You're booked"
-                                : isReschedule
+                                : phase === "patient"
+                                  ? "Before you book"
+                                  : isReschedule
                                   ? "Choose a new time"
                                   : "Book your appointment"}
                         </CardTitle>
-                        {phase !== "done" && phase !== "error" && (
+                        {phase !== "done" && phase !== "error" && phase !== "patient" && (
                             <CardDescription>
                                 Pick a time that suits you at {clinic}.
                             </CardDescription>
@@ -258,6 +312,42 @@ export default function BookingLink() {
 
                         {phase === "error" && (
                             <p className="text-sm text-muted-foreground">{message}</p>
+                        )}
+
+                        {phase === "patient" && (
+                            <div className="space-y-3">
+                                <p className="text-sm text-muted-foreground">
+                                    Have you been seen at {clinic} before?
+                                </p>
+                                <Button
+                                    className="w-full"
+                                    onClick={() =>
+                                        navigate(
+                                            `/book/identify?token=${token}&next=/book/${linkAction}`,
+                                        )
+                                    }
+                                >
+                                    I'm an existing patient
+                                </Button>
+                                <Button
+                                    className="w-full"
+                                    variant="outline"
+                                    disabled={!context?.registration_available}
+                                    onClick={() =>
+                                        navigate(
+                                            `/book/register?token=${token}&next=${encodeURIComponent(`/book/${linkAction}`)}`,
+                                        )
+                                    }
+                                >
+                                    I'm a new patient
+                                </Button>
+                                {!context?.registration_available && (
+                                    <p className="text-xs text-muted-foreground">
+                                        New-patient registration is not configured for this link.
+                                        Please contact {clinic}.
+                                    </p>
+                                )}
+                            </div>
                         )}
 
                         {phase === "booking" && (
@@ -282,9 +372,10 @@ export default function BookingLink() {
                                         types={types}
                                         value={typeId}
                                         onChange={setTypeId}
+                                        allowAny={!context?.selection_required}
                                     />
                                     <div className="flex gap-2">
-                                        {RANGE_OPTIONS.map((opt) => (
+                                        {rangeOptions.map((opt) => (
                                             <Button
                                                 key={opt.days}
                                                 type="button"
@@ -312,7 +403,13 @@ export default function BookingLink() {
                                     </p>
                                 )}
 
-                                {!refreshing && days.length === 0 ? (
+                                {context?.selection_required && !typeId && (
+                                    <p className="text-sm text-muted-foreground">
+                                        Choose an appointment type to see available times.
+                                    </p>
+                                )}
+
+                                {!refreshing && (!context?.selection_required || typeId) && days.length === 0 ? (
                                     <p className="text-sm text-muted-foreground">
                                         No times available for that choice. Try a longer date range
                                         or a different appointment type — or contact {clinic} and

@@ -463,6 +463,60 @@ async def test_rls_system_contexts_are_narrow(rls_engine) -> None:
 
 
 @pytest.mark.asyncio
+async def test_enquiry_intake_lookup_sees_only_the_exact_token_hash(rls_engine) -> None:
+    source_id = "41000000-0000-0000-0000-000000000001"
+    token_hash = "a" * 64
+
+    async with rls_engine.begin() as conn:
+        await _set_context(conn, role="SUPER_ADMIN", user_id=USER_SUPER)
+        await conn.execute(
+            text(
+                """
+                INSERT INTO enquiry_intake_sources
+                  (id, institution_id, location_id, label, token_hash,
+                   source_name, is_active)
+                VALUES
+                  (:id, :institution_id, :location_id, 'Public form',
+                   :token_hash, 'external_form', true)
+                """
+            ),
+            {
+                "id": source_id,
+                "institution_id": INST_A,
+                "location_id": LOC_A1,
+                "token_hash": token_hash,
+            },
+        )
+
+    async with rls_engine.begin() as conn:
+        await _set_context(
+            conn,
+            context_type="enquiry_intake_lookup",
+            external_id=token_hash,
+        )
+        assert await conn.scalar(text("SELECT count(*) FROM enquiry_intake_sources")) == 1
+        # Lookup is SELECT-only. It cannot mutate even the row it can resolve.
+        await conn.execute(
+            text("UPDATE enquiry_intake_sources SET label = 'Changed by lookup'")
+        )
+
+    async with rls_engine.begin() as conn:
+        await _set_context(
+            conn,
+            context_type="enquiry_intake_lookup",
+            external_id="b" * 64,
+        )
+        assert await conn.scalar(text("SELECT count(*) FROM enquiry_intake_sources")) == 0
+
+    async with rls_engine.begin() as conn:
+        await _set_context(conn, role="SUPER_ADMIN", user_id=USER_SUPER)
+        assert await conn.scalar(
+            text("SELECT label FROM enquiry_intake_sources WHERE id = :id"),
+            {"id": source_id},
+        ) == "Public form"
+
+
+@pytest.mark.asyncio
 async def test_rls_login_flow(rls_engine) -> None:
     """Auth email context allows email lookup; cleared context blocks all.
 

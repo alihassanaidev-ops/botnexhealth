@@ -61,15 +61,25 @@ export type AppointmentTypeOption = {
     duration_minutes: number | null
 }
 
+export type BookingPageContext = {
+    appointment_types: AppointmentTypeOption[]
+    selection_required: boolean
+    patient_resolution_required: boolean
+    registration_available: boolean
+    identity_required: boolean
+    clinic_name: string
+    window_days: number
+}
+
 export async function fetchAppointmentTypes(
     action: LinkAction,
     token: string,
-): Promise<AppointmentTypeOption[]> {
-    const { data } = await client.get<{ appointment_types: AppointmentTypeOption[] }>(
+): Promise<BookingPageContext> {
+    const { data } = await client.get<BookingPageContext>(
         `/campaigns/link/${action}/appointment-types`,
         { params: { token } },
     )
-    return data.appointment_types
+    return data
 }
 
 export async function fetchSlots(

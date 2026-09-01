@@ -45,6 +45,7 @@ from src.app.models.institution_location import InstitutionLocation
 from src.app.pms.models import PatientCreateRequest
 from src.app.pms.factory import get_adapter_for_institution_location
 from src.app.services.automation.campaign_action_links import (
+    BOOKING_LINK_CONFIG_KEY,
     EXPIRED,
     INVALID,
     LINK_RESPONSE_HEADERS,
@@ -96,19 +97,22 @@ def _json(payload: dict, status_code: int = 200) -> JSONResponse:
     )
 
 
-def _verify(token: str) -> str | JSONResponse:
-    """Check the token is a valid, unexpired registration token."""
+def _verify(token: str) -> tuple[str, str] | JSONResponse:
+    """Check the token can enter registration.
+
+    A normal registration link is still accepted. A signed booking link may
+    also enter, but is authorised against the run after it is loaded: this is
+    how a new patient can register and continue without receiving two links.
+    """
     verified = verify_action_token(token)
     if verified == EXPIRED:
         return _json({"error": "expired"}, 410)
     if verified == INVALID:
         return _json({"error": "invalid"}, 400)
     run_id, token_action = verified  # type: ignore[misc]
-    if token_action != ACTION:
-        # A booking token must not register a patient: the action is inside the
-        # signed payload precisely so one link cannot be edited into another.
+    if token_action not in {ACTION, "book"}:
         return _json({"error": "invalid"}, 400)
-    return run_id
+    return run_id, token_action
 
 
 def _provider_id(run: AutomationWorkflowRun) -> str | None:
@@ -117,6 +121,19 @@ def _provider_id(run: AutomationWorkflowRun) -> str | None:
         return None
     provider_id = config.get("provider_id")
     return str(provider_id) if provider_id else None
+
+
+def _action_can_register(run: AutomationWorkflowRun, token_action: str) -> bool:
+    """A book token works only when this run executed both relevant nodes."""
+    if token_action == ACTION:
+        return True
+    if not _provider_id(run):
+        return False
+    booking = (run.trigger_metadata or {}).get(BOOKING_LINK_CONFIG_KEY)
+    if not isinstance(booking, dict):
+        return False
+    actions = booking.get("actions")
+    return isinstance(actions, list) and "book" in {str(action) for action in actions}
 
 
 def _clean(value: str | None) -> str:
@@ -131,12 +148,14 @@ async def registration_details(
     verified = _verify(token)
     if isinstance(verified, JSONResponse):
         return verified
-    run_id = verified
+    run_id, token_action = verified
 
     async with get_campaign_link_db_session(run_id) as session:
         run = await session.get(AutomationWorkflowRun, run_id)
         if run is None:
             return _json({"error": "gone"}, 410)
+        if not _action_can_register(run, token_action):
+            return _json({"error": "invalid"}, 400)
         location = (
             await session.get(InstitutionLocation, run.location_id)
             if run.location_id
@@ -167,7 +186,7 @@ async def register_patient(
     verified = _verify(token)
     if isinstance(verified, JSONResponse):
         return verified
-    run_id = verified
+    run_id, token_action = verified
 
     date_of_birth = _clean(body.date_of_birth)
     if not _DOB_RE.match(date_of_birth):
@@ -180,6 +199,8 @@ async def register_patient(
         run = await session.get(AutomationWorkflowRun, run_id)
         if run is None:
             return _json({"error": "gone"}, 410)
+        if not _action_can_register(run, token_action):
+            return _json({"error": "invalid"}, 400)
 
         institution = await session.get(Institution, run.institution_id)
         location = (
@@ -249,8 +270,13 @@ async def register_patient(
         )
 
         contact.nexhealth_patient_id = str(patient_id)
-        if not contact.date_of_birth:
-            contact.date_of_birth = date_of_birth
+        contact.first_name = first_name
+        contact.last_name = last_name
+        contact.full_name = f"{first_name} {last_name}".strip()
+        contact.email = email
+        contact.phone = phone
+        contact.date_of_birth = date_of_birth
+        contact.is_new_patient = True
 
         session.add(
             CampaignResponseEvent(
