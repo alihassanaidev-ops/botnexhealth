@@ -1195,8 +1195,8 @@ def test_list_merge_fields_filters_by_trigger_and_channel():
     assert "booked_timestamp" in names
     assert "created_machine_name" in names
     assert "recall_due_date" not in names
-    assert "appointment_type" not in names  # not present in GoTracker appointment-created payload
-    assert "provider_name" not in names  # enriched reference data, not webhook payload
+    assert "appointment_type" in names
+    assert "provider_name" in names
 
 
 def test_merge_field_catalog_does_not_drift_from_renderer():

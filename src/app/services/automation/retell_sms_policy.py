@@ -38,11 +38,15 @@ AUTOMATIC_RETELL_SMS_VARIABLES: tuple[str, ...] = (
     "appointment_type_name",
     "provider_name",
     "booking_link",
+    "registration_link",
     "confirmation_link",
     "reschedule_link",
     "recall_due_date",
     "callback_requested_at",
     "preferred_callback_time",
+    "enquiry_source",
+    "enquiry_status",
+    "matched_existing_contact",
     "sms_reply_intent",
 )
 

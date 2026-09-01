@@ -47,7 +47,10 @@ from src.app.services.automation.step_dispatcher import (
     _evaluate_rule,
 )
 from src.app.services.automation.llm_node_executor import execute_llm_node
-from src.app.services.automation.campaign_templates import TEMPLATES, instantiate_definition
+from src.app.services.automation.campaign_templates import (
+    TEMPLATES,
+    instantiate_definition,
+)
 from src.app.services.circuit_breaker import BreakerDecision, BreakerState
 from src.app.services.outbound_limits import LimitDecision
 from src.app.services.write_provenance import WriteActor
@@ -105,10 +108,14 @@ class _FakeGoTrackerWritebackAdapter:
 
     def __init__(self) -> None:
         self.set_appointment_status_id = AsyncMock(
-            return_value=SimpleNamespace(success=True, status="status_updated", error=None)
+            return_value=SimpleNamespace(
+                success=True, status="status_updated", error=None
+            )
         )
         self.update_appointment = AsyncMock(
-            return_value=SimpleNamespace(success=True, status="appointment_updated", error=None)
+            return_value=SimpleNamespace(
+                success=True, status="appointment_updated", error=None
+            )
         )
         self.close = AsyncMock()
 
@@ -209,7 +216,9 @@ def test_advance_json_mapper_writes_context_for_condition() -> None:
         dispatcher.advance(
             run,
             defn,
-            context={"gotracker_payload": {"appointment": {"reasons": ["Implant surgery"]}}},
+            context={
+                "gotracker_payload": {"appointment": {"reasons": ["Implant surgery"]}}
+            },
         )
     )
 
@@ -564,14 +573,20 @@ def test_advance_llm_node_classifies_with_keyword_rules() -> None:
                 output_field="appointment_category",
                 prompt_template="Classify the appointment reason.",
                 labels=["implant", "hygiene", "other"],
-                label_rules=[LlmLabelRule(label="implant", keywords=["implant", "surgery"])],
+                label_rules=[
+                    LlmLabelRule(label="implant", keywords=["implant", "surgery"])
+                ],
                 fallback_label="other",
                 allow_keyword_fallback=True,
                 next_node_id="cond-1",
             ),
             ConditionNode(
                 id="cond-1",
-                rules=[ConditionRule(field="appointment_category", op="eq", value="implant")],
+                rules=[
+                    ConditionRule(
+                        field="appointment_category", op="eq", value="implant"
+                    )
+                ],
                 true_next_node_id="exit-yes",
                 false_next_node_id="exit-no",
             ),
@@ -605,7 +620,9 @@ def test_advance_llm_node_classifies_with_keyword_rules() -> None:
 
 
 @pytest.mark.asyncio
-async def test_execute_llm_node_calls_openai_and_writes_output(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_execute_llm_node_calls_openai_and_writes_output(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     monkeypatch.setattr(settings, "openai_api_key", "sk-test")
     monkeypatch.setattr(settings, "openai_base_url", "https://api.openai.test/v1")
     monkeypatch.setattr(settings, "workflow_llm_default_model", "gpt-5.6-luna")
@@ -626,7 +643,7 @@ async def test_execute_llm_node_calls_openai_and_writes_output(monkeypatch: pyte
                 200,
                 json={
                     "id": "resp-1",
-                    "output_text": "{\"value\":\"implant\"}",
+                    "output_text": '{"value":"implant"}',
                     "usage": {"input_tokens": 20, "output_tokens": 4},
                 },
             )
@@ -698,7 +715,9 @@ def test_advance_sms_reply_wait_mode_creates_timeout_timer() -> None:
 
     assert result.status == "waiting"
     assert result.timer_id == "timer-1"
-    assert sched.create_timer.await_args.kwargs["due_at"] == _NOW + timedelta(minutes=30)
+    assert sched.create_timer.await_args.kwargs["due_at"] == _NOW + timedelta(
+        minutes=30
+    )
     rt.wait_run.assert_awaited_once()
 
 
@@ -766,7 +785,9 @@ def test_advance_drip_releases_available_batch_slot_immediately() -> None:
     run = _make_run()
     defn = _definition(
         nodes=[
-            DripNode(id="drip-1", batch_size=2, interval_seconds=3600, next_node_id="exit-1"),
+            DripNode(
+                id="drip-1", batch_size=2, interval_seconds=3600, next_node_id="exit-1"
+            ),
             ExitNode(id="exit-1", outcome="released"),
         ],
         entry="drip-1",
@@ -816,7 +837,9 @@ def test_advance_drip_waits_for_next_batch_after_batch_is_full() -> None:
     run = _make_run()
     defn = _definition(
         nodes=[
-            DripNode(id="drip-1", batch_size=2, interval_seconds=3600, next_node_id="exit-1"),
+            DripNode(
+                id="drip-1", batch_size=2, interval_seconds=3600, next_node_id="exit-1"
+            ),
             ExitNode(id="exit-1", outcome="released"),
         ],
         entry="drip-1",
@@ -850,7 +873,9 @@ def test_resume_after_timer_moves_past_drip_gate() -> None:
     run.current_step_id = "drip-1"
     defn = _definition(
         nodes=[
-            DripNode(id="drip-1", batch_size=2, interval_seconds=3600, next_node_id="exit-1"),
+            DripNode(
+                id="drip-1", batch_size=2, interval_seconds=3600, next_node_id="exit-1"
+            ),
             ExitNode(id="exit-1", outcome="released"),
         ],
         entry="drip-1",
@@ -1023,9 +1048,7 @@ def test_advance_condition_true_branch() -> None:
         entry="cond-1",
     )
 
-    result = asyncio.run(
-        dispatcher.advance(run, defn, context={"status": "confirmed"})
-    )
+    result = asyncio.run(dispatcher.advance(run, defn, context={"status": "confirmed"}))
 
     assert result.status == "completed"
     assert result.outcome == "confirmed"
@@ -1057,9 +1080,7 @@ def test_advance_condition_false_branch() -> None:
         entry="cond-1",
     )
 
-    result = asyncio.run(
-        dispatcher.advance(run, defn, context={"status": "pending"})
-    )
+    result = asyncio.run(dispatcher.advance(run, defn, context={"status": "pending"}))
 
     assert result.status == "completed"
     assert result.outcome == "no_response"
@@ -1143,6 +1164,65 @@ def test_do_not_call_status_writes_dnc_suppression() -> None:
     assert kwargs["reason"] == "workflow_do_not_call_requested"
 
 
+def test_update_patient_status_updates_lead_status_when_contact_is_a_lead() -> None:
+    from src.app.models.campaign_enquiry import EnquiryStatus
+
+    contact = SimpleNamespace(phone="+15551234567", lead_status=EnquiryStatus.NEW.value)
+    session = _make_session()
+    session.get = AsyncMock(return_value=contact)
+    rt = _make_runtime()
+    sched = _make_scheduler()
+    dispatcher = WorkflowStepDispatcher(session, rt, sched)
+
+    run = _make_run()
+    run.id = "run-1"
+    run.contact_id = "contact-1"
+    node = UpdatePatientStatusNode(
+        id="status-qualified",
+        status=EnquiryStatus.QUALIFIED.value,
+        next_node_id="exit-1",
+    )
+
+    asyncio.run(dispatcher._apply_status_side_effects(run, node))
+
+    assert contact.lead_status == EnquiryStatus.QUALIFIED.value
+
+
+def test_do_not_call_status_maps_leads_to_not_qualified_and_suppresses_sms() -> None:
+    from src.app.models.campaign_enquiry import EnquiryStatus
+
+    contact = SimpleNamespace(
+        phone="+15551234567",
+        lead_status=EnquiryStatus.QUALIFIED.value,
+    )
+    session = _make_session()
+    session.get = AsyncMock(return_value=contact)
+    rt = _make_runtime()
+    sched = _make_scheduler()
+    dispatcher = WorkflowStepDispatcher(session, rt, sched)
+
+    run = _make_run()
+    run.id = "run-1"
+    run.location_id = "loc-1"
+    run.contact_id = "contact-1"
+    node = UpdatePatientStatusNode(
+        id="status-dnc",
+        status="do_not_call_requested",
+        next_node_id="exit-1",
+    )
+    compliance = AsyncMock()
+    compliance.set_do_not_contact = AsyncMock()
+
+    with patch(
+        "src.app.services.sms_compliance.SmsComplianceService",
+        return_value=compliance,
+    ):
+        asyncio.run(dispatcher._apply_status_side_effects(run, node))
+
+    assert contact.lead_status == EnquiryStatus.NOT_QUALIFIED.value
+    compliance.set_do_not_contact.assert_awaited_once()
+
+
 # ---------------------------------------------------------------------------
 # advance() — missing node fails the run
 # ---------------------------------------------------------------------------
@@ -1205,7 +1285,10 @@ def test_preappointment_no_answer_routes_to_configured_second_attempt_wait() -> 
 
     assert result.status == "waiting"
     assert sched.create_timer.await_args.kwargs["due_at"] == _NOW + timedelta(hours=4)
-    assert any(call.kwargs.get("step_id") == "wait-retry-1" for call in rt.begin_step.await_args_list)
+    assert any(
+        call.kwargs.get("step_id") == "wait-retry-1"
+        for call in rt.begin_step.await_args_list
+    )
 
 
 def test_preappointment_callback_routes_to_patient_requested_clinic_time() -> None:
@@ -1233,26 +1316,37 @@ def test_preappointment_callback_routes_to_patient_requested_clinic_time() -> No
     assert sched.create_timer.await_args.kwargs["due_at"] == datetime(
         2026, 7, 2, 19, 0, tzinfo=timezone.utc
     )
-    assert any(call.kwargs.get("step_id") == "wait-callback-1" for call in rt.begin_step.await_args_list)
+    assert any(
+        call.kwargs.get("step_id") == "wait-callback-1"
+        for call in rt.begin_step.await_args_list
+    )
 
 
-@pytest.mark.parametrize("op,field_val,rule_val,expected", [
-    ("eq", "confirmed", "confirmed", True),
-    ("eq", "confirmed", "pending", False),
-    ("neq", "confirmed", "pending", True),
-    ("in", "confirmed", ["confirmed", "pending"], True),
-    ("in", "other", ["confirmed", "pending"], False),
-    ("in_case_insensitive", "Bridge Prep", ["bridge prep", "implant surgery"], True),
-    ("in_case_insensitive", "Bridge Prep Follow-up", ["bridge prep"], False),
-    ("not_in", "other", ["confirmed"], True),
-    ("is_null", None, None, True),
-    ("is_null", "x", None, False),
-    ("is_not_null", "x", None, True),
-    ("is_not_null", None, None, False),
-    ("contains", "Implant Surgery", "surgery", True),
-    ("contains", "Cleaning", "surgery", False),
-    ("not_contains", "Cleaning", "surgery", True),
-])
+@pytest.mark.parametrize(
+    "op,field_val,rule_val,expected",
+    [
+        ("eq", "confirmed", "confirmed", True),
+        ("eq", "confirmed", "pending", False),
+        ("neq", "confirmed", "pending", True),
+        ("in", "confirmed", ["confirmed", "pending"], True),
+        ("in", "other", ["confirmed", "pending"], False),
+        (
+            "in_case_insensitive",
+            "Bridge Prep",
+            ["bridge prep", "implant surgery"],
+            True,
+        ),
+        ("in_case_insensitive", "Bridge Prep Follow-up", ["bridge prep"], False),
+        ("not_in", "other", ["confirmed"], True),
+        ("is_null", None, None, True),
+        ("is_null", "x", None, False),
+        ("is_not_null", "x", None, True),
+        ("is_not_null", None, None, False),
+        ("contains", "Implant Surgery", "surgery", True),
+        ("contains", "Cleaning", "surgery", False),
+        ("not_contains", "Cleaning", "surgery", True),
+    ],
+)
 def test_evaluate_rule(op, field_val, rule_val, expected) -> None:
     rule = ConditionRule(field="f", op=op, value=rule_val)
     assert _evaluate_rule(rule, {"f": field_val}) is expected
@@ -1309,6 +1403,7 @@ def test_compute_due_at_duration() -> None:
     delay = DurationDelay(duration_seconds=3600)
     result = _compute_due_at(delay, "UTC", _NOW)
     from datetime import timedelta
+
     assert result == _NOW + timedelta(seconds=3600)
 
 
@@ -1346,7 +1441,9 @@ def test_compute_due_at_appointment_relative_past_returns_now() -> None:
     assert result == _NOW
 
 
-def test_compute_due_at_context_anchor_interprets_naive_time_in_location_timezone() -> None:
+def test_compute_due_at_context_anchor_interprets_naive_time_in_location_timezone() -> (
+    None
+):
     delay = AppointmentRelativeDelay(offset_seconds=0, anchor_field="callback_at")
 
     result = _compute_due_at(
@@ -1513,7 +1610,9 @@ def test_send_rate_limit_holds_the_message_instead_of_dropping_it() -> None:
     run = _make_run()
     run.location_id = "loc-9"
     now = datetime(2026, 8, 31, 12, 0, tzinfo=timezone.utc)
-    result = asyncio.run(dispatcher.advance(run, _sms_definition(), context={}, now=now))
+    result = asyncio.run(
+        dispatcher.advance(run, _sms_definition(), context={}, now=now)
+    )
 
     assert result.status == "waiting"
     rt.fail_run.assert_not_awaited()

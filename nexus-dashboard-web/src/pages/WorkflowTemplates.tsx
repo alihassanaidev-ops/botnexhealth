@@ -27,9 +27,16 @@ import {
 import { toast } from "sonner"
 import { createWorkflowFromTemplate, listTemplates, type CampaignTemplate } from "@/lib/workflow-api"
 import { triggerTypeLabel } from "@/lib/workflow/catalog"
-import { listAppointmentTypes, listLocations } from "@/lib/tenant-api"
+import { listAppointmentTypes, listLocations, listProviders } from "@/lib/tenant-api"
 import { listOutboundVoiceProfiles } from "@/lib/outbound-voice-api"
-import type { CachedAppointmentType, LocationInfo, OutboundVoiceProfile } from "@/types"
+import { listRetellSmsChatProfiles } from "@/lib/retell-sms-api"
+import type {
+    CachedAppointmentType,
+    CachedProvider,
+    LocationInfo,
+    OutboundVoiceProfile,
+    RetellSmsChatProfile,
+} from "@/types"
 import type { TriggerType } from "@/types/workflow"
 
 const CATEGORY_LABELS: Record<string, string> = {
@@ -37,10 +44,11 @@ const CATEGORY_LABELS: Record<string, string> = {
     callback: "Callback",
     recall: "Recall",
     reactivation: "Reactivation",
+    sales: "Sales",
     treatment: "Treatment",
 }
 
-const CATEGORY_ORDER = ["appointment_ops", "callback", "recall", "reactivation", "treatment"]
+const CATEGORY_ORDER = ["appointment_ops", "callback", "recall", "reactivation", "sales", "treatment"]
 
 function label(value: string) {
     return CATEGORY_LABELS[value] ?? value.replace(/_/g, " ")
@@ -54,12 +62,28 @@ function requiresVoiceProfile(template: CampaignTemplate) {
 
 function requiresAppointmentTypes(template: CampaignTemplate) {
     return template.metadata.setup_fields.some(
-        (field) => field.id === "appointment_type_ids" && field.required,
+        (field) => ["appointment_type_ids", "sales_appointment_type_ids"].includes(field.id) && field.required,
+    )
+}
+
+function requiresRetellSmsProfile(template: CampaignTemplate) {
+    return template.metadata.setup_fields.some(
+        (field) => field.id === "retell_sms_profile_id" && field.required,
+    )
+}
+
+function requiresProvider(template: CampaignTemplate) {
+    return template.metadata.setup_fields.some(
+        (field) => field.id === "sales_provider_id" && field.required,
     )
 }
 
 function hasSetupField(template: CampaignTemplate, fieldId: string) {
     return template.metadata.setup_fields.some((field) => field.id === fieldId)
+}
+
+function setupFieldLabel(template: CampaignTemplate, fieldId: string, fallback: string): string {
+    return template.metadata.setup_fields.find((field) => field.id === fieldId)?.label ?? fallback
 }
 
 function pmsCapabilityStatus(template: CampaignTemplate) {
@@ -110,10 +134,15 @@ export default function WorkflowTemplates() {
     const [templates, setTemplates] = useState<CampaignTemplate[]>([])
     const [locations, setLocations] = useState<LocationInfo[]>([])
     const [appointmentTypes, setAppointmentTypes] = useState<CachedAppointmentType[]>([])
+    const [providers, setProviders] = useState<CachedProvider[]>([])
     const [voiceProfiles, setVoiceProfiles] = useState<OutboundVoiceProfile[]>([])
+    const [retellSmsProfiles, setRetellSmsProfiles] = useState<RetellSmsChatProfile[]>([])
     const [appointmentTypesLocationId, setAppointmentTypesLocationId] = useState<string | null>(null)
+    const [providersLocationId, setProvidersLocationId] = useState<string | null>(null)
     const [appointmentTypesLoading, setAppointmentTypesLoading] = useState(false)
+    const [providersLoading, setProvidersLoading] = useState(false)
     const [voiceProfilesLoading, setVoiceProfilesLoading] = useState(false)
+    const [retellSmsProfilesLoading, setRetellSmsProfilesLoading] = useState(false)
     const [loading, setLoading] = useState(true)
     const [picked, setPicked] = useState<CampaignTemplate | null>(null)
     const [name, setName] = useState("")
@@ -123,6 +152,8 @@ export default function WorkflowTemplates() {
     const [copyVariant, setCopyVariant] = useState("")
     const [handoffBehavior, setHandoffBehavior] = useState("")
     const [voiceProfileId, setVoiceProfileId] = useState("")
+    const [retellSmsProfileId, setRetellSmsProfileId] = useState("")
+    const [salesProviderId, setSalesProviderId] = useState("")
     const [appointmentTypeIds, setAppointmentTypeIds] = useState<string[]>([])
     const [appointmentReasons, setAppointmentReasons] = useState("")
     const [postOpReasons, setPostOpReasons] = useState("")
@@ -132,6 +163,7 @@ export default function WorkflowTemplates() {
     const [postOpDelayHours, setPostOpDelayHours] = useState("24")
     const [postOpLatestCallHours, setPostOpLatestCallHours] = useState("72")
     const [patientVoiceCooldownHours, setPatientVoiceCooldownHours] = useState("24")
+    const [salesBookingWindowDays, setSalesBookingWindowDays] = useState("14")
     const [activeCategory, setActiveCategory] = useState<string>("all")
     const [creating, setCreating] = useState(false)
 
@@ -207,6 +239,74 @@ export default function WorkflowTemplates() {
     }, [picked, selectedLocationId])
 
     useEffect(() => {
+        if (!picked || !selectedLocationId || !requiresRetellSmsProfile(picked)) {
+            setRetellSmsProfiles([])
+            setRetellSmsProfileId("")
+            return
+        }
+        let active = true
+        ;(async () => {
+            setRetellSmsProfilesLoading(true)
+            try {
+                const rows = await listRetellSmsChatProfiles({ locationId: selectedLocationId, isActive: true })
+                if (!active) return
+                setRetellSmsProfiles(rows)
+                setRetellSmsProfileId((current) =>
+                    rows.some((profile) => profile.id === current) ? current : "",
+                )
+            } catch {
+                if (active) {
+                    setRetellSmsProfiles([])
+                    setRetellSmsProfileId("")
+                    toast.error("Failed to load Retell SMS profiles")
+                }
+            } finally {
+                if (active) setRetellSmsProfilesLoading(false)
+            }
+        })()
+        return () => {
+            active = false
+        }
+    }, [picked, selectedLocationId])
+
+    useEffect(() => {
+        if (!picked || !selectedLocationId || !requiresProvider(picked)) {
+            setProviders([])
+            setSalesProviderId("")
+            setProvidersLocationId(null)
+            return
+        }
+        let active = true
+        ;(async () => {
+            setProvidersLoading(true)
+            try {
+                const rows = await listProviders(selectedLocationId)
+                if (!active) return
+                const activeRows = rows.filter((row) => row.is_active && !row.is_hidden)
+                setProviders(activeRows)
+                setProvidersLocationId(selectedLocationId)
+                setSalesProviderId((current) =>
+                    activeRows.some((provider) => provider.source_id === current)
+                        ? current
+                        : "",
+                )
+            } catch {
+                if (active) {
+                    setProviders([])
+                    setSalesProviderId("")
+                    setProvidersLocationId(selectedLocationId)
+                    toast.error("Failed to load providers")
+                }
+            } finally {
+                if (active) setProvidersLoading(false)
+            }
+        })()
+        return () => {
+            active = false
+        }
+    }, [picked, selectedLocationId])
+
+    useEffect(() => {
         if (!picked || !selectedLocationId || !requiresAppointmentTypes(picked)) return
         let active = true
         ;(async () => {
@@ -270,10 +370,15 @@ export default function WorkflowTemplates() {
             ),
         )
         setVoiceProfileId("")
+        setRetellSmsProfileId("")
+        setSalesProviderId("")
         setVoiceProfiles([])
+        setRetellSmsProfiles([])
+        setProviders([])
         setAppointmentTypeIds([])
         setAppointmentTypes([])
         setAppointmentTypesLocationId(null)
+        setProvidersLocationId(null)
         setAppointmentReasons("")
         setPostOpReasons("")
         setCallOffsetHoursBefore(setupFieldDefault(t, "call_offset_hours_before", "24"))
@@ -282,6 +387,7 @@ export default function WorkflowTemplates() {
         setPostOpDelayHours(setupFieldDefault(t, "post_op_delay_hours", "24"))
         setPostOpLatestCallHours(setupFieldDefault(t, "post_op_latest_call_hours", "72"))
         setPatientVoiceCooldownHours(setupFieldDefault(t, "patient_voice_cooldown_hours", "24"))
+        setSalesBookingWindowDays(setupFieldDefault(t, "sales_booking_window_days", "14"))
     }
 
     async function handleCreate() {
@@ -296,6 +402,18 @@ export default function WorkflowTemplates() {
             }
             if (requiresAppointmentTypes(picked)) {
                 setupOptions.appointment_type_ids = appointmentTypeIds
+            }
+            if (hasSetupField(picked, "sales_appointment_type_ids")) {
+                setupOptions.sales_appointment_type_ids = appointmentTypeIds
+            }
+            if (hasSetupField(picked, "retell_sms_profile_id")) {
+                setupOptions.retell_sms_profile_id = retellSmsProfileId
+            }
+            if (hasSetupField(picked, "sales_provider_id")) {
+                setupOptions.sales_provider_id = salesProviderId
+            }
+            if (hasSetupField(picked, "sales_booking_window_days")) {
+                setupOptions.sales_booking_window_days = Number(salesBookingWindowDays)
             }
             if (hasSetupField(picked, "appointment_reasons")) {
                 setupOptions.appointment_reasons = appointmentReasons
@@ -341,6 +459,8 @@ export default function WorkflowTemplates() {
     }
 
     const voiceRequired = picked ? requiresVoiceProfile(picked) : false
+    const retellSmsRequired = picked ? requiresRetellSmsProfile(picked) : false
+    const providerRequired = picked ? requiresProvider(picked) : false
     const appointmentTypesRequired = picked ? requiresAppointmentTypes(picked) : false
     const appointmentReasonsRequired = picked ? hasSetupField(picked, "appointment_reasons") : false
     const postOpReasonsRequired = picked ? hasSetupField(picked, "post_op_reasons") : false
@@ -377,6 +497,16 @@ export default function WorkflowTemplates() {
         : []
     const appointmentTypeRows =
         appointmentTypesLocationId === selectedLocationId ? appointmentTypes : []
+    const providerRows = providersLocationId === selectedLocationId ? providers : []
+    const appointmentTypesLabel = picked
+        ? setupFieldLabel(
+            picked,
+            hasSetupField(picked, "sales_appointment_type_ids")
+                ? "sales_appointment_type_ids"
+                : "appointment_type_ids",
+            "Appointment types",
+        )
+        : "Appointment types"
     function toggleAppointmentType(id: string, checked: boolean) {
         setAppointmentTypeIds((current) =>
             checked
@@ -389,6 +519,8 @@ export default function WorkflowTemplates() {
         !name.trim() ||
         !selectedLocationId ||
         (voiceRequired && !voiceProfileId.trim()) ||
+        (retellSmsRequired && !retellSmsProfileId.trim()) ||
+        (providerRequired && !salesProviderId.trim()) ||
         (appointmentTypesRequired && appointmentTypeIds.length === 0) ||
         (appointmentReasonsRequired && appointmentReasons.split(",").every((reason) => !reason.trim())) ||
         (postOpReasonsRequired && postOpReasons.split(",").every((reason) => !reason.trim())) ||
@@ -399,6 +531,7 @@ export default function WorkflowTemplates() {
         (picked && hasSetupField(picked, "post_op_latest_call_hours") && !isPositiveWholeNumber(postOpLatestCallHours)) ||
         postOpTimingInvalid ||
         (picked && hasSetupField(picked, "patient_voice_cooldown_hours") && !isNonNegativeWholeNumber(patientVoiceCooldownHours)) ||
+        (picked && hasSetupField(picked, "sales_booking_window_days") && !isPositiveWholeNumber(salesBookingWindowDays)) ||
         pickedCapability?.supported === false
 
     return (
@@ -643,6 +776,66 @@ export default function WorkflowTemplates() {
                                         )}
                                     </div>
                                 )}
+                                {retellSmsRequired && (
+                                    <div className="space-y-2">
+                                        <Label htmlFor="retell-sms-profile">Retell SMS profile</Label>
+                                        <Select
+                                            value={retellSmsProfileId || "__none__"}
+                                            disabled={retellSmsProfilesLoading || retellSmsProfiles.length === 0}
+                                            onValueChange={(value) => setRetellSmsProfileId(value === "__none__" ? "" : value)}
+                                        >
+                                            <SelectTrigger id="retell-sms-profile">
+                                                <SelectValue placeholder="Choose Retell SMS profile" />
+                                            </SelectTrigger>
+                                            <SelectContent>
+                                                <SelectItem value="__none__" disabled={retellSmsProfiles.length > 0}>
+                                                    {retellSmsProfilesLoading ? "Loading profiles..." : "No profile selected"}
+                                                </SelectItem>
+                                                {retellSmsProfiles.map((profile) => (
+                                                    <SelectItem key={profile.id} value={profile.id}>
+                                                        {profile.display_name || profile.purpose || "Unnamed SMS profile"}
+                                                    </SelectItem>
+                                                ))}
+                                            </SelectContent>
+                                        </Select>
+                                        {!retellSmsProfilesLoading && retellSmsProfiles.length === 0 && (
+                                            <p className="text-xs text-muted-foreground">
+                                                No Retell SMS profiles are configured for this location. Add one in location settings.
+                                            </p>
+                                        )}
+                                    </div>
+                                )}
+                                {providerRequired && (
+                                    <div className="space-y-2">
+                                        <Label htmlFor="sales-provider">
+                                            {setupFieldLabel(picked, "sales_provider_id", "Provider")}
+                                        </Label>
+                                        <Select
+                                            value={salesProviderId || "__none__"}
+                                            disabled={providersLoading || providerRows.length === 0}
+                                            onValueChange={(value) => setSalesProviderId(value === "__none__" ? "" : value)}
+                                        >
+                                            <SelectTrigger id="sales-provider">
+                                                <SelectValue placeholder="Choose provider" />
+                                            </SelectTrigger>
+                                            <SelectContent>
+                                                <SelectItem value="__none__" disabled={providerRows.length > 0}>
+                                                    {providersLoading ? "Loading providers..." : "No provider selected"}
+                                                </SelectItem>
+                                                {providerRows.map((provider) => (
+                                                    <SelectItem key={provider.source_id} value={provider.source_id}>
+                                                        {provider.name || `${provider.first_name ?? ""} ${provider.last_name ?? ""}`.trim() || provider.source_id}
+                                                    </SelectItem>
+                                                ))}
+                                            </SelectContent>
+                                        </Select>
+                                        {!providersLoading && providerRows.length === 0 && (
+                                            <p className="text-xs text-muted-foreground">
+                                                No active providers are available for this location yet.
+                                            </p>
+                                        )}
+                                    </div>
+                                )}
                                 {hasSetupField(picked, "appointment_reasons") && (
                                     <div className="space-y-2">
                                         <Label htmlFor="appointment-reasons">Eligible GoTracker reasons</Label>
@@ -676,7 +869,8 @@ export default function WorkflowTemplates() {
                                     hasSetupField(picked, "retry_delay_2_hours") ||
                                     hasSetupField(picked, "post_op_delay_hours") ||
                                     hasSetupField(picked, "post_op_latest_call_hours") ||
-                                    hasSetupField(picked, "patient_voice_cooldown_hours")) && (
+                                    hasSetupField(picked, "patient_voice_cooldown_hours") ||
+                                    hasSetupField(picked, "sales_booking_window_days")) && (
                                     <div className="grid gap-4 sm:grid-cols-3">
                                         {hasSetupField(picked, "call_offset_hours_before") && (
                                             <div className="space-y-2">
@@ -760,6 +954,20 @@ export default function WorkflowTemplates() {
                                                 />
                                             </div>
                                         )}
+                                        {hasSetupField(picked, "sales_booking_window_days") && (
+                                            <div className="space-y-2">
+                                                <Label htmlFor="sales-booking-window">Booking window (days)</Label>
+                                                <Input
+                                                    id="sales-booking-window"
+                                                    type="number"
+                                                    min="1"
+                                                    max="60"
+                                                    step="1"
+                                                    value={salesBookingWindowDays}
+                                                    onChange={(event) => setSalesBookingWindowDays(event.target.value)}
+                                                />
+                                            </div>
+                                        )}
                                         {postOpTimingInvalid && (
                                             <p className="text-xs text-destructive sm:col-span-3">
                                                 Latest allowed call time must be at least the post-op delay.
@@ -769,7 +977,7 @@ export default function WorkflowTemplates() {
                                 )}
                                 {appointmentTypesRequired && (
                                     <div className="space-y-2">
-                                        <Label>Major appointment types</Label>
+                                        <Label>{appointmentTypesLabel}</Label>
                                         <div className="max-h-56 space-y-2 overflow-y-auto rounded-md border border-border p-2">
                                             {appointmentTypesLoading ? (
                                                 <p className="text-xs text-muted-foreground">
@@ -802,7 +1010,7 @@ export default function WorkflowTemplates() {
                                             )}
                                         </div>
                                         <p className="text-xs text-muted-foreground">
-                                            Only appointments matching these types will enter this workflow.
+                                            Only these appointment types are available through this workflow.
                                         </p>
                                     </div>
                                 )}

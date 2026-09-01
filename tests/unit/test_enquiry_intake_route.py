@@ -63,10 +63,25 @@ def _session(source):
 _DEFAULT = object()
 
 
-def _post(client, body, *, source=_DEFAULT, token=TOKEN, headers=None, intake=None):
+def _post(
+    client,
+    body,
+    *,
+    source=_DEFAULT,
+    token=TOKEN,
+    headers=None,
+    intake=None,
+    dispatches=None,
+    enqueue=None,
+    capture=None,
+):
     # A sentinel, because `source=None` is a meaningful case here — it is the
     # unknown-token path — and must not be confused with "use the default".
     session = _session(_source() if source is _DEFAULT else source)
+    dispatches = [] if dispatches is None else dispatches
+    trigger_service = MagicMock()
+    trigger_service.prepare_dispatches = AsyncMock(return_value=dispatches)
+    enqueue_spy = enqueue or MagicMock(return_value=len(dispatches))
 
     class _Ctx:
         async def __aenter__(self):
@@ -75,17 +90,32 @@ def _post(client, body, *, source=_DEFAULT, token=TOKEN, headers=None, intake=No
         async def __aexit__(self, *a):
             return False
 
-    with patch(
-        "src.app.api.routes.enquiry_intake.get_system_db_session", return_value=_Ctx()
-    ), patch(
-        "src.app.api.routes.enquiry_intake.intake_enquiry",
-        intake or AsyncMock(return_value=MagicMock()),
-    ) as spy:
+    with (
+        patch(
+            "src.app.api.routes.enquiry_intake.get_system_db_session",
+            return_value=_Ctx(),
+        ),
+        patch(
+            "src.app.api.routes.enquiry_intake.intake_enquiry",
+            intake or AsyncMock(return_value=MagicMock()),
+        ) as spy,
+        patch(
+            "src.app.api.routes.enquiry_intake.EnquiryTriggerService",
+            return_value=trigger_service,
+        ),
+        patch(
+            "src.app.api.routes.enquiry_intake.enqueue_enquiry_workflow_dispatches",
+            enqueue_spy,
+        ),
+    ):
         response = client.post(
             f"/api/enquiries/intake/{token}",
             content=json.dumps(body) if isinstance(body, (dict, list)) else body,
             headers={"content-type": "application/json", **(headers or {})},
         )
+    if capture is not None:
+        capture["trigger_service"] = trigger_service
+        capture["enqueue"] = enqueue_spy
     return response, spy
 
 
@@ -127,7 +157,9 @@ class TestSignature:
     def test_a_correct_signature_is_accepted(self, client):
         raw, digest = self._signed({"email": "a@b.com"})
         r, _ = _post(
-            client, raw, source=_source(secret=SECRET),
+            client,
+            raw,
+            source=_source(secret=SECRET),
             headers={"X-Signature": digest},
         )
         assert r.status_code == 202
@@ -135,7 +167,9 @@ class TestSignature:
     def test_the_sha256_prefix_form_is_accepted(self, client):
         raw, digest = self._signed({"email": "a@b.com"})
         r, _ = _post(
-            client, raw, source=_source(secret=SECRET),
+            client,
+            raw,
+            source=_source(secret=SECRET),
             headers={"X-Signature": f"sha256={digest}"},
         )
         assert r.status_code == 202
@@ -144,8 +178,10 @@ class TestSignature:
         """The point of signing: the URL token cannot prove the body."""
         _, digest = self._signed({"email": "a@b.com"})
         r, _ = _post(
-            client, json.dumps({"email": "attacker@evil.com"}),
-            source=_source(secret=SECRET), headers={"X-Signature": digest},
+            client,
+            json.dumps({"email": "attacker@evil.com"}),
+            source=_source(secret=SECRET),
+            headers={"X-Signature": digest},
         )
         assert r.status_code == 401
 
@@ -173,9 +209,7 @@ class TestPayload:
 
     def test_unknown_fields_are_tolerated(self, client):
         """Forms post far more than they were asked for."""
-        r, _ = _post(
-            client, {"email": "a@b.com", "utm_term": "x", "hidden": {"a": 1}}
-        )
+        r, _ = _post(client, {"email": "a@b.com", "utm_term": "x", "hidden": {"a": 1}})
         assert r.status_code == 202
 
     def test_a_single_word_name_does_not_invent_a_surname(self, client):
@@ -193,14 +227,20 @@ class TestPayload:
 
 class TestHostedFormAnswers:
     def test_email_and_phone_are_read_from_the_answers_list(self, client):
-        _, spy = _post(client, {
-            "answers": [
-                {"type": "email", "email": "dana@example.com"},
-                {"type": "phone_number", "phone_number": "+15054821234"},
-                {"type": "short_text", "text": "Dana Reyes",
-                 "field": {"ref": "full_name"}},
-            ]
-        })
+        _, spy = _post(
+            client,
+            {
+                "answers": [
+                    {"type": "email", "email": "dana@example.com"},
+                    {"type": "phone_number", "phone_number": "+15054821234"},
+                    {
+                        "type": "short_text",
+                        "text": "Dana Reyes",
+                        "field": {"ref": "full_name"},
+                    },
+                ]
+            },
+        )
         kwargs = spy.await_args.kwargs
         assert kwargs["email"] == "dana@example.com"
         assert kwargs["phone"] == "+15054821234"
@@ -209,24 +249,38 @@ class TestHostedFormAnswers:
     def test_a_phone_typed_into_a_text_box_is_not_treated_as_a_phone(self, client):
         """Reading the declared type, not the shape of the value: we will not
         text somebody on the strength of a guess."""
-        r, spy = _post(client, {
-            "answers": [{"type": "short_text", "text": "505-482-1234",
-                         "field": {"ref": "anything"}}]
-        })
+        r, spy = _post(
+            client,
+            {
+                "answers": [
+                    {
+                        "type": "short_text",
+                        "text": "505-482-1234",
+                        "field": {"ref": "anything"},
+                    }
+                ]
+            },
+        )
         assert r.status_code == 422  # no contact method
 
     def test_top_level_fields_win_over_the_answers_list(self, client):
-        _, spy = _post(client, {
-            "email": "explicit@example.com",
-            "answers": [{"type": "email", "email": "from-answers@example.com"}],
-        })
+        _, spy = _post(
+            client,
+            {
+                "email": "explicit@example.com",
+                "answers": [{"type": "email", "email": "from-answers@example.com"}],
+            },
+        )
         assert spy.await_args.kwargs["email"] == "explicit@example.com"
 
     def test_junk_entries_in_the_answers_list_do_not_crash_it(self, client):
-        r, _ = _post(client, {
-            "email": "a@b.com",
-            "answers": ["not-a-dict", None, {"type": "email"}, {}],
-        })
+        r, _ = _post(
+            client,
+            {
+                "email": "a@b.com",
+                "answers": ["not-a-dict", None, {"type": "email"}, {}],
+            },
+        )
         assert r.status_code == 202
 
 
@@ -236,17 +290,26 @@ class TestConsent:
         assert spy.await_args.kwargs["consent_channels"] == ()
 
     def test_only_the_declared_channels_are_passed_on(self, client):
-        _, spy = _post(client, {
-            "phone": "5054821234", "email": "a@b.com",
-            "consent_sms": True, "consent_email": False,
-        })
+        _, spy = _post(
+            client,
+            {
+                "phone": "5054821234",
+                "email": "a@b.com",
+                "consent_sms": True,
+                "consent_email": False,
+            },
+        )
         assert spy.await_args.kwargs["consent_channels"] == ("sms",)
 
     def test_the_wording_travels_with_it(self, client):
-        _, spy = _post(client, {
-            "phone": "5054821234", "consent_sms": True,
-            "consent_wording": "Yes, text me",
-        })
+        _, spy = _post(
+            client,
+            {
+                "phone": "5054821234",
+                "consent_sms": True,
+                "consent_wording": "Yes, text me",
+            },
+        )
         assert spy.await_args.kwargs["consent_wording"] == "Yes, text me"
 
 
@@ -277,25 +340,85 @@ class TestIdempotencyAndAttribution:
         )
         attribution = spy.await_args.kwargs["attribution"]
         assert attribution["utm_source"] == "request"  # request wins
-        assert attribution["form"] == "contact"        # default still there
+        assert attribution["form"] == "contact"  # default still there
+
+
+class TestWorkflowEnrollment:
+    def test_a_landed_enquiry_prepares_and_enqueues_matching_workflows(self, client):
+        result = MagicMock()
+        result.enquiry = MagicMock(id="lead-1")
+        result.created = True
+        result.matched_existing_contact = False
+        dispatch = MagicMock()
+        capture = {}
+
+        r, _ = _post(
+            client,
+            {
+                "phone": "+15054821234",
+                "intake_key": "form-response-1",
+                "consent_sms": True,
+            },
+            intake=AsyncMock(return_value=result),
+            dispatches=[dispatch],
+            capture=capture,
+        )
+
+        assert r.status_code == 202
+        capture["trigger_service"].prepare_dispatches.assert_awaited_once_with(
+            institution_id="inst-1",
+            location_id="loc-1",
+            contact=result.enquiry,
+            intake_key="form-response-1",
+            source="typeform",
+            created=True,
+            matched_existing_contact=False,
+        )
+        capture["enqueue"].assert_called_once_with([dispatch])
+
+    def test_enqueue_failure_is_retriable_for_public_forms(self, client):
+        result = MagicMock()
+        result.enquiry = MagicMock(id="lead-1")
+        result.created = True
+        result.matched_existing_contact = False
+
+        r, _ = _post(
+            client,
+            {"phone": "+15054821234", "intake_key": "form-response-1"},
+            intake=AsyncMock(return_value=result),
+            dispatches=[MagicMock()],
+            enqueue=MagicMock(side_effect=RuntimeError("broker unavailable")),
+        )
+
+        assert r.status_code == 503
+        assert r.json() == {"error": "unavailable"}
 
 
 class TestFailureDisclosure:
     def test_the_reply_does_not_say_whether_the_lead_was_already_known(self, client):
         """An open endpoint that distinguishes them reveals a clinic's patients."""
-        new, _ = _post(client, {"email": "a@b.com"},
-                       intake=AsyncMock(return_value=MagicMock(created=True)))
-        seen, _ = _post(client, {"email": "a@b.com"},
-                        intake=AsyncMock(return_value=MagicMock(created=False)))
+        new, _ = _post(
+            client,
+            {"email": "a@b.com"},
+            intake=AsyncMock(return_value=MagicMock(created=True)),
+        )
+        seen, _ = _post(
+            client,
+            {"email": "a@b.com"},
+            intake=AsyncMock(return_value=MagicMock(created=False)),
+        )
         assert new.json() == seen.json()
         assert new.status_code == seen.status_code
 
     def test_an_internal_failure_never_echoes_the_submitted_values(self, client):
         r, _ = _post(
-            client, {"email": "dana@example.com", "phone": "5054821234"},
-            intake=AsyncMock(side_effect=RuntimeError(
-                "duplicate key for dana@example.com / 5054821234"
-            )),
+            client,
+            {"email": "dana@example.com", "phone": "5054821234"},
+            intake=AsyncMock(
+                side_effect=RuntimeError(
+                    "duplicate key for dana@example.com / 5054821234"
+                )
+            ),
         )
         assert r.status_code == 503
         assert "dana@example.com" not in r.text

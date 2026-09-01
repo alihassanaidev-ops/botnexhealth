@@ -2,7 +2,8 @@
 
 Definitions are immutable once published. Schema version "1.0" supports:
   Triggers: appointment_offset, appointment_state_changed, recall_scan, manual,
-            bulk_import, callback_requested, patient_status_changed, sms_reply
+            bulk_import, callback_requested, patient_status_changed, sms_reply,
+            email_reply, enquiry_received
   Nodes:    wait, drip, send_sms, retell_sms_conversation, send_voice, send_email,
             update_patient_status, update_appointment, book_appointment,
             update_gotracker_appointment, booking_link, patient_registration,
@@ -147,6 +148,23 @@ class BulkImportTrigger(BaseModel):
     filter: FilterExpression | None = None
 
 
+class EnquiryReceivedTrigger(BaseModel):
+    """Enroll when a sales enquiry lands through the intake pipeline.
+
+    The intake source and Contact record carry the tenant/location identity; the
+    trigger's optional filter can narrow by PHI-light fields such as source,
+    whether this submission created a new contact, or whether it matched an
+    existing PMS patient.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    type: Literal["enquiry_received"] = "enquiry_received"
+    # Optional eligibility filter, evaluated against the intake event before a
+    # run is created.
+    filter: FilterExpression | None = None
+
+
 class CallbackRequestedTrigger(BaseModel):
     """Enroll when an inbound call is classified 'needs_callback' (Plan 07).
 
@@ -268,6 +286,7 @@ WorkflowTrigger = Annotated[
         RecallScanTrigger,
         ManualTrigger,
         BulkImportTrigger,
+        EnquiryReceivedTrigger,
         CallbackRequestedTrigger,
         PatientStatusChangedTrigger,
         SmsReplyTrigger,

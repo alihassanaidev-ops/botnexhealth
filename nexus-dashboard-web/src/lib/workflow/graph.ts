@@ -776,6 +776,8 @@ export function createTrigger(type: TriggerType): WorkflowTrigger {
             return { type }
         case "bulk_import":
             return { type }
+        case "enquiry_received":
+            return { type }
         case "callback_requested":
             return { type }
         case "patient_status_changed":

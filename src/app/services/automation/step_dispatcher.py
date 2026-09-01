@@ -1357,6 +1357,14 @@ class WorkflowStepDispatcher:
             }
             if result_code in {"booked", "pending"}:
                 _apply_booking_metadata_to_run(run, metadata, context)
+            if (
+                result_code == "booked"
+                and contact is not None
+                and contact.lead_status is not None
+            ):
+                from src.app.models.campaign_enquiry import EnquiryStatus
+
+                contact.lead_status = EnquiryStatus.BOOKED.value
             await self.runtime.complete_step(
                 step,
                 result_code=result_code,
@@ -2290,14 +2298,28 @@ class WorkflowStepDispatcher:
         node: UpdatePatientStatusNode,
     ) -> None:
         """Apply durable side effects implied by local workflow statuses."""
-        if node.status != "do_not_call_requested" or not run.contact_id:
+        if not run.contact_id:
             return
 
+        from src.app.models.campaign_enquiry import EnquiryStatus
         from src.app.models.contact import Contact
         from src.app.models.sms_consent import ConsentSource, DncScope
         from src.app.services.sms_compliance import SmsComplianceService
 
         contact = await self.session.get(Contact, run.contact_id)
+        if contact is None:
+            return
+
+        lead_statuses = {member.value for member in EnquiryStatus}
+        if getattr(contact, "lead_status", None) is not None:
+            if node.status in lead_statuses:
+                contact.lead_status = node.status
+            elif node.status == "do_not_call_requested":
+                contact.lead_status = EnquiryStatus.NOT_QUALIFIED.value
+
+        if node.status != "do_not_call_requested":
+            return
+
         phone = contact.phone if contact else None
         if not phone:
             logger.warning(

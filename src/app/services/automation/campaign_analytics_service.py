@@ -119,50 +119,228 @@ _ZERO_METRICS: dict[str, int | Decimal] = {
 
 _OUTCOME_DEFINITIONS: dict[str, tuple[OutcomeDefinition, ...]] = {
     "appointment_confirmation": (
-        OutcomeDefinition("confirmed", "Confirmed", "success", "Patient confirmed the appointment.", 10),
-        OutcomeDefinition("reschedule_requested", "Reschedule Requested", "neutral", "Patient asked to move the appointment.", 20),
-        OutcomeDefinition("staff_handoff", "Staff Handoff", "neutral", "Automation routed the run to staff.", 30),
+        OutcomeDefinition(
+            "confirmed",
+            "Confirmed",
+            "success",
+            "Patient confirmed the appointment.",
+            10,
+        ),
+        OutcomeDefinition(
+            "reschedule_requested",
+            "Reschedule Requested",
+            "neutral",
+            "Patient asked to move the appointment.",
+            20,
+        ),
+        OutcomeDefinition(
+            "staff_handoff",
+            "Staff Handoff",
+            "neutral",
+            "Automation routed the run to staff.",
+            30,
+        ),
         OutcomeDefinition("opt_out", "Opt-Out", "failure", "Patient opted out.", 40),
     ),
     "appointment_ops": (
-        OutcomeDefinition("completed", "Completed Runs", "success", "Campaign runs that completed.", 10),
-        OutcomeDefinition("failed", "Failed Runs", "failure", "Runs that failed or blocked.", 20),
-        OutcomeDefinition("cancelled", "Cancelled Runs", "neutral", "Runs cancelled before completion.", 30),
-        OutcomeDefinition("staff_handoff", "Staff Handoff", "neutral", "Automation routed the run to staff.", 40),
+        OutcomeDefinition(
+            "completed",
+            "Completed Runs",
+            "success",
+            "Campaign runs that completed.",
+            10,
+        ),
+        OutcomeDefinition(
+            "failed", "Failed Runs", "failure", "Runs that failed or blocked.", 20
+        ),
+        OutcomeDefinition(
+            "cancelled",
+            "Cancelled Runs",
+            "neutral",
+            "Runs cancelled before completion.",
+            30,
+        ),
+        OutcomeDefinition(
+            "staff_handoff",
+            "Staff Handoff",
+            "neutral",
+            "Automation routed the run to staff.",
+            40,
+        ),
         OutcomeDefinition("opt_out", "Opt-Out", "failure", "Patient opted out.", 50),
     ),
     "recall": (
-        OutcomeDefinition("booked", "Recall Booked", "success", "Patient booked from recall outreach.", 10),
-        OutcomeDefinition("callback_requested", "Callback Requested", "neutral", "Patient asked for staff follow-up.", 20),
-        OutcomeDefinition("staff_handoff", "Staff Handoff", "neutral", "Automation routed the run to staff.", 30),
+        OutcomeDefinition(
+            "booked",
+            "Recall Booked",
+            "success",
+            "Patient booked from recall outreach.",
+            10,
+        ),
+        OutcomeDefinition(
+            "callback_requested",
+            "Callback Requested",
+            "neutral",
+            "Patient asked for staff follow-up.",
+            20,
+        ),
+        OutcomeDefinition(
+            "staff_handoff",
+            "Staff Handoff",
+            "neutral",
+            "Automation routed the run to staff.",
+            30,
+        ),
         OutcomeDefinition("opt_out", "Opt-Out", "failure", "Patient opted out.", 40),
     ),
     "callback": (
-        OutcomeDefinition("callback_requested", "Callbacks Automated", "neutral", "Callback requests entering the campaign.", 10),
-        OutcomeDefinition("voice_answered", "Answered", "success", "AI voice callback reached the patient.", 20),
-        OutcomeDefinition("booked", "Booked By Callback", "success", "Callback outreach produced a booking.", 30),
-        OutcomeDefinition("transferred", "Transferred", "neutral", "AI voice transferred the call to staff.", 40),
-        OutcomeDefinition("staff_handoff", "Staff Handoff", "neutral", "Automation routed the run to staff.", 50),
-        OutcomeDefinition("voice_failed", "Unreachable", "failure", "Callback voice attempts did not reach the patient.", 60),
-        OutcomeDefinition("opt_out", "Do-Not-Call", "failure", "Patient asked not to be called.", 70),
+        OutcomeDefinition(
+            "callback_requested",
+            "Callbacks Automated",
+            "neutral",
+            "Callback requests entering the campaign.",
+            10,
+        ),
+        OutcomeDefinition(
+            "voice_answered",
+            "Answered",
+            "success",
+            "AI voice callback reached the patient.",
+            20,
+        ),
+        OutcomeDefinition(
+            "booked",
+            "Booked By Callback",
+            "success",
+            "Callback outreach produced a booking.",
+            30,
+        ),
+        OutcomeDefinition(
+            "transferred",
+            "Transferred",
+            "neutral",
+            "AI voice transferred the call to staff.",
+            40,
+        ),
+        OutcomeDefinition(
+            "staff_handoff",
+            "Staff Handoff",
+            "neutral",
+            "Automation routed the run to staff.",
+            50,
+        ),
+        OutcomeDefinition(
+            "voice_failed",
+            "Unreachable",
+            "failure",
+            "Callback voice attempts did not reach the patient.",
+            60,
+        ),
+        OutcomeDefinition(
+            "opt_out", "Do-Not-Call", "failure", "Patient asked not to be called.", 70
+        ),
     ),
     "treatment": (
-        OutcomeDefinition("booked", "Treatment Visit Booked", "success", "Patient scheduled the next treatment visit.", 10),
-        OutcomeDefinition("callback_requested", "Callback Requested", "neutral", "Patient asked for staff follow-up.", 20),
-        OutcomeDefinition("staff_handoff", "Staff Handoff", "neutral", "Automation routed the run to staff.", 30),
+        OutcomeDefinition(
+            "booked",
+            "Treatment Visit Booked",
+            "success",
+            "Patient scheduled the next treatment visit.",
+            10,
+        ),
+        OutcomeDefinition(
+            "callback_requested",
+            "Callback Requested",
+            "neutral",
+            "Patient asked for staff follow-up.",
+            20,
+        ),
+        OutcomeDefinition(
+            "staff_handoff",
+            "Staff Handoff",
+            "neutral",
+            "Automation routed the run to staff.",
+            30,
+        ),
         OutcomeDefinition("opt_out", "Opt-Out", "failure", "Patient opted out.", 40),
     ),
     "reactivation": (
-        OutcomeDefinition("booked", "Reactivation Booked", "success", "Patient scheduled a visit after reactivation outreach.", 10),
-        OutcomeDefinition("callback_requested", "Callback Requested", "neutral", "Patient asked for staff follow-up.", 20),
-        OutcomeDefinition("staff_handoff", "Staff Handoff", "neutral", "Automation routed the run to staff.", 30),
+        OutcomeDefinition(
+            "booked",
+            "Reactivation Booked",
+            "success",
+            "Patient scheduled a visit after reactivation outreach.",
+            10,
+        ),
+        OutcomeDefinition(
+            "callback_requested",
+            "Callback Requested",
+            "neutral",
+            "Patient asked for staff follow-up.",
+            20,
+        ),
+        OutcomeDefinition(
+            "staff_handoff",
+            "Staff Handoff",
+            "neutral",
+            "Automation routed the run to staff.",
+            30,
+        ),
         OutcomeDefinition("opt_out", "Opt-Out", "failure", "Patient opted out.", 40),
     ),
+    "sales": (
+        OutcomeDefinition(
+            "qualified",
+            "Qualified",
+            "success",
+            "Lead qualified and received a booking path.",
+            10,
+        ),
+        OutcomeDefinition(
+            "booked", "Booked", "success", "Lead booked an appointment.", 20
+        ),
+        OutcomeDefinition(
+            "not_qualified",
+            "Not Qualified",
+            "failure",
+            "Lead was not a fit for this campaign.",
+            30,
+        ),
+        OutcomeDefinition(
+            "staff_handoff",
+            "Staff Handoff",
+            "neutral",
+            "Automation routed the lead to staff.",
+            40,
+        ),
+        OutcomeDefinition(
+            "unreachable",
+            "Unreachable",
+            "failure",
+            "Lead did not complete qualification.",
+            50,
+        ),
+        OutcomeDefinition("opt_out", "Opt-Out", "failure", "Lead opted out.", 60),
+    ),
     "default": (
-        OutcomeDefinition("confirmed", "Confirmed", "success", "Patient confirmed.", 10),
+        OutcomeDefinition(
+            "confirmed", "Confirmed", "success", "Patient confirmed.", 10
+        ),
         OutcomeDefinition("booked", "Booked", "success", "Patient booked.", 20),
-        OutcomeDefinition("callback_requested", "Callback Requested", "neutral", "Patient asked for a callback.", 30),
-        OutcomeDefinition("staff_handoff", "Staff Handoff", "neutral", "Automation routed the run to staff.", 40),
+        OutcomeDefinition(
+            "callback_requested",
+            "Callback Requested",
+            "neutral",
+            "Patient asked for a callback.",
+            30,
+        ),
+        OutcomeDefinition(
+            "staff_handoff",
+            "Staff Handoff",
+            "neutral",
+            "Automation routed the run to staff.",
+            40,
+        ),
         OutcomeDefinition("opt_out", "Opt-Out", "failure", "Patient opted out.", 50),
     ),
 }
@@ -514,7 +692,9 @@ class CampaignAnalyticsService:
         limit: int,
     ) -> list[CampaignAnalytics]:
         sum_columns = [
-            func.coalesce(func.sum(getattr(CampaignMetricsDaily, column)), 0).label(column)
+            func.coalesce(func.sum(getattr(CampaignMetricsDaily, column)), 0).label(
+                column
+            )
             for column in ROLLUP_METRIC_COLUMNS
         ]
         rows = (
@@ -534,14 +714,18 @@ class CampaignAnalyticsService:
                     CampaignMetricsDaily.metric_date <= end_date,
                 )
                 .group_by(AutomationWorkflow.id)
-                .order_by(func.coalesce(func.sum(CampaignMetricsDaily.total_cost), 0).desc())
+                .order_by(
+                    func.coalesce(func.sum(CampaignMetricsDaily.total_cost), 0).desc()
+                )
                 .limit(limit)
             )
         ).all()
         results: list[CampaignAnalytics] = []
         for row in rows:
             workflow = row[0]
-            values = dict(zip(ROLLUP_METRIC_COLUMNS, row[1 : 1 + len(ROLLUP_METRIC_COLUMNS)]))
+            values = dict(
+                zip(ROLLUP_METRIC_COLUMNS, row[1 : 1 + len(ROLLUP_METRIC_COLUMNS)])
+            )
             values["rollup_fresh_at"] = row[-1]
             results.append(
                 _analytics_from_metrics(
@@ -565,7 +749,9 @@ class CampaignAnalyticsService:
         end_date: date,
     ) -> dict[str, Any]:
         sum_columns = [
-            func.coalesce(func.sum(getattr(CampaignMetricsDaily, column)), 0).label(column)
+            func.coalesce(func.sum(getattr(CampaignMetricsDaily, column)), 0).label(
+                column
+            )
             for column in ROLLUP_METRIC_COLUMNS
         ]
         row = (
@@ -640,7 +826,9 @@ def campaign_category(workflow: AutomationWorkflow) -> str:
     if raw_category in {"recall", "callback", "treatment", "reactivation"}:
         return raw_category
     if raw_category == "appointment_ops" or trigger_type == "appointment_offset":
-        if "confirm" in name or _definition_has_outcome(workflow.definition, "confirmed"):
+        if "confirm" in name or _definition_has_outcome(
+            workflow.definition, "confirmed"
+        ):
             return "appointment_confirmation"
         return "appointment_ops"
     if trigger_type == "callback_requested":

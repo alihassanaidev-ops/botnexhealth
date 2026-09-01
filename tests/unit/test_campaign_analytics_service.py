@@ -8,7 +8,10 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-from src.app.models.automation_workflow import AutomationWorkflow, AutomationWorkflowVersion
+from src.app.models.automation_workflow import (
+    AutomationWorkflow,
+    AutomationWorkflowVersion,
+)
 from src.app.models.campaign_analytics import CampaignMetricsDaily
 from src.app.models.usage_cost_rollup import NULL_LOCATION_SENTINEL
 from src.app.services.automation import campaign_analytics_service as analytics
@@ -44,7 +47,9 @@ def test_appointment_confirmation_category_uses_specific_outcomes() -> None:
     category = analytics.campaign_category(_workflow())
 
     assert category == "appointment_confirmation"
-    labels = [definition.label for definition in analytics.outcome_definitions(category)]
+    labels = [
+        definition.label for definition in analytics.outcome_definitions(category)
+    ]
     assert labels[:2] == ["Confirmed", "Reschedule Requested"]
 
 
@@ -58,7 +63,9 @@ def test_recall_category_uses_booking_as_success_label() -> None:
 
 
 def test_callback_category_exposes_voice_outcome_labels() -> None:
-    wf = _workflow(name="Callback Automation", category="callback", trigger="callback_requested")
+    wf = _workflow(
+        name="Callback Automation", category="callback", trigger="callback_requested"
+    )
 
     definitions = analytics.outcome_definitions(analytics.campaign_category(wf))
     labels_by_key = {definition.key: definition.label for definition in definitions}
@@ -67,6 +74,20 @@ def test_callback_category_exposes_voice_outcome_labels() -> None:
     assert labels_by_key["voice_failed"] == "Unreachable"
     assert labels_by_key["opt_out"] == "Do-Not-Call"
     assert labels_by_key["transferred"] == "Transferred"
+
+
+def test_sales_category_exposes_qualification_outcome_labels() -> None:
+    wf = _workflow(
+        name="Sales Qualification", category="sales", trigger="enquiry_received"
+    )
+
+    definitions = analytics.outcome_definitions(analytics.campaign_category(wf))
+    labels_by_key = {definition.key: definition.label for definition in definitions}
+
+    assert labels_by_key["qualified"] == "Qualified"
+    assert labels_by_key["booked"] == "Booked"
+    assert labels_by_key["not_qualified"] == "Not Qualified"
+    assert labels_by_key["unreachable"] == "Unreachable"
 
 
 def test_rollup_sql_covers_every_metrics_model_column() -> None:

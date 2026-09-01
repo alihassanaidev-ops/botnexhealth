@@ -47,6 +47,11 @@ from src.app.database import get_system_db_session
 from src.app.models.audit_log import AuditAction, AuditActor, AuditOutcome
 from src.app.services.audit import log_audit_background
 from src.app.models.enquiry_intake_source import EnquiryIntakeSource, hash_intake_token
+from src.app.services.automation.enquiry_trigger_service import (
+    EnquiryWorkflowDispatch,
+    EnquiryTriggerService,
+    enqueue_enquiry_workflow_dispatches,
+)
 from src.app.services.automation.enquiry_intake_service import intake_enquiry
 
 logger = logging.getLogger(__name__)
@@ -143,7 +148,7 @@ def _signature_ok(secret: str, raw_body: bytes, supplied: str | None) -> bool:
     # Providers commonly prefix the algorithm.
     for prefix in ("sha256=", "sha256:"):
         if candidate.startswith(prefix):
-            candidate = candidate[len(prefix):]
+            candidate = candidate[len(prefix) :]
             break
     expected = hmac.new(secret.encode("utf-8"), raw_body, hashlib.sha256).hexdigest()
     return hmac.compare_digest(expected, candidate)
@@ -167,12 +172,16 @@ async def intake(
     # intake context with no institution — the source row is what supplies one.
     async with get_system_db_session(INTAKE_CONTEXT, external_id="lookup") as session:
         source = (
-            await session.execute(
-                select(EnquiryIntakeSource).where(
-                    EnquiryIntakeSource.token_hash == token_hash
+            (
+                await session.execute(
+                    select(EnquiryIntakeSource).where(
+                        EnquiryIntakeSource.token_hash == token_hash
+                    )
                 )
             )
-        ).scalars().first()
+            .scalars()
+            .first()
+        )
         institution_id = str(source.institution_id) if source else None
         location_id = str(source.location_id) if source and source.location_id else None
         source_name = source.source_name if source else None
@@ -217,16 +226,22 @@ async def intake(
     attribution = {**defaults, **(body.attribution or {})}
     consent_channels = tuple(
         channel
-        for channel, agreed in (("sms", body.consent_sms), ("email", body.consent_email))
+        for channel, agreed in (
+            ("sms", body.consent_sms),
+            ("email", body.consent_email),
+        )
         if agreed
     )
 
+    dispatches: list[EnquiryWorkflowDispatch] = []
     async with get_system_db_session(
-        INTAKE_CONTEXT, institution_id=institution_id, location_id=location_id,
+        INTAKE_CONTEXT,
+        institution_id=institution_id,
+        location_id=location_id,
         external_id=source_id,
     ) as session:
         try:
-            await intake_enquiry(
+            result = await intake_enquiry(
                 session,
                 institution_id=institution_id,
                 location_id=location_id,
@@ -241,6 +256,15 @@ async def intake(
                 notes=body.notes,
                 consent_channels=consent_channels,
                 consent_wording=body.consent_wording,
+            )
+            dispatches = await EnquiryTriggerService(session).prepare_dispatches(
+                institution_id=institution_id,
+                location_id=location_id,
+                contact=result.enquiry,
+                intake_key=intake_key,
+                source=source_name or "external_form",
+                created=result.created,
+                matched_existing_contact=result.matched_existing_contact,
             )
         except Exception:
             # Never echoed: the exception text can repeat the submitted values,
@@ -265,6 +289,18 @@ async def intake(
         if row is not None:
             row.last_used_at = datetime.now(timezone.utc)
         await session.flush()
+
+    try:
+        enqueued = enqueue_enquiry_workflow_dispatches(dispatches)
+    except Exception:
+        logger.exception("enquiry intake workflow enqueue failed source=%s", source_id)
+        return _json({"error": "unavailable"}, 503)
+    if enqueued:
+        logger.info(
+            "enquiry intake enqueued %d workflow(s) source=%s",
+            enqueued,
+            source_id,
+        )
 
     # Deliberately says nothing about whether this person was already known.
     return _json({"status": "received"}, 202)

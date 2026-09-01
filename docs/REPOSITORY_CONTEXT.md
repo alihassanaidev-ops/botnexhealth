@@ -408,11 +408,12 @@ available.
 
 Current schema version `1.0` supports triggers such as `appointment_offset`,
 `appointment_state_changed`, `recall_scan`, `manual`, `bulk_import`,
-`callback_requested`, `patient_status_changed`, `sms_reply`, and `email_reply`;
-node types include `wait`, `drip`, `send_sms`, `send_voice`, `send_email`,
-`retell_sms_conversation`, `update_patient_status`, `update_appointment`,
-`book_appointment`, `update_gotracker_appointment`, `booking_link`,
-`patient_registration`, `json_mapper`, `llm`, `condition`, `switch`, and `exit`.
+`enquiry_received`, `callback_requested`, `patient_status_changed`,
+`sms_reply`, and `email_reply`; node types include `wait`, `drip`,
+`send_sms`, `send_voice`, `send_email`, `retell_sms_conversation`,
+`update_patient_status`, `update_appointment`, `book_appointment`,
+`update_gotracker_appointment`, `booking_link`, `patient_registration`,
+`json_mapper`, `llm`, `condition`, `switch`, and `exit`.
 
 `book_appointment` is the campaign-controlled booking action: it resolves the
 patient from the run contact, renders provider/type/time from context, re-checks
@@ -430,6 +431,13 @@ should use the PMS-neutral `update_appointment`. The excluded set lives in
 `UNAVAILABLE_TRIGGER_TYPES` in `nexus-dashboard-web/src/lib/workflow/catalog.ts`,
 and `tests/unit/test_workflow_schema_frontend_parity.py` fails if the builder's
 TypeScript model drifts from `definition_schema.py` in either direction.
+
+`enquiry_received` is the sales-intake trigger. Public signed form intake and
+staff-entered enquiries both go through `enquiry_intake_service.py`; after the
+contact write commits, matching active `enquiry_received` workflows are enqueued
+through `enquiry_trigger_service.py` with PHI-light trigger metadata. The Sales
+Qualification launch template uses that trigger, a Retell SMS conversation,
+patient registration, and a restricted booking link.
 
 ### Filter expressions
 

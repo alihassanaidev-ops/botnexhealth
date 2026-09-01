@@ -206,6 +206,24 @@ def test_sms_reply_trigger_validates() -> None:
     assert d.trigger.tokens == ["pricing", "reschedule"]
 
 
+def test_enquiry_received_trigger_validates_with_filter() -> None:
+    defn = _sms_to_exit()
+    defn["trigger"] = {
+        "type": "enquiry_received",
+        "filter": {
+            "kind": "rule",
+            "field": "enquiry_source",
+            "op": "eq",
+            "value": "website_form",
+        },
+    }
+
+    d = WorkflowDefinition.model_validate(defn)
+
+    assert d.trigger.type == "enquiry_received"
+    assert d.trigger.filter is not None
+
+
 def test_condition_branch_definition() -> None:
     d = WorkflowDefinition.model_validate(_with_condition())
     assert len(d.nodes) == 4

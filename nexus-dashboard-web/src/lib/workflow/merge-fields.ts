@@ -13,15 +13,18 @@ type MergeChannel = "sms" | "email" | "voice"
 
 const ALL_TRIGGERS: TriggerType[] = [
     "appointment_offset",
+    "appointment_state_changed",
     "recall_scan",
     "manual",
     "bulk_import",
     "callback_requested",
+    "enquiry_received",
     "patient_status_changed",
     "sms_reply",
+    "email_reply",
 ]
 const ALL_CHANNELS: MergeChannel[] = ["sms", "email", "voice"]
-const APPOINTMENT_CONTEXT_TRIGGERS: TriggerType[] = ["appointment_offset", "patient_status_changed"]
+const APPOINTMENT_CONTEXT_TRIGGERS: TriggerType[] = ["appointment_offset", "appointment_state_changed", "patient_status_changed"]
 
 export const FALLBACK_MERGE_FIELDS: MergeField[] = [
     field("patient_first_name", "Patient first name", "Jordan", "patient", "derived", "low", ALL_CHANNELS, ALL_TRIGGERS),
@@ -37,7 +40,10 @@ export const FALLBACK_MERGE_FIELDS: MergeField[] = [
     field("appointment_status", "Appointment status", "scheduled", "appointment", "optional_context", "medium", ALL_CHANNELS, APPOINTMENT_CONTEXT_TRIGGERS),
     field("appointment_status_id", "Appointment status ID", "1", "appointment", "optional_context", "medium", ALL_CHANNELS, APPOINTMENT_CONTEXT_TRIGGERS),
     field("appointment_duration", "Appointment duration", "00:15:00", "appointment", "optional_context", "medium", ALL_CHANNELS, APPOINTMENT_CONTEXT_TRIGGERS),
+    field("appointment_type", "Appointment type", "Implant consultation", "appointment", "optional_context", "medium", ALL_CHANNELS, APPOINTMENT_CONTEXT_TRIGGERS),
+    field("appointment_type_name", "Appointment type name", "Implant consultation", "appointment", "optional_context", "medium", ALL_CHANNELS, APPOINTMENT_CONTEXT_TRIGGERS),
     field("provider_id", "Provider ID", "gt-2", "appointment", "optional_context", "low", ALL_CHANNELS, APPOINTMENT_CONTEXT_TRIGGERS),
+    field("provider_name", "Provider name", "Dr. Smith", "appointment", "optional_context", "low", ALL_CHANNELS, APPOINTMENT_CONTEXT_TRIGGERS),
     field("schedule_column_id", "Schedule column ID", "1", "appointment", "optional_context", "medium", ALL_CHANNELS, APPOINTMENT_CONTEXT_TRIGGERS),
     field("booked_user_id", "Booked user", "Admin", "appointment", "optional_context", "medium", ALL_CHANNELS, APPOINTMENT_CONTEXT_TRIGGERS),
     field("booked_timestamp", "Booked timestamp", "2026-07-29T20:32:00.810", "appointment", "optional_context", "medium", ALL_CHANNELS, APPOINTMENT_CONTEXT_TRIGGERS),
@@ -56,9 +62,15 @@ export const FALLBACK_MERGE_FIELDS: MergeField[] = [
     field("callback_requested_at", "Callback requested at", "July 18, 2026 at 10:30 AM", "callback", "required_context", "low", ALL_CHANNELS, ["callback_requested"]),
     field("callback_reason", "Callback reason", "Reschedule request", "callback", "optional_context", "medium", ["email", "voice"], ["callback_requested"]),
     field("preferred_callback_time", "Preferred callback time", "Today after 3:00 PM", "callback", "optional_context", "low", ALL_CHANNELS, ["callback_requested"]),
+    field("enquiry_source", "Enquiry source", "website_form", "enquiry", "required_context", "none", ALL_CHANNELS, ["enquiry_received"]),
+    field("enquiry_status", "Enquiry status", "new", "enquiry", "optional_context", "none", ALL_CHANNELS, ["enquiry_received"]),
+    field("enquiry_external_ref", "Enquiry external ref", "typeform-response-123", "enquiry", "optional_context", "low", ["email", "voice"], ["enquiry_received"]),
+    field("matched_existing_contact", "Matched existing contact", "false", "enquiry", "required_context", "none", ALL_CHANNELS, ["enquiry_received"]),
     field("sms_reply_body", "SMS reply body", "I need to reschedule", "sms_reply", "required_context", "high", ["email", "voice"], ["sms_reply"]),
     field("sms_reply_intent", "SMS reply intent", "free_text", "sms_reply", "required_context", "none", ALL_CHANNELS, ["sms_reply"]),
     field("inbound_sms_message_id", "Inbound SMS message ID", "inbound-1", "sms_reply", "required_context", "none", ALL_CHANNELS, ["sms_reply"]),
+    field("email_reply_intent", "Email reply intent", "reschedule_request", "email_reply", "required_context", "none", ALL_CHANNELS, ["email_reply"]),
+    field("email_reply_message_id", "Inbound email message ID", "inbound-email-1", "email_reply", "required_context", "none", ALL_CHANNELS, ["email_reply"]),
 ]
 
 let catalog: MergeField[] = FALLBACK_MERGE_FIELDS

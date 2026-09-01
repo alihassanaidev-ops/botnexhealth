@@ -25,6 +25,8 @@ describe("merge-field catalog", () => {
         expect(tokens).toEqual(FALLBACK_MERGE_FIELDS.map((f) => f.token))
         expect(tokens).toContain("{{provider_name}}")
         expect(tokens).toContain("{{appointment_date}}")
+        expect(tokens).toContain("{{enquiry_source}}")
+        expect(tokens).toContain("{{registration_link}}")
     })
 
     it("fetches and caches the backend catalog once", async () => {
@@ -49,11 +51,15 @@ describe("merge-field catalog", () => {
                 channels: ["sms", "email", "voice"],
                 trigger_types: [
                     "appointment_offset",
+                    "appointment_state_changed",
                     "recall_scan",
                     "manual",
                     "bulk_import",
                     "callback_requested",
+                    "enquiry_received",
                     "patient_status_changed",
+                    "sms_reply",
+                    "email_reply",
                 ],
             },
         ])
@@ -113,7 +119,7 @@ describe("merge-field catalog", () => {
                 triggerType: "appointment_offset",
                 channel: "sms",
             }),
-        ).toEqual(["{{appointment_type}}"])
+        ).toEqual([])
     })
 })
 
@@ -131,11 +137,15 @@ function catalogItem(name: string, token: string, label: string, sample: string)
         channels: ["sms", "email", "voice"],
         trigger_types: [
             "appointment_offset",
+            "appointment_state_changed",
             "recall_scan",
             "manual",
             "bulk_import",
             "callback_requested",
+            "enquiry_received",
             "patient_status_changed",
+            "sms_reply",
+            "email_reply",
         ],
     }
 }

@@ -17,6 +17,9 @@ from typing import Any
 
 VOICE_AGENT_PLACEHOLDER = "__SELECT_OUTBOUND_VOICE_AGENT__"
 VOICE_PROFILE_PLACEHOLDER = "__SELECT_OUTBOUND_VOICE_PROFILE__"
+RETELL_SMS_PROFILE_PLACEHOLDER = "__SELECT_RETELL_SMS_PROFILE__"
+SALES_PROVIDER_PLACEHOLDER = "__SELECT_SALES_PROVIDER__"
+SALES_APPOINTMENT_TYPES_PLACEHOLDER = "__SELECT_SALES_APPOINTMENT_TYPES__"
 APPOINTMENT_REASONS_PLACEHOLDER = "__SELECT_APPOINTMENT_REASONS__"
 _TOKEN_RE = re.compile(r"\{\{\s*([a-zA-Z0-9_]+)\s*\}\}")
 
@@ -135,10 +138,60 @@ def _apply_required_setup_fields(
         field_id = setup_field.get("id")
         if field_id == "appointment_type_ids":
             continue
+        if field_id == "retell_sms_profile_id":
+            profile_id = _required_text(
+                setup_options.get(field_id),
+                field_id,
+                label="Retell SMS profile",
+            )
+            for node in definition.get("nodes", []):
+                if (
+                    isinstance(node, dict)
+                    and node.get("type") == "retell_sms_conversation"
+                    and node.get("chat_profile_id") == RETELL_SMS_PROFILE_PLACEHOLDER
+                ):
+                    node["chat_profile_id"] = profile_id
+            continue
+        if field_id == "sales_provider_id":
+            provider_id = _required_text(
+                setup_options.get(field_id),
+                field_id,
+                label="sales provider",
+            )
+            for node in definition.get("nodes", []):
+                if not isinstance(node, dict):
+                    continue
+                if node.get("type") == "patient_registration":
+                    node["provider_id"] = provider_id
+                elif node.get("type") == "booking_link":
+                    node["provider_id"] = provider_id
+            continue
+        if field_id == "sales_appointment_type_ids":
+            type_ids = _string_list(setup_options.get(field_id))
+            if setup_field.get("required") and not type_ids:
+                raise ValueError(
+                    "sales_appointment_type_ids must contain at least one appointment type"
+                )
+            for node in definition.get("nodes", []):
+                if isinstance(node, dict) and node.get("type") == "booking_link":
+                    node["appointment_type_ids"] = type_ids
+            continue
+        if field_id == "sales_booking_window_days":
+            days = _positive_number(
+                setup_options.get(field_id, setup_field.get("default", 14)),
+                field_id,
+                integer=True,
+            )
+            for node in definition.get("nodes", []):
+                if isinstance(node, dict) and node.get("type") == "booking_link":
+                    node["window_days"] = int(days)
+            continue
         if field_id == "appointment_reasons":
             reasons = _string_list(setup_options.get(field_id))
             if setup_field.get("required") and not reasons:
-                raise ValueError("appointment_reasons must contain at least one GoTracker reason")
+                raise ValueError(
+                    "appointment_reasons must contain at least one GoTracker reason"
+                )
             if reasons:
                 _set_filter_rule_value(
                     definition.get("trigger", {}).get("filter"),
@@ -153,7 +206,10 @@ def _apply_required_setup_fields(
                         node.get("filter"), field="appointment_reason", value=reasons
                     )
                     for rule in node.get("rules", []):
-                        if isinstance(rule, dict) and rule.get("field") == "appointment_reason":
+                        if (
+                            isinstance(rule, dict)
+                            and rule.get("field") == "appointment_reason"
+                        ):
                             rule["value"] = reasons
             continue
         if field_id == "call_offset_hours_before":
@@ -170,7 +226,9 @@ def _apply_required_setup_fields(
                 setup_options.get(field_id, setup_field.get("default", 5)),
                 field_id,
             )
-            wait_id = "wait-retry-1" if field_id == "retry_delay_1_hours" else "wait-retry-2"
+            wait_id = (
+                "wait-retry-1" if field_id == "retry_delay_1_hours" else "wait-retry-2"
+            )
             node = _node_by_id(definition, wait_id)
             if node:
                 node["delay"] = {
@@ -192,7 +250,9 @@ def _apply_required_setup_fields(
         if field_id == "post_op_reasons":
             reasons = _string_list(setup_options.get(field_id))
             if setup_field.get("required") and not reasons:
-                raise ValueError("post_op_reasons must contain at least one GoTracker reason")
+                raise ValueError(
+                    "post_op_reasons must contain at least one GoTracker reason"
+                )
             node = _node_by_id(definition, "check-post-op-eligible-reason")
             if node:
                 node["rules"][0]["value"] = reasons
@@ -237,9 +297,7 @@ def _apply_required_setup_fields(
             )
 
 
-def _set_filter_rule_value(
-    expression: Any, *, field: str, value: Any
-) -> bool:
+def _set_filter_rule_value(expression: Any, *, field: str, value: Any) -> bool:
     """Substitute a setup-time value into every rule on ``field``.
 
     Walks the filter tree because a template's placeholder can sit at any depth
@@ -281,9 +339,15 @@ def _positive_number(
     except (TypeError, ValueError) as exc:
         raise ValueError(f"{field_id} must be a positive number") from exc
     below_minimum = parsed < 0 if allow_zero else parsed <= 0
-    if not math.isfinite(parsed) or below_minimum or (integer and not parsed.is_integer()):
+    if (
+        not math.isfinite(parsed)
+        or below_minimum
+        or (integer and not parsed.is_integer())
+    ):
         if allow_zero:
-            qualifier = "non-negative whole number" if integer else "non-negative number"
+            qualifier = (
+                "non-negative whole number" if integer else "non-negative number"
+            )
         else:
             qualifier = "positive whole number" if integer else "positive number"
         raise ValueError(f"{field_id} must be a {qualifier}")
@@ -300,6 +364,18 @@ def _string_list(value: Any) -> list[str]:
     else:
         return []
     return list(dict.fromkeys(str(part).strip() for part in parts if str(part).strip()))
+
+
+def _required_text(
+    value: Any,
+    field_id: str,
+    *,
+    label: str | None = None,
+) -> str:
+    text = str(value or "").strip()
+    if not text or text.startswith("__SELECT_"):
+        raise ValueError(f"{label or field_id} is required")
+    return text
 
 
 def _metadata(
@@ -480,9 +556,7 @@ _REACTIVATION_SMS_EMAIL_18MONTH: dict[str, Any] = {
         {
             "type": "condition",
             "id": "check-booked",
-            "rules": [
-                {"field": "appointment_booked", "op": "eq", "value": True}
-            ],
+            "rules": [{"field": "appointment_booked", "op": "eq", "value": True}],
             "true_next_node_id": "exit-booked",
             "false_next_node_id": "email-followup",
         },
@@ -553,7 +627,9 @@ _CANCELLATION_REBOOKING: dict[str, Any] = {
         {
             "type": "condition",
             "id": "check-cancelled",
-            "rules": [{"field": "appointment_status", "op": "eq", "value": "cancelled"}],
+            "rules": [
+                {"field": "appointment_status", "op": "eq", "value": "cancelled"}
+            ],
             "true_next_node_id": "sms-rebook",
             "false_next_node_id": "exit-not-cancelled",
         },
@@ -590,7 +666,13 @@ _CALLBACK_AUTOMATION: dict[str, Any] = {
         {
             "type": "condition",
             "id": "check-call-outcome",
-            "rules": [{"field": "call_outcome", "op": "in", "value": ["answered", "transferred"]}],
+            "rules": [
+                {
+                    "field": "call_outcome",
+                    "op": "in",
+                    "value": ["answered", "transferred"],
+                }
+            ],
             "true_next_node_id": "exit-handled",
             "false_next_node_id": "exit-handoff",
         },
@@ -645,6 +727,180 @@ _UNSCHEDULED_TREATMENT_FOLLOWUP: dict[str, Any] = {
     "compliance": {"content_class": "sales", "consent_required": True},
 }
 
+
+_SALES_QUALIFICATION: dict[str, Any] = {
+    "schema_version": "1.0",
+    "trigger": {"type": "enquiry_received"},
+    "entry_node_id": "mark-engaged",
+    "nodes": [
+        {
+            "type": "update_patient_status",
+            "id": "mark-engaged",
+            "status": "engaged",
+            "note_template": "Sales enquiry landed from {{enquiry_source}}.",
+            "next_node_id": "configure-registration",
+        },
+        {
+            "type": "patient_registration",
+            "id": "configure-registration",
+            "provider_id": SALES_PROVIDER_PLACEHOLDER,
+            "next_node_id": "configure-booking-link",
+            "on_abandoned_node_id": "mark-handoff",
+        },
+        {
+            "type": "booking_link",
+            "id": "configure-booking-link",
+            "actions": ["book"],
+            "appointment_type_ids": [SALES_APPOINTMENT_TYPES_PLACEHOLDER],
+            "window_days": 14,
+            "provider_id": SALES_PROVIDER_PLACEHOLDER,
+            "identity_check": "off",
+            "next_node_id": "sms-open",
+        },
+        {
+            "type": "send_sms",
+            "id": "sms-open",
+            "body_template": (
+                "Thanks for reaching out to {{clinic_name}}. Reply here and our "
+                "assistant can help answer questions and find the right visit. "
+                "Reply STOP to opt out."
+            ),
+            "next_node_id": "ai-qualification",
+        },
+        {
+            "type": "retell_sms_conversation",
+            "id": "ai-qualification",
+            "chat_profile_id": RETELL_SMS_PROFILE_PLACEHOLDER,
+            "next_node_id": "route-qualification",
+        },
+        {
+            "type": "switch",
+            "id": "route-qualification",
+            "subject": "retell_sms_agent_outcome",
+            "cases": [
+                {
+                    "label": "Qualified",
+                    "filter": {
+                        "kind": "rule",
+                        "field": "retell_sms_agent_outcome",
+                        "op": "in_case_insensitive",
+                        "value": [
+                            "qualified",
+                            "book_ready",
+                            "booking_requested",
+                            "appointment_requested",
+                        ],
+                    },
+                    "next_node_id": "mark-qualified",
+                },
+                {
+                    "label": "Not qualified",
+                    "filter": {
+                        "kind": "rule",
+                        "field": "retell_sms_agent_outcome",
+                        "op": "in_case_insensitive",
+                        "value": ["not_qualified", "not_a_fit", "declined"],
+                    },
+                    "next_node_id": "mark-not-qualified",
+                },
+                {
+                    "label": "Do not contact",
+                    "filter": {
+                        "kind": "rule",
+                        "field": "retell_sms_agent_outcome",
+                        "op": "in_case_insensitive",
+                        "value": ["do_not_contact", "do_not_call", "opt_out"],
+                    },
+                    "next_node_id": "mark-dnc",
+                },
+                {
+                    "label": "Unreachable",
+                    "filter": {
+                        "kind": "rule",
+                        "field": "retell_sms_outcome",
+                        "op": "in_case_insensitive",
+                        "value": ["timeout", "max_turns"],
+                    },
+                    "next_node_id": "mark-unreachable",
+                },
+                {
+                    "label": "Staff handoff",
+                    "filter": {
+                        "kind": "rule",
+                        "field": "retell_sms_agent_outcome",
+                        "op": "in_case_insensitive",
+                        "value": [
+                            "staff_handoff",
+                            "needs_staff",
+                            "clinical_question",
+                            "billing_question",
+                        ],
+                    },
+                    "next_node_id": "mark-handoff",
+                },
+            ],
+            "default_next_node_id": "mark-handoff",
+        },
+        {
+            "type": "update_patient_status",
+            "id": "mark-qualified",
+            "status": "qualified",
+            "note_template": "Sales qualification outcome: {{retell_sms_agent_outcome}}",
+            "next_node_id": "sms-booking-link",
+        },
+        {
+            "type": "send_sms",
+            "id": "sms-booking-link",
+            "body_template": (
+                "You can choose a visit time here: {{booking_link}}. If you are "
+                "new to {{clinic_name}}, complete registration first: "
+                "{{registration_link}}. Reply STOP to opt out."
+            ),
+            "send_after_response": True,
+            "next_node_id": "exit-qualified",
+        },
+        {
+            "type": "update_patient_status",
+            "id": "mark-not-qualified",
+            "status": "not_qualified",
+            "note_template": "Sales enquiry was not qualified by AI SMS. Outcome: {{retell_sms_agent_outcome}}",
+            "next_node_id": "exit-not-qualified",
+        },
+        {
+            "type": "update_patient_status",
+            "id": "mark-unreachable",
+            "status": "unreachable",
+            "note_template": "Sales enquiry did not complete AI SMS qualification.",
+            "next_node_id": "exit-unreachable",
+        },
+        {
+            "type": "update_patient_status",
+            "id": "mark-handoff",
+            "status": "handed_to_staff",
+            "note_template": "Sales enquiry needs staff follow-up. Outcome: {{retell_sms_agent_outcome}}",
+            "next_node_id": "exit-handoff",
+        },
+        {
+            "type": "update_patient_status",
+            "id": "mark-dnc",
+            "status": "do_not_call_requested",
+            "note_template": "Lead requested no further automated outreach during sales qualification.",
+            "next_node_id": "exit-dnc",
+        },
+        {
+            "type": "exit",
+            "id": "exit-qualified",
+            "outcome": "qualified_booking_link_sent",
+        },
+        {"type": "exit", "id": "exit-not-qualified", "outcome": "not_qualified"},
+        {"type": "exit", "id": "exit-unreachable", "outcome": "unreachable"},
+        {"type": "exit", "id": "exit-handoff", "outcome": "staff_handoff"},
+        {"type": "exit", "id": "exit-dnc", "outcome": "do_not_contact"},
+    ],
+    "compliance": {"content_class": "sales", "consent_required": True},
+}
+
+
 def _preappointment_attempt_nodes(attempt: int) -> list[dict[str, Any]]:
     """Build one explicit patient-contact attempt and its outcome router.
 
@@ -657,7 +913,9 @@ def _preappointment_attempt_nodes(attempt: int) -> list[dict[str, Any]]:
     callback_target = (
         "mark-callback-after-max" if final_attempt else f"check-callback-time-{suffix}"
     )
-    unreachable_target = "mark-max-attempts" if final_attempt else f"wait-retry-{suffix}"
+    unreachable_target = (
+        "mark-max-attempts" if final_attempt else f"wait-retry-{suffix}"
+    )
     nodes: list[dict[str, Any]] = [
         {
             "type": "send_voice",
@@ -735,7 +993,13 @@ def _preappointment_attempt_nodes(attempt: int) -> list[dict[str, Any]]:
                         "kind": "rule",
                         "field": "call_outcome",
                         "op": "in_case_insensitive",
-                        "value": ["no_answer", "voicemail", "busy", "timeout", "declined"],
+                        "value": [
+                            "no_answer",
+                            "voicemail",
+                            "busy",
+                            "timeout",
+                            "declined",
+                        ],
                     },
                     "next_node_id": unreachable_target,
                 },
@@ -893,11 +1157,31 @@ _SURGERY_PRE_APPOINTMENT_CONFIRMATION: dict[str, Any] = {
         },
         {"type": "exit", "id": "exit-confirmed", "outcome": "appointment_confirmed"},
         {"type": "exit", "id": "exit-cancelled", "outcome": "appointment_cancelled"},
-        {"type": "exit", "id": "exit-rescheduled", "outcome": "appointment_rescheduled"},
-        {"type": "exit", "id": "exit-max-attempts", "outcome": "unreachable_after_max_attempts"},
-        {"type": "exit", "id": "exit-callback-after-max", "outcome": "callback_requested_after_max_attempts"},
-        {"type": "exit", "id": "exit-callback-time-missing", "outcome": "callback_time_missing"},
-        {"type": "exit", "id": "exit-reschedule-time-missing", "outcome": "reschedule_time_missing"},
+        {
+            "type": "exit",
+            "id": "exit-rescheduled",
+            "outcome": "appointment_rescheduled",
+        },
+        {
+            "type": "exit",
+            "id": "exit-max-attempts",
+            "outcome": "unreachable_after_max_attempts",
+        },
+        {
+            "type": "exit",
+            "id": "exit-callback-after-max",
+            "outcome": "callback_requested_after_max_attempts",
+        },
+        {
+            "type": "exit",
+            "id": "exit-callback-time-missing",
+            "outcome": "callback_time_missing",
+        },
+        {
+            "type": "exit",
+            "id": "exit-reschedule-time-missing",
+            "outcome": "reschedule_time_missing",
+        },
         {"type": "exit", "id": "exit-handoff", "outcome": "staff_handoff"},
         {"type": "exit", "id": "exit-dnc", "outcome": "do_not_call"},
     ],
@@ -1008,7 +1292,11 @@ _POST_OP_FOLLOWUP_AFTER_CONFIRMATION: dict[str, Any] = {
         {"type": "exit", "id": "exit-post-op-complete", "outcome": "post_op_complete"},
         {"type": "exit", "id": "exit-post-op-followup", "outcome": "staff_handoff"},
         {"type": "exit", "id": "exit-post-op-dnc", "outcome": "do_not_call"},
-        {"type": "exit", "id": "exit-ineligible-reason", "outcome": "ineligible_reason"},
+        {
+            "type": "exit",
+            "id": "exit-ineligible-reason",
+            "outcome": "ineligible_reason",
+        },
         {
             "type": "exit",
             "id": "exit-post-op-cooldown-expired",
@@ -1035,11 +1323,28 @@ _ALL_TEMPLATES: dict[str, CampaignTemplate] = {
             goal="Reduce late arrivals and missed appointments one day before the visit.",
             outcome_labels=["reminder_sent"],
             supported_channels=["sms"],
-            required_readiness_checks=["location", "nexhealth_appointment_data", "sms", "consent", "quiet_hours"],
-            required_merge_fields=["patient_first_name", "clinic_name", "appointment_date", "appointment_time", "provider_name", "location_phone"],
+            required_readiness_checks=[
+                "location",
+                "nexhealth_appointment_data",
+                "sms",
+                "consent",
+                "quiet_hours",
+            ],
+            required_merge_fields=[
+                "patient_first_name",
+                "clinic_name",
+                "appointment_date",
+                "appointment_time",
+                "provider_name",
+                "location_phone",
+            ],
             content_class="transactional_care",
             audience="NexHealth appointments scheduled 24 hours from now",
-            eligibility=["future appointment still exists", "patient is not suppressed", "SMS consent exists"],
+            eligibility=[
+                "future appointment still exists",
+                "patient is not suppressed",
+                "SMS consent exists",
+            ],
             handoff_reason=None,
             analytics={"reminder_sent": "sent"},
             sample_context={
@@ -1071,11 +1376,26 @@ _ALL_TEMPLATES: dict[str, CampaignTemplate] = {
             goal="Collect YES confirmations 48 hours before appointments.",
             outcome_labels=["confirmed", "no_response"],
             supported_channels=["sms"],
-            required_readiness_checks=["location", "nexhealth_appointment_data", "sms", "consent", "response_handling"],
-            required_merge_fields=["patient_first_name", "clinic_name", "appointment_date", "appointment_time"],
+            required_readiness_checks=[
+                "location",
+                "nexhealth_appointment_data",
+                "sms",
+                "consent",
+                "response_handling",
+            ],
+            required_merge_fields=[
+                "patient_first_name",
+                "clinic_name",
+                "appointment_date",
+                "appointment_time",
+            ],
             content_class="transactional_care",
             audience="NexHealth appointments scheduled 48 hours from now and not already confirmed",
-            eligibility=["future appointment still exists", "patient is not suppressed", "SMS consent exists"],
+            eligibility=[
+                "future appointment still exists",
+                "patient is not suppressed",
+                "SMS consent exists",
+            ],
             handoff_reason="reschedule_requested",
             analytics={"confirmed": "confirmed", "no_response": "no_response"},
             sample_context={
@@ -1102,11 +1422,28 @@ _ALL_TEMPLATES: dict[str, CampaignTemplate] = {
             goal="Bring overdue hygiene recall patients back onto the schedule.",
             outcome_labels=["recall_sent", "booked"],
             supported_channels=["sms"],
-            required_readiness_checks=["location", "nexhealth_patient_recalls", "sms", "booking_link", "consent"],
-            required_merge_fields=["patient_first_name", "clinic_name", "recall_due_date", "booking_link", "location_phone"],
+            required_readiness_checks=[
+                "location",
+                "nexhealth_patient_recalls",
+                "sms",
+                "booking_link",
+                "consent",
+            ],
+            required_merge_fields=[
+                "patient_first_name",
+                "clinic_name",
+                "recall_due_date",
+                "booking_link",
+                "location_phone",
+            ],
             content_class="recall",
             audience="Patients due or overdue for 6-month hygiene recall with no future appointment",
-            eligibility=["PMS supports patient_recalls", "no future appointment", "patient is not suppressed", "SMS consent exists"],
+            eligibility=[
+                "PMS supports patient_recalls",
+                "no future appointment",
+                "patient is not suppressed",
+                "SMS consent exists",
+            ],
             handoff_reason="patient_asks_for_staff",
             analytics={"recall_sent": "sent", "booked": "booked"},
             sample_context={
@@ -1134,11 +1471,28 @@ _ALL_TEMPLATES: dict[str, CampaignTemplate] = {
             goal="Re-engage lapsed patients who have not booked in 18 months.",
             outcome_labels=["booked", "email_sent"],
             supported_channels=["sms", "email"],
-            required_readiness_checks=["location", "nexhealth_patient_recalls", "sms", "email", "booking_link", "consent"],
-            required_merge_fields=["patient_first_name", "clinic_name", "booking_link", "location_phone"],
+            required_readiness_checks=[
+                "location",
+                "nexhealth_patient_recalls",
+                "sms",
+                "email",
+                "booking_link",
+                "consent",
+            ],
+            required_merge_fields=[
+                "patient_first_name",
+                "clinic_name",
+                "booking_link",
+                "location_phone",
+            ],
             content_class="recall",
             audience="Patients inactive for 18 months with no future appointment",
-            eligibility=["PMS supports patient_recalls", "no future appointment", "patient is not suppressed", "SMS/email consent exists"],
+            eligibility=[
+                "PMS supports patient_recalls",
+                "no future appointment",
+                "patient is not suppressed",
+                "SMS/email consent exists",
+            ],
             handoff_reason="patient_asks_for_staff",
             analytics={"booked": "booked", "email_sent": "sent"},
             sample_context={
@@ -1162,13 +1516,32 @@ _ALL_TEMPLATES: dict[str, CampaignTemplate] = {
             goal="Recover missed appointments before the schedule gap becomes permanent.",
             outcome_labels=["booked", "handoff", "not_applicable"],
             supported_channels=["sms"],
-            required_readiness_checks=["location", "nexhealth_appointment_data", "sms", "reschedule_link", "consent"],
-            required_merge_fields=["patient_first_name", "clinic_name", "reschedule_link", "location_phone"],
+            required_readiness_checks=[
+                "location",
+                "nexhealth_appointment_data",
+                "sms",
+                "reschedule_link",
+                "consent",
+            ],
+            required_merge_fields=[
+                "patient_first_name",
+                "clinic_name",
+                "reschedule_link",
+                "location_phone",
+            ],
             content_class="transactional_care",
             audience="Appointments marked missed/no-show by NexHealth",
-            eligibility=["appointment is still marked missed", "patient is not suppressed", "SMS consent exists"],
+            eligibility=[
+                "appointment is still marked missed",
+                "patient is not suppressed",
+                "SMS consent exists",
+            ],
             handoff_reason="failed_booking",
-            analytics={"booked": "booked", "handoff": "handoff", "not_applicable": "skipped"},
+            analytics={
+                "booked": "booked",
+                "handoff": "handoff",
+                "not_applicable": "skipped",
+            },
             sample_context={
                 "patient_first_name": "Jordan",
                 "clinic_name": "Riverside Dental",
@@ -1190,11 +1563,26 @@ _ALL_TEMPLATES: dict[str, CampaignTemplate] = {
             goal="Turn cancellations into new bookings quickly.",
             outcome_labels=["rebooking_link_sent", "not_applicable"],
             supported_channels=["sms"],
-            required_readiness_checks=["location", "nexhealth_appointment_data", "sms", "reschedule_link", "consent"],
-            required_merge_fields=["patient_first_name", "clinic_name", "reschedule_link", "location_phone"],
+            required_readiness_checks=[
+                "location",
+                "nexhealth_appointment_data",
+                "sms",
+                "reschedule_link",
+                "consent",
+            ],
+            required_merge_fields=[
+                "patient_first_name",
+                "clinic_name",
+                "reschedule_link",
+                "location_phone",
+            ],
             content_class="transactional_care",
             audience="Appointments marked cancelled by NexHealth",
-            eligibility=["appointment is still cancelled", "patient is not suppressed", "SMS consent exists"],
+            eligibility=[
+                "appointment is still cancelled",
+                "patient is not suppressed",
+                "SMS consent exists",
+            ],
             handoff_reason="reschedule_requested",
             analytics={"rebooking_link_sent": "sent", "not_applicable": "skipped"},
             sample_context={
@@ -1231,7 +1619,13 @@ _ALL_TEMPLATES: dict[str, CampaignTemplate] = {
                 "do_not_call",
             ],
             supported_channels=["voice"],
-            required_readiness_checks=["location", "nexhealth_appointment_data", "voice", "consent", "quiet_hours"],
+            required_readiness_checks=[
+                "location",
+                "nexhealth_appointment_data",
+                "voice",
+                "consent",
+                "quiet_hours",
+            ],
             required_merge_fields=[
                 "patient_first_name",
                 "clinic_name",
@@ -1325,24 +1719,29 @@ _ALL_TEMPLATES: dict[str, CampaignTemplate] = {
             "Call patients after a completed surgical/major appointment "
             "to check whether staff follow-up is needed."
         ),
-            trigger_type="appointment_state_changed",
-            definition=_POST_OP_FOLLOWUP_AFTER_CONFIRMATION,
-            metadata=_metadata(
-                category="appointment_ops",
-                goal="Complete configurable post-op follow-up after Tracker marks an eligible appointment Completed.",
+        trigger_type="appointment_state_changed",
+        definition=_POST_OP_FOLLOWUP_AFTER_CONFIRMATION,
+        metadata=_metadata(
+            category="appointment_ops",
+            goal="Complete configurable post-op follow-up after Tracker marks an eligible appointment Completed.",
             outcome_labels=["post_op_complete", "staff_handoff", "do_not_call"],
             supported_channels=["voice"],
             required_readiness_checks=["location", "voice", "consent", "quiet_hours"],
-            required_merge_fields=["patient_first_name", "clinic_name", "appointment_date", "appointment_time"],
+            required_merge_fields=[
+                "patient_first_name",
+                "clinic_name",
+                "appointment_date",
+                "appointment_time",
+            ],
             content_class="transactional_care",
-                audience="Eligible appointments whose Tracker Chair Flow state became Completed",
-                eligibility=[
-                    "Tracker Chair Flow state is Completed",
-                    "appointment reason is selected during setup",
-                    "source appointment includes FlowChange",
-                    "voice consent exists",
-                    "patient is not suppressed",
-                ],
+            audience="Eligible appointments whose Tracker Chair Flow state became Completed",
+            eligibility=[
+                "Tracker Chair Flow state is Completed",
+                "appointment reason is selected during setup",
+                "source appointment includes FlowChange",
+                "voice consent exists",
+                "patient is not suppressed",
+            ],
             handoff_reason="post_op_followup_needed",
             analytics={
                 "post_op_complete": "completed",
@@ -1399,6 +1798,100 @@ _ALL_TEMPLATES: dict[str, CampaignTemplate] = {
         ),
         tags=["appointment", "surgery", "voice", "post-op"],
     ),
+    "sales-qualification": CampaignTemplate(
+        id="sales-qualification",
+        name="Sales Qualification",
+        description=(
+            "Start an AI SMS conversation when a sales enquiry lands, qualify the "
+            "lead, and route qualified patients to registration and booking."
+        ),
+        trigger_type="enquiry_received",
+        definition=_SALES_QUALIFICATION,
+        metadata=_metadata(
+            category="sales",
+            goal="Respond to new enquiries quickly, qualify fit, and move qualified leads toward booking.",
+            outcome_labels=[
+                "qualified_booking_link_sent",
+                "not_qualified",
+                "unreachable",
+                "staff_handoff",
+                "do_not_contact",
+            ],
+            supported_channels=["sms"],
+            required_readiness_checks=[
+                "location",
+                "sms",
+                "retell_sms_profile",
+                "enquiry_intake_source",
+                "patient_registration",
+                "booking_link",
+                "express_consent",
+                "staff_handoff",
+                "quiet_hours",
+            ],
+            required_merge_fields=[
+                "clinic_name",
+                "enquiry_source",
+                "booking_link",
+                "registration_link",
+            ],
+            content_class="sales",
+            audience="Inbound enquiries submitted through a signed intake source",
+            eligibility=[
+                "lead submitted a contact method",
+                "SMS consent exists",
+                "patient is not suppressed",
+                "appointment types are selected during setup",
+            ],
+            handoff_reason="sales_qualification_needs_staff",
+            analytics={
+                "qualified_booking_link_sent": "qualified",
+                "not_qualified": "not_qualified",
+                "unreachable": "unreachable",
+                "staff_handoff": "handoff",
+                "do_not_contact": "opt_out",
+            },
+            sample_context={
+                "clinic_name": "Riverside Dental",
+                "enquiry_source": "website_form",
+                "booking_link": "https://book.example.com/r/jordan",
+                "registration_link": "https://book.example.com/book/register?token=abc123",
+                "retell_sms_agent_outcome": "qualified",
+                "retell_sms_outcome": "retell_chat_ended",
+            },
+            setup_fields=[
+                {
+                    "id": "retell_sms_profile_id",
+                    "label": "Sales qualification SMS profile",
+                    "type": "retell_sms_profile_select",
+                    "required": True,
+                    "placeholder": "Choose Retell SMS profile",
+                },
+                {
+                    "id": "sales_provider_id",
+                    "label": "Registration and booking provider",
+                    "type": "provider_select",
+                    "required": True,
+                    "placeholder": "Choose provider",
+                },
+                {
+                    "id": "sales_appointment_type_ids",
+                    "label": "Bookable appointment types",
+                    "type": "appointment_type_multiselect",
+                    "required": True,
+                    "placeholder": "New patient exam, consultation",
+                },
+                {
+                    "id": "sales_booking_window_days",
+                    "label": "Booking window (days)",
+                    "type": "number",
+                    "required": True,
+                    "default": 14,
+                },
+            ],
+        ),
+        tags=["sales", "enquiry", "sms", "retell", "booking"],
+    ),
     "callback-automation": CampaignTemplate(
         id="callback-automation",
         name="Callback Automation",
@@ -1408,13 +1901,32 @@ _ALL_TEMPLATES: dict[str, CampaignTemplate] = {
         metadata=_metadata(
             category="callback",
             goal="Respond to callback requests with a configured AI voice profile.",
-            outcome_labels=["answered", "booked", "transferred", "staff_handoff", "unreachable", "do_not_call"],
+            outcome_labels=[
+                "answered",
+                "booked",
+                "transferred",
+                "staff_handoff",
+                "unreachable",
+                "do_not_call",
+            ],
             supported_channels=["voice"],
-            required_readiness_checks=["location", "callback_queue_source", "outbound_voice_profile", "voice_consent", "voice_outcome_wait", "staff_handoff", "quiet_hours"],
+            required_readiness_checks=[
+                "location",
+                "callback_queue_source",
+                "outbound_voice_profile",
+                "voice_consent",
+                "voice_outcome_wait",
+                "staff_handoff",
+                "quiet_hours",
+            ],
             required_merge_fields=["callback_requested_at"],
             content_class="transactional_care",
             audience="Inbound calls classified as needing callback",
-            eligibility=["active outbound voice profile", "voice consent exists", "patient is not suppressed"],
+            eligibility=[
+                "active outbound voice profile",
+                "voice consent exists",
+                "patient is not suppressed",
+            ],
             handoff_reason="ambiguous_voice_outcome",
             analytics={
                 "callback_requested": "callbacks_automated",
@@ -1455,11 +1967,27 @@ _ALL_TEMPLATES: dict[str, CampaignTemplate] = {
             goal="Help patients schedule their next dental visit after unscheduled treatment planning.",
             outcome_labels=["booked", "email_sent"],
             supported_channels=["sms", "email"],
-            required_readiness_checks=["location", "pms_treatment_plans", "sms", "email", "booking_link", "express_consent"],
-            required_merge_fields=["patient_first_name", "clinic_name", "booking_link", "location_phone"],
+            required_readiness_checks=[
+                "location",
+                "pms_treatment_plans",
+                "sms",
+                "email",
+                "booking_link",
+                "express_consent",
+            ],
+            required_merge_fields=[
+                "patient_first_name",
+                "clinic_name",
+                "booking_link",
+                "location_phone",
+            ],
             content_class="sales",
             audience="Manual or PMS-gated treatment-plan audience selected after preview",
-            eligibility=["PMS supports treatment_plans when automated", "patient is not suppressed", "express SMS/email consent exists"],
+            eligibility=[
+                "PMS supports treatment_plans when automated",
+                "patient is not suppressed",
+                "express SMS/email consent exists",
+            ],
             handoff_reason="patient_asks_for_staff",
             analytics={"booked": "booked", "email_sent": "sent"},
             sample_context={
@@ -1477,10 +2005,10 @@ _ALL_TEMPLATES: dict[str, CampaignTemplate] = {
 LAUNCH_TEMPLATE_IDS: tuple[str, ...] = (
     "surgery-pre-appointment-confirmation",
     "post-op-followup-after-confirmation",
+    "sales-qualification",
 )
 
-# Client-facing launch scope: only expose the two workflows requested for the
-# current production rollout. Keep the other template definitions above so they
+# Client-facing launch scope. Keep the other template definitions above so they
 # can be re-enabled later without rebuilding them.
 TEMPLATES: dict[str, CampaignTemplate] = {
     template_id: _ALL_TEMPLATES[template_id] for template_id in LAUNCH_TEMPLATE_IDS

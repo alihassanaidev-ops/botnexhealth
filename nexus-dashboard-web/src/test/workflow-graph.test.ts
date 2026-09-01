@@ -264,6 +264,7 @@ describe("workflow graph — factories", () => {
         expect(createTrigger("recall_scan")).toMatchObject({ recall_interval_months: 6 })
         expect(createTrigger("manual").type).toBe("manual")
         expect(createTrigger("bulk_import").type).toBe("bulk_import")
+        expect(createTrigger("enquiry_received").type).toBe("enquiry_received")
         expect(createTrigger("callback_requested").type).toBe("callback_requested")
         expect(createTrigger("patient_status_changed")).toMatchObject({
             statuses: ["appointment_confirmed"],

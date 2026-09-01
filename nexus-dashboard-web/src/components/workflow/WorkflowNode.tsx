@@ -125,6 +125,8 @@ function triggerSummary(t: WorkflowTrigger): string {
             return "Manual / bulk enrollment"
         case "bulk_import":
             return "Bulk import"
+        case "enquiry_received":
+            return "Sales enquiry"
         case "callback_requested":
             return "Callback request"
         case "patient_status_changed":

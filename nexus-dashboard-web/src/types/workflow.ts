@@ -19,6 +19,7 @@ export type TriggerType =
     | "recall_scan"
     | "manual"
     | "bulk_import"
+    | "enquiry_received"
     | "callback_requested"
     | "patient_status_changed"
     | "sms_reply"
@@ -62,6 +63,11 @@ export interface BulkImportTrigger {
     /** Optional eligibility filter, evaluated before a run is created. */
     filter?: FilterExpression | null
 }
+export interface EnquiryReceivedTrigger {
+    type: "enquiry_received"
+    /** Optional eligibility filter, evaluated before a run is created. */
+    filter?: FilterExpression | null
+}
 export interface CallbackRequestedTrigger {
     type: "callback_requested"
     /** Optional eligibility filter, evaluated before a run is created. */
@@ -101,6 +107,7 @@ export type WorkflowTrigger =
     | RecallScanTrigger
     | ManualTrigger
     | BulkImportTrigger
+    | EnquiryReceivedTrigger
     | CallbackRequestedTrigger
     | PatientStatusChangedTrigger
     | SmsReplyTrigger

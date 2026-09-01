@@ -16,7 +16,11 @@ from fastapi.testclient import TestClient
 
 from src.app.api.routes.campaign_booking import router
 from src.app.pms.models import BookingWriteStatus
-from src.app.services.automation.campaign_action_links import make_action_token
+from src.app.services.automation.campaign_action_links import (
+    BOOKING_LINK_CONFIG_KEY,
+    make_action_token,
+)
+from src.app.services.automation.campaign_identity import VERIFIED_KEY
 
 
 def client_():
@@ -31,7 +35,9 @@ def client():
 
 
 def _expired(action: str = "book") -> str:
-    return make_action_token("run-1", action, ttl_seconds=1, now=int(time.time()) - 9999)
+    return make_action_token(
+        "run-1", action, ttl_seconds=1, now=int(time.time()) - 9999
+    )
 
 
 def _run():
@@ -57,12 +63,22 @@ def _slot(start="2026-09-02T14:00:00Z", provider="prov-1"):
     return s
 
 
-def _ctx(*, run=None, contact_pms_id="pms-9", already_booked=False, slots=None,
-         book_success=True, write_status=BookingWriteStatus.CONFIRMED.value):
+def _ctx(
+    *,
+    run=None,
+    contact_pms_id="pms-9",
+    already_booked=False,
+    slots=None,
+    book_success=True,
+    write_status=BookingWriteStatus.CONFIRMED.value,
+    lead_status=None,
+):
     """Patch the module's collaborators for one request."""
     session = AsyncMock()
     run = run if run is not None else _run()
-    contact = MagicMock(nexhealth_patient_id=contact_pms_id)
+    contact = MagicMock()
+    contact.nexhealth_patient_id = contact_pms_id
+    contact.lead_status = lead_status
     # MagicMock(name=...) sets the mock's own name, not a .name attribute.
     location = MagicMock(timezone="America/Toronto")
     location.name = "Downtown"
@@ -71,6 +87,7 @@ def _ctx(*, run=None, contact_pms_id="pms-9", already_booked=False, slots=None,
         from src.app.models.automation_workflow import AutomationWorkflowRun
         from src.app.models.contact import Contact
         from src.app.models.institution_location import InstitutionLocation
+
         if model is AutomationWorkflowRun:
             return run
         if model is Contact:
@@ -82,6 +99,7 @@ def _ctx(*, run=None, contact_pms_id="pms-9", already_booked=False, slots=None,
     session.get = AsyncMock(side_effect=_get)
     session.add = MagicMock()
     session.commit = AsyncMock()
+    session.contact = contact
 
     class _Ctx:
         async def __aenter__(self):
@@ -111,37 +129,46 @@ def _ctx(*, run=None, contact_pms_id="pms-9", already_booked=False, slots=None,
 
 def _call(client, method, path, ctx, json=None):
     session, cm, adapter, booked = ctx
-    with patch(
-        "src.app.api.routes.campaign_booking.get_system_db_session", return_value=cm
-    ), patch(
-        "src.app.api.routes.campaign_booking.get_adapter_for_institution_location",
-        AsyncMock(return_value=adapter),
-    ), patch(
-        "src.app.api.routes.campaign_booking._already_booked", booked
-    ), patch(
-        "src.app.api.routes.campaign_booking.log_audit_background"
+    with (
+        patch(
+            "src.app.api.routes.campaign_booking.get_system_db_session", return_value=cm
+        ),
+        patch(
+            "src.app.api.routes.campaign_booking.get_adapter_for_institution_location",
+            AsyncMock(return_value=adapter),
+        ),
+        patch("src.app.api.routes.campaign_booking._already_booked", booked),
+        patch("src.app.api.routes.campaign_booking.log_audit_background"),
     ):
         return client.request(method, path, json=json)
 
 
 class TestTokenGate:
     def test_a_forged_token_gets_nothing(self, client):
-        r = _call(client, "GET", "/api/campaigns/link/book/slots?token=a.book.9.bad", _ctx())
+        r = _call(
+            client, "GET", "/api/campaigns/link/book/slots?token=a.book.9.bad", _ctx()
+        )
         assert r.status_code == 400
 
     def test_an_expired_token_says_so(self, client):
-        r = _call(client, "GET", f"/api/campaigns/link/book/slots?token={_expired()}", _ctx())
+        r = _call(
+            client, "GET", f"/api/campaigns/link/book/slots?token={_expired()}", _ctx()
+        )
         assert r.status_code == 410
 
     def test_confirm_cannot_reach_the_slot_picker(self, client):
         """Only book and reschedule pick slots; confirm needs no slot."""
         token = make_action_token("run-1", "confirm")
-        r = _call(client, "GET", f"/api/campaigns/link/confirm/slots?token={token}", _ctx())
+        r = _call(
+            client, "GET", f"/api/campaigns/link/confirm/slots?token={token}", _ctx()
+        )
         assert r.status_code == 404
 
     def test_a_book_token_cannot_be_replayed_on_reschedule(self, client):
         token = make_action_token("run-1", "book")
-        r = _call(client, "GET", f"/api/campaigns/link/reschedule/slots?token={token}", _ctx())
+        r = _call(
+            client, "GET", f"/api/campaigns/link/reschedule/slots?token={token}", _ctx()
+        )
         assert r.status_code == 400
 
     def test_every_response_sends_no_referrer(self, client):
@@ -152,7 +179,9 @@ class TestTokenGate:
 class TestListingSlots:
     def test_slots_are_offered_with_no_patient_detail(self, client):
         token = make_action_token("run-1", "book")
-        r = _call(client, "GET", f"/api/campaigns/link/book/slots?token={token}", _ctx())
+        r = _call(
+            client, "GET", f"/api/campaigns/link/book/slots?token={token}", _ctx()
+        )
         assert r.status_code == 200
         body = r.json()
         assert body["slots"][0]["start"] == "2026-09-02T14:00:00Z"
@@ -163,7 +192,9 @@ class TestListingSlots:
     def test_an_already_booked_run_is_not_offered_more_slots(self, client):
         token = make_action_token("run-1", "book")
         r = _call(
-            client, "GET", f"/api/campaigns/link/book/slots?token={token}",
+            client,
+            "GET",
+            f"/api/campaigns/link/book/slots?token={token}",
             _ctx(already_booked=True),
         )
         assert r.json()["already_booked"] is True
@@ -175,7 +206,10 @@ class TestBooking:
         token = make_action_token("run-1", "book")
         ctx = _ctx()
         r = _call(
-            client, "POST", f"/api/campaigns/link/book/slots?token={token}", ctx,
+            client,
+            "POST",
+            f"/api/campaigns/link/book/slots?token={token}",
+            ctx,
             json={"slot_start": "2026-09-02T14:00:00Z"},
         )
         assert r.status_code == 200
@@ -194,7 +228,10 @@ class TestBooking:
             AsyncMock(side_effect=RuntimeError("smtp is down")),
         ):
             r = _call(
-                client, "POST", f"/api/campaigns/link/book/slots?token={token}", ctx,
+                client,
+                "POST",
+                f"/api/campaigns/link/book/slots?token={token}",
+                ctx,
                 json={"slot_start": "2026-09-02T14:00:00Z"},
             )
         assert r.status_code == 200
@@ -212,19 +249,67 @@ class TestBooking:
             sender,
         ):
             r = _call(
-                client, "POST", f"/api/campaigns/link/book/slots?token={token}", ctx,
+                client,
+                "POST",
+                f"/api/campaigns/link/book/slots?token={token}",
+                ctx,
                 json={"slot_start": "2026-09-02T14:00:00Z"},
             )
         assert r.json()["status"] == "pending"
         sender.assert_not_awaited()
+
+    def test_confirmed_booking_marks_a_lead_booked(self, client):
+        from src.app.models.campaign_enquiry import EnquiryStatus
+
+        token = make_action_token("run-1", "book")
+        ctx = _ctx(lead_status=EnquiryStatus.QUALIFIED.value)
+
+        r = _call(
+            client,
+            "POST",
+            f"/api/campaigns/link/book/slots?token={token}",
+            ctx,
+            json={"slot_start": "2026-09-02T14:00:00Z"},
+        )
+
+        assert r.status_code == 200
+        session, _cm, _adapter, _b = ctx
+        assert session.contact.lead_status == EnquiryStatus.BOOKED.value
+
+    def test_pending_booking_write_does_not_mark_a_lead_booked(self, client):
+        from src.app.models.campaign_enquiry import EnquiryStatus
+
+        token = make_action_token("run-1", "book")
+        ctx = _ctx(
+            write_status=BookingWriteStatus.PENDING.value,
+            lead_status=EnquiryStatus.QUALIFIED.value,
+        )
+
+        r = _call(
+            client,
+            "POST",
+            f"/api/campaigns/link/book/slots?token={token}",
+            ctx,
+            json={"slot_start": "2026-09-02T14:00:00Z"},
+        )
+
+        assert r.status_code == 200
+        session, _cm, _adapter, _b = ctx
+        assert session.contact.lead_status == EnquiryStatus.QUALIFIED.value
 
     def test_the_client_cannot_choose_the_booking_parameters(self, client):
         """It sends a start time; the server books the slot it found itself."""
         token = make_action_token("run-1", "book")
         ctx = _ctx(slots=[_slot(provider="the-real-provider")])
         _call(
-            client, "POST", f"/api/campaigns/link/book/slots?token={token}", ctx,
-            json={"slot_start": "2026-09-02T14:00:00Z", "provider_id": "attacker-choice"},
+            client,
+            "POST",
+            f"/api/campaigns/link/book/slots?token={token}",
+            ctx,
+            json={
+                "slot_start": "2026-09-02T14:00:00Z",
+                "provider_id": "attacker-choice",
+            },
         )
         _session, _cm, adapter, _b = ctx
         booked = adapter.book_appointment.await_args.args[0]
@@ -235,7 +320,10 @@ class TestBooking:
         token = make_action_token("run-1", "book")
         ctx = _ctx()
         r = _call(
-            client, "POST", f"/api/campaigns/link/book/slots?token={token}", ctx,
+            client,
+            "POST",
+            f"/api/campaigns/link/book/slots?token={token}",
+            ctx,
             json={"slot_start": "2026-12-25T03:00:00Z"},
         )
         assert r.status_code == 409
@@ -247,7 +335,10 @@ class TestBooking:
         token = make_action_token("run-1", "book")
         ctx = _ctx(already_booked=True)
         r = _call(
-            client, "POST", f"/api/campaigns/link/book/slots?token={token}", ctx,
+            client,
+            "POST",
+            f"/api/campaigns/link/book/slots?token={token}",
+            ctx,
             json={"slot_start": "2026-09-02T14:00:00Z"},
         )
         assert r.json()["status"] == "already_booked"
@@ -258,7 +349,9 @@ class TestBooking:
         """Item 4 again: accepted is not the same as in the practice software."""
         token = make_action_token("run-1", "book")
         r = _call(
-            client, "POST", f"/api/campaigns/link/book/slots?token={token}",
+            client,
+            "POST",
+            f"/api/campaigns/link/book/slots?token={token}",
             _ctx(write_status=BookingWriteStatus.PENDING.value),
             json={"slot_start": "2026-09-02T14:00:00Z"},
         )
@@ -267,7 +360,9 @@ class TestBooking:
     def test_a_rejected_booking_does_not_claim_success(self, client):
         token = make_action_token("run-1", "book")
         r = _call(
-            client, "POST", f"/api/campaigns/link/book/slots?token={token}",
+            client,
+            "POST",
+            f"/api/campaigns/link/book/slots?token={token}",
             _ctx(book_success=False),
             json={"slot_start": "2026-09-02T14:00:00Z"},
         )
@@ -276,7 +371,9 @@ class TestBooking:
     def test_a_patient_with_no_practice_record_is_handed_off(self, client):
         token = make_action_token("run-1", "book")
         r = _call(
-            client, "POST", f"/api/campaigns/link/book/slots?token={token}",
+            client,
+            "POST",
+            f"/api/campaigns/link/book/slots?token={token}",
             _ctx(contact_pms_id=None),
             json={"slot_start": "2026-09-02T14:00:00Z"},
         )
@@ -301,7 +398,10 @@ class TestLosingTheSlotToSomeoneElse:
             slots=[[_slot()], []],
         )
         r = _call(
-            client, "POST", f"/api/campaigns/link/book/slots?token={token}", ctx,
+            client,
+            "POST",
+            f"/api/campaigns/link/book/slots?token={token}",
+            ctx,
             json={"slot_start": "2026-09-02T14:00:00Z"},
         )
         assert r.status_code == 409
@@ -312,7 +412,10 @@ class TestLosingTheSlotToSomeoneElse:
         token = make_action_token("run-1", "book")
         ctx = _ctx(book_success=False, slots=[[_slot()], [_slot()]])
         r = _call(
-            client, "POST", f"/api/campaigns/link/book/slots?token={token}", ctx,
+            client,
+            "POST",
+            f"/api/campaigns/link/book/slots?token={token}",
+            ctx,
             json={"slot_start": "2026-09-02T14:00:00Z"},
         )
         assert r.status_code == 502
@@ -323,7 +426,10 @@ class TestLosingTheSlotToSomeoneElse:
         token = make_action_token("run-1", "book")
         ctx = _ctx(book_success=False, slots=[[_slot()]])  # second search raises
         r = _call(
-            client, "POST", f"/api/campaigns/link/book/slots?token={token}", ctx,
+            client,
+            "POST",
+            f"/api/campaigns/link/book/slots?token={token}",
+            ctx,
             json={"slot_start": "2026-09-02T14:00:00Z"},
         )
         assert r.status_code == 502
@@ -351,7 +457,9 @@ class TestWhatIsActuallyOffered:
         ]
         token = make_action_token("run-1", "book")
         r = _call(
-            client, "GET", f"/api/campaigns/link/book/slots?token={token}",
+            client,
+            "GET",
+            f"/api/campaigns/link/book/slots?token={token}",
             _ctx(slots=many),
         )
         offered = r.json()["slots"]
@@ -371,13 +479,14 @@ class TestWhatIsActuallyOffered:
 
     def test_booking_still_accepts_any_genuinely_free_slot(self, client):
         """Trimming is presentation. A slot we did not render is still bookable."""
-        many = [
-            _slot(start=f"2026-09-01T{h:02d}:00:00Z") for h in range(7, 18)
-        ]
+        many = [_slot(start=f"2026-09-01T{h:02d}:00:00Z") for h in range(7, 18)]
         token = make_action_token("run-1", "book")
         ctx = _ctx(slots=many)
         r = _call(
-            client, "POST", f"/api/campaigns/link/book/slots?token={token}", ctx,
+            client,
+            "POST",
+            f"/api/campaigns/link/book/slots?token={token}",
+            ctx,
             json={"slot_start": "2026-09-01T13:00:00Z"},
         )
         assert r.status_code == 200
@@ -392,7 +501,10 @@ class TestRescheduleMovesRatherThanRebooks:
         token = make_action_token("run-1", "reschedule")
         ctx = _ctx()
         r = _call(
-            client, "POST", f"/api/campaigns/link/reschedule/slots?token={token}", ctx,
+            client,
+            "POST",
+            f"/api/campaigns/link/reschedule/slots?token={token}",
+            ctx,
             json={"slot_start": "2026-09-02T14:00:00Z"},
         )
         assert r.status_code == 200
@@ -404,7 +516,10 @@ class TestRescheduleMovesRatherThanRebooks:
         token = make_action_token("run-1", "reschedule")
         ctx = _ctx()
         _call(
-            client, "POST", f"/api/campaigns/link/reschedule/slots?token={token}", ctx,
+            client,
+            "POST",
+            f"/api/campaigns/link/reschedule/slots?token={token}",
+            ctx,
             json={"slot_start": "2026-09-02T14:00:00Z"},
         )
         _s, _c, adapter, _b = ctx
@@ -419,7 +534,10 @@ class TestRescheduleMovesRatherThanRebooks:
         token = make_action_token("run-1", "reschedule")
         ctx = _ctx(run=run)
         r = _call(
-            client, "POST", f"/api/campaigns/link/reschedule/slots?token={token}", ctx,
+            client,
+            "POST",
+            f"/api/campaigns/link/reschedule/slots?token={token}",
+            ctx,
             json={"slot_start": "2026-09-02T14:00:00Z"},
         )
         assert r.status_code == 409
@@ -432,7 +550,10 @@ class TestRescheduleMovesRatherThanRebooks:
         token = make_action_token("run-1", "book")
         ctx = _ctx()
         _call(
-            client, "POST", f"/api/campaigns/link/book/slots?token={token}", ctx,
+            client,
+            "POST",
+            f"/api/campaigns/link/book/slots?token={token}",
+            ctx,
             json={"slot_start": "2026-09-02T14:00:00Z"},
         )
         _s, _c, adapter, _b = ctx
@@ -448,7 +569,10 @@ class TestWorksOnBothPracticeSystems:
         token = make_action_token("run-1", "book")
         ctx = _ctx()
         _call(
-            client, "POST", f"/api/campaigns/link/book/slots?token={token}", ctx,
+            client,
+            "POST",
+            f"/api/campaigns/link/book/slots?token={token}",
+            ctx,
             json={"slot_start": "2026-09-02T14:00:00Z"},
         )
         _s, _c, adapter, _b = ctx
@@ -460,7 +584,9 @@ class TestWorksOnBothPracticeSystems:
         tell the patient the practice has it."""
         token = make_action_token("run-1", "book")
         r = _call(
-            client, "POST", f"/api/campaigns/link/book/slots?token={token}",
+            client,
+            "POST",
+            f"/api/campaigns/link/book/slots?token={token}",
             _ctx(write_status=BookingWriteStatus.PENDING.value),
             json={"slot_start": "2026-09-02T14:00:00Z"},
         )
@@ -472,7 +598,10 @@ class TestWorksOnBothPracticeSystems:
         token = make_action_token("run-1", "book")
         ctx = _ctx()
         _call(
-            client, "POST", f"/api/campaigns/link/book/slots?token={token}", ctx,
+            client,
+            "POST",
+            f"/api/campaigns/link/book/slots?token={token}",
+            ctx,
             json={"slot_start": "2026-09-02T14:00:00Z"},
         )
         _s, _c, adapter, _b = ctx
@@ -486,11 +615,7 @@ class TestWorksOnBothPracticeSystems:
         adapter.list_providers.assert_awaited()
 
 
-from src.app.services.automation.campaign_action_links import BOOKING_LINK_CONFIG_KEY
-from src.app.services.automation.campaign_identity import VERIFIED_KEY
-
-
-def _configured_run(identity_check="sensitive", verified=False):
+def _configured_run(identity_check="sensitive", verified=False, provider_id=None):
     """A run that a booking_link step actually configured."""
     run = _run()
     run.trigger_metadata = {
@@ -498,7 +623,7 @@ def _configured_run(identity_check="sensitive", verified=False):
             "actions": ["book", "reschedule", "cancel"],
             "appointment_type_ids": [],
             "window_days": 7,
-            "provider_id": None,
+            "provider_id": provider_id,
             "identity_check": identity_check,
             "node_id": "b1",
         }
@@ -516,8 +641,10 @@ class TestIdentityGate:
         ctx = _ctx(run=_configured_run())
         token = make_action_token("run-1", "cancel")
         r = _call(
-            client_(), "GET",
-            f"/api/campaigns/link/cancel/appointment?token={token}", ctx,
+            client_(),
+            "GET",
+            f"/api/campaigns/link/cancel/appointment?token={token}",
+            ctx,
         )
         body = r.json()
         assert body["identity_required"] is True
@@ -528,8 +655,10 @@ class TestIdentityGate:
         ctx = _ctx(run=_configured_run())
         token = make_action_token("run-1", "cancel")
         r = _call(
-            client_(), "POST",
-            f"/api/campaigns/link/cancel/appointment?token={token}", ctx,
+            client_(),
+            "POST",
+            f"/api/campaigns/link/cancel/appointment?token={token}",
+            ctx,
         )
         assert r.status_code == 403
         assert r.json()["error"] == "identity_required"
@@ -538,8 +667,10 @@ class TestIdentityGate:
         ctx = _ctx(run=_configured_run())
         token = make_action_token("run-1", "reschedule")
         r = _call(
-            client_(), "POST",
-            f"/api/campaigns/link/reschedule/slots?token={token}", ctx,
+            client_(),
+            "POST",
+            f"/api/campaigns/link/reschedule/slots?token={token}",
+            ctx,
             json={"slot_start": "2026-09-02T14:00:00Z"},
         )
         assert r.status_code == 403
@@ -549,7 +680,10 @@ class TestIdentityGate:
         ctx = _ctx(run=_configured_run())
         token = make_action_token("run-1", "book")
         r = _call(
-            client_(), "POST", f"/api/campaigns/link/book/slots?token={token}", ctx,
+            client_(),
+            "POST",
+            f"/api/campaigns/link/book/slots?token={token}",
+            ctx,
             json={"slot_start": "2026-09-02T14:00:00Z"},
         )
         assert r.status_code == 200
@@ -558,7 +692,10 @@ class TestIdentityGate:
         ctx = _ctx(run=_configured_run(identity_check="always"))
         token = make_action_token("run-1", "book")
         r = _call(
-            client_(), "POST", f"/api/campaigns/link/book/slots?token={token}", ctx,
+            client_(),
+            "POST",
+            f"/api/campaigns/link/book/slots?token={token}",
+            ctx,
             json={"slot_start": "2026-09-02T14:00:00Z"},
         )
         assert r.status_code == 403
@@ -571,8 +708,10 @@ class TestIdentityGate:
             AsyncMock(return_value=None),
         ):
             return _call(
-                client_(), "GET",
-                f"/api/campaigns/link/cancel/appointment?token={token}", ctx,
+                client_(),
+                "GET",
+                f"/api/campaigns/link/cancel/appointment?token={token}",
+                ctx,
             )
 
     def test_off_lets_a_cancel_through(self):
@@ -593,3 +732,45 @@ class TestIdentityGate:
         ctx = _ctx(run=_run())  # no config at all
         r = self._describe_stubbed(ctx, make_action_token("run-1", "cancel"))
         assert r.json()["identity_required"] is False
+
+
+class TestConfiguredProvider:
+    def test_listing_slots_uses_the_provider_chosen_by_the_workflow(self):
+        token = make_action_token("run-1", "book")
+        ctx = _ctx(run=_configured_run(provider_id="prov-locked"))
+
+        r = _call(
+            client_(),
+            "GET",
+            f"/api/campaigns/link/book/slots?token={token}",
+            ctx,
+        )
+
+        assert r.status_code == 200
+        _session, _cm, adapter, _b = ctx
+        assert (
+            adapter.find_available_slots.await_args.kwargs["provider_id"]
+            == "prov-locked"
+        )
+
+    def test_booking_recheck_uses_the_provider_chosen_by_the_workflow(self):
+        token = make_action_token("run-1", "book")
+        ctx = _ctx(
+            run=_configured_run(provider_id="prov-locked"),
+            slots=[_slot(provider="prov-locked")],
+        )
+
+        r = _call(
+            client_(),
+            "POST",
+            f"/api/campaigns/link/book/slots?token={token}",
+            ctx,
+            json={"slot_start": "2026-09-02T14:00:00Z"},
+        )
+
+        assert r.status_code == 200
+        _session, _cm, adapter, _b = ctx
+        assert (
+            adapter.find_available_slots.await_args.kwargs["provider_id"]
+            == "prov-locked"
+        )

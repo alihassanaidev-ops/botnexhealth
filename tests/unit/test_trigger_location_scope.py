@@ -19,6 +19,7 @@ from src.app.services.automation.appointment_trigger_service import (
     AppointmentTriggerService,
 )
 from src.app.services.automation.callback_trigger_service import CallbackTriggerService
+from src.app.services.automation.enquiry_trigger_service import EnquiryTriggerService
 from src.app.services.automation.patient_status_trigger_service import (
     PatientStatusTriggerService,
 )
@@ -119,6 +120,12 @@ def test_location_comparison_is_string_based() -> None:
             lambda svc, loc: SmsReplyTriggerService(
                 svc
             ).find_active_sms_reply_workflows("inst-1", location_id=loc),
+        ),
+        (
+            "enquiry_received",
+            lambda svc, loc: EnquiryTriggerService(svc).find_active_enquiry_workflows(
+                "inst-1", location_id=loc
+            ),
         ),
     ],
 )

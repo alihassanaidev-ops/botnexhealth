@@ -20,6 +20,7 @@ import {
     RefreshCw,
     Upload,
     PhoneIncoming,
+    Inbox,
     ClipboardList,
     Stethoscope,
     UserPlus,
@@ -191,6 +192,11 @@ export const TRIGGER_META: Record<TriggerType, TriggerMeta> = {
         label: "Bulk import",
         description: "Enroll a batch of imported contacts.",
         icon: Upload,
+    },
+    enquiry_received: {
+        label: "Enquiry received",
+        description: "Enroll when a sales enquiry lands.",
+        icon: Inbox,
     },
     callback_requested: {
         label: "Callback requested",

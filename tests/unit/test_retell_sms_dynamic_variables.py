@@ -66,6 +66,10 @@ def test_dynamic_variables_normalize_provider_context_automatically() -> None:
                     "appointment_type_name": "Hygiene",
                     "provider_name": "Dr. Smith",
                 },
+                "booking_link": "https://book.example.com/r/abc123",
+                "registration_link": "https://book.example.com/register/abc123",
+                "enquiry": {"source": "website_form", "status": "qualified"},
+                "matched_existing_contact": "false",
             },
         )
     )
@@ -81,6 +85,11 @@ def test_dynamic_variables_normalize_provider_context_automatically() -> None:
     assert variables["appointment_reason"] == "Cleaning"
     assert variables["appointment_type"] == "Hygiene"
     assert variables["provider_name"] == "Dr. Smith"
+    assert variables["booking_link"] == "https://book.example.com/r/abc123"
+    assert variables["registration_link"] == "https://book.example.com/register/abc123"
+    assert variables["enquiry_source"] == "website_form"
+    assert variables["enquiry_status"] == "qualified"
+    assert variables["matched_existing_contact"] == "false"
     assert variables["conversation_goal"] == "Confirm the upcoming appointment"
     assert variables["previous_sms_message"] == "Please confirm your appointment"
     assert "provider_id" not in variables

@@ -39,6 +39,10 @@ from src.app.models.contact import Contact
 from src.app.models.user import User
 from src.app.services.audit_decorator import audit
 from src.app.services.automation.enquiry_intake_service import intake_enquiry
+from src.app.services.automation.enquiry_trigger_service import (
+    EnquiryTriggerService,
+    enqueue_enquiry_workflow_dispatches,
+)
 from src.app.services.sms_privacy import hash_email, hash_phone, mask_phone
 
 logger = logging.getLogger(__name__)
@@ -286,7 +290,10 @@ async def create_enquiry(
 
     consent_channels = tuple(
         channel
-        for channel, agreed in (("sms", data.consent_sms), ("email", data.consent_email))
+        for channel, agreed in (
+            ("sms", data.consent_sms),
+            ("email", data.consent_email),
+        )
         if agreed
     )
 
@@ -307,12 +314,39 @@ async def create_enquiry(
         consent_channels=consent_channels,
         consent_wording=data.consent_wording,
     )
+    dispatches = await EnquiryTriggerService(session).prepare_dispatches(
+        institution_id=institution_id,
+        location_id=data.location_id,
+        contact=result.enquiry,
+        intake_key=result.enquiry.intake_key,
+        source="manual",
+        created=result.created,
+        matched_existing_contact=result.matched_existing_contact,
+    )
     await session.flush()
-    return EnquiryCreated(
+    response = EnquiryCreated(
         enquiry=_detail(result.enquiry),
         created=result.created,
         matched_existing_contact=result.matched_existing_contact,
     )
+    await session.commit()
+    try:
+        enqueued = enqueue_enquiry_workflow_dispatches(dispatches)
+    except Exception:
+        logger.exception(
+            "manual enquiry workflow enqueue failed institution=%s contact=%s",
+            institution_id,
+            result.enquiry.id,
+        )
+    else:
+        if enqueued:
+            logger.info(
+                "manual enquiry enqueued %d workflow(s) institution=%s contact=%s",
+                enqueued,
+                institution_id,
+                result.enquiry.id,
+            )
+    return response
 
 
 @router.post("/{enquiry_id}/enrol", response_model=EnquiryEnrolled)

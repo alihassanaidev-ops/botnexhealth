@@ -93,6 +93,18 @@ def test_reply_fields_stay_on_their_own_channel() -> None:
     assert "sms_reply_body" in sms_names
 
 
+def test_enquiry_trigger_exposes_sales_enquiry_fields() -> None:
+    names = {field.name for field in fields_for(trigger_type="enquiry_received")}
+
+    assert {
+        "enquiry_source",
+        "enquiry_status",
+        "matched_existing_contact",
+        "booking_link",
+        "registration_link",
+    } <= names
+
+
 def test_every_catalog_field_is_reachable_by_some_trigger() -> None:
     """A field scoped to no trigger can never be inserted."""
     for field in MERGE_FIELD_CATALOG:

@@ -42,11 +42,12 @@ def test_priority_dental_templates_present() -> None:
     assert set(TEMPLATES.keys()) == {
         "surgery-pre-appointment-confirmation",
         "post-op-followup-after-confirmation",
+        "sales-qualification",
     }
 
 
 def test_list_templates_returns_all() -> None:
-    assert len(list_templates()) == 2
+    assert len(list_templates()) == 3
 
 
 def test_get_template_known_id() -> None:
@@ -118,7 +119,11 @@ def test_surgery_confirmation_template_configures_reasons_and_retry_timing() -> 
     }
     assert nodes["wait-retry-1"]["delay"]["duration_seconds"] == 4 * 60 * 60
     assert nodes["wait-retry-2"]["delay"]["duration_seconds"] == int(7.5 * 60 * 60)
-    for node_id in ("voice-preop-attempt-1", "voice-preop-attempt-2", "voice-preop-attempt-3"):
+    for node_id in (
+        "voice-preop-attempt-1",
+        "voice-preop-attempt-2",
+        "voice-preop-attempt-3",
+    ):
         assert nodes[node_id]["voice_profile_id"] == "prof-surgery"
         assert nodes[node_id]["retell_agent_id"] == ""
         assert nodes[node_id]["patient_voice_cooldown_hours"] == 12
@@ -148,7 +153,9 @@ def test_surgery_confirmation_template_requires_at_least_one_reason() -> None:
         )
 
 
-def test_surgery_confirmation_template_has_three_business_attempts_and_dynamic_callbacks() -> None:
+def test_surgery_confirmation_template_has_three_business_attempts_and_dynamic_callbacks() -> (
+    None
+):
     definition = instantiate_definition(
         TEMPLATES["surgery-pre-appointment-confirmation"],
         voice_profile_id="prof-surgery",
@@ -167,7 +174,10 @@ def test_surgery_confirmation_template_has_three_business_attempts_and_dynamic_c
     assert nodes["wait-callback-1"]["next_node_id"] == "voice-preop-attempt-2"
     assert nodes["wait-callback-2"]["next_node_id"] == "voice-preop-attempt-3"
     assert nodes["mark-max-attempts"]["status"] == "unreachable_after_max_attempts"
-    assert nodes["write-appointment-rescheduled"]["start_time"] == "{{reschedule_start_time}}"
+    assert (
+        nodes["write-appointment-rescheduled"]["start_time"]
+        == "{{reschedule_start_time}}"
+    )
     assert nodes["write-appointment-rescheduled"]["operation"] == "reschedule"
 
 
@@ -233,7 +243,10 @@ def test_post_op_template_starts_from_completed_flow_state_and_waits_one_day() -
     assert nodes["voice-post-op"]["type"] == "send_voice"
     assert nodes["voice-post-op"]["wait_for_outcome"] is True
     assert nodes["voice-post-op"]["patient_voice_cooldown_behavior"] == "defer"
-    assert nodes["voice-post-op"]["patient_voice_cooldown_deadline_field"] == "post_op_expires_at"
+    assert (
+        nodes["voice-post-op"]["patient_voice_cooldown_deadline_field"]
+        == "post_op_expires_at"
+    )
     assert nodes["check-post-op-needs-review"]["rules"] == [
         {"field": "call_outcome", "op": "neq", "value": "post_op_ok"}
     ]
@@ -274,6 +287,69 @@ def test_post_op_template_rejects_deadline_before_planned_call() -> None:
         )
 
 
+def test_sales_template_starts_from_enquiry_received_trigger() -> None:
+    template = TEMPLATES["sales-qualification"]
+    nodes = {node["id"]: node for node in template.definition["nodes"]}
+
+    assert template.trigger_type == "enquiry_received"
+    assert template.definition["trigger"] == {"type": "enquiry_received"}
+    assert template.definition["entry_node_id"] == "mark-engaged"
+    assert nodes["ai-qualification"]["type"] == "retell_sms_conversation"
+    assert nodes["configure-registration"]["type"] == "patient_registration"
+    assert nodes["configure-booking-link"]["type"] == "booking_link"
+    assert nodes["sms-booking-link"]["send_after_response"] is True
+
+
+def test_sales_template_configures_profile_provider_types_and_window() -> None:
+    definition = instantiate_definition(
+        TEMPLATES["sales-qualification"],
+        setup_options={
+            "retell_sms_profile_id": "sms-profile-1",
+            "sales_provider_id": "provider-1",
+            "sales_appointment_type_ids": ["new-patient", "consult"],
+            "sales_booking_window_days": 21,
+        },
+    )
+    parsed = WorkflowDefinition.model_validate(definition)
+    nodes = {node["id"]: node for node in definition["nodes"]}
+
+    assert parsed.trigger.type == "enquiry_received"
+    assert nodes["ai-qualification"]["chat_profile_id"] == "sms-profile-1"
+    assert nodes["configure-registration"]["provider_id"] == "provider-1"
+    assert nodes["configure-booking-link"]["provider_id"] == "provider-1"
+    assert nodes["configure-booking-link"]["appointment_type_ids"] == [
+        "new-patient",
+        "consult",
+    ]
+    assert nodes["configure-booking-link"]["window_days"] == 21
+
+
+def test_sales_template_requires_guided_setup_fields() -> None:
+    template = TEMPLATES["sales-qualification"]
+    base_options = {
+        "retell_sms_profile_id": "sms-profile-1",
+        "sales_provider_id": "provider-1",
+        "sales_appointment_type_ids": ["new-patient"],
+        "sales_booking_window_days": 14,
+    }
+
+    for missing, expected in (
+        ("retell_sms_profile_id", "Retell SMS profile"),
+        ("sales_provider_id", "sales provider"),
+        ("sales_appointment_type_ids", "sales_appointment_type_ids"),
+    ):
+        options = dict(base_options)
+        options.pop(missing)
+        with pytest.raises(ValueError, match=expected):
+            instantiate_definition(template, setup_options=options)
+
+    with pytest.raises(ValueError, match="sales_booking_window_days"):
+        instantiate_definition(
+            template,
+            setup_options={**base_options, "sales_booking_window_days": 0},
+        )
+
+
 def test_template_metadata_has_required_dental_contract() -> None:
     for template in TEMPLATES.values():
         metadata = template.metadata
@@ -283,6 +359,7 @@ def test_template_metadata_has_required_dental_contract() -> None:
             "treatment",
             "callback",
             "reactivation",
+            "sales",
         }
         assert metadata.goal
         assert metadata.outcome_labels
@@ -294,7 +371,9 @@ def test_template_metadata_has_required_dental_contract() -> None:
             "sales",
             "marketing",
         }
-        expected_daily_cap = 3 if template.id == "surgery-pre-appointment-confirmation" else 1
+        expected_daily_cap = (
+            3 if template.id == "surgery-pre-appointment-confirmation" else 1
+        )
         assert metadata.default_frequency_cap.max_per_day == expected_daily_cap
         assert metadata.default_frequency_cap.max_per_rolling_7_days == 3
         assert metadata.analytics_outcome_map
@@ -334,7 +413,7 @@ def test_campaign_template_response_from_template() -> None:
 def test_list_route_returns_all_templates() -> None:
     user = MagicMock()
     result = asyncio.run(list_campaign_templates(user))
-    assert len(result) == 2
+    assert len(result) == 3
 
 
 # ---------------------------------------------------------------------------
@@ -344,12 +423,15 @@ def test_list_route_returns_all_templates() -> None:
 
 def test_get_route_returns_template() -> None:
     user = MagicMock()
-    result = asyncio.run(get_campaign_template("surgery-pre-appointment-confirmation", user))
+    result = asyncio.run(
+        get_campaign_template("surgery-pre-appointment-confirmation", user)
+    )
     assert result.id == "surgery-pre-appointment-confirmation"
 
 
 def test_get_route_unknown_id_raises_404() -> None:
     from fastapi import HTTPException
+
     user = MagicMock()
     with pytest.raises(HTTPException) as exc_info:
         asyncio.run(get_campaign_template("bad-id", user))
@@ -361,15 +443,17 @@ def test_get_route_unknown_id_raises_404() -> None:
 # ---------------------------------------------------------------------------
 
 
-def _make_wf_mock():
+def _make_wf_mock(template_id: str = "surgery-pre-appointment-confirmation"):
     from datetime import datetime, timezone
+
+    template = TEMPLATES[template_id]
     wf = MagicMock()
     wf.id = "wf-new"
-    wf.name = "Surgery Pre-Appointment Confirmation"
+    wf.name = template.name
     # Post-publish state is paused by the template instantiate route.
     wf.status = "draft"
-    wf.trigger_type = "appointment_offset"
-    wf.definition = TEMPLATES["surgery-pre-appointment-confirmation"].definition
+    wf.trigger_type = template.trigger_type
+    wf.definition = template.definition
     wf.current_version_id = "ver-1"
     wf.created_at = datetime(2026, 7, 2, 14, 0, 0, tzinfo=timezone.utc)
     wf.updated_at = datetime(2026, 7, 2, 14, 0, 0, tzinfo=timezone.utc)
@@ -405,6 +489,7 @@ def test_instantiate_creates_publishes_and_pauses_workflow() -> None:
     mock_session.__aexit__ = AsyncMock(return_value=False)
 
     import unittest.mock as mock
+
     with (
         mock.patch(
             "src.app.api.routes.automation_templates.get_db_session",
@@ -416,17 +501,17 @@ def test_instantiate_creates_publishes_and_pauses_workflow() -> None:
         ),
     ):
         result = asyncio.run(
-                instantiate_template(
-                    "surgery-pre-appointment-confirmation",
-                    user,
-                    data=CampaignTemplateInstantiateRequest(
-                        name="My Surgery Confirmation",
-                        location_id="loc-1",
-                        voice_profile_id="prof-surgery",
-                        setup_options={"appointment_reasons": ["bridge prep"]},
-                    ),
-                )
+            instantiate_template(
+                "surgery-pre-appointment-confirmation",
+                user,
+                data=CampaignTemplateInstantiateRequest(
+                    name="My Surgery Confirmation",
+                    location_id="loc-1",
+                    voice_profile_id="prof-surgery",
+                    setup_options={"appointment_reasons": ["bridge prep"]},
+                ),
             )
+        )
 
     assert result.id == "wf-new"
     assert result.status == "paused"
@@ -444,7 +529,9 @@ def test_instantiate_creates_publishes_and_pauses_workflow() -> None:
     published_def = mock_svc.publish_version.call_args.args[1]
     assert "appointment_type_ids" not in published_def["trigger"]
     published_nodes = {node["id"]: node for node in published_def["nodes"]}
-    assert published_nodes["voice-preop-attempt-1"]["voice_profile_id"] == "prof-surgery"
+    assert (
+        published_nodes["voice-preop-attempt-1"]["voice_profile_id"] == "prof-surgery"
+    )
     assert published_nodes["voice-preop-attempt-1"]["retell_agent_id"] == ""
     reason_rule = next(
         rule
@@ -452,7 +539,76 @@ def test_instantiate_creates_publishes_and_pauses_workflow() -> None:
         if rule["field"] == "appointment_reason"
     )
     assert reason_rule["value"] == ["bridge prep"]
-    assert mock_svc.publish_version.call_args.kwargs["content_classification"] == "transactional_care"
+    assert (
+        mock_svc.publish_version.call_args.kwargs["content_classification"]
+        == "transactional_care"
+    )
+    mock_svc.pause_workflow.assert_awaited_once_with(wf)
+
+
+def test_instantiate_sales_template_publishes_enquiry_definition() -> None:
+    user = MagicMock()
+    user.institution_id = "inst-1"
+    user.id = "user-1"
+
+    wf = _make_wf_mock("sales-qualification")
+    mock_svc = AsyncMock()
+    mock_svc.create_draft = AsyncMock(return_value=wf)
+    mock_svc.publish_version = AsyncMock()
+
+    async def _pause_workflow(workflow):
+        workflow.status = "paused"
+        return workflow
+
+    mock_svc.pause_workflow = AsyncMock(side_effect=_pause_workflow)
+
+    mock_session = AsyncMock()
+    mock_session.__aenter__ = AsyncMock(return_value=mock_session)
+    mock_session.__aexit__ = AsyncMock(return_value=False)
+
+    import unittest.mock as mock
+
+    with (
+        mock.patch(
+            "src.app.api.routes.automation_templates.get_db_session",
+            return_value=mock_session,
+        ),
+        mock.patch(
+            "src.app.api.routes.automation_templates.AutomationWorkflowDefinitionService",
+            return_value=mock_svc,
+        ),
+    ):
+        result = asyncio.run(
+            instantiate_template(
+                "sales-qualification",
+                user,
+                data=CampaignTemplateInstantiateRequest(
+                    name="Sales Qualification",
+                    location_id="loc-1",
+                    setup_options={
+                        "retell_sms_profile_id": "sms-profile-1",
+                        "sales_provider_id": "provider-1",
+                        "sales_appointment_type_ids": ["new-patient"],
+                    },
+                ),
+            )
+        )
+
+    assert result.trigger_type == "enquiry_received"
+    _, create_kwargs = mock_svc.create_draft.call_args
+    assert create_kwargs["category"] == "sales"
+    published_def = mock_svc.publish_version.call_args.args[1]
+    assert published_def["trigger"] == {"type": "enquiry_received"}
+    published_nodes = {node["id"]: node for node in published_def["nodes"]}
+    assert published_nodes["ai-qualification"]["chat_profile_id"] == "sms-profile-1"
+    assert published_nodes["configure-registration"]["provider_id"] == "provider-1"
+    assert published_nodes["configure-booking-link"]["provider_id"] == "provider-1"
+    assert published_nodes["configure-booking-link"]["appointment_type_ids"] == [
+        "new-patient"
+    ]
+    assert (
+        mock_svc.publish_version.call_args.kwargs["content_classification"] == "sales"
+    )
     mock_svc.pause_workflow.assert_awaited_once_with(wf)
 
 
@@ -471,6 +627,7 @@ def test_instantiate_voice_template_without_agent_raises_422() -> None:
 
 def test_hidden_templates_are_not_instantiable() -> None:
     from fastapi import HTTPException
+
     user = MagicMock()
     user.institution_id = "inst-1"
 
@@ -484,6 +641,7 @@ def test_hidden_templates_are_not_instantiable() -> None:
 
 def test_instantiate_unknown_template_raises_404() -> None:
     from fastapi import HTTPException
+
     user = MagicMock()
     user.institution_id = "inst-1"
 

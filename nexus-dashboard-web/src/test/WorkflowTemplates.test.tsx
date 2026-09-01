@@ -4,8 +4,9 @@ import userEvent from "@testing-library/user-event"
 import { MemoryRouter } from "react-router-dom"
 import WorkflowTemplates from "@/pages/WorkflowTemplates"
 import { listTemplates, createWorkflowFromTemplate } from "@/lib/workflow-api"
-import { listAppointmentTypes, listLocations } from "@/lib/tenant-api"
+import { listAppointmentTypes, listLocations, listProviders } from "@/lib/tenant-api"
 import { listOutboundVoiceProfiles } from "@/lib/outbound-voice-api"
+import { listRetellSmsChatProfiles } from "@/lib/retell-sms-api"
 
 vi.mock("@/lib/workflow-api", () => ({
     listTemplates: vi.fn(),
@@ -14,9 +15,13 @@ vi.mock("@/lib/workflow-api", () => ({
 vi.mock("@/lib/tenant-api", () => ({
     listLocations: vi.fn(),
     listAppointmentTypes: vi.fn(),
+    listProviders: vi.fn(),
 }))
 vi.mock("@/lib/outbound-voice-api", () => ({
     listOutboundVoiceProfiles: vi.fn(),
+}))
+vi.mock("@/lib/retell-sms-api", () => ({
+    listRetellSmsChatProfiles: vi.fn(),
 }))
 vi.mock("sonner", () => ({ toast: { error: vi.fn(), success: vi.fn(), info: vi.fn() } }))
 
@@ -24,7 +29,9 @@ const list = listTemplates as ReturnType<typeof vi.fn>
 const create = createWorkflowFromTemplate as ReturnType<typeof vi.fn>
 const locations = listLocations as ReturnType<typeof vi.fn>
 const appointmentTypes = listAppointmentTypes as ReturnType<typeof vi.fn>
+const providers = listProviders as ReturnType<typeof vi.fn>
 const voiceProfiles = listOutboundVoiceProfiles as ReturnType<typeof vi.fn>
+const retellSmsProfiles = listRetellSmsChatProfiles as ReturnType<typeof vi.fn>
 
 const TEMPLATES = [
     {
@@ -113,6 +120,26 @@ const POST_OP_TEMPLATE = {
         ],
     },
 }
+const SALES_TEMPLATE = {
+    ...TEMPLATES[0],
+    id: "sales-qualification",
+    name: "Sales Qualification",
+    description: "Qualify inbound sales enquiries over SMS.",
+    trigger_type: "enquiry_received",
+    category: "sales",
+    metadata: {
+        ...TEMPLATES[0].metadata,
+        category: "sales",
+        supported_channels: ["sms"],
+        default_audience: "Inbound enquiries",
+        setup_fields: [
+            { id: "retell_sms_profile_id", label: "Sales qualification SMS profile", type: "retell_sms_profile_select", required: true },
+            { id: "sales_provider_id", label: "Registration and booking provider", type: "provider_select", required: true },
+            { id: "sales_appointment_type_ids", label: "Bookable appointment types", type: "appointment_type_multiselect", required: true },
+            { id: "sales_booking_window_days", label: "Booking window (days)", type: "number", required: true, default: 14 },
+        ],
+    },
+}
 const LOCATIONS = [{ id: "loc-1", name: "Downtown", slug: "downtown" }]
 
 beforeEach(() => {
@@ -120,10 +147,14 @@ beforeEach(() => {
     create.mockReset()
     locations.mockReset()
     appointmentTypes.mockReset()
+    providers.mockReset()
     voiceProfiles.mockReset()
+    retellSmsProfiles.mockReset()
     locations.mockResolvedValue(LOCATIONS)
     appointmentTypes.mockResolvedValue([])
+    providers.mockResolvedValue([])
     voiceProfiles.mockResolvedValue([])
+    retellSmsProfiles.mockResolvedValue([])
 })
 
 describe("WorkflowTemplates page", () => {
@@ -279,6 +310,56 @@ describe("WorkflowTemplates page", () => {
                         post_op_delay_hours: 0,
                         post_op_latest_call_hours: 24,
                         patient_voice_cooldown_hours: 0,
+                    }),
+                }),
+            )
+        })
+    }, 10_000)
+
+    it("configures sales qualification SMS profile provider appointment types and window", async () => {
+        list.mockResolvedValue([SALES_TEMPLATE])
+        retellSmsProfiles.mockResolvedValue([
+            { id: "sms-profile-1", display_name: "Sales SMS", purpose: "sales", is_active: true },
+        ])
+        providers.mockResolvedValue([
+            { source_id: "provider-1", name: "Dr Lane", is_active: true, is_hidden: false },
+        ])
+        appointmentTypes.mockResolvedValue([
+            { source_id: "new-patient", name: "New patient exam", duration_minutes: 60, is_active: true },
+        ])
+        create.mockResolvedValue({ id: "wf-sales", name: SALES_TEMPLATE.name })
+        const user = userEvent.setup()
+        render(
+            <MemoryRouter>
+                <WorkflowTemplates />
+            </MemoryRouter>,
+        )
+
+        await screen.findByText(SALES_TEMPLATE.name)
+        await user.click(screen.getByRole("button", { name: /use template/i }))
+        await user.click(await screen.findByRole("combobox", { name: "Retell SMS profile" }))
+        await user.click(screen.getByRole("option", { name: "Sales SMS" }))
+        await user.click(await screen.findByRole("combobox", { name: "Registration and booking provider" }))
+        await user.click(screen.getByRole("option", { name: "Dr Lane" }))
+        await waitFor(() => expect(appointmentTypes).toHaveBeenCalledWith("loc-1"))
+        await user.click(await screen.findByText("New patient exam"))
+        fireEvent.change(screen.getByLabelText("Booking window (days)"), {
+            target: { value: "21" },
+        })
+        await user.click(screen.getByRole("button", { name: /create & open builder/i }))
+
+        await waitFor(() => {
+            expect(create).toHaveBeenCalledWith(
+                SALES_TEMPLATE.id,
+                SALES_TEMPLATE.name,
+                expect.objectContaining({
+                    locationId: "loc-1",
+                    voiceProfileId: "",
+                    setupOptions: expect.objectContaining({
+                        retell_sms_profile_id: "sms-profile-1",
+                        sales_provider_id: "provider-1",
+                        sales_appointment_type_ids: ["new-patient"],
+                        sales_booking_window_days: 21,
                     }),
                 }),
             )

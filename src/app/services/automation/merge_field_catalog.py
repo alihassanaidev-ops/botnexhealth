@@ -30,6 +30,7 @@ WorkflowTriggerType = Literal[
     "manual",
     "bulk_import",
     "callback_requested",
+    "enquiry_received",
     "patient_status_changed",
     "sms_reply",
     "email_reply",
@@ -46,6 +47,7 @@ ALL_TRIGGERS: tuple[WorkflowTriggerType, ...] = (
     "manual",
     "bulk_import",
     "callback_requested",
+    "enquiry_received",
     "patient_status_changed",
     "sms_reply",
     "email_reply",
@@ -137,7 +139,11 @@ def _format_time(value: Any) -> str:
     return dt.strftime("%-I:%M %p")
 
 
-def _full_name(contact: "Contact | None", _location: "InstitutionLocation | None", _ctx: dict[str, Any]) -> str:
+def _full_name(
+    contact: "Contact | None",
+    _location: "InstitutionLocation | None",
+    _ctx: dict[str, Any],
+) -> str:
     if contact is not None:
         for candidate in (
             contact.full_name,
@@ -148,7 +154,11 @@ def _full_name(contact: "Contact | None", _location: "InstitutionLocation | None
     return _value(_ctx, "patient_full_name")
 
 
-def _location_address(_contact: "Contact | None", location: "InstitutionLocation | None", _ctx: dict[str, Any]) -> str:
+def _location_address(
+    _contact: "Contact | None",
+    location: "InstitutionLocation | None",
+    _ctx: dict[str, Any],
+) -> str:
     if location is not None:
         parts = [
             getattr(location, "address", None),
@@ -159,8 +169,14 @@ def _location_address(_contact: "Contact | None", location: "InstitutionLocation
     return _value(_ctx, "location_address")
 
 
-def _context_field(name: str) -> Callable[["Contact | None", "InstitutionLocation | None", dict[str, Any]], str]:
-    def _resolve(_contact: "Contact | None", _location: "InstitutionLocation | None", context: dict[str, Any]) -> str:
+def _context_field(
+    name: str,
+) -> Callable[["Contact | None", "InstitutionLocation | None", dict[str, Any]], str]:
+    def _resolve(
+        _contact: "Contact | None",
+        _location: "InstitutionLocation | None",
+        context: dict[str, Any],
+    ) -> str:
         return _value(context, name)
 
     return _resolve
@@ -179,7 +195,11 @@ def _contact_value_or_context(
     return _value(context, *keys)
 
 
-def _appointment_date(_contact: "Contact | None", _location: "InstitutionLocation | None", context: dict[str, Any]) -> str:
+def _appointment_date(
+    _contact: "Contact | None",
+    _location: "InstitutionLocation | None",
+    context: dict[str, Any],
+) -> str:
     return _value(context, "appointment_date") or _format_date(
         context.get("appointment_datetime")
         or context.get("appointment_start_time")
@@ -187,7 +207,11 @@ def _appointment_date(_contact: "Contact | None", _location: "InstitutionLocatio
     )
 
 
-def _appointment_time(_contact: "Contact | None", _location: "InstitutionLocation | None", context: dict[str, Any]) -> str:
+def _appointment_time(
+    _contact: "Contact | None",
+    _location: "InstitutionLocation | None",
+    context: dict[str, Any],
+) -> str:
     return _value(context, "appointment_time") or _format_time(
         context.get("appointment_datetime")
         or context.get("appointment_start_time")
@@ -195,7 +219,11 @@ def _appointment_time(_contact: "Contact | None", _location: "InstitutionLocatio
     )
 
 
-def _appointment_datetime(_contact: "Contact | None", _location: "InstitutionLocation | None", context: dict[str, Any]) -> str:
+def _appointment_datetime(
+    _contact: "Contact | None",
+    _location: "InstitutionLocation | None",
+    context: dict[str, Any],
+) -> str:
     explicit = _value(context, "appointment_datetime")
     if explicit and _parse_datetime(explicit) is None:
         return explicit
@@ -206,24 +234,41 @@ def _appointment_datetime(_contact: "Contact | None", _location: "InstitutionLoc
     )
 
 
-def _recall_due_date(_contact: "Contact | None", _location: "InstitutionLocation | None", context: dict[str, Any]) -> str:
+def _recall_due_date(
+    _contact: "Contact | None",
+    _location: "InstitutionLocation | None",
+    context: dict[str, Any],
+) -> str:
     return _value(context, "recall_due_date") or _format_date(
-        context.get("due_date")
-        or context.get("recall_at")
+        context.get("due_date") or context.get("recall_at")
     )
 
 
-def _last_visit_date(_contact: "Contact | None", _location: "InstitutionLocation | None", context: dict[str, Any]) -> str:
-    return _value(context, "last_visit_date") or _format_date(context.get("last_visit_at"))
+def _last_visit_date(
+    _contact: "Contact | None",
+    _location: "InstitutionLocation | None",
+    context: dict[str, Any],
+) -> str:
+    return _value(context, "last_visit_date") or _format_date(
+        context.get("last_visit_at")
+    )
 
 
-def _callback_requested_at(_contact: "Contact | None", _location: "InstitutionLocation | None", context: dict[str, Any]) -> str:
+def _callback_requested_at(
+    _contact: "Contact | None",
+    _location: "InstitutionLocation | None",
+    context: dict[str, Any],
+) -> str:
     return _value(context, "callback_requested_at") or _format_datetime_for_patient(
         context.get("requested_at")
     )
 
 
-def _preferred_callback_time(_contact: "Contact | None", _location: "InstitutionLocation | None", context: dict[str, Any]) -> str:
+def _preferred_callback_time(
+    _contact: "Contact | None",
+    _location: "InstitutionLocation | None",
+    context: dict[str, Any],
+) -> str:
     return _value(context, "preferred_callback_time") or _format_datetime_for_patient(
         context.get("preferred_callback_at")
     )
@@ -268,45 +313,156 @@ class MergeContextBuilder:
 
         appointment = raw.get("appointment")
         if isinstance(appointment, dict):
-            raw.setdefault("appointment_datetime", _nested(raw, "appointment", "datetime", "start_time", "start_at", "appointment_at"))
+            raw.setdefault(
+                "appointment_datetime",
+                _nested(
+                    raw,
+                    "appointment",
+                    "datetime",
+                    "start_time",
+                    "start_at",
+                    "appointment_at",
+                ),
+            )
             raw.setdefault("appointment_status", _nested(raw, "appointment", "status"))
-            raw.setdefault("appointment_status_id", _nested(raw, "appointment", "status_id", "StatusId"))
-            raw.setdefault("appointment_reason", _nested(raw, "appointment", "reason", "Reason", "appointment_reason"))
-            raw.setdefault("appointment_duration", _nested(raw, "appointment", "duration", "Duration"))
-            raw.setdefault("appointment_type", _nested(raw, "appointment", "appointment_type", "appointment_type_name", "type", "Type"))
-            raw.setdefault("appointment_type_name", _nested(raw, "appointment", "appointment_type_name", "appointment_type", "type", "Type"))
-            raw.setdefault("provider_id", _nested(raw, "appointment", "provider_id", "ProviderId"))
-            raw.setdefault("provider_name", _nested(raw, "appointment", "provider_name", "ProviderName"))
-            raw.setdefault("schedule_column_id", _nested(raw, "appointment", "schedule_column_id", "ScheduleColumnId"))
-            raw.setdefault("booked_user_id", _nested(raw, "appointment", "booked_user_id", "BookedUserId"))
-            raw.setdefault("booked_timestamp", _nested(raw, "appointment", "booked_timestamp", "BookedTimeStamp"))
-            raw.setdefault("created_machine_name", _nested(raw, "appointment", "created_machine_name", "CreatedMachineName"))
+            raw.setdefault(
+                "appointment_status_id",
+                _nested(raw, "appointment", "status_id", "StatusId"),
+            )
+            raw.setdefault(
+                "appointment_reason",
+                _nested(raw, "appointment", "reason", "Reason", "appointment_reason"),
+            )
+            raw.setdefault(
+                "appointment_duration",
+                _nested(raw, "appointment", "duration", "Duration"),
+            )
+            raw.setdefault(
+                "appointment_type",
+                _nested(
+                    raw,
+                    "appointment",
+                    "appointment_type",
+                    "appointment_type_name",
+                    "type",
+                    "Type",
+                ),
+            )
+            raw.setdefault(
+                "appointment_type_name",
+                _nested(
+                    raw,
+                    "appointment",
+                    "appointment_type_name",
+                    "appointment_type",
+                    "type",
+                    "Type",
+                ),
+            )
+            raw.setdefault(
+                "provider_id", _nested(raw, "appointment", "provider_id", "ProviderId")
+            )
+            raw.setdefault(
+                "provider_name",
+                _nested(raw, "appointment", "provider_name", "ProviderName"),
+            )
+            raw.setdefault(
+                "schedule_column_id",
+                _nested(raw, "appointment", "schedule_column_id", "ScheduleColumnId"),
+            )
+            raw.setdefault(
+                "booked_user_id",
+                _nested(raw, "appointment", "booked_user_id", "BookedUserId"),
+            )
+            raw.setdefault(
+                "booked_timestamp",
+                _nested(raw, "appointment", "booked_timestamp", "BookedTimeStamp"),
+            )
+            raw.setdefault(
+                "created_machine_name",
+                _nested(
+                    raw, "appointment", "created_machine_name", "CreatedMachineName"
+                ),
+            )
 
         recall = raw.get("recall")
         if isinstance(recall, dict):
-            raw.setdefault("recall_due_date", _nested(raw, "recall", "due_date", "recall_due_date"))
+            raw.setdefault(
+                "recall_due_date", _nested(raw, "recall", "due_date", "recall_due_date")
+            )
             raw.setdefault("recall_type", _nested(raw, "recall", "type", "recall_type"))
-            raw.setdefault("last_visit_date", _nested(raw, "recall", "last_visit_date", "last_visit_at"))
+            raw.setdefault(
+                "last_visit_date",
+                _nested(raw, "recall", "last_visit_date", "last_visit_at"),
+            )
 
         callback = raw.get("callback")
         if isinstance(callback, dict):
-            raw.setdefault("callback_requested_at", _nested(raw, "callback", "requested_at", "callback_requested_at"))
-            raw.setdefault("callback_reason", _nested(raw, "callback", "reason", "callback_reason"))
-            raw.setdefault("preferred_callback_time", _nested(raw, "callback", "preferred_time", "preferred_callback_time", "preferred_callback_at"))
+            raw.setdefault(
+                "callback_requested_at",
+                _nested(raw, "callback", "requested_at", "callback_requested_at"),
+            )
+            raw.setdefault(
+                "callback_reason", _nested(raw, "callback", "reason", "callback_reason")
+            )
+            raw.setdefault(
+                "preferred_callback_time",
+                _nested(
+                    raw,
+                    "callback",
+                    "preferred_time",
+                    "preferred_callback_time",
+                    "preferred_callback_at",
+                ),
+            )
+
+        enquiry = raw.get("enquiry")
+        if isinstance(enquiry, dict):
+            raw.setdefault(
+                "enquiry_source", _nested(raw, "enquiry", "source", "lead_source")
+            )
+            raw.setdefault(
+                "enquiry_status", _nested(raw, "enquiry", "status", "lead_status")
+            )
+            raw.setdefault(
+                "enquiry_external_ref", _nested(raw, "enquiry", "external_ref")
+            )
+            raw.setdefault("enquiry_intake_key", _nested(raw, "enquiry", "intake_key"))
 
         booking = raw.get("booking")
         if isinstance(booking, dict):
-            raw.setdefault("booking_link", _nested(raw, "booking", "booking_link", "url"))
-            raw.setdefault("confirmation_link", _nested(raw, "booking", "confirmation_link", "confirm_url"))
-            raw.setdefault("reschedule_link", _nested(raw, "booking", "reschedule_link", "reschedule_url"))
+            raw.setdefault(
+                "booking_link", _nested(raw, "booking", "booking_link", "url")
+            )
+            raw.setdefault(
+                "confirmation_link",
+                _nested(raw, "booking", "confirmation_link", "confirm_url"),
+            )
+            raw.setdefault(
+                "reschedule_link",
+                _nested(raw, "booking", "reschedule_link", "reschedule_url"),
+            )
 
         patient = raw.get("patient")
         if isinstance(patient, dict):
-            raw.setdefault("patient_first_name", _nested(raw, "patient", "first_name", "FirstName", "firstName"))
-            raw.setdefault("patient_last_name", _nested(raw, "patient", "last_name", "LastName", "lastName"))
-            raw.setdefault("patient_preferred_language", _nested(raw, "patient", "preferred_language", "language"))
-            raw.setdefault("guardian_first_name", _nested(raw, "patient", "guardian_first_name"))
-            raw.setdefault("guardian_full_name", _nested(raw, "patient", "guardian_full_name"))
+            raw.setdefault(
+                "patient_first_name",
+                _nested(raw, "patient", "first_name", "FirstName", "firstName"),
+            )
+            raw.setdefault(
+                "patient_last_name",
+                _nested(raw, "patient", "last_name", "LastName", "lastName"),
+            )
+            raw.setdefault(
+                "patient_preferred_language",
+                _nested(raw, "patient", "preferred_language", "language"),
+            )
+            raw.setdefault(
+                "guardian_first_name", _nested(raw, "patient", "guardian_first_name")
+            )
+            raw.setdefault(
+                "guardian_full_name", _nested(raw, "patient", "guardian_full_name")
+            )
 
         return raw
 
@@ -343,7 +499,9 @@ MERGE_FIELD_CATALOG: tuple[MergeFieldSpec, ...] = (
         phi_level="low",
         channels=ALL_CHANNELS,
         triggers=ALL_TRIGGERS,
-        resolve=lambda c, _l, _ctx: _contact_value_or_context(c, "first_name", _ctx, "patient_first_name", "first_name"),
+        resolve=lambda c, _l, _ctx: _contact_value_or_context(
+            c, "first_name", _ctx, "patient_first_name", "first_name"
+        ),
     ),
     MergeFieldSpec(
         name="patient_last_name",
@@ -357,7 +515,9 @@ MERGE_FIELD_CATALOG: tuple[MergeFieldSpec, ...] = (
         phi_level="low",
         channels=ALL_CHANNELS,
         triggers=ALL_TRIGGERS,
-        resolve=lambda c, _l, _ctx: _contact_value_or_context(c, "last_name", _ctx, "patient_last_name", "last_name"),
+        resolve=lambda c, _l, _ctx: _contact_value_or_context(
+            c, "last_name", _ctx, "patient_last_name", "last_name"
+        ),
     ),
     MergeFieldSpec(
         name="patient_full_name",
@@ -514,6 +674,34 @@ MERGE_FIELD_CATALOG: tuple[MergeFieldSpec, ...] = (
         resolve=_context_field("appointment_duration"),
     ),
     MergeFieldSpec(
+        name="appointment_type",
+        label="Appointment type",
+        description="The appointment type supplied by the PMS.",
+        sample="Implant consultation",
+        group="appointment",
+        source="context",
+        availability="optional_context",
+        requires=("appointment.appointment_type",),
+        phi_level="medium",
+        channels=ALL_CHANNELS,
+        triggers=APPOINTMENT_TRIGGERS,
+        resolve=_context_field("appointment_type"),
+    ),
+    MergeFieldSpec(
+        name="appointment_type_name",
+        label="Appointment type name",
+        description="The display name for the appointment type when available.",
+        sample="Implant consultation",
+        group="appointment",
+        source="context",
+        availability="optional_context",
+        requires=("appointment.appointment_type_name",),
+        phi_level="medium",
+        channels=ALL_CHANNELS,
+        triggers=APPOINTMENT_TRIGGERS,
+        resolve=_context_field("appointment_type_name"),
+    ),
+    MergeFieldSpec(
         name="provider_id",
         label="Provider ID",
         description="The source provider identifier.",
@@ -526,6 +714,20 @@ MERGE_FIELD_CATALOG: tuple[MergeFieldSpec, ...] = (
         channels=ALL_CHANNELS,
         triggers=APPOINTMENT_TRIGGERS,
         resolve=_context_field("provider_id"),
+    ),
+    MergeFieldSpec(
+        name="provider_name",
+        label="Provider name",
+        description="The provider display name when supplied by the PMS.",
+        sample="Dr. Smith",
+        group="appointment",
+        source="context",
+        availability="optional_context",
+        requires=("appointment.provider_name",),
+        phi_level="low",
+        channels=ALL_CHANNELS,
+        triggers=APPOINTMENT_TRIGGERS,
+        resolve=_context_field("provider_name"),
     ),
     MergeFieldSpec(
         name="schedule_column_id",
@@ -595,7 +797,9 @@ MERGE_FIELD_CATALOG: tuple[MergeFieldSpec, ...] = (
         phi_level="none",
         channels=ALL_CHANNELS,
         triggers=ALL_TRIGGERS,
-        resolve=lambda _c, loc, _ctx: (loc.name or "") if loc else _value(_ctx, "clinic_name"),
+        resolve=lambda _c, loc, _ctx: (
+            (loc.name or "") if loc else _value(_ctx, "clinic_name")
+        ),
     ),
     MergeFieldSpec(
         name="location_name",
@@ -609,7 +813,9 @@ MERGE_FIELD_CATALOG: tuple[MergeFieldSpec, ...] = (
         phi_level="none",
         channels=ALL_CHANNELS,
         triggers=ALL_TRIGGERS,
-        resolve=lambda _c, loc, _ctx: (loc.name or "") if loc else _value(_ctx, "location_name"),
+        resolve=lambda _c, loc, _ctx: (
+            (loc.name or "") if loc else _value(_ctx, "location_name")
+        ),
     ),
     MergeFieldSpec(
         name="location_phone",
@@ -623,7 +829,11 @@ MERGE_FIELD_CATALOG: tuple[MergeFieldSpec, ...] = (
         phi_level="none",
         channels=ALL_CHANNELS,
         triggers=ALL_TRIGGERS,
-        resolve=lambda _c, loc, _ctx: (getattr(loc, "phone", None) or "") if loc else _value(_ctx, "location_phone"),
+        resolve=lambda _c, loc, _ctx: (
+            (getattr(loc, "phone", None) or "")
+            if loc
+            else _value(_ctx, "location_phone")
+        ),
     ),
     MergeFieldSpec(
         name="location_address",
@@ -781,6 +991,62 @@ MERGE_FIELD_CATALOG: tuple[MergeFieldSpec, ...] = (
         channels=ALL_CHANNELS,
         triggers=("callback_requested",),
         resolve=_preferred_callback_time,
+    ),
+    MergeFieldSpec(
+        name="enquiry_source",
+        label="Enquiry source",
+        description="The permitted intake source that landed the sales enquiry.",
+        sample="website_form",
+        group="enquiry",
+        source="context",
+        availability="required_context",
+        requires=("enquiry.source",),
+        phi_level="none",
+        channels=ALL_CHANNELS,
+        triggers=("enquiry_received",),
+        resolve=_context_field("enquiry_source"),
+    ),
+    MergeFieldSpec(
+        name="enquiry_status",
+        label="Enquiry status",
+        description="The current sales enquiry workflow status.",
+        sample="new",
+        group="enquiry",
+        source="context",
+        availability="optional_context",
+        requires=("enquiry.status",),
+        phi_level="none",
+        channels=ALL_CHANNELS,
+        triggers=("enquiry_received",),
+        resolve=_context_field("enquiry_status"),
+    ),
+    MergeFieldSpec(
+        name="enquiry_external_ref",
+        label="Enquiry external ref",
+        description="The submitting form or CRM reference when supplied.",
+        sample="typeform-response-123",
+        group="enquiry",
+        source="context",
+        availability="optional_context",
+        requires=("enquiry.external_ref",),
+        phi_level="low",
+        channels=("email", "voice"),
+        triggers=("enquiry_received",),
+        resolve=_context_field("enquiry_external_ref"),
+    ),
+    MergeFieldSpec(
+        name="matched_existing_contact",
+        label="Matched existing contact",
+        description="Whether the intake matched an existing contact or PMS patient.",
+        sample="false",
+        group="enquiry",
+        source="context",
+        availability="required_context",
+        requires=("matched_existing_contact",),
+        phi_level="none",
+        channels=ALL_CHANNELS,
+        triggers=("enquiry_received",),
+        resolve=_context_field("matched_existing_contact"),
     ),
     MergeFieldSpec(
         name="sms_reply_body",

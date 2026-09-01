@@ -386,6 +386,11 @@ function TriggerForm({
                         No timing configuration — contacts are enrolled manually or by import.
                     </p>
                 )}
+                {trigger.type === "enquiry_received" && (
+                    <p className="text-sm text-muted-foreground">
+                        Enrolls when a permitted enquiry intake source lands a lead.
+                    </p>
+                )}
                 {trigger.type === "callback_requested" && (
                     <p className="text-sm text-muted-foreground">
                         Enrolls when an inbound interaction requests staff follow-up.

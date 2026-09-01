@@ -21,7 +21,7 @@ before every send.
 from __future__ import annotations
 
 import logging
-from datetime import date, datetime, timedelta, timezone
+from datetime import date, datetime
 from uuid import uuid4
 
 from fastapi import APIRouter, Query, Request
@@ -152,7 +152,11 @@ def _verify(action: str, token: str) -> tuple[str, str] | JSONResponse:
 
 
 #: What a completed action is recorded as, per action.
-COMPLETED_INTENT = {"book": "booked", "reschedule": "rescheduled", "cancel": "cancelled"}
+COMPLETED_INTENT = {
+    "book": "booked",
+    "reschedule": "rescheduled",
+    "cancel": "cancelled",
+}
 
 
 def _link_config(run: AutomationWorkflowRun) -> dict:
@@ -172,7 +176,17 @@ def _allowed_type_ids(run: AutomationWorkflowRun) -> set[str]:
     return {str(t) for t in raw if str(t)}
 
 
-def _type_is_allowed(run: AutomationWorkflowRun, appointment_type_id: str | None) -> bool:
+def _configured_provider_id(run: AutomationWorkflowRun) -> str | None:
+    raw = _link_config(run).get("provider_id")
+    if raw is None:
+        return None
+    provider_id = str(raw).strip()
+    return provider_id or None
+
+
+def _type_is_allowed(
+    run: AutomationWorkflowRun, appointment_type_id: str | None
+) -> bool:
     """Whether this run may book that type.
 
     Enforced on the server for the reason the restriction exists at all: the
@@ -318,6 +332,7 @@ async def _search_slots(
     result = await adapter.find_available_slots(
         start_date=start_date or date.today().isoformat(),
         days=days or DEFAULT_DAYS,
+        provider_id=_configured_provider_id(run),
         appointment_type_id=appointment_type_id or metadata.get("appointment_type_id"),
     )
     slots = list(getattr(result, "slots", []) or [])
@@ -683,7 +698,9 @@ async def _send_booking_confirmation_email(
         return
 
     pms_name = " ".join(
-        p for p in (getattr(patient, "first_name", ""), getattr(patient, "last_name", "")) if p
+        p
+        for p in (getattr(patient, "first_name", ""), getattr(patient, "last_name", ""))
+        if p
     ).strip()
     await EmailNotificationService().send_notification(
         recipients=[patient_email],
@@ -746,9 +763,7 @@ async def book_slot(
             if run.location_id
             else None
         )
-        contact = (
-            await session.get(Contact, run.contact_id) if run.contact_id else None
-        )
+        contact = await session.get(Contact, run.contact_id) if run.contact_id else None
         if institution is None or location is None or contact is None:
             return _json({"error": "unavailable"}, 503)
 
@@ -833,8 +848,7 @@ async def book_slot(
             # otherwise what the patient chose — never neither, or the
             # appointment is booked at the wrong length.
             appointment_type_id=(
-                getattr(chosen, "appointment_type_id", None)
-                or body.appointment_type_id
+                getattr(chosen, "appointment_type_id", None) or body.appointment_type_id
             ),
             # Item 34. Recorded as PATIENT_LINK rather than CAMPAIGN even though
             # a run id is present: the campaign sent the link, the patient chose
@@ -918,6 +932,10 @@ async def book_slot(
             "booked_end": chosen.end,
             "booked_provider_name": getattr(chosen, "provider_name", "") or "",
         }
+        if not pending and contact.lead_status is not None:
+            from src.app.models.campaign_enquiry import EnquiryStatus
+
+            contact.lead_status = EnquiryStatus.BOOKED.value
 
         session.add(
             CampaignResponseEvent(

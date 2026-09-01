@@ -9,9 +9,8 @@ very little.
 from __future__ import annotations
 
 from datetime import datetime, timezone
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
-import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
@@ -81,6 +80,7 @@ def _session(rows=None, one=None, total=None):
     # Exposed so a test can inspect what was written without replacing
     # session.add, which would disconnect the flush above.
     session.added = added
+    session.commit = AsyncMock()
     return session
 
 
@@ -108,7 +108,9 @@ class TestStageIsDerived:
 
     def test_booked_outranks_registered(self):
         """A booked lead must not read as merely registered."""
-        row = _enquiry(nexhealth_patient_id="nh-1", lead_status=EnquiryStatus.BOOKED.value)
+        row = _enquiry(
+            nexhealth_patient_id="nh-1", lead_status=EnquiryStatus.BOOKED.value
+        )
         assert _stage(row) == "booked"
 
     def test_it_cannot_drift_from_the_link(self):
@@ -184,7 +186,9 @@ class TestWorkingALead:
 
     def test_notes_are_encrypted_at_rest(self):
         row = _enquiry()
-        _client(_session(one=row)).patch(f"{BASE}/e1", json={"notes": "implant consult"})
+        _client(_session(one=row)).patch(
+            f"{BASE}/e1", json={"notes": "implant consult"}
+        )
         assert "implant" not in (row.notes_encrypted or "")
 
     def test_a_status_only_update_does_not_wipe_the_notes(self):
@@ -224,8 +228,26 @@ class TestWorkingALead:
 class TestManualEntry:
     """Staff take enquiries that never touch a form — somebody rings, or walks in."""
 
-    def _post(self, session, body):
-        return _client(session).post(BASE, json=body)
+    def _post(self, session, body, *, dispatches=None, enqueue=None, capture=None):
+        dispatches = [] if dispatches is None else dispatches
+        trigger_service = MagicMock()
+        trigger_service.prepare_dispatches = AsyncMock(return_value=dispatches)
+        enqueue_spy = enqueue or MagicMock(return_value=len(dispatches))
+        with (
+            patch(
+                "src.app.api.routes.enquiries.EnquiryTriggerService",
+                return_value=trigger_service,
+            ),
+            patch(
+                "src.app.api.routes.enquiries.enqueue_enquiry_workflow_dispatches",
+                enqueue_spy,
+            ),
+        ):
+            response = _client(session).post(BASE, json=body)
+        if capture is not None:
+            capture["trigger_service"] = trigger_service
+            capture["enqueue"] = enqueue_spy
+        return response
 
     def test_a_lead_can_be_entered_by_hand(self):
         session = _session(one=None)
@@ -250,7 +272,9 @@ class TestManualEntry:
     def test_notes_can_be_captured_at_entry(self):
         """The reason the call is being written down at all."""
         session = _session(one=None)
-        r = self._post(session, {"phone": "+15054821234", "notes": "Asked about implants"})
+        r = self._post(
+            session, {"phone": "+15054821234", "notes": "Asked about implants"}
+        )
         assert r.json()["enquiry"]["notes"] == "Asked about implants"
 
     def test_nothing_is_claimed_about_consent_that_was_not_ticked(self):
@@ -265,10 +289,14 @@ class TestManualEntry:
         from src.app.models.sms_consent import ConsentRecord
 
         session = _session(one=None)
-        self._post(session, {
-            "phone": "+15054821234", "consent_sms": True,
-            "consent_wording": "Said yes on the phone",
-        })
+        self._post(
+            session,
+            {
+                "phone": "+15054821234",
+                "consent_sms": True,
+                "consent_wording": "Said yes on the phone",
+            },
+        )
         records = [o for o in session.added if isinstance(o, ConsentRecord)]
         assert len(records) == 1
         assert records[0].reason == "Said yes on the phone"
@@ -282,6 +310,41 @@ class TestManualEntry:
         assert r.status_code == 201
         assert r.json()["created"] is False
         assert r.json()["enquiry"]["id"] == "already-here"
+
+    def test_manual_entry_prepares_and_enqueues_matching_workflows(self):
+        session = _session(one=None)
+        dispatch = MagicMock()
+        capture = {}
+
+        r = self._post(
+            session,
+            {"phone": "+15054821234", "location_id": "loc-1"},
+            dispatches=[dispatch],
+            capture=capture,
+        )
+
+        assert r.status_code == 201
+        session.commit.assert_awaited_once()
+        capture["trigger_service"].prepare_dispatches.assert_awaited_once()
+        kwargs = capture["trigger_service"].prepare_dispatches.await_args.kwargs
+        assert kwargs["institution_id"] == "inst-1"
+        assert kwargs["location_id"] == "loc-1"
+        assert kwargs["source"] == "manual"
+        assert kwargs["created"] is True
+        assert kwargs["matched_existing_contact"] is False
+        capture["enqueue"].assert_called_once_with([dispatch])
+
+    def test_manual_entry_still_saves_when_enqueue_fails(self):
+        session = _session(one=None)
+        r = self._post(
+            session,
+            {"phone": "+15054821234"},
+            dispatches=[MagicMock()],
+            enqueue=MagicMock(side_effect=RuntimeError("broker unavailable")),
+        )
+
+        assert r.status_code == 201
+        session.commit.assert_awaited_once()
 
     def test_a_user_with_no_institution_is_refused(self):
         r = _client(_session(), user=_user(institution_id=None)).post(
