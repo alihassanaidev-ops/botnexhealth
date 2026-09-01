@@ -685,6 +685,20 @@ def test_recall_interval_must_be_positive() -> None:
         WorkflowDefinition.model_validate(defn)
 
 
+def test_recall_cooldown_defaults_to_decision_d() -> None:
+    definition = WorkflowDefinition.model_validate(_with_wait())
+
+    assert definition.trigger.type == "recall_scan"
+    assert definition.trigger.recall_reenrollment_cooldown_days == 90
+
+
+def test_recall_cooldown_must_be_positive() -> None:
+    defn = _with_wait()
+    defn["trigger"]["recall_reenrollment_cooldown_days"] = 0
+    with pytest.raises(ValidationError):
+        WorkflowDefinition.model_validate(defn)
+
+
 def test_patient_status_changed_requires_statuses() -> None:
     defn = _sms_to_exit()
     defn["trigger"] = {"type": "patient_status_changed", "statuses": []}

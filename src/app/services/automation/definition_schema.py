@@ -124,6 +124,10 @@ class RecallScanTrigger(BaseModel):
     # a run, a step execution and analytics rows only to exit at node one.
     filter: FilterExpression | None = None
     recall_interval_months: int = Field(ge=1)
+    # How long after any recall enrollment before the same patient can enter
+    # this workflow again. Defaulted here so old recall_scan definitions pick
+    # up Decision D without a migration.
+    recall_reenrollment_cooldown_days: int = Field(default=90, ge=1, le=730)
 
 
 class ManualTrigger(BaseModel):

@@ -771,7 +771,7 @@ export function createTrigger(type: TriggerType): WorkflowTrigger {
                 campaign_goal: "post_op_followup",
             }
         case "recall_scan":
-            return { type, recall_interval_months: 6 }
+            return { type, recall_interval_months: 6, recall_reenrollment_cooldown_days: 90 }
         case "manual":
             return { type }
         case "bulk_import":

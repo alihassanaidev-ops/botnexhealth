@@ -164,6 +164,8 @@ export default function WorkflowTemplates() {
     const [postOpLatestCallHours, setPostOpLatestCallHours] = useState("72")
     const [patientVoiceCooldownHours, setPatientVoiceCooldownHours] = useState("24")
     const [salesBookingWindowDays, setSalesBookingWindowDays] = useState("14")
+    const [recallCooldownDays, setRecallCooldownDays] = useState("90")
+    const [recallBookingWindowDays, setRecallBookingWindowDays] = useState("30")
     const [activeCategory, setActiveCategory] = useState<string>("all")
     const [creating, setCreating] = useState(false)
 
@@ -388,6 +390,8 @@ export default function WorkflowTemplates() {
         setPostOpLatestCallHours(setupFieldDefault(t, "post_op_latest_call_hours", "72"))
         setPatientVoiceCooldownHours(setupFieldDefault(t, "patient_voice_cooldown_hours", "24"))
         setSalesBookingWindowDays(setupFieldDefault(t, "sales_booking_window_days", "14"))
+        setRecallCooldownDays(setupFieldDefault(t, "recall_reenrollment_cooldown_days", "90"))
+        setRecallBookingWindowDays(setupFieldDefault(t, "recall_booking_window_days", "30"))
     }
 
     async function handleCreate() {
@@ -414,6 +418,12 @@ export default function WorkflowTemplates() {
             }
             if (hasSetupField(picked, "sales_booking_window_days")) {
                 setupOptions.sales_booking_window_days = Number(salesBookingWindowDays)
+            }
+            if (hasSetupField(picked, "recall_reenrollment_cooldown_days")) {
+                setupOptions.recall_reenrollment_cooldown_days = Number(recallCooldownDays)
+            }
+            if (hasSetupField(picked, "recall_booking_window_days")) {
+                setupOptions.recall_booking_window_days = Number(recallBookingWindowDays)
             }
             if (hasSetupField(picked, "appointment_reasons")) {
                 setupOptions.appointment_reasons = appointmentReasons
@@ -532,6 +542,8 @@ export default function WorkflowTemplates() {
         postOpTimingInvalid ||
         (picked && hasSetupField(picked, "patient_voice_cooldown_hours") && !isNonNegativeWholeNumber(patientVoiceCooldownHours)) ||
         (picked && hasSetupField(picked, "sales_booking_window_days") && !isPositiveWholeNumber(salesBookingWindowDays)) ||
+        (picked && hasSetupField(picked, "recall_reenrollment_cooldown_days") && !isPositiveWholeNumber(recallCooldownDays)) ||
+        (picked && hasSetupField(picked, "recall_booking_window_days") && !isPositiveWholeNumber(recallBookingWindowDays)) ||
         pickedCapability?.supported === false
 
     return (
@@ -870,7 +882,9 @@ export default function WorkflowTemplates() {
                                     hasSetupField(picked, "post_op_delay_hours") ||
                                     hasSetupField(picked, "post_op_latest_call_hours") ||
                                     hasSetupField(picked, "patient_voice_cooldown_hours") ||
-                                    hasSetupField(picked, "sales_booking_window_days")) && (
+                                    hasSetupField(picked, "sales_booking_window_days") ||
+                                    hasSetupField(picked, "recall_reenrollment_cooldown_days") ||
+                                    hasSetupField(picked, "recall_booking_window_days")) && (
                                     <div className="grid gap-4 sm:grid-cols-3">
                                         {hasSetupField(picked, "call_offset_hours_before") && (
                                             <div className="space-y-2">
@@ -983,6 +997,46 @@ export default function WorkflowTemplates() {
                                                     step="1"
                                                     value={salesBookingWindowDays}
                                                     onChange={(event) => setSalesBookingWindowDays(event.target.value)}
+                                                />
+                                            </div>
+                                        )}
+                                        {hasSetupField(picked, "recall_reenrollment_cooldown_days") && (
+                                            <div className="space-y-2">
+                                                <Label htmlFor="recall-cooldown-days">
+                                                    {setupFieldLabel(
+                                                        picked,
+                                                        "recall_reenrollment_cooldown_days",
+                                                        "Recall cooldown (days)",
+                                                    )}
+                                                </Label>
+                                                <Input
+                                                    id="recall-cooldown-days"
+                                                    type="number"
+                                                    min="1"
+                                                    max="730"
+                                                    step="1"
+                                                    value={recallCooldownDays}
+                                                    onChange={(event) => setRecallCooldownDays(event.target.value)}
+                                                />
+                                            </div>
+                                        )}
+                                        {hasSetupField(picked, "recall_booking_window_days") && (
+                                            <div className="space-y-2">
+                                                <Label htmlFor="recall-booking-window-days">
+                                                    {setupFieldLabel(
+                                                        picked,
+                                                        "recall_booking_window_days",
+                                                        "Booking window (days)",
+                                                    )}
+                                                </Label>
+                                                <Input
+                                                    id="recall-booking-window-days"
+                                                    type="number"
+                                                    min="1"
+                                                    max="60"
+                                                    step="1"
+                                                    value={recallBookingWindowDays}
+                                                    onChange={(event) => setRecallBookingWindowDays(event.target.value)}
                                                 />
                                             </div>
                                         )}

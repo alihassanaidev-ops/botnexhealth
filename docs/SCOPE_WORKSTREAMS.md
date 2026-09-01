@@ -20,10 +20,10 @@ part of this backlog; the section *What doesn't compress* is where the schedule 
 | Fully inside this repo (Platform + dashboard) | **28 items** |
 | Fully outside this repo (Cloud Service / Connector) | **7 items** |
 | Split across both | **12 items** |
-| Blocked on a product decision | **2 items partially** — Item 37 revenue on deferred Decision A; remaining Item 22 recall template copy/path on open Decision B if Recall writes GoTracker bookings |
+| Blocked on a product decision | **1 item partially** — Item 37 revenue on deferred Decision A |
 | Gated on something other than code | Remaining gates are product decisions, practice-DB proof, pentest, cross-codebase rollout/proof, and watched activation windows — see *What doesn't compress* |
-| **Delivered so far** | **29 of 47 complete**, plus partial delivery on Items 15 and 22 — see *Delivered so far* |
-| **Workstreams complete** | **WS2, WS6**; WS3 owes half of Item 15; WS4 owes Overdue Recall + Item 23; WS7 owes Item 40; WS8 owes Item 37 |
+| **Delivered so far** | **30 of 47 complete**, plus partial delivery on Item 15 — see *Delivered so far* |
+| **Workstreams complete** | **WS2, WS6**; WS3 owes half of Item 15; WS4 owes Item 23; WS7 owes Item 40; WS8 owes Item 37 |
 
 ---
 
@@ -45,7 +45,7 @@ part of this backlog; the section *What doesn't compress* is where the schedule 
 | **2** · A conflict outcome for writes | GoTracker booking safety | `4adc67c` | Third terminal status — never re-queued however many attempts remain. Own webhook action. Surfaced per-location on `/api/admin/sync_status` as `conflicts` / `failed` / `oldest_unwritten`. An admin can still re-queue deliberately |
 | **4** · Report pending honestly | GoTracker booking safety | `0d096f2` + `af01334` | Platform half landed first, as the doc requires. Booking response and appointment reads carry `write_status` (`pending`/`written`/`failed`/`conflict`) + `foreign_id`, separate from `status`; PMS-origin rows read as `written`. Campaign run-history visibility is surfaced by Item 11 |
 | **24** · Sales Qualification campaign | The four campaigns | `ecd1861` `db98a99` `a6e8932` `09e1986` `2f39b99` + `157b6e94` | Intake, patient conversion and the lead workspace were already in. `157b6e94` adds the missing `enquiry_received` trigger, enrollment from signed intake and manual staff entry, the Sales Qualification launch template, Retell SMS setup, registration and provider-locked booking links, lead status side effects, merge fields and sales analytics coverage |
-| **22** ◐ · Appointment Reminder campaign | The four campaigns | `8aec6932` | `appointment-reminder-24h` is now a launchable campaign: attending-status eligibility, confirm/reschedule link policy, two SMS reply waits, deterministic reply routing, YES confirmation through PMS-neutral `update_appointment`, staff-follow-up outcomes for reschedule/cancel/staff requests, and pre-send revalidation so moved/cancelled appointments are skipped. Item 22 is **not complete**: Overdue Recall remains the open half |
+| **22** · Appointment Reminder and Overdue Recall campaigns | The four campaigns | `8aec6932` + this change | `appointment-reminder-24h` is launchable with attending-status eligibility, confirm/reschedule link policy, two SMS reply waits, deterministic reply routing, YES confirmation through PMS-neutral `update_appointment`, staff-follow-up outcomes, and pre-send appointment revalidation. `recall-sms-6month` is now launchable with recall type/due-date targeting, active treatment-plan exclusion, future-appointment suppression, a 90-day re-enrolment cooldown, booking-link setup, reply handling and staff handoff outcomes |
 | **25** · Patient Communication API family | NexHealth data families | `5f8fa187` | Adds the supported patient-communication surface: clinical-note metadata, document types, patient-document metadata, patient recall records, recall types and treatment-plan metadata. Workflows can now declare recall and treatment-plan fields including `recall_type_name`, `recall_due_date` and `has_active_treatment_plan`; patient alerts stay out by Decision G |
 | **5** · Recover in-flight writes after Connector restart | GoTracker booking safety | `305ed2d` | Item 3's read-back applied to patient creation too. No local state, so **Decision I fell away instead of being answered** — the decision log's recommendation was to avoid a durable local record, and that is what shipped |
 | **8** · Mapping review before live bookings | GoTracker operations & health | `a9fda29` | Writes that reach a patient are refused until a named person has reviewed the mapping. Reads and agent sync are deliberately not gated — a half-onboarded clinic can still be looked at and talked to, it just cannot have appointments written into it |
@@ -183,16 +183,16 @@ Where the silent failures live. Everything here is in this repo.
 # WS4 · The four campaigns
 **3 items · ≈ 10 days · Platform + campaign design · TIER 2**
 
-**Delivered since the last scope pass:** Item 24 is complete, and the Appointment Reminder half of
-Item 22 is now launchable.
+**Delivered since the last scope pass:** Item 24 is complete, and both halves of Item 22 are now
+launchable.
 
-The remaining campaign build is Overdue Recall, followed by its GoTracker rollout. Sales
-Qualification and Appointment Reminder now exist as launch templates but still need clinic-specific
-setup before activation.
+The remaining campaign work is the GoTracker-specific Overdue Recall rollout in Item 23. Sales
+Qualification, Appointment Reminder and Overdue Recall now exist as launch templates but still need
+clinic-specific setup before activation.
 
 | # | Item | Size | Notes |
 |---|---|---|---|
-| **22** ◐ | Build out Appointment Reminder and Overdue Recall — **Appointment Reminder done, `8aec6932`; Overdue Recall open** | 5d | The reminder template now re-checks live appointment state before every patient-directed send, configures confirm/reschedule links, waits for SMS replies, confirms through `update_appointment`, and routes reschedule/cancel/staff asks to staff-follow-up outcomes. Remaining: rebuild Overdue Recall to the same depth, using recall/treatment-plan data from Item 25, the decided 90-day re-enrolment cooldown, and an explicit pending-write copy/path if it writes GoTracker bookings |
+| **22** ✅ | Build out Appointment Reminder and Overdue Recall — **done, `8aec6932` + this change** | 5d | Appointment Reminder re-checks live appointment state before every patient-directed send, configures confirm/reschedule links, waits for SMS replies, confirms through `update_appointment`, and routes reschedule/cancel/staff asks to staff-follow-up outcomes. Overdue Recall now uses Item 25 recall/treatment-plan data, excludes active treatment-plan patients from generic recall, suppresses patients with future appointments, applies the 90-day re-enrolment cooldown, configures booking links, and routes booked/reschedule/staff/no-response outcomes |
 | **24** ✅ | Build the Sales Qualification campaign — **done, `ecd1861` `db98a99` `a6e8932` `09e1986` `2f39b99` + `157b6e94`** | 4d | Intake, patient conversion and the lead workspace were already in. The last gap is now closed: `enquiry_received` workflows enroll from signed intake and manual staff entry, the launch template runs Retell SMS qualification, qualified leads receive registration and provider-locked booking links, and outcomes update lead status / DNC / analytics. Decision C is answered: signed webhook plus staff manual entry through the same intake path |
 | **23** | Run Overdue Recall for GoTracker clinics | 1d | Must refuse to run on a clinic whose history sync is incomplete — otherwise it tells last month's patients they haven't been seen in two years |
 
@@ -214,7 +214,7 @@ explicit per-workflow declaration.**
 | # | Item | Size | Notes |
 |---|---|---|---|
 | **28** | Financials — charges, claims, payments, balances | 4d | **Largest data family in the scope.** Zero implementation today. Most sensitive data in the product — build the allow-listing *before* the retrieval |
-| **25** ✅ | Patient Communication — notes, documents, recalls — **done, `5f8fa187`** | 3d | Supported surface built: clinical-note metadata, document types, patient-document metadata, patient recall records, recall types and treatment-plan metadata. Patient alerts are explicitly out by Decision G. This unblocks the Overdue Recall half of Item 22 |
+| **25** ✅ | Patient Communication — notes, documents, recalls — **done, `5f8fa187`** | 3d | Supported surface built: clinical-note metadata, document types, patient-document metadata, patient recall records, recall types and treatment-plan metadata. Patient alerts are explicitly out by Decision G. This now feeds the Overdue Recall launch template from Item 22 |
 | **27** | Insurance — plans and coverage | 2d | Live hand-maintained data in production that the voice agent reads right now. **The migration must not lose it.** Decision H |
 | **31** | Working Hours — reconcile the two sources | 1d | Detect divergence and surface it. Never auto-adopt either source — it would silently change what the agent offers on live clinics |
 | **26** | Procedures — visit and treatment history | 1d | Currently a 5-entry extract on a legacy interface version. Unusable for recall targeting |
@@ -269,7 +269,7 @@ still carry their own dashboard slices.
 
 | # | Item | Size | Notes |
 |---|---|---|---|
-| **37** | Outcome reporting — recalls booked, enquiries qualified, revenue | 1.5d | Enquiries-qualified can now be built from Item 24's status side effects and analytics path. Recalls-booked waits on the remaining Overdue Recall work; revenue attribution remains blocked by deferred Decision A |
+| **37** | Outcome reporting — recalls booked, enquiries qualified, revenue | 1.5d | Enquiries-qualified can now be built from Item 24's status side effects and analytics path. Recalls-booked can now use Item 22's recall outcomes; revenue attribution remains blocked by deferred Decision A |
 | **36** ✅ | A screen for messages that could not be delivered — **done, `2c740dea` + `fc8289aa`** | 1d | Platform and tenant operators share `/undeliverables`; tenant access is RLS-scoped, replay requires `write:replay`, dismissals require a bounded reason, and both replay/dismiss paths are audited and covered against double-submit behavior |
 
 **UI slices living inside other items:** campaign builder changes (11, 19, 22), publish-failure
@@ -331,11 +331,11 @@ work fits underneath them; leave them and they become the critical path.
 
 | Gate | Items | Why it doesn't compress |
 |---|---|---|
-| **Open/deferred product decisions** | 22, 37 | Decision B still controls the copy/path for any remaining recall branch that writes a GoTracker booking and receives `pending`; Decision A gates only the revenue-attributed slice of Item 37 |
+| **Open/deferred product decisions** | 37 | Decision A gates only the revenue-attributed slice of Item 37. Decision B is no longer blocking the current Platform recall template because it uses signed booking links; it still applies to any future direct GoTracker booking-step recall policy |
 | **A practice-DB sandbox that doesn't exist** | 41, 42 — and 1, 3, 5 depend on it | No seeded GoTracker database to test writes against. The Tier 0 protections are written but not proven against a seeded practice database, and proving them is the point |
 | **An unscheduled pentest** | 40 | Remediation cannot start before the test runs. Book it now and findings land while other lanes build |
 | **Another team's codebase** | 23, 38, 41, 42, 45, 46 | GoTracker recall rollout, DR, write-path proof, load testing and CI/CD all need Cloud Service / Connector coordination even when the Platform-side code is ready |
-| **Rollouts that must be watched** | 9, 22, 27, 38, 45 | Connector fleet update window, switching campaigns on for real clinics, migrating live insurance answers, a DR rehearsal, a throwaway prod-sized load environment. Elapsed time by nature |
+| **Rollouts that must be watched** | 9, 23, 27, 38, 45 | Connector fleet update window, switching recall on for GoTracker clinics, migrating live insurance answers, a DR rehearsal, a throwaway prod-sized load environment. Elapsed time by nature |
 
 ---
 
@@ -350,10 +350,9 @@ remains in Items 41 and 42.
 Things that fail without telling anyone, plus the two blockers (11, 12) that half the remaining
 feature work sits behind.
 
-**Tier 2 · Contracted features not yet fully delivered.** Items **26, 22, 23, 27, 28, 31, 29**.
-Item 25 is now complete and unblocks Item 22's Overdue Recall work. Item 22 is still half-built:
-Appointment Reminder is launchable, Overdue Recall is not. The remaining campaign build-out,
-GoTracker recall rollout, and NexHealth data families are still the largest visible block of
+**Tier 2 · Contracted features not yet fully delivered.** Items **26, 23, 27, 28, 31, 29**.
+Item 22's Platform campaign work is now complete. The remaining campaign gap is Item 23's
+GoTracker recall rollout; the NexHealth data families are still the largest visible block of
 client-facing work.
 
 **Tier 3 · Operator tooling and resilience.** Items **7, 8, 36, 33, 34, 17, 18, 20, 19, 9, 37**.
@@ -368,10 +367,9 @@ not last in importance.
 
 # Flags before we start
 
-**1 · Decision B now blocks only remaining campaign policy.** When a GoTracker booking is accepted
-but not yet written, does the campaign pause and wait, or exit and hand the patient to staff? Item 4
-and the Item 11 engine node have both shipped; this is now a template-copy/path decision for any
-remaining recall flow that writes bookings.
+**1 · Decision B is not blocking the current recall template.** The Platform Overdue Recall
+template uses signed booking links rather than a direct booking step, so no pending-write branch is
+authored here. Decision B still matters if a future GoTracker recall flow writes bookings directly.
 
 **2 · Remaining cross-codebase work still needs owners.** WS1/WS2 protections are shipped, but
 GoTracker recall rollout, write-path proof, DR, load testing and CI/CD still need Cloud Service /
@@ -383,10 +381,9 @@ consolidation, live PMS patient browsing, workflow-builder improvements, Appoint
 and the Undeliverables screen. Item 37 should be built against the current dashboard patterns, not
 against stale pre-consolidation Leads/Patients assumptions.
 
-**4 · Three items carry a migration or live-data hazard.** Item 27 (insurance answers the voice
-agent reads today), Item 31 (silently changing offered slots on live clinics), and the remaining
-Overdue Recall half of Item 22 (switching on broad outreach before recall/treatment-plan data,
-cooldown and history-sync guards are ready).
+**4 · Two items carry a migration or live-data hazard.** Item 27 (insurance answers the voice
+agent reads today) and Item 31 (silently changing offered slots on live clinics). GoTracker recall
+activation is still a rollout hazard under Item 23 because history-sync completeness must be proven.
 
 **5 · Item 45 must not run locally.** Load testing goes on a throwaway prod-sized environment.
 
@@ -396,12 +393,9 @@ cooldown and history-sync guards are ready).
 
 Everything below is Platform-side, in this repo, and in dependency order.
 
-1. **Item 22 — finish Overdue Recall.** Appointment Reminder is done, and Item 25 now supplies the
-   recall-type and treatment-plan context needed for real targeting, treatment-plan exclusion and the
-   decided 90-day re-enrolment cooldown.
-2. **Item 23 — Run Overdue Recall for GoTracker clinics.** Do this after Item 22, with a hard refusal
-   when history sync is incomplete.
-3. **Item 37 — outcome reporting.** Ship enquiries-qualified first from the Item 24 path; add
+1. **Item 23 — Run Overdue Recall for GoTracker clinics.** Do this now that Item 22 is complete,
+   with a hard refusal when history sync is incomplete.
+2. **Item 37 — outcome reporting.** Ship enquiries-qualified first from the Item 24 path; add
    recalls-booked after Recall, and leave revenue out until Decision A is answered.
-4. **Item 15 — delivery-failure branching.** The receipt ingestion is done; the remaining work is
+3. **Item 15 — delivery-failure branching.** The receipt ingestion is done; the remaining work is
    run-state support for branching after a hard delivery failure.

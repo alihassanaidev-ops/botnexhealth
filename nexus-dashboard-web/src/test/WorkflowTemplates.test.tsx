@@ -144,6 +144,25 @@ const SALES_TEMPLATE = {
         ],
     },
 }
+const RECALL_TEMPLATE = {
+    ...TEMPLATES[0],
+    id: "recall-sms-6month",
+    name: "Recall Outreach (6-Month)",
+    description: "Bring overdue recall patients back onto the schedule.",
+    trigger_type: "recall_scan",
+    category: "recall",
+    metadata: {
+        ...TEMPLATES[0].metadata,
+        category: "recall",
+        goal: "Bring overdue recall patients back onto the schedule while excluding active treatment plans.",
+        supported_channels: ["sms"],
+        default_audience: "Patients due or overdue for recall",
+        setup_fields: [
+            { id: "recall_reenrollment_cooldown_days", label: "Recall cooldown (days)", type: "number", required: true, default: 90 },
+            { id: "recall_booking_window_days", label: "Booking window (days)", type: "number", required: true, default: 30 },
+        ],
+    },
+}
 const LOCATIONS = [{ id: "loc-1", name: "Downtown", slug: "downtown" }]
 
 beforeEach(() => {
@@ -370,6 +389,46 @@ describe("WorkflowTemplates page", () => {
                         sales_provider_id: "provider-1",
                         sales_appointment_type_ids: ["new-patient"],
                         sales_booking_window_days: 21,
+                    }),
+                }),
+            )
+        })
+    }, 10_000)
+
+    it("configures recall cooldown and booking window", async () => {
+        list.mockResolvedValue([RECALL_TEMPLATE])
+        create.mockResolvedValue({ id: "wf-recall", name: RECALL_TEMPLATE.name })
+        const user = userEvent.setup()
+        render(
+            <MemoryRouter>
+                <WorkflowTemplates />
+            </MemoryRouter>,
+        )
+
+        await screen.findByText(RECALL_TEMPLATE.name)
+        await user.click(screen.getByRole("button", { name: /use template/i }))
+
+        expect(screen.getByLabelText("Recall cooldown (days)")).toHaveValue(90)
+        expect(screen.getByLabelText("Booking window (days)")).toHaveValue(30)
+
+        fireEvent.change(screen.getByLabelText("Recall cooldown (days)"), {
+            target: { value: "120" },
+        })
+        fireEvent.change(screen.getByLabelText("Booking window (days)"), {
+            target: { value: "45" },
+        })
+        await user.click(screen.getByRole("button", { name: /create & open builder/i }))
+
+        await waitFor(() => {
+            expect(create).toHaveBeenCalledWith(
+                RECALL_TEMPLATE.id,
+                RECALL_TEMPLATE.name,
+                expect.objectContaining({
+                    locationId: "loc-1",
+                    voiceProfileId: "",
+                    setupOptions: expect.objectContaining({
+                        recall_reenrollment_cooldown_days: 120,
+                        recall_booking_window_days: 45,
                     }),
                 }),
             )

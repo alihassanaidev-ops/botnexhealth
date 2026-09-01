@@ -71,6 +71,19 @@ export function validateDefinition(def: WorkflowDefinition): ValidationIssue[] {
         })
     }
     if (
+        def.trigger.type === "recall_scan" &&
+        def.trigger.recall_reenrollment_cooldown_days !== undefined &&
+        (!Number.isInteger(def.trigger.recall_reenrollment_cooldown_days) ||
+            def.trigger.recall_reenrollment_cooldown_days < 1 ||
+            def.trigger.recall_reenrollment_cooldown_days > 730)
+    ) {
+        issues.push({
+            node_id: TRIGGER_NODE_ID,
+            severity: "error",
+            message: "Recall cooldown must be a whole number from 1 to 730 days.",
+        })
+    }
+    if (
         def.trigger.type === "appointment_state_changed" &&
         def.trigger.status_ids.length === 0 &&
         (def.trigger.confirmed === null || def.trigger.confirmed === undefined) &&

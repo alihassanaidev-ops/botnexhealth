@@ -52,6 +52,8 @@ export interface RecallScanTrigger {
     filter?: FilterExpression | null
     /** Inactivity/recall interval in months (>= 1). */
     recall_interval_months: number
+    /** Days before the same patient may be enrolled in this recall workflow again. */
+    recall_reenrollment_cooldown_days?: number
 }
 export interface ManualTrigger {
     type: "manual"
