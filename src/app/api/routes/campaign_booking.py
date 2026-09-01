@@ -27,6 +27,7 @@ from uuid import uuid4
 from fastapi import APIRouter, Query, Request
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
+from sqlalchemy import select
 
 from src.app.database import get_campaign_link_db_session
 from src.app.models.audit_log import AuditAction, AuditActor, AuditOutcome
@@ -39,6 +40,7 @@ from src.app.services.automation.campaign_identity import is_verified
 from src.app.models.campaign_response import CampaignResponseEvent, CampaignStaffHandoff
 from src.app.models.contact import Contact
 from src.app.models.institution import Institution
+from src.app.models.institution_appointment_type import InstitutionAppointmentType
 from src.app.models.institution_location import InstitutionLocation
 from src.app.pms.factory import get_adapter_for_institution_location
 from src.app.pms.models import BookingRequest, BookingWriteStatus
@@ -588,14 +590,36 @@ async def list_appointment_types(
         if not _action_permitted(run, action):
             return _json({"error": "action_not_offered"}, 403)
         contact = await session.get(Contact, run.contact_id) if run.contact_id else None
-        try:
-            adapter = await get_adapter_for_institution_location(institution, location)
-            types = await adapter.list_appointment_types()
-        except Exception:
-            logger.exception("appointment types failed for run=%s", run_id)
-            return _json({"error": "unavailable"}, 503)
+        allowed = _allowed_type_ids(run)
+        if allowed:
+            # The workflow author selected this closed set from the local,
+            # location-scoped catalog. Use that same catalog for its labels.
+            # Re-fetching the whole catalog from the PMS here introduced a
+            # second source of truth: a transient/shape mismatch could make a
+            # valid saved selection appear as "Any" (or as no choices). Slot
+            # discovery and the final write below remain live PMS operations.
+            result = await session.execute(
+                select(InstitutionAppointmentType)
+                .where(
+                    InstitutionAppointmentType.institution_id
+                    == run.institution_id,
+                    InstitutionAppointmentType.location_id == run.location_id,
+                    InstitutionAppointmentType.source_id.in_(allowed),
+                    InstitutionAppointmentType.is_active.is_(True),
+                )
+                .order_by(InstitutionAppointmentType.name)
+            )
+            types = list(result.scalars().all())
+        else:
+            try:
+                adapter = await get_adapter_for_institution_location(
+                    institution, location
+                )
+                types = await adapter.list_appointment_types()
+            except Exception:
+                logger.exception("appointment types failed for run=%s", run_id)
+                return _json({"error": "unavailable"}, 503)
 
-    allowed = _allowed_type_ids(run)
     identity_required = _identity_required(run, action) and not is_verified(run)
     return _json(
         BookingPageContext(

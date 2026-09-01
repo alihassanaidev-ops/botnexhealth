@@ -780,7 +780,10 @@ class TestConfiguredAppointmentTypes:
         hidden.id = "fallback-implant"
         hidden.name = "Implant"
         hidden.duration_minutes = 90
-        adapter.list_appointment_types = AsyncMock(return_value=[exam, hidden])
+        cached = MagicMock()
+        cached.scalars.return_value.all.return_value = [exam]
+        _session.execute = AsyncMock(return_value=cached)
+        adapter.list_appointment_types = AsyncMock(return_value=[hidden])
 
         r = _call(
             client_(),
@@ -793,6 +796,7 @@ class TestConfiguredAppointmentTypes:
         assert r.json()["selection_required"] is True
         assert r.json()["patient_resolution_required"] is True
         assert [item["id"] for item in r.json()["appointment_types"]] == ["exam"]
+        adapter.list_appointment_types.assert_not_awaited()
 
     def test_page_context_exposes_registration_only_when_that_node_ran(self):
         token = make_action_token("run-1", "book")

@@ -457,7 +457,10 @@ session has no workflow-run visibility under RLS.
 The booking page reads its constraints from the run before it asks a PMS for
 availability. A non-empty appointment-type set is a closed set: the page does
 not offer “Any,” and both slot reads and booking writes reject a missing or
-different type. The configured day window is also a server-side ceiling. When
+different type. It renders that closed set from the same location-scoped,
+non-PHI appointment-type catalog used by the workflow builder; availability
+and the eventual booking still go directly to the PMS. The configured day
+window is also a server-side ceiling. When
 the run contact has no `nexhealth_patient_id`, the page does not offer slots
 yet: an existing patient is resolved through the same exact-one-match identity
 gate used by the Retell handler, while a new patient is created using the
