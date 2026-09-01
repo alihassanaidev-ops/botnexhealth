@@ -40,6 +40,12 @@ export interface WorkflowCanvasProps {
     edges: FlowEdge[]
     selectedId?: string | null
     onSelect?: (id: string | null) => void
+    /**
+     * Every selected node. `selectedId` remains the one the config panel edits;
+     * this is the set that bulk actions (duplicate, copy, delete) operate on.
+     */
+    selectedIds?: string[]
+    onSelectionChange?: (ids: string[]) => void
     /** Hide zoom controls + minimap for compact read-only previews. */
     minimal?: boolean
     /** Enable node dragging + drag-to-connect (author mode). Default: read-only. */
@@ -60,6 +66,8 @@ function InnerCanvas({
     edges,
     selectedId,
     onSelect,
+    selectedIds,
+    onSelectionChange,
     minimal,
     editable,
     onConnectNodes,
@@ -75,12 +83,40 @@ function InnerCanvas({
     const [rfNodes, setRfNodes, onNodesChange] = useNodesState<FlowNode>([])
 
     useEffect(() => {
-        setRfNodes(nodes.map((n) => ({ ...n, selected: n.id === selectedId })))
-    }, [nodes, selectedId, setRfNodes])
+        const multi = new Set(selectedIds ?? [])
+        setRfNodes(
+            nodes.map((n) => ({
+                ...n,
+                selected: n.id === selectedId || multi.has(n.id),
+            })),
+        )
+    }, [nodes, selectedId, selectedIds, setRfNodes])
 
-    const handleNodeClick: NodeMouseHandler = (_e, node) => {
+    const handleNodeClick: NodeMouseHandler = (event, node) => {
+        // Shift/Cmd-click toggles membership; a plain click replaces the
+        // selection, which is what every canvas editor does.
+        if (event.shiftKey || event.metaKey || event.ctrlKey) {
+            const current = new Set(selectedIds ?? (selectedId ? [selectedId] : []))
+            if (current.has(node.id)) current.delete(node.id)
+            else current.add(node.id)
+            onSelectionChange?.([...current])
+            return
+        }
+        onSelectionChange?.([node.id])
         onSelect?.(node.id)
     }
+
+    // Rubber-band selection over the pane.
+    const handleSelectionChange = useCallback(
+        ({ nodes: picked }: { nodes: { id: string }[] }) => {
+            if (!onSelectionChange) return
+            const ids = picked.map((n) => n.id)
+            // React Flow also fires this on programmatic updates; ignoring an
+            // empty payload keeps a click on the pane from clearing twice.
+            if (ids.length) onSelectionChange(ids)
+        },
+        [onSelectionChange],
+    )
 
     const handleConnect: OnConnect = useCallback(
         (conn) => {
@@ -126,7 +162,16 @@ function InnerCanvas({
             nodeTypes={workflowNodeTypes}
             onNodesChange={onNodesChange}
             onNodeClick={handleNodeClick}
-            onPaneClick={() => onSelect?.(null)}
+            onPaneClick={() => {
+                onSelect?.(null)
+                onSelectionChange?.([])
+            }}
+            onSelectionChange={handleSelectionChange}
+            // Drag on the pane draws a selection box while a modifier is held;
+            // without a modifier it pans, which is the more common intent.
+            selectionOnDrag={editable}
+            panOnDrag={editable ? [1, 2] : true}
+            multiSelectionKeyCode={["Shift", "Meta", "Control"]}
             onConnect={editable ? handleConnect : undefined}
             onNodeDragStop={editable ? handleNodeDragStop : undefined}
             onDragOver={editable ? handleDragOver : undefined}
