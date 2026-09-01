@@ -19,12 +19,12 @@ from enum import Enum
 from uuid import uuid4
 
 from sqlalchemy import DateTime, ForeignKey, Index, String, Text, UniqueConstraint
-from sqlalchemy.dialects.postgresql import UUID
+from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
 from src.app.database import Base
 from src.app.models.institution import decrypt_value, encrypt_value
-from src.app.services.sms_privacy import hash_phone
+from src.app.services.sms_privacy import hash_email, hash_phone
 
 
 class EnquiryStatus(str, Enum):
@@ -52,6 +52,7 @@ class CampaignEnquiry(Base):
         ),
         Index("ix_campaign_enquiries_institution_status", "institution_id", "status"),
         Index("ix_campaign_enquiries_institution_phone", "institution_id", "phone_hash"),
+        Index("ix_campaign_enquiries_institution_email", "institution_id", "email_hash"),
     )
 
     id: Mapped[str] = mapped_column(
@@ -81,6 +82,28 @@ class CampaignEnquiry(Base):
     phone_encrypted: Mapped[str | None] = mapped_column(Text, nullable=True)
     #: Keyed HMAC, not reversible. Lets an inbound call match without decrypting.
     phone_hash: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    #: The same for email. Deduplicating on email alone fails the moment a
+    #: channel other than a web form is involved, and deduplicating on phone
+    #: alone fails on recycled and reformatted numbers — so both are hashed and
+    #: either can match. It is also the consent identity for the EMAIL channel.
+    email_hash: Mapped[str | None] = mapped_column(String(64), nullable=True)
+
+    #: Where this came from, structured rather than squeezed into ``source``.
+    #: Campaign, medium, referrer, form id, UTM values — whatever the submitting
+    #: form knows. Attribution is the thing that classically disappears the
+    #: moment a lead converts, and once it is gone the clinic cannot tell which
+    #: of its channels actually produces patients.
+    attribution: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
+    #: The submitting platform's own identifier, kept so a clinic can reconcile
+    #: against the system the lead came from. Distinct from ``intake_key``,
+    #: which is ours and controls idempotency.
+    external_ref: Mapped[str | None] = mapped_column(String(160), nullable=True)
+
+    #: Free text for whoever is working the lead. Encrypted with the rest: a
+    #: note about someone enquiring at a dental practice will describe why they
+    #: are enquiring, which is health information about a person who is not yet
+    #: a patient and has consented to nothing.
+    notes_encrypted: Mapped[str | None] = mapped_column(Text, nullable=True)
 
     status: Mapped[str] = mapped_column(
         String(32), nullable=False, default=EnquiryStatus.NEW.value
@@ -110,6 +133,18 @@ class CampaignEnquiry(Base):
     @email.setter
     def email(self, value: str | None) -> None:
         self.email_encrypted = encrypt_value(value)
+        # Written by the same setter as the phone hash, and for the same
+        # reason: a hash maintained separately from the value it describes
+        # drifts, and a stale match key is worse than none.
+        self.email_hash = hash_email(value) if value else None
+
+    @property
+    def notes(self) -> str | None:
+        return decrypt_value(self.notes_encrypted)
+
+    @notes.setter
+    def notes(self, value: str | None) -> None:
+        self.notes_encrypted = encrypt_value(value)
 
     @property
     def phone(self) -> str | None:
