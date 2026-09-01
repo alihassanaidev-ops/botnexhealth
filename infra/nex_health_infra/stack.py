@@ -1029,6 +1029,14 @@ class NexHealthPlatformStack(Stack):
             environment["CORS_ALLOWED_ORIGINS"] = ",".join(cors_origins)
         if frontend_base_url:
             environment["AUTH_FRONTEND_BASE_URL"] = frontend_base_url
+            # Patient action links (booking, reschedule, cancel, registration)
+            # are built from this. It defaults to the production host in code,
+            # so without setting it here every non-production deployment mints
+            # links that send patients to production — which publish validation
+            # cannot catch, since it only refuses an *empty* base URL. Same
+            # value as the auth emails: both are "where a patient or user opens
+            # a link we sent them".
+            environment["PUBLIC_BASE_URL"] = frontend_base_url
         if self.config.trusted_proxy_cidrs:
             environment["TRUSTED_PROXY_CIDRS"] = ",".join(self.config.trusted_proxy_cidrs)
         # WebAuthn — falls back to frontend host / origin when the config
