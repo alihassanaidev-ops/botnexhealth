@@ -396,6 +396,14 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
                                 )}
                                 {/* Patient SMS acknowledgements only exist for
                                     no-PMS clinics — nothing is booked to confirm. */}
+                                <NavItem
+                                    item={{
+                                        title: "Enquiries",
+                                        url: "/enquiries",
+                                        icon: InboxIcon,
+                                    }}
+                                    isActive={location.pathname === "/enquiries"}
+                                />
                                 {user?.role === "INSTITUTION_ADMIN" && (
                                     <NavItem
                                         item={{

@@ -268,6 +268,12 @@ ROUTES_BY_BOUNDARY: dict[str, tuple[str, ...]] = {
         # Intake credentials for a clinic's own forms. Institution-scoped
         # because a token lands leads in one tenant, and issuing one is a
         # decision about that clinic's data rather than a location's.
+        # The leads that landed. Institution-scoped: a lead has no location
+        # until staff or a campaign assigns one, so scoping reads by location
+        # would hide exactly the ones needing attention.
+        "GET /api/institution/enquiries",
+        "GET /api/institution/enquiries/{enquiry_id}",
+        "PATCH /api/institution/enquiries/{enquiry_id}",
         "GET /api/institution/enquiry-sources",
         "POST /api/institution/enquiry-sources",
         "PATCH /api/institution/enquiry-sources/{source_id}",

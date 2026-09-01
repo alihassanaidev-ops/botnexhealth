@@ -16,6 +16,7 @@ import Login from "./pages/Login";
 import BookingLink from "./pages/BookingLink";
 import CancelLink from "./pages/CancelLink";
 import EnquirySources from "./pages/EnquirySources";
+import Leads from "./pages/Leads";
 import IdentifyPatient from "./pages/IdentifyPatient";
 import RegisterPatient from "./pages/RegisterPatient";
 import SetPassword from "./pages/SetPassword";
@@ -182,6 +183,14 @@ export const router = createBrowserRouter([
                         // PMS-gated: a lead has no practice-software record by
                         // definition, so this is exactly as relevant to an
                         // integrated clinic as to a no-PMS one.
+                        path: "enquiries",
+                        element: (
+                            <RoleGuard allowed={["INSTITUTION_ADMIN", "LOCATION_ADMIN"]}>
+                                <S><Leads /></S>
+                            </RoleGuard>
+                        ),
+                    },
+                    {
                         path: "institution-admin/enquiry-forms",
                         element: (
                             <RoleGuard allowed={["INSTITUTION_ADMIN"]}>
