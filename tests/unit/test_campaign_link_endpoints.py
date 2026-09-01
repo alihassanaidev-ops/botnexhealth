@@ -6,6 +6,7 @@ below cover what a stranger sees, what leaks, and what the headers say.
 
 from __future__ import annotations
 
+import asyncio
 import time
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -146,14 +147,27 @@ class TestConfirm:
 
 
 class TestHandoff:
-    @pytest.mark.parametrize("action", ["book", "reschedule"])
-    def test_intent_is_captured_and_a_person_follows_up(self, client, action):
-        resp, session, adapter, _a = _get(client, action, make_action_token("run-1", action))
-        assert resp.status_code == 200
-        assert "clinic" in resp.text.lower()
-        adapter.confirm_appointment.assert_not_awaited()
+    @pytest.mark.parametrize(
+        "action,expected_reason",
+        [("book", "failed_booking"), ("reschedule", "reschedule_requested")],
+    )
+    def test_intent_is_captured_and_a_person_follows_up(
+        self, client, action, expected_reason
+    ):
+        import src.app.api.routes.campaign_links as links
+
+        _ = client
+        session, _ctx = _session(_run())
+        body, code = asyncio.run(links._hand_to_staff(session, _run(), action))
+
+        assert code == 200
+        assert "clinic" in body.lower()
         # a response event and a staff handoff
         assert session.add.call_count == 2
+        event = session.add.call_args_list[0].args[0]
+        handoff = session.add.call_args_list[1].args[0]
+        assert event.normalized_intent == f"requested_{action}"
+        assert handoff.reason == expected_reason
 
 
 class TestNoLeakage:
@@ -190,6 +204,24 @@ def test_recorded_channel_satisfies_the_database_constraint():
 
     assert used, "expected the route to record a channel"
     assert used <= allowed, f"{used - allowed} not permitted by the CHECK constraint"
+
+
+def test_recorded_handoff_reasons_satisfy_the_database_constraint():
+    import re
+
+    from sqlalchemy import CheckConstraint
+
+    import src.app.api.routes.campaign_links as links
+    from src.app.models.campaign_response import CampaignStaffHandoff
+
+    check = next(
+        c
+        for c in CampaignStaffHandoff.__table_args__
+        if isinstance(c, CheckConstraint) and "reason IN" in str(c.sqltext)
+    )
+    allowed = set(re.findall(r"'([a-z_]+)'", str(check.sqltext)))
+
+    assert set(links._ACTION_HANDOFF_REASONS.values()) <= allowed
 
 
 # ---------------------------------------------------------------------------

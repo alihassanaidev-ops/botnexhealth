@@ -439,6 +439,17 @@ through `enquiry_trigger_service.py` with PHI-light trigger metadata. The Sales
 Qualification launch template uses that trigger, a Retell SMS conversation,
 patient registration, and a restricted booking link.
 
+The `appointment-reminder-24h` launch template is a separate Appointment
+Reminder campaign, not a stage of the confirmation campaign. It uses an
+`appointment_offset` trigger with attending/scheduled status eligibility, records
+a `booking_link` policy limited to `confirm` and `reschedule`, then sends a
+two-step SMS ladder with `sms_reply` waits. Deterministic replies route through
+`appointment_reminder_reply`: `YES` confirms via PMS-neutral
+`update_appointment`, reschedule/cancel/staff tokens create staff follow-up
+outcomes, and no reply exits as `no_response`. The dispatcher still revalidates
+appointment-triggered runs immediately before every patient-directed send, so a
+cancelled or moved appointment is skipped before either reminder SMS can leave.
+
 ### Filter expressions
 
 `src/app/services/automation/filter_expression.py` defines one nested boolean
@@ -650,9 +661,9 @@ waiting run:
   sharing one number), all matching contacts are considered and the reply is
   correlated only if exactly one reply-eligible thread exists across them;
 - deterministic `response_mappings` on the SMS-reply-mode `wait` use whole-token,
-  case-insensitive matching to update workflow context and resume the normal
-  dispatcher; mappings that request staff handoff create a handoff and do not
-  resume;
+  case-insensitive matching and can update workflow context, create a staff
+  handoff, or both. Context-updating mappings resume the normal dispatcher;
+  handoff-only mappings create the handoff and do not resume;
 - for ordinary replies, the Twilio webhook persists the inbound message and
   campaign response event but treats the correlated workflow run as read-only.
   The Celery resume task owns workflow-run metadata updates and advancement under

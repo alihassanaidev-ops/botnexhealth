@@ -53,10 +53,14 @@ const TEMPLATES = [
             default_audience: "Upcoming appointments",
             default_eligibility_rules: ["SMS consent exists"],
             default_frequency_cap: { max_per_day: 1, max_per_rolling_7_days: 3 },
-            default_staff_handoff_reason: null,
+            default_staff_handoff_reason: "patient_asks_for_staff",
             analytics_outcome_map: { reminder_sent: "sent" },
             sample_preview_context: { patient_first_name: "Jordan" },
-            setup_fields: [],
+            setup_fields: [
+                { id: "call_offset_hours_before", label: "First reminder hours before appointment", type: "number", required: true, default: 24 },
+                { id: "retry_delay_1_hours", label: "Second reminder delay (hours)", type: "number", required: true, default: 12 },
+                { id: "retry_delay_2_hours", label: "Final reply window (hours)", type: "number", required: true, default: 6 },
+            ],
             copy_variants: [{ id: "standard", label: "Standard copy" }],
             pms_capability_requirements: [],
         },
@@ -96,9 +100,9 @@ const PRE_APPOINTMENT_TEMPLATE = {
         setup_fields: [
             { id: "voice_profile_id", label: "Voice profile", type: "voice_profile_select", required: true },
             { id: "appointment_reasons", label: "Eligible reasons", type: "string_list", required: true },
-            { id: "call_offset_hours_before", label: "Call hours before", type: "number", required: true, default: 24 },
-            { id: "retry_delay_1_hours", label: "Retry 1", type: "number", required: true, default: 5 },
-            { id: "retry_delay_2_hours", label: "Retry 2", type: "number", required: true, default: 5 },
+            { id: "call_offset_hours_before", label: "Initial call hours before appointment", type: "number", required: true, default: 24 },
+            { id: "retry_delay_1_hours", label: "Delay before second attempt (hours)", type: "number", required: true, default: 5 },
+            { id: "retry_delay_2_hours", label: "Delay before third attempt (hours)", type: "number", required: true, default: 5 },
             { id: "patient_voice_cooldown_hours", label: "Patient cooldown", type: "number", required: true, default: 24 },
         ],
     },
@@ -191,6 +195,9 @@ describe("WorkflowTemplates page", () => {
         expect(screen.getByRole("combobox", { name: "Channel sequence" })).toBeInTheDocument()
         expect(screen.getByRole("combobox", { name: "Message copy" })).toBeInTheDocument()
         expect(screen.getByRole("combobox", { name: "Staff handoff behavior" })).toBeInTheDocument()
+        expect(screen.getByLabelText("First reminder hours before appointment")).toHaveValue(24)
+        expect(screen.getByLabelText("Second reminder delay (hours)")).toHaveValue(12)
+        expect(screen.getByLabelText("Final reply window (hours)")).toHaveValue(6)
         await user.click(screen.getByRole("button", { name: /create & open builder/i }))
 
         await waitFor(() => {
@@ -201,7 +208,10 @@ describe("WorkflowTemplates page", () => {
                     audience_source: "Upcoming appointments",
                     channel_sequence: "SMS",
                     copy_variant: "standard",
-                    staff_handoff_behavior: "Monitor campaign operations",
+                    staff_handoff_behavior: "patient_asks_for_staff",
+                    call_offset_hours_before: 24,
+                    retry_delay_1_hours: 12,
+                    retry_delay_2_hours: 6,
                 },
             })
         })
@@ -235,12 +245,12 @@ describe("WorkflowTemplates page", () => {
         await user.click(await screen.findByRole("combobox", { name: "Voice profile" }))
         await user.click(screen.getByRole("option", { name: "Pre-appointment" }))
         await user.type(screen.getByLabelText("Eligible GoTracker reasons"), "Bridge Prep, Implant Surgery")
-        await user.clear(screen.getByLabelText("Call hours before"))
-        await user.type(screen.getByLabelText("Call hours before"), "0")
-        await user.clear(screen.getByLabelText("Retry 1 delay (hours)"))
-        await user.type(screen.getByLabelText("Retry 1 delay (hours)"), "4")
-        await user.clear(screen.getByLabelText("Retry 2 delay (hours)"))
-        await user.type(screen.getByLabelText("Retry 2 delay (hours)"), "7.5")
+        await user.clear(screen.getByLabelText("Initial call hours before appointment"))
+        await user.type(screen.getByLabelText("Initial call hours before appointment"), "0")
+        await user.clear(screen.getByLabelText("Delay before second attempt (hours)"))
+        await user.type(screen.getByLabelText("Delay before second attempt (hours)"), "4")
+        await user.clear(screen.getByLabelText("Delay before third attempt (hours)"))
+        await user.type(screen.getByLabelText("Delay before third attempt (hours)"), "7.5")
         await user.clear(screen.getByLabelText("Patient cooldown (hours)"))
         await user.type(screen.getByLabelText("Patient cooldown (hours)"), "12")
         await user.click(screen.getByRole("button", { name: /create & open builder/i }))

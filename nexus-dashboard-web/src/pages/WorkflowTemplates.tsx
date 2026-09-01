@@ -874,7 +874,13 @@ export default function WorkflowTemplates() {
                                     <div className="grid gap-4 sm:grid-cols-3">
                                         {hasSetupField(picked, "call_offset_hours_before") && (
                                             <div className="space-y-2">
-                                                <Label htmlFor="call-offset-hours">Call hours before</Label>
+                                                <Label htmlFor="call-offset-hours">
+                                                    {setupFieldLabel(
+                                                        picked,
+                                                        "call_offset_hours_before",
+                                                        "Call hours before",
+                                                    )}
+                                                </Label>
                                                 <Input
                                                     id="call-offset-hours"
                                                     type="number"
@@ -887,7 +893,13 @@ export default function WorkflowTemplates() {
                                         )}
                                         {hasSetupField(picked, "retry_delay_1_hours") && (
                                             <div className="space-y-2">
-                                                <Label htmlFor="retry-delay-1">Retry 1 delay (hours)</Label>
+                                                <Label htmlFor="retry-delay-1">
+                                                    {setupFieldLabel(
+                                                        picked,
+                                                        "retry_delay_1_hours",
+                                                        "Retry 1 delay (hours)",
+                                                    )}
+                                                </Label>
                                                 <Input
                                                     id="retry-delay-1"
                                                     type="number"
@@ -900,7 +912,13 @@ export default function WorkflowTemplates() {
                                         )}
                                         {hasSetupField(picked, "retry_delay_2_hours") && (
                                             <div className="space-y-2">
-                                                <Label htmlFor="retry-delay-2">Retry 2 delay (hours)</Label>
+                                                <Label htmlFor="retry-delay-2">
+                                                    {setupFieldLabel(
+                                                        picked,
+                                                        "retry_delay_2_hours",
+                                                        "Retry 2 delay (hours)",
+                                                    )}
+                                                </Label>
                                                 <Input
                                                     id="retry-delay-2"
                                                     type="number"

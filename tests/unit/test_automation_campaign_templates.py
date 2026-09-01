@@ -40,6 +40,7 @@ def test_template_definition_is_valid_workflow_schema(template_id: str) -> None:
 
 def test_priority_dental_templates_present() -> None:
     assert set(TEMPLATES.keys()) == {
+        "appointment-reminder-24h",
         "surgery-pre-appointment-confirmation",
         "post-op-followup-after-confirmation",
         "sales-qualification",
@@ -47,7 +48,7 @@ def test_priority_dental_templates_present() -> None:
 
 
 def test_list_templates_returns_all() -> None:
-    assert len(list_templates()) == 3
+    assert len(list_templates()) == 4
 
 
 def test_get_template_known_id() -> None:
@@ -68,6 +69,120 @@ def test_get_template_unknown_id_returns_none() -> None:
 def test_appointment_templates_use_appointment_offset_trigger() -> None:
     t = TEMPLATES["surgery-pre-appointment-confirmation"]
     assert t.definition["trigger"]["type"] == "appointment_offset"
+
+
+def test_appointment_reminder_template_is_launchable_sms_ladder() -> None:
+    template = TEMPLATES["appointment-reminder-24h"]
+    nodes = {node["id"]: node for node in template.definition["nodes"]}
+
+    assert template.trigger_type == "appointment_offset"
+    assert template.definition["entry_node_id"] == "configure-reminder-links"
+    assert nodes["configure-reminder-links"]["type"] == "booking_link"
+    assert nodes["configure-reminder-links"]["actions"] == ["confirm", "reschedule"]
+    assert "book" not in nodes["configure-reminder-links"]["actions"]
+    assert nodes["configure-reminder-links"]["identity_check"] == "sensitive"
+
+    send_nodes = [node for node in nodes.values() if node["type"] == "send_sms"]
+    assert {node["id"] for node in send_nodes} == {
+        "sms-reminder-1",
+        "sms-reminder-2",
+    }
+    for node in send_nodes:
+        assert "{{confirmation_link}}" in node["body_template"]
+        assert "{{reschedule_link}}" in node["body_template"]
+        assert "Reply STOP" in node["body_template"]
+
+    assert nodes["write-appointment-confirmed"]["type"] == "update_appointment"
+    assert nodes["write-appointment-confirmed"]["operation"] == "confirm"
+
+
+def test_appointment_reminder_filters_to_attending_statuses() -> None:
+    trigger = TEMPLATES["appointment-reminder-24h"].definition["trigger"]
+    status_filter = trigger["filter"]
+
+    assert status_filter == {
+        "kind": "rule",
+        "field": "appointment_status",
+        "op": "in_case_insensitive",
+        "value": ["scheduled", "booked", "booked_waiting", "pending"],
+    }
+    assert not {
+        "cancelled",
+        "no_show",
+        "short_cancel",
+        "office_cancel",
+        "waiting",
+    } & set(status_filter["value"])
+
+
+def test_appointment_reminder_reply_waits_resume_into_router() -> None:
+    nodes = {
+        node["id"]: node
+        for node in TEMPLATES["appointment-reminder-24h"].definition["nodes"]
+    }
+
+    for wait_id, condition_id in (
+        ("wait-retry-1", "check-reminder-reply-1"),
+        ("wait-retry-2", "check-reminder-reply-2"),
+    ):
+        wait = nodes[wait_id]
+        assert wait["wait_for"]["type"] == "sms_reply"
+        assert wait["next_node_id"] == condition_id
+        assert nodes[condition_id]["rules"] == [
+            {"field": "appointment_reminder_reply", "op": "is_not_null"}
+        ]
+        mapped_values = {
+            mapping["context_updates"].get("appointment_reminder_reply")
+            for mapping in wait["wait_for"]["response_mappings"]
+        }
+        assert mapped_values == {
+            "confirmed",
+            "reschedule_requested",
+            "cancel_requested",
+            "staff_requested",
+        }
+        assert any(
+            mapping.get("handoff_reason") == "reschedule_requested"
+            for mapping in wait["wait_for"]["response_mappings"]
+        )
+        assert any(
+            mapping.get("handoff_reason") == "cancel_requested"
+            for mapping in wait["wait_for"]["response_mappings"]
+        )
+
+    route_targets = {
+        case["label"]: case["next_node_id"]
+        for case in nodes["route-reminder-reply"]["cases"]
+    }
+    assert route_targets == {
+        "Confirmed": "write-appointment-confirmed",
+        "Reschedule requested": "mark-reminder-reschedule-requested",
+        "Cancel requested": "mark-reminder-cancel-requested",
+        "Staff requested": "mark-reminder-staff-requested",
+    }
+    assert nodes["route-reminder-reply"]["default_next_node_id"] == (
+        "mark-reminder-staff-requested"
+    )
+
+
+def test_appointment_reminder_setup_controls_timing_windows() -> None:
+    definition = instantiate_definition(
+        TEMPLATES["appointment-reminder-24h"],
+        setup_options={
+            "call_offset_hours_before": 18,
+            "retry_delay_1_hours": 4.5,
+            "retry_delay_2_hours": 2,
+        },
+    )
+    nodes = {node["id"]: node for node in definition["nodes"]}
+
+    assert definition["trigger"]["offset_hours"] == -18
+    assert nodes["wait-retry-1"]["wait_for"]["response_window_seconds"] == int(
+        4.5 * 60 * 60
+    )
+    assert nodes["wait-retry-2"]["wait_for"]["response_window_seconds"] == 2 * 60 * 60
+    assert "delay" not in nodes["wait-retry-1"]
+    assert "delay" not in nodes["wait-retry-2"]
 
 
 def test_surgery_confirmation_template_marks_confirmed_status() -> None:
@@ -413,7 +528,7 @@ def test_campaign_template_response_from_template() -> None:
 def test_list_route_returns_all_templates() -> None:
     user = MagicMock()
     result = asyncio.run(list_campaign_templates(user))
-    assert len(result) == 3
+    assert len(result) == 4
 
 
 # ---------------------------------------------------------------------------
@@ -634,7 +749,7 @@ def test_hidden_templates_are_not_instantiable() -> None:
     with pytest.raises(HTTPException) as exc_info:
         asyncio.run(instantiate_template("unscheduled-treatment-followup", user))
 
-    assert get_template("appointment-reminder-24h") is None
+    assert get_template("recall-sms-6month") is None
     assert exc_info.value.status_code == 404
     assert exc_info.value.detail == "Template not found"
 

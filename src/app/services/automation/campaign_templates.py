@@ -231,10 +231,17 @@ def _apply_required_setup_fields(
             )
             node = _node_by_id(definition, wait_id)
             if node:
-                node["delay"] = {
-                    "delay_type": "duration",
-                    "duration_seconds": int(hours * 60 * 60),
-                }
+                wait_for = node.get("wait_for")
+                if isinstance(wait_for, dict) and wait_for.get("type") in {
+                    "sms_reply",
+                    "email_reply",
+                }:
+                    wait_for["response_window_seconds"] = int(hours * 60 * 60)
+                else:
+                    node["delay"] = {
+                        "delay_type": "duration",
+                        "duration_seconds": int(hours * 60 * 60),
+                    }
             continue
         if field_id == "patient_voice_cooldown_hours":
             hours = _positive_number(
@@ -456,22 +463,236 @@ def _metadata(
 # Template definitions
 # ---------------------------------------------------------------------------
 
+_APPOINTMENT_REMINDER_ELIGIBLE_STATUSES = [
+    "scheduled",
+    "booked",
+    "booked_waiting",
+    "pending",
+]
+
+_APPOINTMENT_REMINDER_REPLY_MAPPINGS: list[dict[str, Any]] = [
+    {
+        "tokens": ["YES", "Y", "CONFIRM", "1"],
+        "context_updates": {"appointment_reminder_reply": "confirmed"},
+    },
+    {
+        "tokens": [
+            "R",
+            "RESCHEDULE",
+            "RE-SCHEDULE",
+            "REBOOK",
+            "MOVE APPOINTMENT",
+            "CHANGE APPOINTMENT",
+        ],
+        "context_updates": {"appointment_reminder_reply": "reschedule_requested"},
+        "handoff_reason": "reschedule_requested",
+    },
+    {
+        "tokens": ["CANCEL APPOINTMENT", "CANCEL VISIT"],
+        "context_updates": {"appointment_reminder_reply": "cancel_requested"},
+        "handoff_reason": "cancel_requested",
+    },
+    {
+        "tokens": ["CALL", "CALL ME", "CALLBACK", "STAFF", "HUMAN", "PERSON"],
+        "context_updates": {"appointment_reminder_reply": "staff_requested"},
+        "handoff_reason": "patient_asks_for_staff",
+    },
+]
+
 _APPOINTMENT_REMINDER_24H: dict[str, Any] = {
     "schema_version": "1.0",
-    "trigger": {"type": "appointment_offset", "offset_hours": -24},
-    "entry_node_id": "sms-reminder",
+    "trigger": {
+        "type": "appointment_offset",
+        "offset_hours": -24,
+        "filter": {
+            "kind": "rule",
+            "field": "appointment_status",
+            "op": "in_case_insensitive",
+            "value": _APPOINTMENT_REMINDER_ELIGIBLE_STATUSES,
+        },
+    },
+    "entry_node_id": "configure-reminder-links",
     "nodes": [
         {
+            "type": "booking_link",
+            "id": "configure-reminder-links",
+            "actions": ["confirm", "reschedule"],
+            "window_days": 14,
+            "identity_check": "sensitive",
+            "next_node_id": "sms-reminder-1",
+        },
+        {
             "type": "send_sms",
-            "id": "sms-reminder",
+            "id": "sms-reminder-1",
             "body_template": (
                 "Hi {{patient_first_name}}, reminder from {{clinic_name}}: your appointment "
                 "is {{appointment_date}} at {{appointment_time}} with {{provider_name}}. "
-                "Call {{location_phone}} with questions. Reply STOP to opt out."
+                "Confirm: {{confirmation_link}}. Need a different time? {{reschedule_link}} "
+                "or call {{location_phone}}. Reply YES to confirm, R to reschedule. "
+                "Reply STOP to opt out."
             ),
-            "next_node_id": "exit-sent",
+            "next_node_id": "wait-retry-1",
         },
-        {"type": "exit", "id": "exit-sent", "outcome": "reminder_sent"},
+        {
+            "type": "wait",
+            "id": "wait-retry-1",
+            "wait_for": {
+                "type": "sms_reply",
+                "response_window_seconds": 43200,
+                "response_mappings": _APPOINTMENT_REMINDER_REPLY_MAPPINGS,
+            },
+            "next_node_id": "check-reminder-reply-1",
+        },
+        {
+            "type": "condition",
+            "id": "check-reminder-reply-1",
+            "rules": [
+                {
+                    "field": "appointment_reminder_reply",
+                    "op": "is_not_null",
+                }
+            ],
+            "true_next_node_id": "route-reminder-reply",
+            "false_next_node_id": "sms-reminder-2",
+        },
+        {
+            "type": "send_sms",
+            "id": "sms-reminder-2",
+            "body_template": (
+                "Reminder from {{clinic_name}}: your appointment is today at "
+                "{{appointment_time}}. Confirm: {{confirmation_link}}. Need to move it? "
+                "{{reschedule_link}} or call {{location_phone}}. Reply YES to confirm, "
+                "R to reschedule. Reply STOP to opt out."
+            ),
+            "next_node_id": "wait-retry-2",
+        },
+        {
+            "type": "wait",
+            "id": "wait-retry-2",
+            "wait_for": {
+                "type": "sms_reply",
+                "response_window_seconds": 21600,
+                "response_mappings": _APPOINTMENT_REMINDER_REPLY_MAPPINGS,
+            },
+            "next_node_id": "check-reminder-reply-2",
+        },
+        {
+            "type": "condition",
+            "id": "check-reminder-reply-2",
+            "rules": [
+                {
+                    "field": "appointment_reminder_reply",
+                    "op": "is_not_null",
+                }
+            ],
+            "true_next_node_id": "route-reminder-reply",
+            "false_next_node_id": "mark-reminder-no-response",
+        },
+        {
+            "type": "switch",
+            "id": "route-reminder-reply",
+            "subject": "appointment_reminder_reply",
+            "cases": [
+                {
+                    "label": "Confirmed",
+                    "filter": {
+                        "kind": "rule",
+                        "field": "appointment_reminder_reply",
+                        "op": "eq",
+                        "value": "confirmed",
+                    },
+                    "next_node_id": "write-appointment-confirmed",
+                },
+                {
+                    "label": "Reschedule requested",
+                    "filter": {
+                        "kind": "rule",
+                        "field": "appointment_reminder_reply",
+                        "op": "eq",
+                        "value": "reschedule_requested",
+                    },
+                    "next_node_id": "mark-reminder-reschedule-requested",
+                },
+                {
+                    "label": "Cancel requested",
+                    "filter": {
+                        "kind": "rule",
+                        "field": "appointment_reminder_reply",
+                        "op": "eq",
+                        "value": "cancel_requested",
+                    },
+                    "next_node_id": "mark-reminder-cancel-requested",
+                },
+                {
+                    "label": "Staff requested",
+                    "filter": {
+                        "kind": "rule",
+                        "field": "appointment_reminder_reply",
+                        "op": "eq",
+                        "value": "staff_requested",
+                    },
+                    "next_node_id": "mark-reminder-staff-requested",
+                },
+            ],
+            "default_next_node_id": "mark-reminder-staff-requested",
+        },
+        {
+            "type": "update_appointment",
+            "id": "write-appointment-confirmed",
+            "operation": "confirm",
+            "next_node_id": "exit-confirmed",
+        },
+        {
+            "type": "update_patient_status",
+            "id": "mark-reminder-reschedule-requested",
+            "status": "appointment_reminder_reschedule_requested",
+            "note_template": (
+                "Patient replied to the appointment reminder asking to reschedule "
+                "{{appointment_date}} at {{appointment_time}}."
+            ),
+            "next_node_id": "exit-reschedule-requested",
+        },
+        {
+            "type": "update_patient_status",
+            "id": "mark-reminder-cancel-requested",
+            "status": "appointment_reminder_cancel_requested",
+            "note_template": (
+                "Patient replied to the appointment reminder asking to cancel "
+                "{{appointment_date}} at {{appointment_time}}."
+            ),
+            "next_node_id": "exit-cancel-requested",
+        },
+        {
+            "type": "update_patient_status",
+            "id": "mark-reminder-staff-requested",
+            "status": "appointment_reminder_staff_requested",
+            "note_template": (
+                "Patient replied to the appointment reminder and needs staff follow-up."
+            ),
+            "next_node_id": "exit-staff-handoff",
+        },
+        {
+            "type": "update_patient_status",
+            "id": "mark-reminder-no-response",
+            "status": "appointment_reminder_no_response",
+            "note_template": (
+                "No reply was received after the appointment reminder SMS ladder."
+            ),
+            "next_node_id": "exit-no-response",
+        },
+        {"type": "exit", "id": "exit-confirmed", "outcome": "confirmed"},
+        {
+            "type": "exit",
+            "id": "exit-reschedule-requested",
+            "outcome": "reschedule_requested",
+        },
+        {
+            "type": "exit",
+            "id": "exit-cancel-requested",
+            "outcome": "cancel_requested",
+        },
+        {"type": "exit", "id": "exit-staff-handoff", "outcome": "staff_handoff"},
+        {"type": "exit", "id": "exit-no-response", "outcome": "no_response"},
     ],
     "compliance": {"content_class": "transactional_care", "consent_required": True},
 }
@@ -1315,13 +1536,28 @@ _ALL_TEMPLATES: dict[str, CampaignTemplate] = {
     "appointment-reminder-24h": CampaignTemplate(
         id="appointment-reminder-24h",
         name="Appointment Reminder (24h)",
-        description="Send an SMS reminder 24 hours before a scheduled appointment.",
+        description=(
+            "Send a two-step SMS reminder before a still-active appointment, "
+            "with confirm/reschedule links and reply handling."
+        ),
         trigger_type="appointment_offset",
         definition=_APPOINTMENT_REMINDER_24H,
         metadata=_metadata(
             category="appointment_ops",
-            goal="Reduce late arrivals and missed appointments one day before the visit.",
-            outcome_labels=["reminder_sent"],
+            goal=(
+                "Reduce late arrivals and missed appointments with a short-notice "
+                "appointment reminder."
+            ),
+            outcome_labels=[
+                "confirmed",
+                "reschedule_requested",
+                "cancel_requested",
+                "staff_handoff",
+                "no_response",
+                "sms_opt_out",
+                "skipped_cancelled",
+                "skipped_rescheduled",
+            ],
             supported_channels=["sms"],
             required_readiness_checks=[
                 "location",
@@ -1329,6 +1565,10 @@ _ALL_TEMPLATES: dict[str, CampaignTemplate] = {
                 "sms",
                 "consent",
                 "quiet_hours",
+                "confirmation_link",
+                "reschedule_link",
+                "response_handling",
+                "staff_handoff",
             ],
             required_merge_fields=[
                 "patient_first_name",
@@ -1336,25 +1576,62 @@ _ALL_TEMPLATES: dict[str, CampaignTemplate] = {
                 "appointment_date",
                 "appointment_time",
                 "provider_name",
+                "confirmation_link",
+                "reschedule_link",
                 "location_phone",
             ],
             content_class="transactional_care",
-            audience="NexHealth appointments scheduled 24 hours from now",
+            audience="Appointments still scheduled before the configured reminder window",
             eligibility=[
                 "future appointment still exists",
+                "appointment is not cancelled, no-show, short-cancelled, or moved",
                 "patient is not suppressed",
                 "SMS consent exists",
             ],
-            handoff_reason=None,
-            analytics={"reminder_sent": "sent"},
+            handoff_reason="patient_asks_for_staff",
+            analytics={
+                "confirmed": "confirmed",
+                "reschedule_requested": "handoff",
+                "cancel_requested": "handoff",
+                "staff_handoff": "handoff",
+                "no_response": "no_response",
+                "sms_opt_out": "opt_out",
+                "skipped_cancelled": "skipped",
+                "skipped_rescheduled": "skipped",
+            },
             sample_context={
                 "patient_first_name": "Jordan",
                 "clinic_name": "Riverside Dental",
                 "appointment_date": "July 22, 2026",
                 "appointment_time": "2:00 PM",
                 "provider_name": "Dr. Smith",
+                "confirmation_link": "https://book.example.com/r/confirm",
+                "reschedule_link": "https://book.example.com/r/reschedule",
                 "location_phone": "(555) 010-2211",
             },
+            setup_fields=[
+                {
+                    "id": "call_offset_hours_before",
+                    "label": "First reminder hours before appointment",
+                    "type": "number",
+                    "required": True,
+                    "default": 24,
+                },
+                {
+                    "id": "retry_delay_1_hours",
+                    "label": "Second reminder delay (hours)",
+                    "type": "number",
+                    "required": True,
+                    "default": 12,
+                },
+                {
+                    "id": "retry_delay_2_hours",
+                    "label": "Final reply window (hours)",
+                    "type": "number",
+                    "required": True,
+                    "default": 6,
+                },
+            ],
             copy_variants=[
                 {"id": "standard", "label": "Standard reminder"},
                 {"id": "short", "label": "Short reminder"},
@@ -2003,6 +2280,7 @@ _ALL_TEMPLATES: dict[str, CampaignTemplate] = {
 }
 
 LAUNCH_TEMPLATE_IDS: tuple[str, ...] = (
+    "appointment-reminder-24h",
     "surgery-pre-appointment-confirmation",
     "post-op-followup-after-confirmation",
     "sales-qualification",

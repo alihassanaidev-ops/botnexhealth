@@ -11,6 +11,7 @@ import pytest
 from src.app.api.routes.twilio_webhooks import (
     _classify_confirmation_reply,
     _classify_intent,
+    _mapped_sms_response_result,
     _verified_form,
     inbound_sms,
 )
@@ -67,6 +68,20 @@ def test_classify_confirmation_reply_accepts_bare_confirm_tokens(body: str) -> N
 )
 def test_classify_confirmation_reply_rejects_ambiguous_or_non_confirm_tokens(body: str) -> None:
     assert _classify_confirmation_reply(body) is False
+
+
+def test_mapped_response_with_context_preserves_staff_handoff_reason() -> None:
+    result = _mapped_sms_response_result(
+        SimpleNamespace(
+            context_updates={"appointment_reminder_reply": "reschedule_requested"},
+            handoff_reason="reschedule_requested",
+        )
+    )
+
+    assert result is not None
+    assert result.intent == "mapped_response"
+    assert result.outcome == "staff_handoff_required"
+    assert result.handoff_reason == "reschedule_requested"
 
 
 # ---------------------------------------------------------------------------
@@ -205,6 +220,8 @@ def test_confirm_reply_enqueues_resume_without_automatic_sms_acknowledgment():
     location = SimpleNamespace(id="loc-1", institution_id="inst-1", name="Clinic")
     inbound = SimpleNamespace(
         id="inbound-1",
+        institution_id="inst-1",
+        location_id="loc-1",
         workflow_run_id="run-1",
         conversation_thread_id="thread-1",
         contact_id="contact-1",
@@ -235,6 +252,11 @@ def test_confirm_reply_enqueues_resume_without_automatic_sms_acknowledgment():
             new=AsyncMock(return_value=inbound),
         ),
         patch(
+            "src.app.services.automation.retell_sms_conversation_service."
+            "RetellSmsConversationService.find_active_for_inbound",
+            new=AsyncMock(return_value=None),
+        ),
+        patch(
             "src.app.services.automation.campaign_conversation_service.CampaignConversationService.match_sms_response_mapping",
             new=AsyncMock(return_value=None),
         ),
@@ -251,12 +273,89 @@ def test_confirm_reply_enqueues_resume_without_automatic_sms_acknowledgment():
     assert response.body == b'<?xml version="1.0" encoding="UTF-8"?><Response></Response>'
 
 
+def test_mapped_handoff_reply_notifies_staff_and_enqueues_resume():
+    lookup_session = AsyncMock()
+    tenant_session = AsyncMock()
+    location = SimpleNamespace(id="loc-1", institution_id="inst-1", name="Clinic")
+    inbound = SimpleNamespace(
+        id="inbound-1",
+        institution_id="inst-1",
+        location_id="loc-1",
+        workflow_run_id="run-1",
+        conversation_thread_id="thread-1",
+        contact_id="contact-1",
+    )
+    handoff = SimpleNamespace(id="handoff-1")
+    record_response = AsyncMock(return_value=(MagicMock(), handoff))
+    mapping_match = SimpleNamespace(
+        mapping=SimpleNamespace(
+            context_updates={"appointment_reminder_reply": "reschedule_requested"},
+            handoff_reason="reschedule_requested",
+        )
+    )
+
+    with (
+        patch(
+            "src.app.api.routes.twilio_webhooks._verified_form",
+            new=AsyncMock(
+                return_value={
+                    "From": "+14165550100",
+                    "To": "+14165550199",
+                    "Body": "R",
+                    "MessageSid": "SM123",
+                }
+            ),
+        ),
+        patch(
+            "src.app.api.routes.twilio_webhooks.get_system_db_session",
+            side_effect=[_session_cm(lookup_session), _session_cm(tenant_session)],
+        ),
+        patch(
+            "src.app.api.routes.twilio_webhooks._location_for_twilio_number",
+            new=AsyncMock(return_value=location),
+        ),
+        patch(
+            "src.app.services.automation.inbound_sms_routing_service.InboundSmsRoutingService.record_inbound",
+            new=AsyncMock(return_value=inbound),
+        ),
+        patch(
+            "src.app.services.automation.retell_sms_conversation_service."
+            "RetellSmsConversationService.find_active_for_inbound",
+            new=AsyncMock(return_value=None),
+        ),
+        patch(
+            "src.app.services.automation.campaign_conversation_service.CampaignConversationService.match_sms_response_mapping",
+            new=AsyncMock(return_value=mapping_match),
+        ),
+        patch(
+            "src.app.services.automation.campaign_response_service.CampaignResponseService.record_sms_response",
+            new=record_response,
+        ),
+        patch(
+            "src.app.tasks.in_app_notifications.enqueue_in_app_notifications",
+        ) as notify,
+        patch("src.app.tasks.automation_workflow.resume_sms_confirmation") as resume,
+    ):
+        response = asyncio.run(inbound_sms(MagicMock()))
+
+    parsed = record_response.await_args.kwargs["parsed"]
+    assert parsed.intent == "mapped_response"
+    assert parsed.outcome == "staff_handoff_required"
+    assert parsed.handoff_reason == "reschedule_requested"
+    notify.assert_called_once()
+    assert notify.call_args.kwargs["data"]["campaign_staff_handoff_id"] == "handoff-1"
+    resume.delay.assert_called_once()
+    assert response.body == b'<?xml version="1.0" encoding="UTF-8"?><Response></Response>'
+
+
 def test_stop_suppresses_and_cancels_correlated_run_before_one_commit():
     lookup_session = AsyncMock()
     tenant_session = AsyncMock()
     location = SimpleNamespace(id="loc-1", institution_id="inst-1", name="Clinic")
     inbound = SimpleNamespace(
         id="inbound-1",
+        institution_id="inst-1",
+        location_id="loc-1",
         workflow_run_id="run-1",
         conversation_thread_id="thread-1",
         contact_id="contact-1",
@@ -303,6 +402,11 @@ def test_stop_suppresses_and_cancels_correlated_run_before_one_commit():
             "src.app.services.automation.inbound_sms_routing_service."
             "InboundSmsRoutingService.record_inbound",
             new=AsyncMock(return_value=inbound),
+        ),
+        patch(
+            "src.app.services.automation.retell_sms_conversation_service."
+            "RetellSmsConversationService.find_active_for_inbound",
+            new=AsyncMock(return_value=None),
         ),
         patch(
             "src.app.services.automation.campaign_response_service."

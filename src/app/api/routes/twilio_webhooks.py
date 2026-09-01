@@ -32,7 +32,10 @@ from src.app.services.sms_privacy import (
     safe_error_summary,
 )
 from src.app.services.sms_service import SmsService
-from src.app.services.automation.sms_intent_parser import parse_sms_intent
+from src.app.services.automation.sms_intent_parser import (
+    SmsIntentResult,
+    parse_sms_intent,
+)
 from src.app.services.usage_metering_service import (
     parse_cost_amount,
     parse_segments,
@@ -66,6 +69,21 @@ def _classify_confirmation_reply(body: str) -> bool:
     a false PMS confirmation is more expensive than a missed confirmation.
     """
     return parse_sms_intent(body).intent == "confirm"
+
+
+def _mapped_sms_response_result(mapping: Any) -> SmsIntentResult | None:
+    """Convert a deterministic reply mapping into the event we should record."""
+    if not (mapping.context_updates or mapping.handoff_reason):
+        return None
+    return SmsIntentResult(
+        "mapped_response",
+        outcome=(
+            "staff_handoff_required"
+            if mapping.handoff_reason
+            else "mapped_response"
+        ),
+        handoff_reason=mapping.handoff_reason,
+    )
 
 
 @router.post("/inbound-sms")
@@ -122,7 +140,6 @@ async def inbound_sms(request: Request) -> Response:
         from src.app.services.automation.campaign_conversation_service import (
             CampaignConversationService,
         )
-        from src.app.services.automation.sms_intent_parser import SmsIntentResult
         from src.app.services.automation.retell_sms_conversation_service import (
             RetellSmsConversationService,
         )
@@ -149,18 +166,9 @@ async def inbound_sms(request: Request) -> Response:
                 body=body,
             )
             if mapping_match is not None:
-                mapping = mapping_match.mapping
-                if mapping.context_updates:
-                    parsed_for_record = SmsIntentResult(
-                        "mapped_response",
-                        outcome="mapped_response",
-                    )
-                elif mapping.handoff_reason:
-                    parsed_for_record = SmsIntentResult(
-                        "mapped_response",
-                        outcome="staff_handoff_required",
-                        handoff_reason=mapping.handoff_reason,
-                    )
+                mapped_result = _mapped_sms_response_result(mapping_match.mapping)
+                if mapped_result is not None:
+                    parsed_for_record = mapped_result
 
         _, _handoff = await CampaignResponseService(session).record_sms_response(
             _inbound_msg,
@@ -168,6 +176,40 @@ async def inbound_sms(request: Request) -> Response:
             raw_payload=dict(form),
             parsed=parsed_for_record,
         )
+
+        # Free text / non-automated patient requests — surface to staff so they
+        # can continue manually. This runs before mapped replies can resume and
+        # return, because one mapping may both update context and create handoff.
+        needs_staff_review = parsed_for_record.requires_handoff or _handoff is not None
+        if needs_staff_review:
+            try:
+                from src.app.tasks.in_app_notifications import enqueue_in_app_notifications
+
+                enqueue_in_app_notifications(
+                    call_id="",
+                    institution_id=str(location.institution_id),
+                    location_id=str(location.id),
+                    call_status=None,
+                    call_tags_csv=None,
+                    title="Patient campaign response",
+                    message=f"A patient SMS reply at {location.name} needs staff review.",
+                    notification_type=NotificationType.INBOUND_SMS_REPLY.value,
+                    data={
+                        "inbound_sms_message_id": str(_inbound_msg.id),
+                        "contact_id": _inbound_msg.contact_id,
+                        "workflow_run_id": _inbound_msg.workflow_run_id,
+                        "campaign_staff_handoff_id": str(_handoff.id)
+                        if _handoff
+                        else None,
+                        "patient_response_intent": parsed_for_record.intent,
+                    },
+                )
+            except Exception as notif_err:  # noqa: BLE001 — never fail the webhook on notify
+                logger.error(
+                    "Failed to enqueue inbound-SMS staff notification: location_hash=%s error=%s",
+                    hash_for_logging(str(location.id)),
+                    safe_error_summary(notif_err),
+                )
 
         if intent == "STOP":
             if retell_sms_session is not None:
@@ -311,39 +353,6 @@ async def inbound_sms(request: Request) -> Response:
                 hash_for_logging(str(location.id)),
                 _inbound_msg.id,
             )
-
-        # Free text / non-automated patient requests — surface to staff so they can
-        # continue manually.
-        # The reply is already persisted above; here we alert staff via the existing
-        # in-app + SSE notification path (Celery, so the webhook stays fast).
-        needs_staff_review = parsed_for_record.requires_handoff or _handoff is not None
-        if needs_staff_review:
-            try:
-                from src.app.tasks.in_app_notifications import enqueue_in_app_notifications
-
-                enqueue_in_app_notifications(
-                    call_id="",
-                    institution_id=str(location.institution_id),
-                    location_id=str(location.id),
-                    call_status=None,
-                    call_tags_csv=None,
-                    title="Patient campaign response",
-                    message=f"A patient SMS reply at {location.name} needs staff review.",
-                    notification_type=NotificationType.INBOUND_SMS_REPLY.value,
-                    data={
-                        "inbound_sms_message_id": str(_inbound_msg.id),
-                        "contact_id": _inbound_msg.contact_id,
-                        "workflow_run_id": _inbound_msg.workflow_run_id,
-                        "campaign_staff_handoff_id": str(_handoff.id) if _handoff else None,
-                        "patient_response_intent": parsed_for_record.intent,
-                    },
-                )
-            except Exception as notif_err:  # noqa: BLE001 — never fail the webhook on notify
-                logger.error(
-                    "Failed to enqueue inbound-SMS staff notification: location_hash=%s error=%s",
-                    hash_for_logging(str(location.id)),
-                    safe_error_summary(notif_err),
-                )
 
         if needs_staff_review:
             logger.info(

@@ -64,6 +64,11 @@ _CANCEL_ON_PAGE_TEXT = (
 _TROUBLE_TEXT = (
     "Sorry — we couldn't complete that just now. Please contact the clinic directly."
 )
+_ACTION_HANDOFF_REASONS = {
+    "book": "failed_booking",
+    "reschedule": "reschedule_requested",
+    "cancel": "cancel_requested",
+}
 
 
 def _reply(body: str, status_code: int = 200) -> PlainTextResponse:
@@ -162,7 +167,7 @@ async def _hand_to_staff(session, run, action: str) -> tuple[str, int]:
             workflow_run_id=event.workflow_run_id,
             contact_id=event.contact_id,
             response_event_id=str(event.id),
-            reason=f"patient_requested_{action}",
+            reason=_ACTION_HANDOFF_REASONS.get(action, "free_text"),
             status="open",
             summary=f"Patient followed the {action} link from a campaign message.",
         )
