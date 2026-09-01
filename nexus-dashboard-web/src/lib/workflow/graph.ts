@@ -905,3 +905,183 @@ export function normalizeDefinition(def: WorkflowDefinition): WorkflowDefinition
     })
     return { ...def, nodes }
 }
+
+// ---------------------------------------------------------------------------
+// Duplicate / copy / paste, and node search
+// ---------------------------------------------------------------------------
+/**
+ * Rewrite a set of nodes with fresh ids.
+ *
+ * Edges *between* the copied nodes are repointed at their copies, so
+ * duplicating a subgraph keeps its internal shape. Edges leaving the set are
+ * cleared rather than left pointing at the originals: a copy that silently
+ * rejoins the original graph is almost never what someone means by "duplicate",
+ * and a dangling pointer is visible in validation where a wrong one is not.
+ *
+ * Every forward pointer has to be listed here. That is the same knowledge
+ * `outgoing()` carries, and the two must be kept in step — a pointer missed
+ * here does not fail loudly, it silently links a copy back into the original.
+ * `patient_registration.on_abandoned_node_id` is the reason this is a switch
+ * rather than a blanket `next_node_id` rewrite.
+ */
+export function cloneNodes(
+    nodes: WorkflowNode[],
+    existingIds: Iterable<string>,
+): { nodes: WorkflowNode[]; idMap: Record<string, string> } {
+    const taken = new Set(existingIds)
+    const idMap: Record<string, string> = {}
+
+    for (const node of nodes) {
+        const id = genId(node.type, taken)
+        taken.add(id)
+        idMap[node.id] = id
+    }
+
+    const inSet = new Set(nodes.map((n) => n.id))
+    /** Required pointers leave an empty string, which validation reports. */
+    const repoint = (target: string): string => (inSet.has(target) ? idMap[target] : "")
+    /** Optional pointers drop to null instead, since "" is not a valid id. */
+    const repointOptional = (target: string | null | undefined): string | null =>
+        target && inSet.has(target) ? idMap[target] : null
+
+    const cloned = nodes.map((node): WorkflowNode => {
+        const next = { ...node, id: idMap[node.id] } as WorkflowNode
+        switch (next.type) {
+            case "condition":
+                return {
+                    ...next,
+                    true_next_node_id: repoint(next.true_next_node_id),
+                    false_next_node_id: repoint(next.false_next_node_id),
+                }
+            case "patient_registration":
+                return {
+                    ...next,
+                    next_node_id: repoint(next.next_node_id),
+                    on_abandoned_node_id: repointOptional(next.on_abandoned_node_id),
+                }
+            case "exit":
+                return next
+            default:
+                return { ...next, next_node_id: repoint(next.next_node_id) }
+        }
+    })
+
+    return { nodes: cloned, idMap }
+}
+
+/** Offset applied to a duplicate so it does not sit exactly on the original. */
+const DUPLICATE_OFFSET = { x: NODE_W * 0.35, y: NODE_H * 0.7 }
+
+/**
+ * Add copies of `ids` to the definition. Returns the new definition and the
+ * ids of the copies, so the caller can select them.
+ */
+export function duplicateNodes(
+    def: WorkflowDefinition,
+    ids: string[],
+): { def: WorkflowDefinition; newIds: string[] } {
+    const selected = def.nodes.filter((n) => ids.includes(n.id))
+    if (!selected.length) return { def, newIds: [] }
+
+    const { nodes: cloned, idMap } = cloneNodes(
+        selected,
+        def.nodes.map((n) => n.id),
+    )
+
+    const layout = { ...(def.layout ?? {}) }
+    for (const [oldId, newId] of Object.entries(idMap)) {
+        const pos = layout[oldId]
+        if (pos) {
+            layout[newId] = { x: pos.x + DUPLICATE_OFFSET.x, y: pos.y + DUPLICATE_OFFSET.y }
+        }
+    }
+
+    return {
+        def: { ...def, nodes: [...def.nodes, ...cloned], layout },
+        newIds: cloned.map((n) => n.id),
+    }
+}
+
+/** What a copy places on the builder clipboard. */
+export interface NodeClipboard {
+    nodes: WorkflowNode[]
+    layout: Record<string, NodePosition>
+}
+
+export function copyNodes(def: WorkflowDefinition, ids: string[]): NodeClipboard | null {
+    const nodes = def.nodes.filter((n) => ids.includes(n.id))
+    if (!nodes.length) return null
+    const layout: Record<string, NodePosition> = {}
+    for (const node of nodes) {
+        const pos = def.layout?.[node.id]
+        if (pos) layout[node.id] = pos
+    }
+    return { nodes, layout }
+}
+
+export function pasteNodes(
+    def: WorkflowDefinition,
+    clipboard: NodeClipboard,
+): { def: WorkflowDefinition; newIds: string[] } {
+    const { nodes: cloned, idMap } = cloneNodes(
+        clipboard.nodes,
+        def.nodes.map((n) => n.id),
+    )
+
+    const layout = { ...(def.layout ?? {}) }
+    for (const [oldId, newId] of Object.entries(idMap)) {
+        const pos = clipboard.layout[oldId]
+        if (pos) {
+            layout[newId] = { x: pos.x + DUPLICATE_OFFSET.x, y: pos.y + DUPLICATE_OFFSET.y }
+        }
+    }
+
+    return {
+        def: { ...def, nodes: [...def.nodes, ...cloned], layout },
+        newIds: cloned.map((n) => n.id),
+    }
+}
+
+/**
+ * Nodes matching a free-text query, by id, type label, or configured content.
+ * Used by the builder's node search on graphs too large to scan by eye.
+ */
+export function searchNodes(def: WorkflowDefinition, query: string): WorkflowNode[] {
+    const needle = query.trim().toLowerCase()
+    if (!needle) return []
+    return def.nodes.filter((node) => {
+        if (node.id.toLowerCase().includes(needle)) return true
+        if (node.type.replace(/_/g, " ").includes(needle)) return true
+        return searchableText(node).toLowerCase().includes(needle)
+    })
+}
+
+/**
+ * The authored content of a node, as one searchable string. Ids of other
+ * records (profile ids, template keys) are deliberately left out: they are not
+ * what someone is looking for when they search a canvas.
+ */
+function searchableText(node: WorkflowNode): string {
+    switch (node.type) {
+        case "send_sms":
+            return node.body_template
+        case "send_email":
+            return `${node.subject_template} ${node.body_template}`
+        case "update_patient_status":
+            return `${node.status} ${node.note_template ?? ""}`
+        case "update_appointment":
+            return `${node.operation} ${node.reason ?? ""}`
+        case "update_gotracker_appointment":
+            return node.reason ?? ""
+        case "booking_link":
+            return node.actions.join(" ")
+        case "exit":
+            return node.outcome ?? ""
+        case "llm":
+            return `${node.source_field} ${node.output_field} ${node.prompt_template}`
+        case "json_mapper":
+            return node.mappings.map((m) => `${m.source_path} ${m.target_field}`).join(" ")
+        default:
+            return ""
+    }
+}

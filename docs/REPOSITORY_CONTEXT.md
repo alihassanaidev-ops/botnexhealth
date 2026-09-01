@@ -417,6 +417,31 @@ and the webhook route's status labelling both derive from it. Note that the
 `writable` flag is not yet verified against the installed Synchronizer build and
 currently reports every status as writable, which preserves prior behaviour.
 
+### Canvas editing
+
+Undo/redo is recorded at the single `applyDef` seam in `pages/WorkflowBuilder.tsx`
+rather than per editor, with rapid edits coalesced so one undo steps over a typed
+word rather than a character. Applying a definition and recording it are separate
+calls (`commitDef` vs `applyDef`) — undo restores a definition that is already in
+the history, and re-pushing it would make undo and redo cancel each other. The
+history resets on load and on discard, so undo cannot walk back into a draft the
+author has just thrown away.
+
+Duplicate, copy and paste rewrite ids through `cloneNodes` in
+`lib/workflow/graph.ts`: edges *inside* the copied set are repointed at the
+copies, and edges leaving it are cleared rather than left pointing at the
+originals — a copy that silently rejoins the original graph is almost never what
+"duplicate" means, and a dangling pointer is at least visible in validation.
+Every forward pointer must be listed there, which is the same knowledge
+`outgoing()` carries; `patient_registration.on_abandoned_node_id` is the one that
+is not called `next_node_id`, and a blanket rewrite would miss it. Optional
+pointers that leave the copied set drop to `null`, since `""` is not a valid id.
+
+Node search matches id, type and configured content, which is how a graph of
+thirty or forty steps stays navigable. Selection is a set: shift/cmd-click
+toggles membership and a drag on the pane draws a selection box, while
+`selectedId` remains the single node the config panel edits.
+
 `send_sms` is run-scoped and only sends the message. The node does **not** carry
 an arbitrary recipient number; it sends to the workflow run's `Contact.phone`
 from the resolved `InstitutionLocation.twilio_from_number`. New workflow SMS
