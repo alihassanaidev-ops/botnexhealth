@@ -80,8 +80,12 @@ describe("Contacts and Patients directories", () => {
                 last_name: "Reyes",
                 full_name: "Dana Reyes",
                 inactive: false,
+                email: null,
+                phone: null,
                 email_masked: "d***@example.com",
                 phone_masked: "+*******1234",
+                contact_details_masked: true,
+                can_reveal_contact_details: true,
                 pms_updated_at: "2026-09-01T09:55:00Z",
                 pms_last_sync_time: "2026-09-01T09:55:00Z",
                 contact_id: "contact-1",
@@ -120,7 +124,23 @@ describe("Contacts and Patients directories", () => {
         ))
         expect(screen.getByText(/read securely from nexhealth/i)).toBeInTheDocument()
         expect(screen.getAllByText("Active")).toHaveLength(2)
+        expect(screen.getByRole("button", { name: /reveal/i })).toBeInTheDocument()
         expect(screen.queryByRole("button", { name: /add contact/i })).not.toBeInTheDocument()
+    })
+
+    it("reveals one institution-admin patient through a bounded page read", async () => {
+        const user = userEvent.setup()
+        render(<Patients />)
+        await screen.findByText("Dana Reyes")
+
+        await user.click(screen.getByRole("button", { name: /reveal/i }))
+
+        await waitFor(() => expect(api.listLivePatients).toHaveBeenLastCalledWith(
+            expect.objectContaining({
+                locationId: "loc-1",
+                revealPatientId: "nh-42",
+            }),
+        ))
     })
 
     it("creates a contact in the selected location with explicit consent", async () => {

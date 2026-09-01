@@ -14,7 +14,7 @@ from src.app.database import get_db_session
 from src.app.models.audit_log import AuditAction, AuditActor
 from src.app.models.contact import Contact
 from src.app.models.contact_location_access import ContactLocationAccess
-from src.app.models.user import User
+from src.app.models.user import User, UserRole
 from src.app.pms.base import PMSAdapter
 from src.app.pms.factory import get_institution_pms
 from src.app.pms.models import PatientCreateRequest, UniversalPatient
@@ -32,8 +32,12 @@ class PatientDirectoryItem(BaseModel):
     last_name: str
     full_name: str
     inactive: bool = False
+    email: str | None = None
+    phone: str | None = None
     email_masked: str | None = None
     phone_masked: str | None = None
+    contact_details_masked: bool = False
+    can_reveal_contact_details: bool = False
     pms_updated_at: str | None = None
     pms_last_sync_time: str | None = None
     contact_id: str | None = None
@@ -84,7 +88,8 @@ async def _local_contact_ids(
 
 def _patient_directory_resource(*_args, **kwargs) -> str:
     patient_status = kwargs.get("patient_status") or "active"
-    return f"patient_directory:{patient_status}"
+    operation = "reveal" if kwargs.get("reveal_patient_id") else "list"
+    return f"patient_directory:{patient_status}:{operation}"
 
 
 @router.get("/page", response_model=PatientDirectoryPage)
@@ -101,12 +106,14 @@ async def browse_patients(
     page_size: int = Query(25, ge=1, le=100),
     search: str | None = Query(None, min_length=2, max_length=128),
     patient_status: Literal["active", "inactive", "all"] = Query("active"),
+    reveal_patient_id: str | None = Query(None, min_length=1, max_length=128),
     pms: PMSAdapter = Depends(get_institution_pms),
 ) -> PatientDirectoryPage:
     """Read one current patient page from NexHealth or GoTracker.
 
-    The response deliberately contains masked directory fields only. Full PHI
-    continues to require the existing audited reveal/detail flows.
+    Location-scoped clinic users receive contact fields directly. Institution
+    admins receive masked contact fields unless they explicitly reveal one row;
+    that second bounded read is separately identifiable in the audit resource.
     """
     try:
         page = await pms.browse_patients(
@@ -119,29 +126,41 @@ async def browse_patients(
             current_user=current_user,
             pms_patient_ids=[patient.id for patient in page.items],
         )
-        items = [
-            PatientDirectoryItem(
-                pms_patient_id=patient.id,
-                source=patient.source,
-                first_name=patient.first_name,
-                last_name=patient.last_name,
-                full_name=(
-                    " ".join(
-                        value
-                        for value in (patient.first_name, patient.last_name)
-                        if value
-                    ).strip()
-                    or "Unknown patient"
-                ),
-                inactive=bool(patient.extra.get("inactive", False)),
-                email_masked=_mask_email(patient.email),
-                phone_masked=mask_phone(patient.phone),
-                pms_updated_at=_string_or_none(patient.extra.get("updated_at")),
-                pms_last_sync_time=_string_or_none(patient.extra.get("last_sync_time")),
-                contact_id=contact_ids.get(patient.id),
+        institution_admin = current_user.role == UserRole.INSTITUTION_ADMIN.value
+        items = []
+        for patient in page.items:
+            reveal_this_patient = institution_admin and reveal_patient_id == patient.id
+            show_contact_details = not institution_admin or reveal_this_patient
+            items.append(
+                PatientDirectoryItem(
+                    pms_patient_id=patient.id,
+                    source=patient.source,
+                    first_name=patient.first_name,
+                    last_name=patient.last_name,
+                    full_name=(
+                        " ".join(
+                            value
+                            for value in (patient.first_name, patient.last_name)
+                            if value
+                        ).strip()
+                        or "Unknown patient"
+                    ),
+                    inactive=bool(patient.extra.get("inactive", False)),
+                    email=patient.email if show_contact_details else None,
+                    phone=patient.phone if show_contact_details else None,
+                    email_masked=_mask_email(patient.email),
+                    phone_masked=mask_phone(patient.phone),
+                    contact_details_masked=not show_contact_details,
+                    can_reveal_contact_details=(
+                        institution_admin and not reveal_this_patient
+                    ),
+                    pms_updated_at=_string_or_none(patient.extra.get("updated_at")),
+                    pms_last_sync_time=_string_or_none(
+                        patient.extra.get("last_sync_time")
+                    ),
+                    contact_id=contact_ids.get(patient.id),
+                )
             )
-            for patient in page.items
-        ]
         return PatientDirectoryPage(
             source=pms.source,
             fetched_at=datetime.now(timezone.utc).isoformat(),

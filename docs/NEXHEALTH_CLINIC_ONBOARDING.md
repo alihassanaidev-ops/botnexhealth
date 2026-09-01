@@ -148,6 +148,8 @@ one current page directly from NexHealth through the backend, defaults to active
 patients, and should expose working Next/Previous controls when NexHealth returns
 more rows. This check proves current directory access; it does **not** prove that
 NexHealth's Synchronizer has finished importing all historical PMS patients.
+Verify the role policy as well: location-scoped clinic users see phone/email
+directly, while an institution admin sees masked values until revealing one row.
 
 Webhook registration, Synchronizer read health, and historical projection
 backfill are separate readiness signals. A clinic may browse the rows NexHealth

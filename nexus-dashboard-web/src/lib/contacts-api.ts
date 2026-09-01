@@ -88,8 +88,12 @@ export interface LivePatientListItem {
     last_name: string
     full_name: string
     inactive: boolean
+    email: string | null
+    phone: string | null
     email_masked: string | null
     phone_masked: string | null
+    contact_details_masked: boolean
+    can_reveal_contact_details: boolean
     pms_updated_at: string | null
     pms_last_sync_time: string | null
     contact_id: string | null
@@ -113,6 +117,7 @@ export interface LivePatientFilters {
     pageSize?: number
     search?: string
     patientStatus?: "active" | "inactive" | "all"
+    revealPatientId?: string
 }
 
 export async function listLivePatients(filters: LivePatientFilters): Promise<LivePatientPage> {
@@ -121,6 +126,7 @@ export async function listLivePatients(filters: LivePatientFilters): Promise<Liv
     if (filters.pageSize !== undefined) params.set("page_size", String(filters.pageSize))
     if (filters.search) params.set("search", filters.search)
     if (filters.patientStatus) params.set("patient_status", filters.patientStatus)
+    if (filters.revealPatientId) params.set("reveal_patient_id", filters.revealPatientId)
     const { data } = await api.get<LivePatientPage>(`/v1/pms/patients/page?${params.toString()}`)
     return data
 }

@@ -726,8 +726,10 @@ The clinic-facing **Patients** directory has a different read requirement from
 campaign dispatch. It proxies exactly one current page from the selected
 location's NexHealth or GoTracker adapter through
 `GET /api/v1/pms/patients/page`; credentials stay server-side, active status is
-explicit, directory PHI is masked, and upstream errors become a stable 503. The
-page never loads the full patient roster. NexHealth uses stable-v3 cursors;
+explicit, and upstream errors become a stable 503. Location-scoped clinic users
+receive phone/email directly; institution admins receive masked contact fields
+until they use the audited per-row reveal action. The page never loads the full
+patient roster. NexHealth uses stable-v3 cursors;
 GoTracker requests one fixed Synchronizer page. Existing local Contact links are
 attached to returned rows only to open call/history detail. **Contacts** remains
 the local non-PMS relationship directory, while local patient projections remain

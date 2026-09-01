@@ -11,6 +11,7 @@ import {
     Link2Off,
     Sparkles,
     UserPlus,
+    Eye,
 } from "lucide-react"
 import { PageHeader } from "@/components/PageHeader"
 import { Card, CardContent } from "@/components/ui/card"
@@ -565,6 +566,7 @@ function LivePatientsDirectory() {
     const [cursor, setCursor] = useState<string | null>(null)
     const [pageNumber, setPageNumber] = useState(1)
     const [selected, setSelected] = useState<string | null>(null)
+    const [revealingPatientId, setRevealingPatientId] = useState<string | null>(null)
     const requestVersion = useRef(0)
 
     useEffect(() => {
@@ -577,6 +579,15 @@ function LivePatientsDirectory() {
         setPageNumber(1)
     }, [debouncedSearch, patientStatus, locationId])
 
+    const loadPatientPage = useCallback((revealPatientId?: string) => listLivePatients({
+        locationId: locationId!,
+        cursor,
+        pageSize: PAGE_SIZE,
+        search: debouncedSearch.length >= 2 ? debouncedSearch : undefined,
+        patientStatus,
+        revealPatientId,
+    }), [locationId, cursor, debouncedSearch, patientStatus])
+
     const fetchPatients = useCallback(async () => {
         const version = ++requestVersion.current
         if (!locationId) {
@@ -585,13 +596,7 @@ function LivePatientsDirectory() {
         }
         setLoading(true)
         try {
-            const next = await listLivePatients({
-                locationId,
-                cursor,
-                pageSize: PAGE_SIZE,
-                search: debouncedSearch.length >= 2 ? debouncedSearch : undefined,
-                patientStatus,
-            })
+            const next = await loadPatientPage()
             if (requestVersion.current === version) setData(next)
         } catch (error) {
             if (requestVersion.current === version) {
@@ -601,7 +606,23 @@ function LivePatientsDirectory() {
         } finally {
             if (requestVersion.current === version) setLoading(false)
         }
-    }, [locationId, cursor, debouncedSearch, patientStatus])
+    }, [locationId, loadPatientPage])
+
+    const revealContactDetails = useCallback(async (patientId: string) => {
+        if (!locationId) return
+        const version = ++requestVersion.current
+        setRevealingPatientId(patientId)
+        try {
+            const next = await loadPatientPage(patientId)
+            if (requestVersion.current === version) setData(next)
+        } catch (error) {
+            if (requestVersion.current === version) {
+                toast.error(error instanceof Error ? error.message : "Failed to reveal patient contact details")
+            }
+        } finally {
+            if (requestVersion.current === version) setRevealingPatientId(null)
+        }
+    }, [locationId, loadPatientPage])
 
     useEffect(() => { void fetchPatients() }, [fetchPatients])
 
@@ -729,8 +750,28 @@ function LivePatientsDirectory() {
                                                     {patient.inactive ? "Inactive" : "Active"}
                                                 </Badge>
                                             </TableCell>
-                                            <TableCell className="whitespace-nowrap px-4">{patient.phone_masked ?? "—"}</TableCell>
-                                            <TableCell className="whitespace-nowrap px-4">{patient.email_masked ?? "—"}</TableCell>
+                                            <TableCell className="whitespace-nowrap px-4">
+                                                <div className="flex items-center gap-2">
+                                                    <span>{patient.phone ?? patient.phone_masked ?? "—"}</span>
+                                                    {patient.can_reveal_contact_details && (
+                                                        <Button
+                                                            type="button"
+                                                            size="sm"
+                                                            variant="ghost"
+                                                            className="h-7 gap-1 px-2 text-xs"
+                                                            disabled={revealingPatientId !== null}
+                                                            onClick={(event) => {
+                                                                event.stopPropagation()
+                                                                void revealContactDetails(patient.pms_patient_id)
+                                                            }}
+                                                        >
+                                                            <Eye className="h-3.5 w-3.5" />
+                                                            {revealingPatientId === patient.pms_patient_id ? "Revealing…" : "Reveal"}
+                                                        </Button>
+                                                    )}
+                                                </div>
+                                            </TableCell>
+                                            <TableCell className="whitespace-nowrap px-4">{patient.email ?? patient.email_masked ?? "—"}</TableCell>
                                             <TableCell className="whitespace-nowrap px-4 text-muted-foreground">
                                                 {formatDateTime(patient.pms_last_sync_time ?? patient.pms_updated_at)}
                                             </TableCell>

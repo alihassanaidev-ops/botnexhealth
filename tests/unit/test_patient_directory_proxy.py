@@ -18,10 +18,10 @@ def _unwrap(fn):
     return fn
 
 
-def _user():
+def _user(role="LOCATION_ADMIN"):
     return SimpleNamespace(
         id="user-1",
-        role="LOCATION_ADMIN",
+        role=role,
         institution_id="inst-1",
         location_id="loc-1",
     )
@@ -51,7 +51,9 @@ class _PMS:
 
 
 @pytest.mark.asyncio
-async def test_live_patient_page_masks_phi_and_links_existing_contact(monkeypatch):
+async def test_location_admin_patient_page_shows_contact_fields_and_links_contact(
+    monkeypatch,
+):
     pms = _PMS(
         UniversalPatientPage(
             items=[
@@ -87,13 +89,16 @@ async def test_live_patient_page_masks_phi_and_links_existing_contact(monkeypatc
         page_size=25,
         search="Dana",
         patient_status="active",
+        reveal_patient_id=None,
         pms=pms,
     )
 
     assert response.total == 75
     assert response.next_cursor == "next:cursor-1"
-    assert response.items[0].email_masked == "d***@example.com"
-    assert response.items[0].phone_masked.endswith("1234")
+    assert response.items[0].email == "dana@example.com"
+    assert response.items[0].phone == "+12125551234"
+    assert response.items[0].contact_details_masked is False
+    assert response.items[0].can_reveal_contact_details is False
     assert response.items[0].contact_id == "contact-42"
     assert "1988-04-02" not in response.model_dump_json()
     assert pms.calls == [
@@ -108,6 +113,57 @@ async def test_live_patient_page_masks_phi_and_links_existing_contact(monkeypatc
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("reveal_patient_id", "expected_email", "masked", "can_reveal"),
+    [
+        (None, None, True, True),
+        ("nh-42", "dana@example.com", False, False),
+    ],
+)
+async def test_institution_admin_masks_until_one_patient_is_revealed(
+    monkeypatch,
+    reveal_patient_id,
+    expected_email,
+    masked,
+    can_reveal,
+):
+    pms = _PMS(
+        UniversalPatientPage(
+            items=[
+                UniversalPatient(
+                    id="nh-42",
+                    source="nexhealth",
+                    first_name="Dana",
+                    last_name="Reyes",
+                    email="dana@example.com",
+                    phone="+12125551234",
+                )
+            ]
+        )
+    )
+    monkeypatch.setattr(route, "_local_contact_ids", AsyncMock(return_value={}))
+
+    response = await _unwrap(route.browse_patients)(
+        request=_request(),
+        current_user=_user("INSTITUTION_ADMIN"),
+        cursor=None,
+        page_size=25,
+        search=None,
+        patient_status="active",
+        reveal_patient_id=reveal_patient_id,
+        pms=pms,
+    )
+
+    item = response.items[0]
+    assert item.email == expected_email
+    assert item.phone == ("+12125551234" if expected_email else None)
+    assert item.email_masked == "d***@example.com"
+    assert item.phone_masked.endswith("1234")
+    assert item.contact_details_masked is masked
+    assert item.can_reveal_contact_details is can_reveal
+
+
+@pytest.mark.asyncio
 async def test_live_patient_page_returns_safe_503_and_closes_adapter():
     pms = _PMS(error=RuntimeError("patient Dana +15551234567 failed"))
 
@@ -119,6 +175,7 @@ async def test_live_patient_page_returns_safe_503_and_closes_adapter():
             page_size=25,
             search=None,
             patient_status="active",
+            reveal_patient_id=None,
             pms=pms,
         )
 

@@ -111,8 +111,10 @@ appointment-type and scheduling selections.
 The clinic-facing Patients page is a bounded server-to-server read, not a full
 local-roster query and never a browser-to-NexHealth request. The dashboard calls
 `GET /api/v1/pms/patients/page` with an explicit local `location_id`; the backend
-resolves the institution credential, calls NexHealth, masks phone/email, audits
-the read, and returns one page.
+resolves the institution credential, calls NexHealth, audits the read, and
+returns one page. Location-scoped clinic users receive phone/email directly.
+Institution admins receive masked contact fields by default and can reveal one
+patient's fields with a second audited, bounded read of the current page.
 
 For stable v3 the adapter passes `location_strict=true`, `non_patient=false`, an
 explicit inactive filter, and at most 100 records. It follows neither cursor on
