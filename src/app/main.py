@@ -25,6 +25,7 @@ from src.app.api.routes.do_not_contact import router as do_not_contact_router
 from src.app.api.routes.campaign_booking import router as campaign_booking_router
 from src.app.api.routes.campaign_identity_routes import router as campaign_identity_router
 from src.app.api.routes.enquiry_intake import router as enquiry_intake_router
+from src.app.api.routes.enquiry_intake_admin import router as enquiry_intake_admin_router
 from src.app.api.routes.campaign_registration import router as campaign_registration_router
 from src.app.api.routes.campaign_links import router as campaign_links_router
 from src.app.api.routes.email_compliance import router as email_compliance_router
@@ -290,6 +291,7 @@ def create_app() -> FastAPI:
     app.include_router(campaign_registration_router, prefix="/api")
     app.include_router(campaign_identity_router, prefix="/api")
     app.include_router(enquiry_intake_router, prefix="/api")
+    app.include_router(enquiry_intake_admin_router, prefix="/api")
     app.include_router(group_router, prefix="/api")
     app.include_router(custom_fields_router, prefix="/api")
     app.include_router(workflow_statuses_router, prefix="/api")

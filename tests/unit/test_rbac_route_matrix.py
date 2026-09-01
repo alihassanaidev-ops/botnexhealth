@@ -265,6 +265,13 @@ ROUTES_BY_BOUNDARY: dict[str, tuple[str, ...]] = {
         "DELETE /api/outbound-voice/profiles/{profile_id}",
     ),
     INSTITUTION_ADMIN: (
+        # Intake credentials for a clinic's own forms. Institution-scoped
+        # because a token lands leads in one tenant, and issuing one is a
+        # decision about that clinic's data rather than a location's.
+        "GET /api/institution/enquiry-sources",
+        "POST /api/institution/enquiry-sources",
+        "PATCH /api/institution/enquiry-sources/{source_id}",
+        "POST /api/institution/enquiry-sources/{source_id}/rotate",
         "POST /api/institution/users/invite-institution-admin",
         "GET /api/institution/users",
         "POST /api/institution/users/invite",

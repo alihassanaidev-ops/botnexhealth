@@ -15,6 +15,7 @@ import BrandLoader from "@/components/BrandLoader";
 import Login from "./pages/Login";
 import BookingLink from "./pages/BookingLink";
 import CancelLink from "./pages/CancelLink";
+import EnquirySources from "./pages/EnquirySources";
 import IdentifyPatient from "./pages/IdentifyPatient";
 import RegisterPatient from "./pages/RegisterPatient";
 import SetPassword from "./pages/SetPassword";
@@ -177,6 +178,18 @@ export const router = createBrowserRouter([
                         // SMS templates are patient-facing acknowledgements that
                         // only no-PMS clinics send, so the page is guarded on both
                         // the role and the tenant type.
+                        // Intake credentials for a clinic's own forms. Not
+                        // PMS-gated: a lead has no practice-software record by
+                        // definition, so this is exactly as relevant to an
+                        // integrated clinic as to a no-PMS one.
+                        path: "institution-admin/enquiry-forms",
+                        element: (
+                            <RoleGuard allowed={["INSTITUTION_ADMIN"]}>
+                                <S><EnquirySources /></S>
+                            </RoleGuard>
+                        ),
+                    },
+                    {
                         path: "institution-admin/sms-templates",
                         element: (
                             <RoleGuard allowed={["INSTITUTION_ADMIN"]}>

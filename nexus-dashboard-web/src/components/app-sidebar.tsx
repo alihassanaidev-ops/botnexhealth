@@ -396,6 +396,16 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
                                 )}
                                 {/* Patient SMS acknowledgements only exist for
                                     no-PMS clinics — nothing is booked to confirm. */}
+                                {user?.role === "INSTITUTION_ADMIN" && (
+                                    <NavItem
+                                        item={{
+                                            title: "Enquiry Forms",
+                                            url: "/institution-admin/enquiry-forms",
+                                            icon: InboxIcon,
+                                        }}
+                                        isActive={location.pathname === "/institution-admin/enquiry-forms"}
+                                    />
+                                )}
                                 {user?.role === "INSTITUTION_ADMIN" && !hasPms && (
                                     <NavItem
                                         item={{
