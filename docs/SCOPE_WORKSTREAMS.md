@@ -22,6 +22,8 @@ part of this backlog; the section *What doesn't compress* is where the schedule 
 | Split across both | **12 items** |
 | Blocked on a product decision | **9 items** (Decisions A–I) |
 | Gated on something other than code | **17 items** — see *What doesn't compress* |
+| **Delivered so far** | **26 of 47**, plus Item 24 part-built — see *Delivered so far* |
+| **Workstreams complete** | **WS2, WS6**; WS3 owes Item 11 and half of Item 15; WS7 owes Item 40 |
 
 ---
 
@@ -32,8 +34,8 @@ part of this backlog; the section *What doesn't compress* is where the schedule 
 | **32** · Record who changed a campaign | Security, audit & RBAC | `7572ca4` | 15 `CAMPAIGN_*` action types, 18 endpoints decorated, static coverage test. Four of five acceptance criteria met in full; compliance-setting audit is reserved for Item 20 (no such endpoint exists yet) |
 | **14** · Retry text messages | Campaign engine core | `7116457` | Found worse than documented: `SmsService` never raises, and the executor discarded its return value, so a Twilio rejection was recorded as a delivered contact. Three-way classification — the ambiguous network case is deliberately not retried, since Twilio's Create Message has no idempotency key |
 | **15** · Delivery results into campaigns | Campaign engine core | `cc3f28a` | Step records the provider message id in `result_metadata`; terminal receipts mark `sent:delivered` / `sent:undelivered`. Branching on delivery failure deferred — the run has usually advanced past the step by then |
-| **12** · Generate the three link types | Campaign engine core | `797063d` + `e43378d` | Signed, run-scoped, expiring tokens (action and expiry both inside the signature) plus the three public landing endpoints. Confirm completes the write-back; book and reschedule capture intent and raise a staff handoff, because no patient-facing slot picker exists. **Remaining: a booking page**, so those two can finish unattended |
-| **21** · Inbound enquiry store | Campaign engine core | `080e3a0` | `campaign_enquiries` with RLS (forced, `WITH CHECK` so a clinic can't insert into another's scope), unique on `(institution_id, intake_key)` for idempotent resubmission, AES-GCM email/phone with the hash written by the same setter. Unblocks Item 24 |
+| **12** · Generate the three link types | Campaign engine core | `797063d` `e43378d` → `e73786f` `96d86c4` `bc70361` `04ec54a` `fd30337` `0dc95ed` `750ea50` | Signed, run-scoped, expiring tokens (action and expiry both inside the signature), the public landing endpoints, and the patient-facing slot picker: book, reschedule and cancel all finish unattended. Reschedule patches the original appointment rather than cancel-and-rebook; a slot lost mid-flow is told apart from a failed booking and re-offered in one round trip. **`750ea50` fixed the defect that made the rest unreachable** — `action_url` had always returned the API path, so `{{booking_link}}` resolved to the endpoint that hands the patient to staff rather than to the picker. Marked delivered once on tests that never checked where a link goes |
+| **21** · Inbound enquiry store | Campaign engine core | `080e3a0` → `0196ba7` | `campaign_enquiries` with RLS (forced, `WITH CHECK` so a clinic can't insert into another's scope), unique on `(institution_id, intake_key)` for idempotent resubmission, AES-GCM email/phone with the hash written by the same setter. **`0196ba7` added what working a lead actually needs**: an email hash (deduplicating on email alone breaks the moment a channel other than a web form is involved; on phone alone it breaks on recycled numbers), structured attribution and an external reference, and encrypted notes. Intake matches key → either hash → existing patient contact, because a "new lead" is often somebody the practice already has. Consent is written to `consent_records`, which already keys on hash with `contact_id` nullable, so a lead's opt-in is read by the gates that were going to check anyway |
 | **30** · Block unsupported campaigns | Campaign engine core | `d3c444b` | Doc said flip warn→refuse; instantiation already refused. Real gap: requirements lived on template metadata and never reached the definition, so publish never re-checked. Now carried and re-evaluated; unknown still counts as unavailable |
 | **13** · Enforce readiness at publish | Campaign engine core | `417bf54` | Doc was out of date — the publish path already ran the real readiness service, fail-closed. Real gap: SMS-not-provisioned was a *warning* while voice was an error, so a campaign published for a clinic with no Twilio sender and failed for every patient. Email's platform-address fallback stays a warning, since that mail does deliver |
 | **16** · Cross-channel suppression | Campaign engine core | `46a3a9f` + `fca9d07` | Moved from "how the campaign was drawn" to an engine rule in the compliance gate, checked before quiet hours. Opt-out moved to the send node (`send_after_response`) after `fca9d07` — on `ComplianceMetadata` it was dead, since `publish_version` strips that block. Verified safe for both live campaigns — they hold only a voice attempt ladder, no post-response sends |
@@ -69,6 +71,23 @@ Not scope items, but they blocked or silently defeated scope work.
 | `channel` value the response table permits | `dc74076` | The link endpoints wrote `"link"`, which the CHECK constraint rejects. Every confirm and handoff would have failed on insert; mocked sessions never touched the constraint |
 | Enquiry column types + duplicate index | `f358857` | `String(36)` ids against `uuid` targets, and a model declaring two indexes of one name |
 | Cross-channel suppression opt-out moved to the send node | `fca9d07` | On `ComplianceMetadata` it was dead code — `publish_version` strips that block, so the flag could never be switched on |
+| Action links pointed at the API, never at the pages | `750ea50` | `action_url` returned `/api/campaigns/link/{action}` for every action, including after the patient-facing pages were built. `{{booking_link}}` therefore resolved to the handler that hands the patient to **staff** — the precise outcome the slot picker exists to avoid. Item 12 had been marked delivered on tests that never asserted where a link goes |
+| The two new node types were unreachable by the engine | `02a3f1a` | `booking_link` and `patient_registration` were never added to `NODE_CAPABILITIES`, which the dispatcher consults before executing a step and the builder palette filters against. Both were invisible in the palette **and** would have failed their run with "not supported by this engine" — schema, executor, API enforcement and 71 tests, all correct and all unreachable. The guard added with the fix derives from the schema union rather than a hand-kept list, so the same omission cannot recur |
+| Every environment minted links pointing at production | `77d637d` | `public_base_url` was a hardcoded default in `config.py` and nothing set it per environment, so staging generated patient links aimed at `app.scalenexus.ai`. Publish validation could not catch it: it refuses an *empty* base URL, not a wrong one |
+| A fragile emergency-halt test, unmasked | `02a3f1a` | Pinned `session.execute` to a two-item `side_effect`, so it broke when `cancel_run` gained its Retell-SMS cleanup. Already failing in isolation on staging; full-suite ordering was hiding it |
+
+---
+
+## Added beyond the scope
+
+Not in the 47 items. Each came out of a question the scope did not ask.
+
+| Addition | Commit | Why |
+|---|---|---|
+| A patient identity gate in front of action links | `bdb5c25` + `3c1a851` | A link binds a *run*, and the run names a contact — which is not the same as knowing who is holding the phone. A number reaches a household (the contact model says so outright), and one given to a clinic 18 months ago may have been reassigned. Opening a cancel link used to hand the appointment's time, provider and reason to whoever opened it, then let them cancel it. Reuses the voice agent's `_identity_gate_passes` rather than growing a second matcher, keeps its one-neutral-answer property so the page cannot be used to test guesses, and caps attempts — a phone call has natural friction, a web form has none. Running out fetches a human instead of showing a wall. The campaign author chooses when it applies; runs already in flight are exempt |
+| Booking Link and Register Patient as configurable steps | `3f72962` + `c15d7eb` | The link was a bare merge field: the API offered every appointment type the practice software returned. The voice agent restricts what a new patient may book, but that rule lives in its Retell prompt — guidance an LLM follows, not a constraint the platform applies — so a patient following a link could pick something the phone agent would never have offered. Now a step with rules the server enforces, configured from the cached PMS lists rather than typed ids: NexHealth types `provider_id` as an integer, so a typed name made every registration fail as an opaque 503 |
+| Enquiry intake credentials, issued by the clinic | `db98a99` | The intake table existed but nothing could create a row. One credential per form, so a practice can run a website form, a Typeform page and a paid-ads form at once and retire one without the others. Shown once, stored hashed, rotatable |
+| A confirmation email after a link booking | `2f39b99` | Reuses the voice agent's template and its activation gate, so a clinic edits that wording once and both channels follow. Reads the address from the PMS rather than the page — a forwarded link must not redirect someone else's confirmation |
 
 ---
 
@@ -154,12 +173,15 @@ Where the silent failures live. Everything here is in this repo.
 # WS4 · The four campaigns
 **3 items · ≈ 10 days · Platform + campaign design · TIER 2**
 
+**Item 24 is part-built**: intake, patient conversion and the lead workspace are in; the trigger and
+the campaign template are not.
+
 Two campaigns are live and good. Two are two-step placeholders and one does not exist.
 
 | # | Item | Size | Notes |
 |---|---|---|---|
 | **22** | Build out Appointment Reminder and Overdue Recall | 5d | Rebuild both to the depth of the live campaigns (~15–20 steps each). Reminder must re-check live practice data before every send. **Switching them on is the last action in this workstream.** Blocked on Decision D, needs Items 11, 12, 13, 25 |
-| **24** | Build the Sales Qualification campaign | 4d | Does not exist in any form. Intake route + trigger + template + provider/type matching + patient conversion. Blocked on Decision C, needs Items 21 and 11 |
+| **24** ◐ | Build the Sales Qualification campaign — **intake and conversion done, `ecd1861` `db98a99` `a6e8932` `09e1986` `2f39b99`** | 4d | Was "does not exist in any form"; three of its five parts now do. **Intake**: a per-form credential a clinic issues itself, posted to by its own site or a hosted builder, with tolerant extraction of the answers array so a Typeform payload does not have to be reshaped first — plus staff entry by hand through the same path, so dedup and consent cannot diverge between the two. **Patient conversion**: the registration form and `create_patient`, which both adapters already implemented and only the voice agent could reach. **Working the lead**: a list, a stage derived from whether a practice-software record exists, and encrypted notes. **Remaining: the trigger and the template** — nothing enrols a landed lead into a campaign yet, and `BulkImportTrigger` is still a literal nothing implements. Decision C answered (signed webhook), and its open half answered too (staff may enter by hand) |
 | **23** | Run Overdue Recall for GoTracker clinics | 1d | Must refuse to run on a clinic whose history sync is incomplete — otherwise it tells last month's patients they haven't been seen in two years |
 
 ---
