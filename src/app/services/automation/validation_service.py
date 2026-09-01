@@ -28,7 +28,10 @@ from pydantic import ValidationError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.app.config import settings
-from src.app.services.automation.campaign_action_links import PLACEHOLDER_ACTIONS
+from src.app.services.automation.campaign_action_links import (
+    PLACEHOLDER_ACTIONS,
+    REGISTRATION_PLACEHOLDER,
+)
 from src.app.services.automation.definition_schema import (
     SendEmailNode,
     SendSmsNode,
@@ -157,6 +160,7 @@ class WorkflowValidationService:
         # issues += self._consent_and_content(definition)
         issues += self._merge_field_issues(definition)
         issues += self._action_link_issues(definition)
+        issues += self._registration_link_issues(definition)
         issues += await self._pms_capability_issues(
             definition, institution_id=institution_id, location_id=location_id
         )
@@ -523,6 +527,47 @@ class WorkflowValidationService:
                             fix="Set public_base_url, or remove the link from this message.",
                         )
                     )
+        return issues
+
+    @staticmethod
+    def _registration_link_issues(definition: WorkflowDefinition) -> list[ValidationIssue]:
+        """{{registration_link}} only resolves if a step actually issues one.
+
+        Unlike the booking placeholders, this link is not generated for every
+        run — a link that creates patient records exists only for a campaign
+        that asked for one. So a message using the placeholder without a
+        Register Patient step ahead of it would send with the link missing,
+        which is precisely the failure these placeholders had before anything
+        produced a value.
+        """
+        has_step = any(
+            getattr(node, "type", None) == "patient_registration"
+            for node in definition.nodes
+        )
+        if has_step:
+            return []
+        issues: list[ValidationIssue] = []
+        for node in definition.nodes:
+            for field_path, template in _node_templates(node):
+                if REGISTRATION_PLACEHOLDER not in _extract_token_names(template):
+                    continue
+                issues.append(
+                    ValidationIssue(
+                        severity="error",
+                        message=(
+                            f"'{{{{{REGISTRATION_PLACEHOLDER}}}}}' is used but no "
+                            "Register Patient step issues one, so the message "
+                            "would go out with the link missing."
+                        ),
+                        node_id=getattr(node, "id", None),
+                        field_path=[field_path],
+                        code="registration_link_not_issued",
+                        fix=(
+                            "Add a Register Patient step before this message, or "
+                            "remove the link from it."
+                        ),
+                    )
+                )
         return issues
 
     @staticmethod

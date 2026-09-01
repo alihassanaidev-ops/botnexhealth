@@ -32,6 +32,8 @@ from src.app.services.automation.campaign_action_links import build_run_links
 from src.app.services.automation.campaign_action_links import (
     BOOKING_LINK_CONFIG_KEY,
     REGISTRATION_CONFIG_KEY,
+    REGISTRATION_PLACEHOLDER,
+    registration_link,
 )
 from src.app.services.automation.definition_schema import (
     AppointmentRelativeDelay,
@@ -720,10 +722,23 @@ class WorkflowStepDispatcher:
                 }
                 metadata = dict(run.trigger_metadata or {})
                 metadata[REGISTRATION_CONFIG_KEY] = config
+                # The step is what makes {{registration_link}} resolvable. It is
+                # not part of build_run_links, because a link that creates
+                # patient records should exist only for a campaign that asked
+                # for one. Stored on the run so the messages after this step can
+                # render it.
+                if settings.public_base_url:
+                    metadata[REGISTRATION_PLACEHOLDER] = registration_link(
+                        str(run.id), settings.public_base_url
+                    )
                 run.trigger_metadata = metadata
-                context = {**context, REGISTRATION_CONFIG_KEY: config}
+                context = {**context, **metadata}
                 await self.runtime.complete_step(
-                    step, result_code="configured", result_metadata={}
+                    step,
+                    result_code="configured",
+                    result_metadata={
+                        "link_issued": REGISTRATION_PLACEHOLDER in metadata
+                    },
                 )
                 current_node_id = node.next_node_id
 

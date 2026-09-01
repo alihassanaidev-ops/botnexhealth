@@ -47,6 +47,7 @@ export const FALLBACK_MERGE_FIELDS: MergeField[] = [
     field("location_phone", "Location phone", "(555) 010-2211", "location", "derived", "none", ALL_CHANNELS, ALL_TRIGGERS),
     field("location_address", "Location address", "100 Main St, Austin, TX", "location", "derived", "none", ["email", "voice"], ALL_TRIGGERS),
     field("booking_link", "Booking link", "https://book.example.com/r/jordan", "booking", "required_context", "low", ["sms", "email"], ALL_TRIGGERS),
+    field("registration_link", "Registration link", "https://book.example.com/book/register?token=abc123", "booking", "required_context", "low", ["sms", "email"], ALL_TRIGGERS),
     field("confirmation_link", "Confirmation link", "https://book.example.com/c/abc123", "booking", "required_context", "low", ["sms", "email"], ["appointment_offset"]),
     field("reschedule_link", "Reschedule link", "https://book.example.com/r/abc123", "booking", "required_context", "low", ["sms", "email"], ["appointment_offset"]),
     field("recall_due_date", "Recall due date", "August 15, 2026", "recall", "required_context", "medium", ALL_CHANNELS, ["recall_scan"]),

@@ -635,6 +635,23 @@ MERGE_FIELD_CATALOG: tuple[MergeFieldSpec, ...] = (
         resolve=_context_field("booking_link"),
     ),
     MergeFieldSpec(
+        name="registration_link",
+        label="Registration link",
+        description=(
+            "A per-run link to the form that registers a lead as a patient. "
+            "Only resolves after a Register Patient step has run."
+        ),
+        sample="https://book.example.com/book/register?token=abc123",
+        group="booking",
+        source="context",
+        availability="required_context",
+        requires=("booking.registration_link",),
+        phi_level="low",
+        channels=("sms", "email"),
+        triggers=ALL_TRIGGERS,
+        resolve=_context_field("registration_link"),
+    ),
+    MergeFieldSpec(
         name="confirmation_link",
         label="Confirmation link",
         description="A per-run appointment confirmation link.",

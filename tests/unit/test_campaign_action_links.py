@@ -16,6 +16,7 @@ from src.app.services.automation.campaign_action_links import (
     EXPIRED,
     INVALID,
     LINK_RESPONSE_HEADERS,
+    AUTO_PLACEHOLDER_ACTIONS,
     PLACEHOLDER_ACTIONS,
     build_run_links,
     make_action_token,
@@ -102,8 +103,10 @@ class TestExpiry:
 
 class TestRunLinks:
     def test_all_three_placeholders_are_produced(self):
+        """The three every run gets. registration_link is issued by its own
+        step instead, so it is deliberately not in here."""
         links = build_run_links("run-1", "https://app.example.com", now=NOW)
-        assert set(links) == set(PLACEHOLDER_ACTIONS)
+        assert set(links) == set(AUTO_PLACEHOLDER_ACTIONS)
 
     def test_each_link_verifies_to_its_own_action(self):
         links = build_run_links("run-1", "https://app.example.com", now=NOW)
@@ -116,7 +119,9 @@ class TestRunLinks:
 
     def test_base_url_trailing_slash_does_not_double(self):
         links = build_run_links("run-1", "https://app.example.com/", now=NOW)
-        assert "//api/" not in links["booking_link"]
+        # booking now lands on the page, so check the path it actually uses.
+        assert "//book/" not in links["booking_link"].replace("https://", "")
+        assert "//api/" not in links["confirmation_link"]
 
 
 def test_referrer_policy_is_no_referrer():

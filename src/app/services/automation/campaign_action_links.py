@@ -52,11 +52,29 @@ _SIG_LEN = 32  # hex chars
 ACTIONS = ("book", "confirm", "reschedule", "cancel", "register")
 Action = Literal["book", "confirm", "reschedule", "cancel", "register"]
 
-#: Maps the merge-field placeholder to the action its link performs.
-PLACEHOLDER_ACTIONS: dict[str, Action] = {
+#: Placeholders whose link every run gets for free. ``build_run_links`` fills
+#: these on any message send, because the action they perform is meaningful for
+#: any run: the patient already exists and is booking, confirming or moving an
+#: appointment.
+AUTO_PLACEHOLDER_ACTIONS: dict[str, Action] = {
     "booking_link": "book",
     "confirmation_link": "confirm",
     "reschedule_link": "reschedule",
+}
+
+#: ``registration_link`` is deliberately not automatic. Registering creates a
+#: record in the clinic's practice software, so its link exists only for a run
+#: whose campaign actually has a ``patient_registration`` step — that step emits
+#: it. Generating one for every run would hand every campaign a live link to a
+#: form that creates patients, which is not a thing to have by default.
+REGISTRATION_PLACEHOLDER = "registration_link"
+
+#: Every placeholder that resolves to an action link. Validation uses this so a
+#: message carrying any of them is checked against the deployment's public base
+#: URL; ``build_run_links`` uses the AUTO set instead.
+PLACEHOLDER_ACTIONS: dict[str, Action] = {
+    **AUTO_PLACEHOLDER_ACTIONS,
+    REGISTRATION_PLACEHOLDER: "register",
 }
 
 #: Long enough to outlive a campaign run — a reminder ladder can span a fortnight
@@ -141,8 +159,28 @@ def verify_action_token(
     return run_id, action  # type: ignore[return-value]
 
 
+#: Actions the patient completes on a page rather than by opening a URL.
+#:
+#: ``confirm`` is the odd one out and stays on the API: it is a one-tap
+#: write-back with nothing to decide, so the endpoint performs it and replies in
+#: text. Everything else needs the patient to choose something — a time, a
+#: confirmation to cancel, their date of birth — so the link has to land on the
+#: page that asks.
+PAGE_ACTIONS: frozenset[str] = frozenset({"book", "reschedule", "cancel", "register"})
+
+
 def action_url(base_url: str, token: str, action: Action) -> str:
-    return f"{base_url.rstrip('/')}/api/campaigns/link/{action}?token={token}"
+    """Where a patient following this link should land.
+
+    These pointed at the API for every action until the patient-facing pages
+    existed. A booking link that resolves to the API hands the patient to staff
+    instead of showing them the slot picker, which is the whole thing the picker
+    was built to avoid.
+    """
+    base = base_url.rstrip("/")
+    if action in PAGE_ACTIONS:
+        return f"{base}/book/{action}?token={token}"
+    return f"{base}/api/campaigns/link/{action}?token={token}"
 
 
 def build_run_links(
@@ -159,5 +197,25 @@ def build_run_links(
             make_action_token(run_id, action, ttl_seconds=ttl_seconds, now=now),
             action,
         )
-        for placeholder, action in PLACEHOLDER_ACTIONS.items()
+        for placeholder, action in AUTO_PLACEHOLDER_ACTIONS.items()
     }
+
+
+def registration_link(
+    run_id: str,
+    base_url: str,
+    *,
+    ttl_seconds: int = DEFAULT_TTL_SECONDS,
+    now: int | None = None,
+) -> str:
+    """The link a ``patient_registration`` step hands the patient.
+
+    Separate from :func:`build_run_links` on purpose — see
+    ``REGISTRATION_PLACEHOLDER``. The step calls this when it runs, which is
+    also what makes the placeholder resolvable in the messages after it.
+    """
+    return action_url(
+        base_url,
+        make_action_token(run_id, "register", ttl_seconds=ttl_seconds, now=now),
+        "register",
+    )
