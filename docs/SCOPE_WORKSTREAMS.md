@@ -22,7 +22,7 @@ part of this backlog; the section *What doesn't compress* is where the schedule 
 | Split across both | **12 items** |
 | Blocked on a product decision | **2 items partially** — Item 37 revenue on deferred Decision A; remaining Item 22 recall template copy/path on open Decision B if Recall writes GoTracker bookings |
 | Gated on something other than code | Remaining gates are product decisions, practice-DB proof, pentest, cross-codebase rollout/proof, and watched activation windows — see *What doesn't compress* |
-| **Delivered so far** | **28 of 47 complete**, plus partial delivery on Items 15 and 22 — see *Delivered so far* |
+| **Delivered so far** | **29 of 47 complete**, plus partial delivery on Items 15 and 22 — see *Delivered so far* |
 | **Workstreams complete** | **WS2, WS6**; WS3 owes half of Item 15; WS4 owes Overdue Recall + Item 23; WS7 owes Item 40; WS8 owes Item 37 |
 
 ---
@@ -46,6 +46,7 @@ part of this backlog; the section *What doesn't compress* is where the schedule 
 | **4** · Report pending honestly | GoTracker booking safety | `0d096f2` + `af01334` | Platform half landed first, as the doc requires. Booking response and appointment reads carry `write_status` (`pending`/`written`/`failed`/`conflict`) + `foreign_id`, separate from `status`; PMS-origin rows read as `written`. Campaign run-history visibility is surfaced by Item 11 |
 | **24** · Sales Qualification campaign | The four campaigns | `ecd1861` `db98a99` `a6e8932` `09e1986` `2f39b99` + `157b6e94` | Intake, patient conversion and the lead workspace were already in. `157b6e94` adds the missing `enquiry_received` trigger, enrollment from signed intake and manual staff entry, the Sales Qualification launch template, Retell SMS setup, registration and provider-locked booking links, lead status side effects, merge fields and sales analytics coverage |
 | **22** ◐ · Appointment Reminder campaign | The four campaigns | `8aec6932` | `appointment-reminder-24h` is now a launchable campaign: attending-status eligibility, confirm/reschedule link policy, two SMS reply waits, deterministic reply routing, YES confirmation through PMS-neutral `update_appointment`, staff-follow-up outcomes for reschedule/cancel/staff requests, and pre-send revalidation so moved/cancelled appointments are skipped. Item 22 is **not complete**: Overdue Recall remains the open half |
+| **25** · Patient Communication API family | NexHealth data families | `5f8fa187` | Adds the supported patient-communication surface: clinical-note metadata, document types, patient-document metadata, patient recall records, recall types and treatment-plan metadata. Workflows can now declare recall and treatment-plan fields including `recall_type_name`, `recall_due_date` and `has_active_treatment_plan`; patient alerts stay out by Decision G |
 | **5** · Recover in-flight writes after Connector restart | GoTracker booking safety | `305ed2d` | Item 3's read-back applied to patient creation too. No local state, so **Decision I fell away instead of being answered** — the decision log's recommendation was to avoid a durable local record, and that is what shipped |
 | **8** · Mapping review before live bookings | GoTracker operations & health | `a9fda29` | Writes that reach a patient are refused until a named person has reviewed the mapping. Reads and agent sync are deliberately not gated — a half-onboarded clinic can still be looked at and talked to, it just cannot have appointments written into it |
 | **6** · Alert when a connection is unhealthy | GoTracker operations & health | `e178162` + `c1ed593` + `07afeb2` + `94d46e7` | Nine conditions evaluated every five minutes, collapsed into three CloudWatch alarms. Suppressed when the clinic is genuinely closed, so a practice with its lights off overnight does not page anyone |
@@ -199,8 +200,10 @@ setup before activation.
 # WS5 · NexHealth data families
 **6 items · ≈ 11.5 days · Platform integration · TIER 2 — largest workstream**
 
-Runs independently of WS3/WS4 and is the natural second developer's lane. Two of the six contracted
-families are complete; four are not.
+Runs independently of WS3/WS4 and is the natural second developer's lane. Three of the six
+contracted families now have working platform coverage: NexHealth Operations, Patient Communication
+and the live Working Hours reads. Procedures, Insurance and Financials are still unbuilt; Working
+Hours still owes reconciliation, and NexHealth Operations still owes onboarding interfaces.
 
 Every item here carries the same five-part definition of done: minimal field return, role-based
 access control, audit on every access, per-workflow field allow-lists, and sandbox tests proving
@@ -210,7 +213,7 @@ explicit per-workflow declaration.**
 | # | Item | Size | Notes |
 |---|---|---|---|
 | **28** | Financials — charges, claims, payments, balances | 4d | **Largest data family in the scope.** Zero implementation today. Most sensitive data in the product — build the allow-listing *before* the retrieval |
-| **25** ⏸ | Patient Communication — notes, documents, recalls — **DEFERRED 2026-08-30** | 3d | 1 of 7 record types built. **Highest-value item in Part 4** — Item 22's recall quality depends on it. Build this family first. Decisions F and G |
+| **25** ✅ | Patient Communication — notes, documents, recalls — **done, `5f8fa187`** | 3d | Supported surface built: clinical-note metadata, document types, patient-document metadata, patient recall records, recall types and treatment-plan metadata. Patient alerts are explicitly out by Decision G. This unblocks the Overdue Recall half of Item 22 |
 | **27** | Insurance — plans and coverage | 2d | Live hand-maintained data in production that the voice agent reads right now. **The migration must not lose it.** Decision H |
 | **31** | Working Hours — reconcile the two sources | 1d | Detect divergence and surface it. Never auto-adopt either source — it would silently change what the agent offers on live clinics |
 | **26** | Procedures — visit and treatment history | 1d | Currently a 5-entry extract on a legacy interface version. Unusable for recall targeting |
@@ -346,10 +349,11 @@ remains in Items 41 and 42.
 Things that fail without telling anyone, plus the two blockers (11, 12) that half the remaining
 feature work sits behind.
 
-**Tier 2 · Contracted features not yet built.** Items **25, 26, 22, 23, 27, 28, 31, 29**.
-Item 22 is half-built: Appointment Reminder is launchable, Overdue Recall is not. The remaining
-campaign build-out, GoTracker recall rollout, and NexHealth data families are still the largest
-visible block of client-facing work.
+**Tier 2 · Contracted features not yet fully delivered.** Items **26, 22, 23, 27, 28, 31, 29**.
+Item 25 is now complete and unblocks Item 22's Overdue Recall work. Item 22 is still half-built:
+Appointment Reminder is launchable, Overdue Recall is not. The remaining campaign build-out,
+GoTracker recall rollout, and NexHealth data families are still the largest visible block of
+client-facing work.
 
 **Tier 3 · Operator tooling and resilience.** Items **7, 8, 36, 33, 34, 17, 18, 20, 19, 9, 37**.
 All but Item 37 are now delivered; the remaining reporting work makes the product measurable rather

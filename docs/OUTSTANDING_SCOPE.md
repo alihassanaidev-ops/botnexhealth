@@ -1493,8 +1493,9 @@ explicitly requires it and declares it.
 
 ### Description
 
-A family of seven related record types covering clinical notes, documents and recall information. One
-of the seven is integrated.
+A family of seven related record types covering clinical notes, documents and recall information.
+The six supported record types are integrated; patient alerts are intentionally excluded by
+Decision G.
 
 ### Context and expected behaviour
 
@@ -1521,8 +1522,7 @@ API, not a complete view of staff-created PMS chart alerts.
 
 The Recall campaign's eligibility rules require the practice software's own recall information —
 recall records, recall types, treatment plan context and visit history — rather than guessing from
-last-visit dates. Item 22 cannot be finished properly until this is in place. Build this family
-first.
+last-visit dates. This family is now in place and unblocks the Overdue Recall half of Item 22.
 
 ### Implementation notes
 
@@ -1722,8 +1722,8 @@ for that clinic. An unknown capability is treated as unavailable, not as availab
 ### Current implementation status
 
 **Partially implemented.** The capability-checking mechanism exists and campaigns declare their
-requirements. But where the underlying data family is not built at all — Items 25, 26, 27, 28 — the
-check cannot answer truthfully, and the current behaviour is to warn and allow.
+requirements. But where the underlying data family is not built at all — Items 26, 27, 28 — the
+check cannot answer truthfully for those families.
 
 ### Remaining work
 
@@ -2227,9 +2227,9 @@ including permission enforcement and withholding of sensitive fields.
 
 ### Current implementation status
 
-**Cannot exist yet** for four of the families, because those families are not built (Items 25, 26, 27,
-28). Build the tests alongside each family rather than afterwards — they are part of that family's
-definition of done.
+Item 25 added its coverage with the Patient Communication family. The same coverage **cannot exist
+yet** for the three unbuilt families (Items 26, 27, 28). Build the tests alongside each family rather
+than afterwards — they are part of that family's definition of done.
 
 ### Acceptance criteria
 
