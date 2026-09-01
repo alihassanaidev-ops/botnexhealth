@@ -10,8 +10,14 @@
  * The backend remains authoritative on publish (a 422 is caught and surfaced). This
  * exists to give fast, precise, in-canvas feedback. Pure module.
  */
-import type { ValidationIssue, WorkflowDefinition, WorkflowNode } from "@/types/workflow"
+import type {
+    FilterExpression,
+    ValidationIssue,
+    WorkflowDefinition,
+    WorkflowNode,
+} from "@/types/workflow"
 import { referencedIds, TRIGGER_NODE_ID } from "./graph"
+import { OPS_WITHOUT_VALUE } from "./filter-ops"
 import { unavailableTokens, unknownTokens } from "./merge-fields"
 
 const HHMM_RE = /^([01]\d|2[0-3]):[0-5]\d$/
@@ -435,14 +441,17 @@ export function validateDefinition(def: WorkflowDefinition): ValidationIssue[] {
             case "condition": {
                 refError(node, node.true_next_node_id, "Condition (Yes branch)")
                 refError(node, node.false_next_node_id, "Condition (No branch)")
-                if (node.rules.length === 0) {
+                const legacyRules = node.rules ?? []
+                if (node.filter) {
+                    issues.push(...filterIssues(node.filter, node.id, "Condition"))
+                } else if (legacyRules.length === 0) {
                     issues.push({
                         node_id: node.id,
                         severity: "error",
                         message: "Condition has no rules.",
                     })
                 }
-                node.rules.forEach((r, i) => {
+                legacyRules.forEach((r, i) => {
                     if (!r.field.trim()) {
                         issues.push({
                             node_id: node.id,
@@ -450,6 +459,39 @@ export function validateDefinition(def: WorkflowDefinition): ValidationIssue[] {
                             message: `Condition rule ${i + 1} has no field.`,
                         })
                     }
+                })
+                break
+            }
+            case "switch": {
+                refError(node, node.default_next_node_id, "Switch (Otherwise branch)")
+                if (node.cases.length === 0) {
+                    issues.push({
+                        node_id: node.id,
+                        severity: "error",
+                        message: "Switch has no cases.",
+                    })
+                }
+                const seenLabels = new Set<string>()
+                node.cases.forEach((c, i) => {
+                    const label = c.label.trim()
+                    refError(node, c.next_node_id, `Switch case "${label || i + 1}"`)
+                    if (!label) {
+                        issues.push({
+                            node_id: node.id,
+                            severity: "error",
+                            message: `Switch case ${i + 1} has no label.`,
+                        })
+                    } else if (seenLabels.has(label.toLowerCase())) {
+                        // The label is the port identity in traces, so duplicates
+                        // make an execution log ambiguous.
+                        issues.push({
+                            node_id: node.id,
+                            severity: "error",
+                            message: `Switch has two cases labelled "${label}".`,
+                        })
+                    }
+                    seenLabels.add(label.toLowerCase())
+                    issues.push(...filterIssues(c.filter, node.id, `Case "${label || i + 1}"`))
                 })
                 break
             }
@@ -580,4 +622,52 @@ export function reachableCycleNodes(def: WorkflowDefinition): string[] {
 /** Convenience: true if there are no error-severity issues. */
 export function isPublishable(issues: ValidationIssue[]): boolean {
     return !issues.some((i) => i.severity === "error")
+}
+
+/**
+ * Structural checks on a filter expression. Deliberately shallow: the backend
+ * validator owns operator/value semantics, and duplicating them here is how the
+ * two drift apart. This catches only what an author can see is incomplete.
+ */
+function filterIssues(
+    expression: FilterExpression,
+    nodeId: string,
+    label: string,
+): ValidationIssue[] {
+    const issues: ValidationIssue[] = []
+    const walk = (node: FilterExpression, path: string) => {
+        if (node.kind === "group") {
+            if (!node.children.length) {
+                issues.push({
+                    node_id: nodeId,
+                    severity: "error",
+                    message: `${label}: ${path || "filter"} group has no conditions.`,
+                })
+            }
+            node.children.forEach((child, index) => walk(child, `${path}${index + 1}.`))
+            return
+        }
+        if (!node.field.trim()) {
+            issues.push({
+                node_id: nodeId,
+                severity: "error",
+                message: `${label}: a condition has no field.`,
+            })
+        }
+        const needsValue = !OPS_WITHOUT_VALUE.has(node.op)
+        const blank =
+            node.value === undefined
+            || node.value === null
+            || node.value === ""
+            || (Array.isArray(node.value) && node.value.length === 0)
+        if (needsValue && blank) {
+            issues.push({
+                node_id: nodeId,
+                severity: "error",
+                message: `${label}: "${node.field || "field"}" ${node.op} has no value.`,
+            })
+        }
+    }
+    walk(expression, "")
+    return issues
 }

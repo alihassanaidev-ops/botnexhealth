@@ -1192,7 +1192,7 @@ def test_preappointment_no_answer_routes_to_configured_second_attempt_wait() -> 
     sched = _make_scheduler()
     dispatcher = WorkflowStepDispatcher(session, rt, sched)
     run = _make_run()
-    run.current_step_id = "attempt-1-confirmed"
+    run.current_step_id = "route-attempt-1"
 
     result = asyncio.run(
         dispatcher.advance(
@@ -1214,7 +1214,7 @@ def test_preappointment_callback_routes_to_patient_requested_clinic_time() -> No
     sched = _make_scheduler()
     dispatcher = WorkflowStepDispatcher(session, rt, sched)
     run = _make_run()
-    run.current_step_id = "attempt-1-confirmed"
+    run.current_step_id = "route-attempt-1"
 
     result = asyncio.run(
         dispatcher.advance(

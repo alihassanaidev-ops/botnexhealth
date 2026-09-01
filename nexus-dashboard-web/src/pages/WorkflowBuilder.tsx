@@ -9,7 +9,7 @@
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { Link, useNavigate, useParams, useSearchParams } from "react-router-dom"
-import { Activity, ArrowLeft, History, Loader2, Pencil } from "lucide-react"
+import { Activity, ArrowLeft, CopyPlus, History, Loader2, Pencil, Redo2, Undo2 } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Skeleton } from "@/components/ui/skeleton"
@@ -31,18 +31,25 @@ import {
     addNode,
     blankDefinition,
     connectNodes,
+    copyNodes,
     createNode,
     definitionToFlow,
+    duplicateNodes,
     genId,
     normalizeDefinition,
+    pasteNodes,
     removeNode,
+    searchNodes,
     serializeDefinition,
     setEntry,
     setNodePosition,
     TRIGGER_NODE_ID,
     updateNode,
     type FlowNode,
+    type NodeClipboard,
 } from "@/lib/workflow/graph"
+import { useDefinitionHistory } from "@/lib/workflow/use-history"
+import { NODE_META } from "@/lib/workflow/catalog"
 import { validateDefinition as validateDefinitionLocally } from "@/lib/workflow/validation"
 import WorkflowCanvas from "@/components/workflow/WorkflowCanvas"
 import WorkflowPalette from "@/components/workflow/WorkflowPalette"
@@ -84,6 +91,9 @@ export default function WorkflowBuilder() {
     const [busy, setBusy] = useState(false)
     const [layouting, setLayouting] = useState(false)
     const [selectedId, setSelectedId] = useState<string | null>(null)
+    /** Every selected node. `selectedId` stays the one the config panel edits. */
+    const [selectedIds, setSelectedIds] = useState<string[]>([])
+    const [nodeQuery, setNodeQuery] = useState("")
     const [panelOpen, setPanelOpen] = useState(false)
     const [testOpen, setTestOpen] = useState(false)
     const [backendIssues, setBackendIssues] = useState<ValidationIssue[]>([])
@@ -98,6 +108,10 @@ export default function WorkflowBuilder() {
     const [retellSmsProfiles, setRetellSmsProfiles] = useState<RetellSmsChatProfile[]>([])
     const serverDef = useRef<WorkflowDefinition | null>(null)
     const validationRequest = useRef(0)
+    const history = useDefinitionHistory()
+    const { push: pushHistory, undo: undoHistory, redo: redoHistory, reset: resetHistory } = history
+    // Not state: pasting reads it, nothing renders from it.
+    const clipboard = useRef<NodeClipboard | null>(null)
 
     const readOnly = workflow?.status === "archived"
     const view = searchParams.get("view") === "executions" ? "executions" : "build"
@@ -146,14 +160,18 @@ export default function WorkflowBuilder() {
             const raw = localStorage.getItem(draftKey(id))
             if (raw) {
                 try {
-                    setDef(normalizeDefinition(JSON.parse(raw) as WorkflowDefinition))
+                    const restored = normalizeDefinition(JSON.parse(raw) as WorkflowDefinition)
+                    setDef(restored)
+                    resetHistory(restored)
                     setDirty(true)
                     toast.info("Restored unsaved changes from this browser.")
                 } catch {
                     setDef(base)
+                    resetHistory(base)
                 }
             } else {
                 setDef(base)
+                resetHistory(base)
                 setDirty(false)
             }
         } catch {
@@ -162,7 +180,7 @@ export default function WorkflowBuilder() {
         } finally {
             setLoading(false)
         }
-    }, [id])
+    }, [id, resetHistory])
 
     useEffect(() => {
         void load()
@@ -221,7 +239,10 @@ export default function WorkflowBuilder() {
     }, [locationId])
 
     // ---- editing buffer ----
-    const applyDef = useCallback(
+    // Applying a definition and *recording* it are separate: undo and redo
+    // restore a definition that is already in the history, and re-pushing it
+    // would make the two buttons undo each other.
+    const commitDef = useCallback(
         (next: WorkflowDefinition) => {
             setDef(next)
             setDirty(true)
@@ -232,6 +253,100 @@ export default function WorkflowBuilder() {
         },
         [id],
     )
+
+    // Every definition mutation funnels through here, which is also where the
+    // undo history is recorded — one seam rather than one per editor.
+    const applyDef = useCallback(
+        (next: WorkflowDefinition) => {
+            pushHistory(next)
+            commitDef(next)
+        },
+        [commitDef, pushHistory],
+    )
+
+    const handleUndo = useCallback(() => {
+        const previous = undoHistory()
+        if (previous) commitDef(previous)
+    }, [commitDef, undoHistory])
+
+    const handleRedo = useCallback(() => {
+        const next = redoHistory()
+        if (next) commitDef(next)
+    }, [commitDef, redoHistory])
+
+    const searchResults = useMemo(
+        () =>
+            def
+                ? searchNodes(def, nodeQuery)
+                      .slice(0, 12)
+                      .map((node) => ({
+                          id: node.id,
+                          type: node.type,
+                          label: NODE_META[node.type].label,
+                      }))
+                : [],
+        [def, nodeQuery],
+    )
+
+    /** Nodes a bulk action applies to: the multi-selection, else the focused node. */
+    const actionTargets = useMemo(() => {
+        const ids = selectedIds.length ? selectedIds : selectedId ? [selectedId] : []
+        return ids.filter((nodeId) => nodeId !== TRIGGER_NODE_ID)
+    }, [selectedId, selectedIds])
+
+    const handleDuplicate = useCallback(() => {
+        if (!def || !actionTargets.length) return
+        const { def: next, newIds } = duplicateNodes(def, actionTargets)
+        if (!newIds.length) return
+        applyDef(next)
+        setSelectedIds(newIds)
+        setSelectedId(newIds[0])
+    }, [applyDef, def, actionTargets])
+
+    const handleCopy = useCallback(() => {
+        if (!def || !actionTargets.length) return
+        const copied = copyNodes(def, actionTargets)
+        if (copied) clipboard.current = copied
+    }, [def, actionTargets])
+
+    const handlePaste = useCallback(() => {
+        if (!def || !clipboard.current) return
+        const { def: next, newIds } = pasteNodes(def, clipboard.current)
+        if (!newIds.length) return
+        applyDef(next)
+        setSelectedIds(newIds)
+        setSelectedId(newIds[0])
+    }, [applyDef, def])
+
+    // Ctrl/Cmd+Z and Ctrl/Cmd+Shift+Z, ignored while typing in a field so the
+    // browser's own text undo still works inside inputs.
+    useEffect(() => {
+        if (readOnly) return
+        const onKeyDown = (event: KeyboardEvent) => {
+            if (!(event.metaKey || event.ctrlKey)) return
+            const key = event.key.toLowerCase()
+            if (!["z", "d", "c", "v"].includes(key)) return
+            const target = event.target as HTMLElement | null
+            if (
+                target
+                && (target.tagName === "INPUT"
+                    || target.tagName === "TEXTAREA"
+                    || target.isContentEditable)
+            ) {
+                // Inside a field the browser's own text editing wins.
+                return
+            }
+            event.preventDefault()
+            if (key === "z") {
+                if (event.shiftKey) handleRedo()
+                else handleUndo()
+            } else if (key === "d") handleDuplicate()
+            else if (key === "c") handleCopy()
+            else if (key === "v") handlePaste()
+        }
+        window.addEventListener("keydown", onKeyDown)
+        return () => window.removeEventListener("keydown", onKeyDown)
+    }, [readOnly, handleUndo, handleRedo, handleDuplicate, handleCopy, handlePaste])
 
     const issues = useMemo(() => (def ? validateDefinitionLocally(def) : []), [def])
     const errorCount = [...issues, ...backendIssues].filter((i) => i.severity === "error").length
@@ -282,6 +397,7 @@ export default function WorkflowBuilder() {
 
     const onSelect = useCallback((sel: string | null) => {
         setSelectedId(sel)
+        setSelectedIds(sel && sel !== TRIGGER_NODE_ID ? [sel] : [])
         setPanelOpen(sel !== null)
     }, [])
 
@@ -354,13 +470,15 @@ export default function WorkflowBuilder() {
     const onDiscard = useCallback(() => {
         if (!id || !serverDef.current) return
         setDef(serverDef.current)
+        resetHistory(serverDef.current)
         setName(workflow?.name ?? "")
         setDirty(false)
         localStorage.removeItem(draftKey(id))
         setPanelOpen(false)
         setSelectedId(null)
+        setSelectedIds([])
         toast.success("Reverted to the last published version")
-    }, [id, workflow])
+    }, [id, workflow, resetHistory])
 
     async function runLifecycle(
         action: (wid: string) => Promise<AutomationWorkflow>,
@@ -497,6 +615,47 @@ export default function WorkflowBuilder() {
                 </div>
 
                 <div className="ml-auto flex items-center gap-2">
+                    {view === "build" && !readOnly && (
+                        <div className="flex items-center">
+                            <Button
+                                variant="ghost"
+                                size="icon"
+                                className="h-8 w-8"
+                                aria-label="Undo"
+                                title="Undo (Ctrl+Z)"
+                                disabled={!history.canUndo}
+                                onClick={handleUndo}
+                            >
+                                <Undo2 className="h-4 w-4" />
+                            </Button>
+                            <Button
+                                variant="ghost"
+                                size="icon"
+                                className="h-8 w-8"
+                                aria-label="Redo"
+                                title="Redo (Ctrl+Shift+Z)"
+                                disabled={!history.canRedo}
+                                onClick={handleRedo}
+                            >
+                                <Redo2 className="h-4 w-4" />
+                            </Button>
+                            <Button
+                                variant="ghost"
+                                size="icon"
+                                className="h-8 w-8"
+                                aria-label={
+                                    actionTargets.length > 1
+                                        ? `Duplicate ${actionTargets.length} steps`
+                                        : "Duplicate step"
+                                }
+                                title="Duplicate selection (Ctrl+D)"
+                                disabled={!actionTargets.length}
+                                onClick={handleDuplicate}
+                            >
+                                <CopyPlus className="h-4 w-4" />
+                            </Button>
+                        </div>
+                    )}
                     <Button variant="outline" size="sm" className="gap-1.5" asChild>
                         <Link to={`/institution-admin/campaigns/${id}/versions`}>
                             <History className="h-3.5 w-3.5" /> Versions
@@ -528,6 +687,13 @@ export default function WorkflowBuilder() {
             ) : <div className="flex min-h-0 flex-1">
                 <aside className="w-56 shrink-0 border-r border-border">
                     <WorkflowPalette
+                        searchQuery={nodeQuery}
+                        onSearchChange={setNodeQuery}
+                        searchResults={searchResults}
+                        onSelectResult={(nodeId) => {
+                            onSelect(nodeId)
+                            setNodeQuery("")
+                        }}
                         trigger={def.trigger}
                         onEditTrigger={() => onSelect(TRIGGER_NODE_ID)}
                         disabled={readOnly}
@@ -541,6 +707,8 @@ export default function WorkflowBuilder() {
                         edges={flow.edges}
                         selectedId={selectedId}
                         onSelect={onSelect}
+                        selectedIds={selectedIds}
+                        onSelectionChange={setSelectedIds}
                         editable={!readOnly}
                         onConnectNodes={onConnectNodes}
                         onNodePositionChange={onNodePositionChange}
