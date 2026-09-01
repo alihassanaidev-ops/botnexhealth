@@ -14,8 +14,9 @@ from __future__ import annotations
 import logging
 import secrets
 from dataclasses import dataclass, field
-from datetime import datetime, time, timedelta, timezone
+from datetime import date, datetime, time, timedelta, timezone
 from typing import Literal
+from uuid import uuid4
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from sqlalchemy import select
@@ -26,6 +27,8 @@ from src.app.config import settings
 from src.app.models.automation_workflow import (
     AutomationWorkflowDripState,
     AutomationWorkflowRun,
+    AutomationWorkflowStepExecution,
+    AutomationStepStatus,
 )
 from src.app.models.institution_location import InstitutionLocation
 from src.app.services.automation.campaign_action_links import build_run_links
@@ -56,6 +59,7 @@ from src.app.services.automation.definition_schema import (
     SwitchCase,
     SwitchNode,
     TimeWaitConfig,
+    BookAppointmentNode,
     BookingLinkNode,
     PatientRegistrationNode,
     UpdateAppointmentNode,
@@ -86,7 +90,9 @@ from src.app.services.automation.compliance_gate import (
 from src.app.services.automation.revalidation import NoOpRevalidator, RunRevalidator
 from src.app.services.automation.runtime_service import AutomationWorkflowRuntimeService
 from src.app.services.automation.node_registry import capability_for
-from src.app.services.automation.scheduler_service import AutomationWorkflowSchedulerService
+from src.app.services.automation.scheduler_service import (
+    AutomationWorkflowSchedulerService,
+)
 from src.app.services.automation.voice_node_executor import (
     _CALL_PLACED_AWAITING,
     VoiceCooldownDeferred,
@@ -125,6 +131,10 @@ class WorkflowGoTrackerWritebackError(RuntimeError):
 
 class WorkflowAppointmentWritebackError(RuntimeError):
     """Raised when a PMS-neutral appointment writeback node fails."""
+
+
+class WorkflowAppointmentBookingError(RuntimeError):
+    """Raised when a campaign booking node hits a system/integration failure."""
 
 
 # GoTracker's "cancelled" status id, per _gotracker_status_label.
@@ -192,9 +202,13 @@ class WorkflowStepDispatcher:
             if node is None:
                 logger.error(
                     "dispatch: node not found institution=%s run=%s node=%s",
-                    run.institution_id, run.id, current_node_id,
+                    run.institution_id,
+                    run.id,
+                    current_node_id,
                 )
-                await self.runtime.fail_run(run, reason=f"node '{current_node_id}' not found")
+                await self.runtime.fail_run(
+                    run, reason=f"node '{current_node_id}' not found"
+                )
                 return DispatchResult(
                     status="failed",
                     steps_advanced=steps_advanced,
@@ -378,7 +392,9 @@ class WorkflowStepDispatcher:
                         error_message=type(exc).__name__,
                     )
                     if run.location_id and run.contact_id:
-                        from src.app.models.campaign_response import CampaignStaffHandoff
+                        from src.app.models.campaign_response import (
+                            CampaignStaffHandoff,
+                        )
                         from src.app.services.automation.campaign_conversation_service import (
                             CampaignConversationService,
                         )
@@ -436,7 +452,9 @@ class WorkflowStepDispatcher:
                     await self.runtime.complete_run(run, outcome=skip_outcome)
                     logger.info(
                         "dispatch: revalidation skip run=%s node=%s outcome=%s",
-                        run.id, node.id, skip_outcome,
+                        run.id,
+                        node.id,
+                        skip_outcome,
                     )
                     return DispatchResult(
                         status="completed",
@@ -446,7 +464,9 @@ class WorkflowStepDispatcher:
                     )
 
                 content_class = (
-                    definition.compliance.content_class if definition.compliance else None
+                    definition.compliance.content_class
+                    if definition.compliance
+                    else None
                 )
                 # The gate models *patient* protection — consent, do-not-contact
                 # and the quiet-hours hold. An email addressed to the clinic's own
@@ -467,11 +487,17 @@ class WorkflowStepDispatcher:
                         ),
                     )
                 else:
-                    gate_result = GateResult(action="allow", reason="non_patient_recipient")
+                    gate_result = GateResult(
+                        action="allow", reason="non_patient_recipient"
+                    )
                 if gate_result.action == "block":
-                    step = await self.runtime.begin_step(run, step_id=node.id, step_type=node.type)
+                    step = await self.runtime.begin_step(
+                        run, step_id=node.id, step_type=node.type
+                    )
                     await self.runtime.fail_step(step, result_code="compliance_blocked")
-                    await self.runtime.fail_run(run, reason=gate_result.reason or "compliance_blocked")
+                    await self.runtime.fail_run(
+                        run, reason=gate_result.reason or "compliance_blocked"
+                    )
                     return DispatchResult(
                         status="failed",
                         steps_advanced=steps_advanced,
@@ -501,7 +527,10 @@ class WorkflowStepDispatcher:
                     await self.runtime.wait_run(run, step)
                     logger.info(
                         "dispatch: hold->deferred run=%s node=%s resume_at=%s reason=%s",
-                        run.id, node.id, resume_at, gate_result.reason,
+                        run.id,
+                        node.id,
+                        resume_at,
+                        gate_result.reason,
                     )
                     return DispatchResult(
                         status="waiting",
@@ -546,8 +575,11 @@ class WorkflowStepDispatcher:
                         logger.info(
                             "dispatch: breaker->deferred run=%s node=%s service=%s "
                             "state=%s resume_at=%s",
-                            run.id, node.id, breaker_service.value,
-                            breaker_decision.state.value, resume_at,
+                            run.id,
+                            node.id,
+                            breaker_service.value,
+                            breaker_decision.state.value,
+                            resume_at,
                         )
                         return DispatchResult(
                             status="waiting",
@@ -589,7 +621,10 @@ class WorkflowStepDispatcher:
                         logger.info(
                             "dispatch: send-rate->deferred run=%s node=%s "
                             "resume_at=%s reason=%s",
-                            run.id, node.id, resume_at, rate_decision.reason,
+                            run.id,
+                            node.id,
+                            resume_at,
+                            rate_decision.reason,
                         )
                         return DispatchResult(
                             status="waiting",
@@ -615,7 +650,9 @@ class WorkflowStepDispatcher:
                         # webhook. Set a safety-timeout timer so a never-arriving
                         # webhook can't hang the run, then wait; the webhook (or the
                         # timer) resumes via resume_after_timer.
-                        resume_at = now + timedelta(minutes=dispatch_result.timeout_minutes)
+                        resume_at = now + timedelta(
+                            minutes=dispatch_result.timeout_minutes
+                        )
                         timer = await self.scheduler.create_timer(
                             institution_id=run.institution_id,
                             location_id=run.location_id,
@@ -627,7 +664,9 @@ class WorkflowStepDispatcher:
                         await self.runtime.wait_run(run, dispatch_result.step)
                         logger.info(
                             "dispatch: voice parked for outcome run=%s node=%s timeout_at=%s",
-                            run.id, node.id, resume_at,
+                            run.id,
+                            node.id,
+                            resume_at,
                         )
                         return DispatchResult(
                             status="waiting",
@@ -680,6 +719,18 @@ class WorkflowStepDispatcher:
                         run, node, context, location_timezone=location_timezone
                     )
                 except WorkflowGoTrackerWritebackError:
+                    return DispatchResult(
+                        status="failed",
+                        steps_advanced=steps_advanced,
+                        patient_status_event_ids=patient_status_event_ids,
+                    )
+
+            elif isinstance(node, BookAppointmentNode):
+                try:
+                    current_node_id = await self._book_appointment(
+                        run, node, context, location_timezone=location_timezone
+                    )
+                except WorkflowAppointmentBookingError:
                     return DispatchResult(
                         status="failed",
                         steps_advanced=steps_advanced,
@@ -751,7 +802,9 @@ class WorkflowStepDispatcher:
                 current_node_id = node.next_node_id
 
             elif isinstance(node, JsonMapperNode):
-                step = await self.runtime.begin_step(run, step_id=node.id, step_type="json_mapper")
+                step = await self.runtime.begin_step(
+                    run, step_id=node.id, step_type="json_mapper"
+                )
                 mapped: dict[str, object] = {}
                 for mapping in node.mappings:
                     value = _context_value(context, mapping.source_path)
@@ -772,7 +825,9 @@ class WorkflowStepDispatcher:
                     execute_llm_node,
                 )
 
-                step = await self.runtime.begin_step(run, step_id=node.id, step_type="llm")
+                step = await self.runtime.begin_step(
+                    run, step_id=node.id, step_type="llm"
+                )
                 try:
                     llm_result = await execute_llm_node(node, context)
                 except WorkflowLlmError as exc:
@@ -798,7 +853,9 @@ class WorkflowStepDispatcher:
                 branch = evaluate_condition_node(
                     node, context, location_timezone=location_timezone, now=now
                 )
-                step = await self.runtime.begin_step(run, step_id=node.id, step_type="condition")
+                step = await self.runtime.begin_step(
+                    run, step_id=node.id, step_type="condition"
+                )
                 await self.runtime.complete_step(
                     step,
                     result_code=f"branch_{'true' if branch else 'false'}",
@@ -817,7 +874,9 @@ class WorkflowStepDispatcher:
                 matched = select_switch_case(
                     node, context, location_timezone=location_timezone, now=now
                 )
-                step = await self.runtime.begin_step(run, step_id=node.id, step_type="switch")
+                step = await self.runtime.begin_step(
+                    run, step_id=node.id, step_type="switch"
+                )
                 target = (
                     matched.next_node_id
                     if matched is not None
@@ -838,8 +897,12 @@ class WorkflowStepDispatcher:
                 current_node_id = target
 
             elif isinstance(node, ExitNode):
-                step = await self.runtime.begin_step(run, step_id=node.id, step_type="exit")
-                await self.runtime.complete_step(step, result_code=node.outcome or "exit")
+                step = await self.runtime.begin_step(
+                    run, step_id=node.id, step_type="exit"
+                )
+                await self.runtime.complete_step(
+                    step, result_code=node.outcome or "exit"
+                )
                 await self.runtime.complete_run(run, outcome=node.outcome)
                 return DispatchResult(
                     status="completed",
@@ -904,7 +967,8 @@ class WorkflowStepDispatcher:
         if run.status != AutomationRunStatus.WAITING.value:
             logger.warning(
                 "resume_after_timer: run %s not in waiting state (status=%s)",
-                run.id, run.status,
+                run.id,
+                run.status,
             )
             return DispatchResult(status="failed")
 
@@ -917,7 +981,9 @@ class WorkflowStepDispatcher:
         is_email_reply_wait = email_reply_wait_spec(current_node) is not None
         is_drip = isinstance(current_node, DripNode)
         is_retell_sms = isinstance(current_node, RetellSmsConversationNode)
-        is_held_send = isinstance(current_node, (SendSmsNode, SendVoiceNode, SendEmailNode))
+        is_held_send = isinstance(
+            current_node, (SendSmsNode, SendVoiceNode, SendEmailNode)
+        )
         if not (
             is_wait
             or is_sms_reply_wait
@@ -940,7 +1006,8 @@ class WorkflowStepDispatcher:
             .where(
                 AutomationWorkflowStepExecution.workflow_run_id == run.id,
                 AutomationWorkflowStepExecution.step_id == run.current_step_id,
-                AutomationWorkflowStepExecution.status == AutomationStepStatus.WAITING.value,
+                AutomationWorkflowStepExecution.status
+                == AutomationStepStatus.WAITING.value,
             )
             .order_by(AutomationWorkflowStepExecution.created_at.desc())
             .limit(1)
@@ -948,7 +1015,8 @@ class WorkflowStepDispatcher:
         waiting_step = result.scalar_one_or_none()
         if waiting_step is None:
             await self.runtime.fail_run(
-                run, reason=f"no waiting step execution for node '{run.current_step_id}'"
+                run,
+                reason=f"no waiting step execution for node '{run.current_step_id}'",
             )
             return DispatchResult(status="failed")
 
@@ -970,7 +1038,9 @@ class WorkflowStepDispatcher:
                 )
             ).scalar_one_or_none()
             if retell_session is None:
-                await self.runtime.fail_run(run, reason="active Retell SMS session not found")
+                await self.runtime.fail_run(
+                    run, reason="active Retell SMS session not found"
+                )
                 return DispatchResult(status="failed")
             effective_now = now or datetime.now(tz=timezone.utc)
             is_active_retell_session = (
@@ -1026,7 +1096,9 @@ class WorkflowStepDispatcher:
                 if context.get("email_reply_message_id")
                 else "email_reply_timeout"
             )
-        is_parked_voice = is_held_send and waiting_step.result_code == _CALL_PLACED_AWAITING
+        is_parked_voice = (
+            is_held_send and waiting_step.result_code == _CALL_PLACED_AWAITING
+        )
         if (
             is_wait
             or is_sms_reply_wait
@@ -1047,7 +1119,11 @@ class WorkflowStepDispatcher:
         await self.session.flush()
 
         return await self.advance(
-            run, definition, context=context, location_timezone=location_timezone, now=now
+            run,
+            definition,
+            context=context,
+            location_timezone=location_timezone,
+            now=now,
         )
 
     async def _allocate_drip_slot(
@@ -1131,7 +1207,10 @@ class WorkflowStepDispatcher:
         step = await self.runtime.begin_step(run, step_id=node.id, step_type=node.type)
         logger.info(
             "stub dispatch: institution=%s run=%s step=%s type=%s",
-            run.institution_id, run.id, node.id, node.type,
+            run.institution_id,
+            run.id,
+            node.id,
+            node.type,
         )
         await self.runtime.complete_step(step, result_code="stub_dispatched")
         return node.next_node_id
@@ -1151,9 +1230,7 @@ class WorkflowStepDispatcher:
         from src.app.models.patient_workflow_status import PatientWorkflowStatusEvent
         from src.app.services.automation.template_renderer import render_sms_body
 
-        step = await self.runtime.begin_step(
-            run, step_id=node.id, step_type=node.type
-        )
+        step = await self.runtime.begin_step(run, step_id=node.id, step_type=node.type)
         note = None
         if node.note_template:
             note = render_sms_body(node.note_template, None, None, context)
@@ -1182,6 +1259,511 @@ class WorkflowStepDispatcher:
         )
         await self.session.flush()
         return node.next_node_id, str(event.id)
+
+    async def _completed_booking_step_branch(
+        self,
+        run: AutomationWorkflowRun,
+        node: BookAppointmentNode,
+        context: dict,
+    ) -> str | None:
+        """Return the recorded branch for a booking step already completed.
+
+        A campaign booking writes into a real clinic schedule. Retrying after a
+        worker redelivery must therefore replay the already-recorded outcome, not
+        re-run availability and potentially create a second appointment.
+        """
+        row = (
+            (
+                await self.session.execute(
+                    select(AutomationWorkflowStepExecution)
+                    .where(
+                        AutomationWorkflowStepExecution.workflow_run_id == run.id,
+                        AutomationWorkflowStepExecution.step_id == node.id,
+                        AutomationWorkflowStepExecution.status
+                        == AutomationStepStatus.COMPLETED.value,
+                        AutomationWorkflowStepExecution.result_code.in_(
+                            ("booked", "pending", "could_not_book")
+                        ),
+                    )
+                    .order_by(AutomationWorkflowStepExecution.attempt_number.desc())
+                    .limit(1)
+                )
+            )
+            .scalars()
+            .first()
+        )
+        if row is None:
+            return None
+
+        metadata = row.result_metadata or {}
+        if isinstance(metadata, dict):
+            _apply_booking_metadata_to_run(run, metadata, context)
+        return _book_appointment_branch(node, row.result_code)
+
+    async def _book_appointment(
+        self,
+        run: AutomationWorkflowRun,
+        node: BookAppointmentNode,
+        context: dict,
+        *,
+        location_timezone: str = "UTC",
+    ) -> str:
+        """Book the appointment selected by prior campaign context.
+
+        The patient only comes from the run's contact. Provider/type/time may be
+        literal values or merge fields, but every write is re-checked against
+        live PMS availability immediately before booking.
+        """
+        from fastapi import HTTPException
+
+        from src.app.models.audit_log import AuditAction, AuditActor, AuditOutcome
+        from src.app.models.contact import Contact
+        from src.app.models.institution import Institution
+        from src.app.pms.factory import get_adapter_for_institution_location
+        from src.app.pms.models import BookingRequest, BookingWriteStatus
+        from src.app.services.audit import log_audit
+
+        replay_branch = await self._completed_booking_step_branch(run, node, context)
+        if replay_branch is not None:
+            return replay_branch
+
+        step = await self.runtime.begin_step(run, step_id=node.id, step_type=node.type)
+
+        async def fail(
+            reason: str,
+            metadata: dict | None = None,
+            *,
+            result_code: str = "appointment_booking_failed",
+        ) -> None:
+            await self.runtime.fail_step(
+                step,
+                error_message=reason,
+                result_code=result_code,
+                result_metadata=metadata or {},
+            )
+            await self.runtime.fail_run(run, reason=result_code)
+
+        async def complete_outcome(
+            result_code: Literal["booked", "pending", "could_not_book"],
+            metadata: dict,
+        ) -> str:
+            next_node_id = _book_appointment_branch(node, result_code)
+            metadata = {**metadata, "next_node_id": next_node_id}
+            context["book_appointment_result"] = {
+                "outcome": result_code,
+                "reason": metadata.get("reason"),
+                "appointment_id": metadata.get("appointment_id"),
+                "write_status": metadata.get("write_status"),
+            }
+            if result_code in {"booked", "pending"}:
+                _apply_booking_metadata_to_run(run, metadata, context)
+            await self.runtime.complete_step(
+                step,
+                result_code=result_code,
+                result_metadata=metadata,
+            )
+            await self._record_booking_response_event(run, node, result_code, metadata)
+            return next_node_id
+
+        if not run.location_id:
+            await fail("Appointment booking requires a location-scoped run")
+            raise WorkflowAppointmentBookingError("missing location")
+
+        institution = await self.session.get(Institution, run.institution_id)
+        location = await self.session.get(InstitutionLocation, run.location_id)
+        if institution is None or location is None:
+            await fail(
+                "Appointment booking could not resolve institution/location",
+                {
+                    "institution_id": str(run.institution_id),
+                    "location_id": str(run.location_id),
+                },
+            )
+            raise WorkflowAppointmentBookingError("missing institution/location")
+
+        contact = (
+            await self.session.get(Contact, run.contact_id) if run.contact_id else None
+        )
+        patient_id = getattr(contact, "nexhealth_patient_id", None)
+        if not patient_id:
+            return await complete_outcome(
+                "could_not_book",
+                {
+                    "reason": "missing_patient_id",
+                    "pms_source": getattr(institution, "pms_type", None),
+                },
+            )
+
+        appointment_type_id = _render_workflow_value(node.appointment_type_id, context)
+        provider_id = _render_workflow_value(node.provider_id, context)
+        requested_start = _render_workflow_value(node.start_time, context)
+        requested_end = _render_workflow_value(node.end_time, context)
+        operatory_id = _render_workflow_value(node.operatory_id, context)
+        note = _render_workflow_value(node.note_template, context)
+
+        missing = [
+            name
+            for name, value in (
+                ("appointment_type_id", appointment_type_id),
+                ("provider_id", provider_id),
+                ("start_time", requested_start),
+            )
+            if not value
+        ]
+        if missing:
+            return await complete_outcome(
+                "could_not_book",
+                {
+                    "reason": "unresolved_booking_fields",
+                    "missing_fields": missing,
+                },
+            )
+
+        parsed_start = _parse_context_datetime(requested_start, location_timezone)
+        if parsed_start is None:
+            return await complete_outcome(
+                "could_not_book",
+                {
+                    "reason": "invalid_start_time",
+                    "start_time": requested_start,
+                },
+            )
+        if (
+            requested_end
+            and _parse_context_datetime(requested_end, location_timezone) is None
+        ):
+            return await complete_outcome(
+                "could_not_book",
+                {
+                    "reason": "invalid_end_time",
+                    "end_time": requested_end,
+                },
+            )
+
+        start_date = (
+            _slot_search_date(requested_start) or parsed_start.date().isoformat()
+        )
+        adapter = None
+        pms_source = None
+        try:
+            adapter = await get_adapter_for_institution_location(institution, location)
+            pms_source = getattr(adapter, "source", None)
+            slot_result = await adapter.find_available_slots(
+                start_date=start_date,
+                days=1,
+                provider_id=provider_id,
+                appointment_type_id=appointment_type_id,
+                operatory_ids=[operatory_id] if operatory_id else None,
+                tz_offset=_clinic_tz_offset(
+                    start_date,
+                    getattr(location, "timezone", None) or location_timezone,
+                ),
+            )
+            slots = list(getattr(slot_result, "slots", []) or [])
+            chosen = _matching_booking_slot(
+                slots,
+                requested_start=requested_start,
+                provider_id=provider_id,
+                appointment_type_id=appointment_type_id,
+                operatory_id=operatory_id,
+            )
+            if chosen is None:
+                existing = await self._find_existing_booked_appointment(
+                    adapter,
+                    start_date=start_date,
+                    patient_id=str(patient_id),
+                    provider_id=provider_id,
+                    appointment_type_id=appointment_type_id,
+                    requested_start=requested_start,
+                    pms_source=pms_source,
+                )
+                if existing is not None:
+                    return await complete_outcome(
+                        "booked",
+                        _existing_booking_metadata(
+                            existing,
+                            pms_source=pms_source,
+                            requested_start=requested_start,
+                            appointment_type_id=appointment_type_id,
+                            provider_id=provider_id,
+                        ),
+                    )
+                return await complete_outcome(
+                    "could_not_book",
+                    {
+                        "reason": "slot_unavailable",
+                        "pms_source": pms_source,
+                        "available_slot_count": len(slots),
+                        "next_available_date": getattr(
+                            slot_result, "next_available_date", None
+                        ),
+                    },
+                )
+
+            slot_end = getattr(chosen, "end", None) or requested_end
+            booking = BookingRequest(
+                patient_id=str(patient_id),
+                provider_id=str(provider_id),
+                slot_start=str(chosen.start),
+                slot_end=str(slot_end) if slot_end else None,
+                duration_min=node.duration_min
+                or _duration_minutes(
+                    str(chosen.start), str(slot_end) if slot_end else None
+                ),
+                operatory_id=getattr(chosen, "operatory_id", None) or operatory_id,
+                appointment_type_id=getattr(chosen, "appointment_type_id", None)
+                or appointment_type_id,
+                note=note,
+                provenance=WriteProvenance.for_campaign(
+                    workflow_run_id=str(run.id),
+                    step_id=node.id,
+                ).as_payload(),
+            )
+
+            result = await adapter.book_appointment(booking)
+            await log_audit(
+                actor=AuditActor.SYSTEM,
+                action=AuditAction.BOOK_APPOINTMENT,
+                target_resource=f"campaign_run:{run.id}:book_appointment:{node.id}",
+                outcome=(
+                    AuditOutcome.SUCCESS
+                    if getattr(result, "success", False)
+                    else AuditOutcome.FAILURE_EXTERNAL_API
+                ),
+                metadata={
+                    "source": "workflow_book_appointment",
+                    "workflow_run_id": str(run.id),
+                    "step_id": node.id,
+                    "pms_source": pms_source,
+                    "pms_status": getattr(result, "status", None),
+                    "write_status": getattr(result, "write_status", None),
+                    "error": getattr(result, "error", None),
+                },
+                institution_id=str(run.institution_id),
+                location_id=str(run.location_id),
+            )
+
+            if not getattr(result, "success", False):
+                existing = await self._find_existing_booked_appointment(
+                    adapter,
+                    start_date=start_date,
+                    patient_id=str(patient_id),
+                    provider_id=provider_id,
+                    appointment_type_id=appointment_type_id,
+                    requested_start=requested_start,
+                    pms_source=pms_source,
+                )
+                if existing is not None:
+                    return await complete_outcome(
+                        "booked",
+                        _existing_booking_metadata(
+                            existing,
+                            pms_source=pms_source,
+                            requested_start=requested_start,
+                            appointment_type_id=appointment_type_id,
+                            provider_id=provider_id,
+                        ),
+                    )
+                if await self._booking_slot_no_longer_available(
+                    adapter,
+                    start_date=start_date,
+                    requested_start=requested_start,
+                    provider_id=provider_id,
+                    appointment_type_id=appointment_type_id,
+                    operatory_id=operatory_id,
+                    location_timezone=getattr(location, "timezone", None)
+                    or location_timezone,
+                    error=getattr(result, "error", None),
+                ):
+                    return await complete_outcome(
+                        "could_not_book",
+                        {
+                            "reason": "slot_unavailable",
+                            "pms_source": pms_source,
+                            "pms_status": getattr(result, "status", None),
+                            "error": getattr(result, "error", None),
+                        },
+                    )
+
+                await fail(
+                    getattr(result, "error", None) or "Appointment booking failed",
+                    {
+                        "pms_source": pms_source,
+                        "pms_status": getattr(result, "status", None),
+                        "error": getattr(result, "error", None),
+                    },
+                )
+                raise WorkflowAppointmentBookingError("appointment booking failed")
+
+            write_status = getattr(result, "write_status", None)
+            pending = write_status == BookingWriteStatus.PENDING.value
+            metadata = _booking_result_metadata(
+                result_code="pending" if pending else "booked",
+                pms_source=pms_source,
+                result=result,
+                booking=booking,
+                provider_name=getattr(chosen, "provider_name", "") or "",
+            )
+            return await complete_outcome("pending" if pending else "booked", metadata)
+        except HTTPException as exc:
+            await fail(
+                "Appointment booking PMS integration is unavailable",
+                {"status_code": exc.status_code, "detail": exc.detail},
+            )
+            raise WorkflowAppointmentBookingError(
+                "pms integration unavailable"
+            ) from exc
+        except WorkflowAppointmentBookingError:
+            raise
+        except Exception as exc:
+            logger.exception(
+                "Campaign appointment booking failed run=%s node=%s", run.id, node.id
+            )
+            await fail(
+                "Appointment booking failed before the PMS accepted the write",
+                {"error": str(exc), "pms_source": pms_source},
+            )
+            raise WorkflowAppointmentBookingError("appointment booking failed") from exc
+        finally:
+            if adapter is not None:
+                await adapter.close()
+
+    async def _find_existing_booked_appointment(
+        self,
+        adapter,
+        *,
+        start_date: str,
+        patient_id: str,
+        provider_id: str,
+        appointment_type_id: str,
+        requested_start: str,
+        pms_source: str | None,
+    ) -> dict | None:
+        """Find an appointment that is already the effect of this booking step.
+
+        This is the recovery guard for the narrow crash window where the PMS
+        accepts a booking but the worker dies before recording the completed
+        workflow step. On retry, the slot is no longer available; before taking
+        the could-not-book branch, read the day's appointments and see whether
+        the unavailable slot is already held for this same patient.
+        """
+        if not hasattr(adapter, "list_appointments"):
+            return None
+
+        start_at, end_at = _appointment_read_window(start_date, requested_start)
+        try:
+            if pms_source == "gotracker":
+                appointments = await adapter.list_appointments(
+                    start_date=start_at,
+                    end_date=end_at,
+                    contact_id=patient_id,
+                    exclude_cancelled=True,
+                    max_items=500,
+                )
+            else:
+                appointments = await adapter.list_appointments(
+                    start_date=start_at,
+                    end_date=end_at,
+                    max_items=500,
+                )
+        except TypeError:
+            try:
+                appointments = await adapter.list_appointments(
+                    start_date=start_at,
+                    end_date=end_at,
+                    max_items=500,
+                )
+            except Exception:
+                logger.debug("booking duplicate read-back failed", exc_info=True)
+                return None
+        except Exception:
+            logger.debug("booking duplicate read-back failed", exc_info=True)
+            return None
+
+        for appointment in appointments or []:
+            if not isinstance(appointment, dict):
+                continue
+            if _raw_appointment_matches_booking(
+                appointment,
+                patient_id=patient_id,
+                provider_id=provider_id,
+                appointment_type_id=appointment_type_id,
+                requested_start=requested_start,
+            ):
+                return appointment
+        return None
+
+    async def _booking_slot_no_longer_available(
+        self,
+        adapter,
+        *,
+        start_date: str,
+        requested_start: str,
+        provider_id: str,
+        appointment_type_id: str,
+        operatory_id: str | None,
+        location_timezone: str,
+        error: str | None,
+    ) -> bool:
+        """Best-effort conflict classifier after a PMS booking refusal."""
+        try:
+            slot_result = await adapter.find_available_slots(
+                start_date=start_date,
+                days=1,
+                provider_id=provider_id,
+                appointment_type_id=appointment_type_id,
+                operatory_ids=[operatory_id] if operatory_id else None,
+                tz_offset=_clinic_tz_offset(start_date, location_timezone),
+            )
+        except Exception:
+            return _booking_error_looks_like_slot_conflict(error)
+
+        slots = list(getattr(slot_result, "slots", []) or [])
+        return (
+            _matching_booking_slot(
+                slots,
+                requested_start=requested_start,
+                provider_id=provider_id,
+                appointment_type_id=appointment_type_id,
+                operatory_id=operatory_id,
+            )
+            is None
+        )
+
+    async def _record_booking_response_event(
+        self,
+        run: AutomationWorkflowRun,
+        node: BookAppointmentNode,
+        result_code: Literal["booked", "pending", "could_not_book"],
+        metadata: dict,
+    ) -> None:
+        """Add a workflow-channel event so campaign reporting sees the outcome."""
+        from src.app.models.campaign_response import CampaignResponseEvent
+
+        event_values = {
+            "booked": ("booked", "appointment_booked"),
+            "pending": ("booking_pending", "pending"),
+            "could_not_book": ("could_not_book", "could_not_book"),
+        }
+        normalized_intent, normalized_outcome = event_values[result_code]
+        self.session.add(
+            CampaignResponseEvent(
+                id=str(uuid4()),
+                institution_id=str(run.institution_id),
+                location_id=str(run.location_id) if run.location_id else None,
+                workflow_id=str(run.workflow_id) if run.workflow_id else None,
+                workflow_run_id=str(run.id),
+                contact_id=str(run.contact_id) if run.contact_id else None,
+                channel="workflow",
+                normalized_intent=normalized_intent,
+                normalized_outcome=normalized_outcome,
+                source="workflow_book_appointment",
+                source_event_id=f"workflow:{run.id}:{node.id}:{result_code}",
+                confidence="deterministic",
+                summary=f"Book appointment node {result_code.replace('_', ' ')}",
+            )
+        )
+        await self.session.flush()
 
     async def _reschedule_booking_request(
         self,
@@ -1253,7 +1835,9 @@ class WorkflowStepDispatcher:
                 **common, confirmed=True, preconfirmed=None
             )
         if node.operation == "cancel":
-            return UpdateGoTrackerAppointmentNode(**common, status_id=_GOTRACKER_CANCELLED_STATUS_ID)
+            return UpdateGoTrackerAppointmentNode(
+                **common, status_id=_GOTRACKER_CANCELLED_STATUS_ID
+            )
         return UpdateGoTrackerAppointmentNode(
             **common,
             start_time=node.start_time,
@@ -1287,7 +1871,10 @@ class WorkflowStepDispatcher:
 
         institution = await self.session.get(Institution, run.institution_id)
 
-        if institution is not None and getattr(institution, "pms_type", None) == "gotracker":
+        if (
+            institution is not None
+            and getattr(institution, "pms_type", None) == "gotracker"
+        ):
             return await self._update_gotracker_appointment(
                 run,
                 self._gotracker_node_for(node),
@@ -1429,9 +2016,7 @@ class WorkflowStepDispatcher:
             action_for_status_write,
         )
 
-        step = await self.runtime.begin_step(
-            run, step_id=node.id, step_type=node.type
-        )
+        step = await self.runtime.begin_step(run, step_id=node.id, step_type=node.type)
 
         async def fail(reason: str, metadata: dict | None = None) -> None:
             await self.runtime.fail_step(
@@ -1487,8 +2072,12 @@ class WorkflowStepDispatcher:
                 "start_time": _render_gotracker_update_value(node.start_time, context),
                 "end_time": _render_gotracker_update_value(node.end_time, context),
                 "duration_min": node.duration_min,
-                "provider_id": _render_gotracker_update_value(node.provider_id, context),
-                "operatory_id": _render_gotracker_update_value(node.operatory_id, context),
+                "provider_id": _render_gotracker_update_value(
+                    node.provider_id, context
+                ),
+                "operatory_id": _render_gotracker_update_value(
+                    node.operatory_id, context
+                ),
                 "patient_id": _render_gotracker_update_value(node.patient_id, context),
                 "reason": _render_gotracker_update_value(node.reason, context),
             }
@@ -1505,7 +2094,9 @@ class WorkflowStepDispatcher:
                         "GoTracker appointment start_time is not a valid ISO datetime",
                         {"operations": operations},
                     )
-                    raise WorkflowGoTrackerWritebackError("invalid appointment start_time")
+                    raise WorkflowGoTrackerWritebackError(
+                        "invalid appointment start_time"
+                    )
                 normalized_start_time = parsed_start.isoformat()
                 update_payload["start_time"] = _gotracker_wall_clock_datetime(
                     update_payload["start_time"]
@@ -1521,9 +2112,14 @@ class WorkflowStepDispatcher:
                         "GoTracker appointment writeback cannot combine status and "
                         "appointment-field updates in one node"
                     ),
-                    {"status_payload": status_payload, "update_payload": update_payload},
+                    {
+                        "status_payload": status_payload,
+                        "update_payload": update_payload,
+                    },
                 )
-                raise WorkflowGoTrackerWritebackError("combined writeback not serializable")
+                raise WorkflowGoTrackerWritebackError(
+                    "combined writeback not serializable"
+                )
 
             status_write_succeeded = False
             if status_payload:
@@ -1580,7 +2176,9 @@ class WorkflowStepDispatcher:
                     patient_id=update_payload.get("patient_id"),
                     reason=update_payload.get("reason"),
                 )
-                operations.append({"endpoint": "appointment", "payload": update_payload})
+                operations.append(
+                    {"endpoint": "appointment", "payload": update_payload}
+                )
                 await log_audit(
                     actor=AuditActor.SYSTEM,
                     action=AuditAction.RESCHEDULE_APPOINTMENT,
@@ -1894,7 +2492,7 @@ def _metadata_value(value: object) -> object:
     return str(value)
 
 
-def _render_gotracker_update_value(value: str | None, context: dict) -> str | None:
+def _render_workflow_value(value: str | None, context: dict) -> str | None:
     if value is None:
         return None
     from src.app.services.automation.template_renderer import render_sms_body
@@ -1903,7 +2501,356 @@ def _render_gotracker_update_value(value: str | None, context: dict) -> str | No
     return rendered or None
 
 
-def _gotracker_status_payload(node: UpdateGoTrackerAppointmentNode) -> dict[str, object]:
+def _render_gotracker_update_value(value: str | None, context: dict) -> str | None:
+    return _render_workflow_value(value, context)
+
+
+def _book_appointment_branch(
+    node: BookAppointmentNode,
+    result_code: str | None,
+) -> str:
+    if result_code == "booked":
+        return node.booked_next_node_id
+    if result_code == "pending":
+        return node.pending_next_node_id
+    return node.could_not_book_next_node_id
+
+
+def _parse_slot_datetime(value: object) -> datetime | None:
+    if isinstance(value, datetime):
+        return value
+    if value in (None, ""):
+        return None
+    text = str(value).strip()
+    if not text:
+        return None
+    if text.endswith("Z"):
+        text = f"{text[:-1]}+00:00"
+    try:
+        return datetime.fromisoformat(text)
+    except ValueError:
+        return None
+
+
+def _has_utc_offset(value: datetime) -> bool:
+    return value.tzinfo is not None and value.utcoffset() is not None
+
+
+def _same_slot_datetime(left: object, right: object) -> bool:
+    left_dt = _parse_slot_datetime(left)
+    right_dt = _parse_slot_datetime(right)
+    if left_dt and right_dt:
+        if _has_utc_offset(left_dt) and _has_utc_offset(right_dt):
+            return left_dt == right_dt
+        return left_dt.replace(tzinfo=None) == right_dt.replace(tzinfo=None)
+    return str(left).strip() == str(right).strip()
+
+
+def _slot_search_date(slot_start: str) -> str | None:
+    parsed = _parse_slot_datetime(slot_start)
+    if parsed:
+        return parsed.date().isoformat()
+    text = str(slot_start or "").strip()
+    if "T" in text:
+        return text.split("T", 1)[0] or None
+    if len(text) >= 10:
+        return text[:10]
+    return None
+
+
+def _raw_pms_id(value: object) -> str | None:
+    if value in (None, ""):
+        return None
+    text = str(value).strip()
+    for prefix in ("nh-", "gt-"):
+        if text.startswith(prefix):
+            return text[len(prefix) :]
+    return text or None
+
+
+def _matching_booking_slot(
+    slots: list,
+    *,
+    requested_start: str,
+    provider_id: str,
+    appointment_type_id: str,
+    operatory_id: str | None,
+):
+    for slot in slots:
+        if not _same_slot_datetime(getattr(slot, "start", None), requested_start):
+            continue
+        if _raw_pms_id(getattr(slot, "provider_id", None)) != _raw_pms_id(provider_id):
+            continue
+        slot_type_id = getattr(slot, "appointment_type_id", None)
+        if (
+            appointment_type_id
+            and slot_type_id
+            and _raw_pms_id(slot_type_id) != _raw_pms_id(appointment_type_id)
+        ):
+            continue
+        if operatory_id and _raw_pms_id(
+            getattr(slot, "operatory_id", None)
+        ) != _raw_pms_id(operatory_id):
+            continue
+        return slot
+    return None
+
+
+def _duration_minutes(start: str, end: str | None) -> int | None:
+    if not end:
+        return None
+    started = _parse_slot_datetime(start)
+    finished = _parse_slot_datetime(end)
+    if started is None or finished is None:
+        return None
+    if _has_utc_offset(started) != _has_utc_offset(finished):
+        started = started.replace(tzinfo=None)
+        finished = finished.replace(tzinfo=None)
+    minutes = int((finished - started).total_seconds() // 60)
+    return minutes if minutes > 0 else None
+
+
+def _clinic_tz_offset(start_date: str, timezone_name: str | None) -> str | None:
+    """Return the UTC offset for a clinic-local date as +/-HH:MM."""
+    if not timezone_name:
+        return None
+    try:
+        local_date = date.fromisoformat(str(start_date))
+        tz = ZoneInfo(timezone_name)
+        local_midnight = datetime(
+            local_date.year,
+            local_date.month,
+            local_date.day,
+            tzinfo=tz,
+        )
+    except (TypeError, ValueError, ZoneInfoNotFoundError):
+        return None
+    offset = local_midnight.utcoffset()
+    if offset is None:
+        return None
+    total_minutes = int(offset.total_seconds() // 60)
+    sign = "+" if total_minutes >= 0 else "-"
+    total_minutes = abs(total_minutes)
+    hours, minutes = divmod(total_minutes, 60)
+    return f"{sign}{hours:02d}:{minutes:02d}"
+
+
+def _booking_result_metadata(
+    *,
+    result_code: Literal["booked", "pending"],
+    pms_source: str | None,
+    result,
+    booking,
+    provider_name: str,
+) -> dict:
+    appointment_id = getattr(result, "id", None)
+    start = getattr(result, "start", None) or booking.slot_start
+    end = getattr(result, "end", None) or booking.slot_end
+    write_status = getattr(result, "write_status", None) or (
+        "pending" if result_code == "pending" else "confirmed"
+    )
+    return {
+        "appointment_id": str(appointment_id) if appointment_id else None,
+        "appointment_type_id": getattr(result, "appointment_type_id", None)
+        or booking.appointment_type_id,
+        "provider_id": getattr(result, "provider_id", None) or booking.provider_id,
+        "provider_name": provider_name,
+        "booked_start": start,
+        "booked_end": end,
+        "pms_source": pms_source,
+        "pms_status": getattr(result, "status", None),
+        "write_status": write_status,
+    }
+
+
+def _existing_booking_metadata(
+    appointment: dict,
+    *,
+    pms_source: str | None,
+    requested_start: str,
+    appointment_type_id: str,
+    provider_id: str,
+) -> dict:
+    appointment_id = _prefixed_pms_id(_appointment_value(appointment, "id"), pms_source)
+    start = _appointment_value(appointment, "start") or requested_start
+    return {
+        "appointment_id": appointment_id,
+        "appointment_type_id": _prefixed_pms_id(
+            _appointment_value(appointment, "appointment_type_id"),
+            pms_source,
+        )
+        or appointment_type_id,
+        "provider_id": _prefixed_pms_id(
+            _appointment_value(appointment, "provider_id"), pms_source
+        )
+        or provider_id,
+        "provider_name": str(_appointment_value(appointment, "provider_name") or ""),
+        "booked_start": start,
+        "booked_end": _appointment_value(appointment, "end"),
+        "pms_source": pms_source,
+        "pms_status": _appointment_value(appointment, "status"),
+        "write_status": "confirmed",
+        "recovered_existing_booking": True,
+    }
+
+
+def _apply_booking_metadata_to_run(
+    run: AutomationWorkflowRun,
+    metadata: dict,
+    context: dict,
+) -> None:
+    appointment_id = metadata.get("appointment_id")
+    if appointment_id:
+        run.trigger_ref_type = "appointment"
+        run.trigger_ref_id = str(appointment_id)
+
+    keys = (
+        "appointment_id",
+        "appointment_type_id",
+        "provider_id",
+        "provider_name",
+        "booked_start",
+        "booked_end",
+        "write_status",
+    )
+    updates = {key: metadata.get(key) for key in keys if metadata.get(key) is not None}
+    if updates:
+        run.trigger_metadata = {**(run.trigger_metadata or {}), **updates}
+        context.update(updates)
+
+
+def _appointment_read_window(start_date: str, requested_start: str) -> tuple[str, str]:
+    """Return a same-day appointment query window in the requested slot's offset."""
+    parsed_start = _parse_slot_datetime(requested_start)
+    query_tz = (
+        parsed_start.tzinfo
+        if parsed_start is not None and _has_utc_offset(parsed_start)
+        else timezone.utc
+    )
+    try:
+        query_date = date.fromisoformat(str(start_date))
+    except (TypeError, ValueError):
+        query_date = parsed_start.date() if parsed_start is not None else date.today()
+    start_at = datetime(
+        query_date.year,
+        query_date.month,
+        query_date.day,
+        0,
+        0,
+        0,
+        tzinfo=query_tz,
+    )
+    end_at = datetime(
+        query_date.year,
+        query_date.month,
+        query_date.day,
+        23,
+        59,
+        59,
+        tzinfo=query_tz,
+    )
+    return start_at.isoformat(), end_at.isoformat()
+
+
+def _raw_appointment_matches_booking(
+    appointment: dict,
+    *,
+    patient_id: str,
+    provider_id: str,
+    appointment_type_id: str,
+    requested_start: str,
+) -> bool:
+    if _appointment_cancelled(appointment):
+        return False
+    if _raw_pms_id(_appointment_value(appointment, "patient_id")) != _raw_pms_id(
+        patient_id
+    ):
+        return False
+    if not _same_slot_datetime(
+        _appointment_value(appointment, "start"), requested_start
+    ):
+        return False
+
+    raw_provider = _appointment_value(appointment, "provider_id")
+    if raw_provider is not None and _raw_pms_id(raw_provider) != _raw_pms_id(
+        provider_id
+    ):
+        return False
+
+    raw_type = _appointment_value(appointment, "appointment_type_id")
+    if raw_type is not None and _raw_pms_id(raw_type) != _raw_pms_id(
+        appointment_type_id
+    ):
+        return False
+
+    return True
+
+
+def _appointment_value(appointment: dict, field: str) -> object:
+    keys = {
+        "id": ("id", "appointment_id", "AppointmentId"),
+        "patient_id": (
+            "patient_id",
+            "PatientId",
+            "ContactId",
+            "contact_id",
+            "nexhealth_patient_id",
+        ),
+        "provider_id": ("provider_id", "ProviderId"),
+        "provider_name": ("provider_name", "ProviderName"),
+        "appointment_type_id": (
+            "appointment_type_id",
+            "AppointmentTypeId",
+            "appointmentTypeId",
+            "appt_type_id",
+        ),
+        "start": ("start_time", "StartTime", "time", "start"),
+        "end": ("end_time", "EndTime", "end"),
+        "status": ("status", "Status"),
+    }[field]
+    for key in keys:
+        value = appointment.get(key)
+        if value not in (None, ""):
+            return value
+    return None
+
+
+def _appointment_cancelled(appointment: dict) -> bool:
+    return bool(
+        appointment.get("cancelled")
+        or appointment.get("Cancelled")
+        or appointment.get("is_cancelled")
+    )
+
+
+def _prefixed_pms_id(value: object, pms_source: str | None) -> str | None:
+    raw = _raw_pms_id(value)
+    if not raw:
+        return None
+    if str(value).startswith(("nh-", "gt-")):
+        return str(value)
+    prefix = {"nexhealth": "nh", "gotracker": "gt"}.get(str(pms_source or ""))
+    return f"{prefix}-{raw}" if prefix else raw
+
+
+def _booking_error_looks_like_slot_conflict(error: str | None) -> bool:
+    text = (error or "").casefold()
+    return any(
+        token in text
+        for token in (
+            "slot",
+            "available",
+            "availability",
+            "conflict",
+            "already booked",
+            "overlap",
+        )
+    )
+
+
+def _gotracker_status_payload(
+    node: UpdateGoTrackerAppointmentNode,
+) -> dict[str, object]:
     payload: dict[str, object] = {}
     if node.status_id is not None:
         payload["status_id"] = node.status_id
@@ -1968,7 +2915,9 @@ def _compute_due_at(
     return local_target.astimezone(timezone.utc)
 
 
-def _parse_context_datetime(value: object, location_timezone: str = "UTC") -> datetime | None:
+def _parse_context_datetime(
+    value: object, location_timezone: str = "UTC"
+) -> datetime | None:
     if isinstance(value, datetime):
         dt = value
     elif isinstance(value, str) and value:
@@ -1982,7 +2931,9 @@ def _parse_context_datetime(value: object, location_timezone: str = "UTC") -> da
         try:
             tz = ZoneInfo(location_timezone)
         except (ZoneInfoNotFoundError, KeyError):
-            logger.warning("unknown timezone '%s', falling back to UTC", location_timezone)
+            logger.warning(
+                "unknown timezone '%s', falling back to UTC", location_timezone
+            )
             tz = ZoneInfo("UTC")
         dt = dt.replace(tzinfo=tz)
     return dt.astimezone(timezone.utc)
@@ -2020,7 +2971,9 @@ async def build_dispatcher(
     Returns ``(dispatcher, resolved_location_timezone)``.
     """
     # Lazy import avoids any import cycle between the dispatcher and the gate.
-    from src.app.services.automation.compliance_gate_service import ComplianceGateService
+    from src.app.services.automation.compliance_gate_service import (
+        ComplianceGateService,
+    )
 
     runtime = runtime or AutomationWorkflowRuntimeService(session)
     scheduler = scheduler or AutomationWorkflowSchedulerService(session)

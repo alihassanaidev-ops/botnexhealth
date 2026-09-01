@@ -70,6 +70,10 @@ function stepSummary(node: WfNode): string {
             return `Internal: ${truncate(node.status, 30)}`
         case "update_appointment":
             return `PMS: ${node.operation}`
+        case "book_appointment":
+            return node.appointment_type_id && node.provider_id
+                ? `Book ${truncate(node.appointment_type_id, 18)}`
+                : "Provider/type required"
         case "update_gotracker_appointment":
             return node.status_id ? `GoTracker StatusId: ${node.status_id}` : "GoTracker writeback"
         case "booking_link": {
@@ -178,7 +182,7 @@ export function TriggerNodeCard({ data }: NodeProps<FlowNode>) {
  */
 function portLeft(node: WfNode, index: number, total: number): string {
     if (node.type === "condition") return index === 0 ? "38%" : "62%"
-    if (node.type === "switch") return handleOffset(index, total)
+    if (node.type === "switch" || node.type === "book_appointment") return handleOffset(index, total)
     return "50%"
 }
 
@@ -265,6 +269,20 @@ export function StepNodeCard({ data, selected }: NodeProps<FlowNode>) {
                 <>
                     <Handle id="true" type="source" position={Position.Bottom} style={{ left: "38%" }} className={HANDLE} />
                     <Handle id="false" type="source" position={Position.Bottom} style={{ left: "62%" }} className={HANDLE} />
+                </>
+            ) : node.type === "book_appointment" ? (
+                <>
+                    {outgoing(node).map((port, index, ports) => (
+                        <Handle
+                            key={port.handle}
+                            id={port.handle}
+                            type="source"
+                            position={Position.Bottom}
+                            title={port.label}
+                            style={{ left: handleOffset(index, ports.length) }}
+                            className={HANDLE}
+                        />
+                    ))}
                 </>
             ) : node.type === "switch" ? (
                 <>

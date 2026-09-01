@@ -332,6 +332,44 @@ export function validateDefinition(def: WorkflowDefinition): ValidationIssue[] {
                 }
                 break
             }
+            case "book_appointment": {
+                refError(node, node.booked_next_node_id, "Book appointment (Booked branch)")
+                refError(node, node.could_not_book_next_node_id, "Book appointment (Could not book branch)")
+                refError(node, node.pending_next_node_id, "Book appointment (Pending branch)")
+                if (!node.appointment_type_id.trim()) {
+                    issues.push({
+                        node_id: node.id,
+                        severity: "error",
+                        message: "Book appointment needs an appointment type.",
+                    })
+                }
+                if (!node.provider_id.trim()) {
+                    issues.push({
+                        node_id: node.id,
+                        severity: "error",
+                        message: "Book appointment needs a provider.",
+                    })
+                }
+                if (!node.start_time.trim()) {
+                    issues.push({
+                        node_id: node.id,
+                        severity: "error",
+                        message: "Book appointment needs a start time.",
+                    })
+                }
+                if (
+                    node.duration_min !== null &&
+                    node.duration_min !== undefined &&
+                    (!Number.isFinite(node.duration_min) || node.duration_min < 1)
+                ) {
+                    issues.push({
+                        node_id: node.id,
+                        severity: "error",
+                        message: "Book appointment duration must be at least 1 minute.",
+                    })
+                }
+                break
+            }
             case "update_gotracker_appointment": {
                 refError(node, node.next_node_id, "GoTracker appointment update step")
                 const hasWriteback =

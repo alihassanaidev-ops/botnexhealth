@@ -18,6 +18,7 @@ EXPECTED_NODE_TYPES = {
     "send_email",
     "update_patient_status",
     "update_appointment",
+    "book_appointment",
     "update_gotracker_appointment",
     "booking_link",
     "patient_registration",
@@ -32,8 +33,12 @@ EXPECTED_NODE_TYPES = {
 def test_registry_declares_every_engine_node_as_runtime_and_dry_run_supported() -> None:
     assert NODE_REGISTRY_VERSION == "1.0"
     assert set(NODE_CAPABILITIES) == EXPECTED_NODE_TYPES
-    assert all(capability.runtime_supported for capability in NODE_CAPABILITIES.values())
-    assert all(capability.dry_run_supported for capability in NODE_CAPABILITIES.values())
+    assert all(
+        capability.runtime_supported for capability in NODE_CAPABILITIES.values()
+    )
+    assert all(
+        capability.dry_run_supported for capability in NODE_CAPABILITIES.values()
+    )
 
 
 def test_only_legacy_wait_is_not_authorable() -> None:
@@ -49,6 +54,18 @@ def test_registry_owns_linear_and_condition_edges() -> None:
     assert outgoing_references(
         {"type": "update_appointment", "next_node_id": "exit-1"}
     ) == (("next_node_id", "exit-1"),)
+    assert outgoing_references(
+        {
+            "type": "book_appointment",
+            "booked_next_node_id": "booked",
+            "could_not_book_next_node_id": "no-slot",
+            "pending_next_node_id": "pending",
+        }
+    ) == (
+        ("booked_next_node_id", "booked"),
+        ("could_not_book_next_node_id", "no-slot"),
+        ("pending_next_node_id", "pending"),
+    )
     assert outgoing_references(
         {
             "type": "condition",

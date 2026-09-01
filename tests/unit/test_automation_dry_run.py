@@ -15,7 +15,12 @@ def _defn(nodes: list, entry: str) -> WorkflowDefinition:
 def test_dry_run_sms_to_exit_renders_sample_merge() -> None:
     d = _defn(
         [
-            {"type": "send_sms", "id": "s1", "body_template": "Hi {{patient_first_name}}", "next_node_id": "x1"},
+            {
+                "type": "send_sms",
+                "id": "s1",
+                "body_template": "Hi {{patient_first_name}}",
+                "next_node_id": "x1",
+            },
             {"type": "exit", "id": "x1", "outcome": "sent"},
         ],
         "s1",
@@ -84,7 +89,12 @@ def test_dry_run_describes_drip_action() -> None:
 def test_dry_run_truncates_on_loop() -> None:
     d = _defn(
         [
-            {"type": "wait", "id": "w1", "delay": {"delay_type": "duration", "duration_seconds": 1}, "next_node_id": "w1"},
+            {
+                "type": "wait",
+                "id": "w1",
+                "delay": {"delay_type": "duration", "duration_seconds": 1},
+                "next_node_id": "w1",
+            },
             {"type": "exit", "id": "x1"},  # present (schema requires) but unreachable
         ],
         "w1",
@@ -120,3 +130,36 @@ def test_dry_run_supports_internal_status_and_pms_appointment_updates() -> None:
         "update_appointment",
         "exit",
     ]
+
+
+def test_dry_run_supports_campaign_booking_node() -> None:
+    definition = _defn(
+        [
+            {
+                "type": "book_appointment",
+                "id": "book-1",
+                "appointment_type_id": "type-1",
+                "provider_id": "provider-1",
+                "start_time": "{{booking_start_time}}",
+                "booked_next_node_id": "booked",
+                "could_not_book_next_node_id": "could-not-book",
+                "pending_next_node_id": "pending",
+            },
+            {"type": "exit", "id": "booked", "outcome": "booked"},
+            {"type": "exit", "id": "could-not-book", "outcome": "could_not_book"},
+            {"type": "exit", "id": "pending", "outcome": "pending"},
+        ],
+        "book-1",
+    )
+
+    result = simulate_run(
+        definition,
+        context={"booking_start_time": "2026-09-02T14:30:00+00:00"},
+    )
+
+    assert [step.node_type for step in result.steps] == [
+        "book_appointment",
+        "exit",
+    ]
+    assert result.steps[0].summary == "Book appointment"
+    assert result.outcome == "booked"

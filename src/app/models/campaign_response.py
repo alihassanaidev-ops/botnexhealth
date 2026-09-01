@@ -20,7 +20,7 @@ class CampaignResponseEvent(Base):
     __tablename__ = "campaign_response_events"
     __table_args__ = (
         CheckConstraint(
-            "channel IN ('sms', 'voice', 'email', 'booking_link', 'staff')",
+            "channel IN ('sms', 'voice', 'email', 'booking_link', 'workflow', 'staff')",
             name="ck_campaign_response_events_channel",
         ),
         Index(
@@ -28,10 +28,14 @@ class CampaignResponseEvent(Base):
             "institution_id",
             "occurred_at",
         ),
-        Index("ix_campaign_response_events_run_created", "workflow_run_id", "occurred_at"),
+        Index(
+            "ix_campaign_response_events_run_created", "workflow_run_id", "occurred_at"
+        ),
         Index("ix_campaign_response_events_workflow", "workflow_id", "occurred_at"),
         Index("ix_campaign_response_events_contact", "contact_id"),
-        Index("ix_campaign_response_events_source", "institution_id", "source_event_id"),
+        Index(
+            "ix_campaign_response_events_source", "institution_id", "source_event_id"
+        ),
     )
 
     id: Mapped[str] = mapped_column(
@@ -76,7 +80,9 @@ class CampaignResponseEvent(Base):
     source: Mapped[str] = mapped_column(String(80), nullable=False)
     source_event_id: Mapped[str | None] = mapped_column(String(160), nullable=True)
     source_event_type: Mapped[str | None] = mapped_column(String(80), nullable=True)
-    confidence: Mapped[str] = mapped_column(String(32), nullable=False, default="deterministic")
+    confidence: Mapped[str] = mapped_column(
+        String(32), nullable=False, default="deterministic"
+    )
     summary: Mapped[str | None] = mapped_column(String(240), nullable=True)
 
     raw_body_encrypted: Mapped[str | None] = mapped_column(Text, nullable=True)
@@ -131,8 +137,12 @@ class CampaignStaffHandoff(Base):
             "status IN ('open', 'assigned', 'resolved', 'dismissed')",
             name="ck_campaign_staff_handoffs_status",
         ),
-        Index("ix_campaign_staff_handoffs_institution_status", "institution_id", "status"),
-        Index("ix_campaign_staff_handoffs_run_created", "workflow_run_id", "created_at"),
+        Index(
+            "ix_campaign_staff_handoffs_institution_status", "institution_id", "status"
+        ),
+        Index(
+            "ix_campaign_staff_handoffs_run_created", "workflow_run_id", "created_at"
+        ),
         Index("ix_campaign_staff_handoffs_workflow_status", "workflow_id", "status"),
     )
 
@@ -185,13 +195,20 @@ class CampaignStaffHandoff(Base):
     reason: Mapped[str] = mapped_column(String(80), nullable=False)
     status: Mapped[str] = mapped_column(String(24), nullable=False, default="open")
     summary: Mapped[str | None] = mapped_column(String(240), nullable=True)
-    due_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
-    resolved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    due_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    resolved_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
     resolution_outcome: Mapped[str | None] = mapped_column(String(80), nullable=True)
 
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now()
     )
     updated_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now()
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+        onupdate=func.now(),
     )

@@ -6,6 +6,7 @@
 import {
     CalendarCheck,
     CalendarClock,
+    CalendarPlus,
     ClipboardCheck,
     Clock,
     Flag,
@@ -79,6 +80,13 @@ export const NODE_META: Record<NodeType, NodeMeta> = {
         icon: ClipboardList,
         group: "action",
         accent: "bg-rose-100 text-rose-700 dark:bg-rose-950/50 dark:text-rose-300",
+    },
+    book_appointment: {
+        label: "Book Appointment",
+        description: "Book a campaign-selected slot in the clinic's PMS.",
+        icon: CalendarPlus,
+        group: "action",
+        accent: "bg-sky-100 text-sky-700 dark:bg-sky-950/50 dark:text-sky-300",
     },
     booking_link: {
         label: "Booking Link",
@@ -236,7 +244,7 @@ export const PALETTE_GROUPS: Array<{ title: string; group: NodeMeta["group"]; ty
     // `update_gotracker_appointment` is deliberately absent: it is retained in the
     // schema for already-published definitions, but binds a new workflow to one
     // PMS. `update_appointment` is the PMS-neutral replacement.
-    { title: "Actions", group: "action", types: ["drip", "llm", "booking_link", "patient_registration", "update_appointment"] },
+    { title: "Actions", group: "action", types: ["drip", "llm", "book_appointment", "booking_link", "patient_registration", "update_appointment"] },
     { title: "Control flow", group: "control", types: ["wait", "condition", "switch", "exit"] },
     { title: "Advanced", group: "advanced", types: ["update_patient_status", "json_mapper"] },
 ]

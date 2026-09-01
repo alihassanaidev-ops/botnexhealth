@@ -12,6 +12,7 @@ from dataclasses import dataclass, field
 
 from src.app.services.automation.definition_schema import (
     ConditionNode,
+    BookAppointmentNode,
     DripNode,
     ExitNode,
     JsonMapperNode,
@@ -112,7 +113,11 @@ def simulate_run(
         node = node_map.get(current)
         if node is None:
             result.steps.append(
-                DryRunStep(node_id=current, node_type="unknown", summary=f"Node '{current}' not found")
+                DryRunStep(
+                    node_id=current,
+                    node_type="unknown",
+                    summary=f"Node '{current}' not found",
+                )
             )
             result.outcome = "error"
             break
@@ -182,7 +187,12 @@ def simulate_run(
             current = node.next_node_id
         elif isinstance(node, SendVoiceNode):
             result.steps.append(
-                DryRunStep(node.id, "send_voice", "Place AI voice call", f"agent {node.retell_agent_id}")
+                DryRunStep(
+                    node.id,
+                    "send_voice",
+                    "Place AI voice call",
+                    f"agent {node.retell_agent_id}",
+                )
             )
             current = node.next_node_id
         elif isinstance(node, UpdatePatientStatusNode):
@@ -205,6 +215,19 @@ def simulate_run(
                 )
             )
             current = node.next_node_id
+        elif isinstance(node, BookAppointmentNode):
+            result.steps.append(
+                DryRunStep(
+                    node.id,
+                    node.type,
+                    "Book appointment",
+                    (
+                        f"{node.appointment_type_id} with {node.provider_id} "
+                        f"at {node.start_time}"
+                    ),
+                )
+            )
+            current = node.booked_next_node_id
         elif isinstance(node, JsonMapperNode):
             mapped: dict[str, object] = {}
             for mapping in node.mappings:
@@ -214,7 +237,9 @@ def simulate_run(
                 _assign_context_value(ctx, mapping.target_field, value)
                 mapped[mapping.target_field] = _metadata_value(value)
             detail = ", ".join(mapped.keys()) or None
-            result.steps.append(DryRunStep(node.id, "json_mapper", "Map JSON fields", detail))
+            result.steps.append(
+                DryRunStep(node.id, "json_mapper", "Map JSON fields", detail)
+            )
             current = node.next_node_id
         elif isinstance(node, LlmNode):
             source_value = _context_value(ctx, node.source_field)
@@ -225,24 +250,35 @@ def simulate_run(
             )
             current = node.next_node_id
         elif isinstance(node, UpdateGoTrackerAppointmentNode):
-            detail = f"StatusId {node.status_id}" if node.status_id else "Writeback configured"
+            detail = (
+                f"StatusId {node.status_id}"
+                if node.status_id
+                else "Writeback configured"
+            )
             result.steps.append(
-                DryRunStep(node.id, "update_gotracker_appointment", "Update GoTracker appointment", detail)
+                DryRunStep(
+                    node.id,
+                    "update_gotracker_appointment",
+                    "Update GoTracker appointment",
+                    detail,
+                )
             )
             current = node.next_node_id
         elif isinstance(node, ConditionNode):
             branch = choices.get(node.id, True)
             result.steps.append(
-                DryRunStep(node.id, "condition", f"Condition → {'Yes' if branch else 'No'} branch")
+                DryRunStep(
+                    node.id,
+                    "condition",
+                    f"Condition → {'Yes' if branch else 'No'} branch",
+                )
             )
             current = node.true_next_node_id if branch else node.false_next_node_id
         elif isinstance(node, SwitchNode):
             # `case_choices` names the case to take, so a preview can walk any
             # branch. Unset (or an unknown label) previews the default.
             wanted = case_choices.get(node.id)
-            chosen = next(
-                (case for case in node.cases if case.label == wanted), None
-            )
+            chosen = next((case for case in node.cases if case.label == wanted), None)
             subject = f" on {node.subject}" if node.subject else ""
             result.steps.append(
                 DryRunStep(
@@ -252,11 +288,11 @@ def simulate_run(
                     detail=", ".join(case.label for case in node.cases),
                 )
             )
-            current = (
-                chosen.next_node_id if chosen else node.default_next_node_id
-            )
+            current = chosen.next_node_id if chosen else node.default_next_node_id
         elif isinstance(node, ExitNode):
-            result.steps.append(DryRunStep(node.id, "exit", f"Exit — {node.outcome or 'done'}"))
+            result.steps.append(
+                DryRunStep(node.id, "exit", f"Exit — {node.outcome or 'done'}")
+            )
             result.outcome = node.outcome or "exit"
             current = None
         else:  # pragma: no cover - registry contract tests keep this exhaustive

@@ -54,17 +54,21 @@ NODE_CAPABILITIES: dict[str, NodeCapability] = {
     ),
     "send_voice": NodeCapability("send_voice", ("next_node_id",)),
     "send_email": NodeCapability("send_email", ("next_node_id",)),
-    "update_patient_status": NodeCapability(
-        "update_patient_status", ("next_node_id",)
-    ),
+    "update_patient_status": NodeCapability("update_patient_status", ("next_node_id",)),
     "update_appointment": NodeCapability("update_appointment", ("next_node_id",)),
+    "book_appointment": NodeCapability(
+        "book_appointment",
+        (
+            "booked_next_node_id",
+            "could_not_book_next_node_id",
+            "pending_next_node_id",
+        ),
+    ),
     "update_gotracker_appointment": NodeCapability(
         "update_gotracker_appointment", ("next_node_id",)
     ),
     "booking_link": NodeCapability("booking_link", ("next_node_id",)),
-    "patient_registration": NodeCapability(
-        "patient_registration", ("next_node_id",)
-    ),
+    "patient_registration": NodeCapability("patient_registration", ("next_node_id",)),
     "json_mapper": NodeCapability("json_mapper", ("next_node_id",)),
     "llm": NodeCapability("llm", ("next_node_id",)),
     "condition": NodeCapability(
@@ -80,7 +84,9 @@ NODE_CAPABILITIES: dict[str, NodeCapability] = {
 
 
 def node_type(node: object) -> str | None:
-    value = node.get("type") if isinstance(node, Mapping) else getattr(node, "type", None)
+    value = (
+        node.get("type") if isinstance(node, Mapping) else getattr(node, "type", None)
+    )
     return str(value) if value is not None else None
 
 

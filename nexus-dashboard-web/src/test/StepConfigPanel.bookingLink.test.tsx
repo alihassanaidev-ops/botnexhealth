@@ -4,7 +4,7 @@ import { describe, expect, it, vi } from "vitest"
 
 import StepConfigPanel from "@/components/workflow/StepConfigPanel"
 import { blankDefinition, createNode } from "@/lib/workflow/graph"
-import type { BookingLinkNode, PatientRegistrationNode, WorkflowDefinition } from "@/types/workflow"
+import type { BookAppointmentNode, BookingLinkNode, PatientRegistrationNode, WorkflowDefinition } from "@/types/workflow"
 import type { CachedAppointmentType, CachedProvider } from "@/types"
 
 const TYPES = [
@@ -17,12 +17,12 @@ const PROVIDERS = [
     { source_id: "88", name: "Hidden Hygienist", first_name: null, last_name: null, is_hidden: true },
 ] as unknown as CachedProvider[]
 
-function def(node: BookingLinkNode | PatientRegistrationNode): WorkflowDefinition {
+function def(node: BookAppointmentNode | BookingLinkNode | PatientRegistrationNode): WorkflowDefinition {
     const base = blankDefinition()
     return { ...base, entry_node_id: node.id, nodes: [node] }
 }
 
-function renderPanel(node: BookingLinkNode | PatientRegistrationNode, opts: {
+function renderPanel(node: BookAppointmentNode | BookingLinkNode | PatientRegistrationNode, opts: {
     appointmentTypes?: CachedAppointmentType[]
     providers?: CachedProvider[]
 } = {}) {
@@ -91,5 +91,32 @@ describe("Register Patient config", () => {
             providers: [],
         })
         expect(await screen.findByPlaceholderText("PMS provider id")).toBeInTheDocument()
+    })
+})
+
+describe("Book Appointment config", () => {
+    it("falls back to typed provider and type ids when caches are empty", async () => {
+        renderPanel(createNode("book_appointment", "book-1") as BookAppointmentNode, {
+            appointmentTypes: [],
+            providers: [],
+        })
+
+        expect(
+            await screen.findByPlaceholderText("PMS appointment type id or {{field}}"),
+        ).toBeInTheDocument()
+        expect(screen.getByPlaceholderText("PMS provider id or {{field}}")).toBeInTheDocument()
+        expect(screen.getByPlaceholderText("{{booking_start_time}}")).toBeInTheDocument()
+    })
+
+    it("shows the three runtime outcome branches", async () => {
+        renderPanel(createNode("book_appointment", "book-1") as BookAppointmentNode, {
+            appointmentTypes: [],
+            providers: [],
+        })
+
+        expect(await screen.findByText("Outcome branches")).toBeInTheDocument()
+        expect(screen.getByText("Booked")).toBeInTheDocument()
+        expect(screen.getByText("Could not book")).toBeInTheDocument()
+        expect(screen.getByText("Pending")).toBeInTheDocument()
     })
 })

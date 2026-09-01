@@ -20,10 +20,10 @@ part of this backlog; the section *What doesn't compress* is where the schedule 
 | Fully inside this repo (Platform + dashboard) | **28 items** |
 | Fully outside this repo (Cloud Service / Connector) | **7 items** |
 | Split across both | **12 items** |
-| Blocked on a product decision | **9 items** (Decisions A–I) |
-| Gated on something other than code | **17 items** — see *What doesn't compress* |
-| **Delivered so far** | **26 of 47**, plus Item 24 part-built — see *Delivered so far* |
-| **Workstreams complete** | **WS2, WS6**; WS3 owes Item 11 and half of Item 15; WS7 owes Item 40 |
+| Blocked on a product decision | **7 items** (Decisions A–I) |
+| Gated on something other than code | **16 items** — see *What doesn't compress* |
+| **Delivered so far** | **27 of 47**, plus Item 24 part-built — see *Delivered so far* |
+| **Workstreams complete** | **WS2, WS6**; WS3 owes half of Item 15; WS7 owes Item 40 |
 
 ---
 
@@ -42,7 +42,7 @@ part of this backlog; the section *What doesn't compress* is where the schedule 
 | **3** · Prevent the same booking being written twice | GoTracker booking safety | `e294420` | Connector asks the chart "did I already write this?" before every write, keyed on `CreatedUserId='ThirdPartyIntegrator'`. A retry returns the existing id and writes nothing. Root cause of the duplicate-booking class |
 | **1** · Check the clinic's schedule before writing | GoTracker booking safety | `b066a8d` | Patient-resolves + slot-free re-checked on the same connection immediately before the write. Cancelled statuses release their slot; touching boundaries are not overlaps |
 | **2** · A conflict outcome for writes | GoTracker booking safety | `4adc67c` | Third terminal status — never re-queued however many attempts remain. Own webhook action. Surfaced per-location on `/api/admin/sync_status` as `conflicts` / `failed` / `oldest_unwritten`. An admin can still re-queue deliberately |
-| **4** · Report pending honestly | GoTracker booking safety | `0d096f2` + `af01334` | Platform half landed first, as the doc requires. Booking response and appointment reads carry `write_status` (`pending`/`written`/`failed`/`conflict`) + `foreign_id`, separate from `status`; PMS-origin rows read as `written`. Run-history visibility still rides with Item 11 |
+| **4** · Report pending honestly | GoTracker booking safety | `0d096f2` + `af01334` | Platform half landed first, as the doc requires. Booking response and appointment reads carry `write_status` (`pending`/`written`/`failed`/`conflict`) + `foreign_id`, separate from `status`; PMS-origin rows read as `written`. Campaign run-history visibility is surfaced by Item 11 |
 | **5** · Recover in-flight writes after Connector restart | GoTracker booking safety | `305ed2d` | Item 3's read-back applied to patient creation too. No local state, so **Decision I fell away instead of being answered** — the decision log's recommendation was to avoid a durable local record, and that is what shipped |
 | **8** · Mapping review before live bookings | GoTracker operations & health | `a9fda29` | Writes that reach a patient are refused until a named person has reviewed the mapping. Reads and agent sync are deliberately not gated — a half-onboarded clinic can still be looked at and talked to, it just cannot have appointments written into it |
 | **6** · Alert when a connection is unhealthy | GoTracker operations & health | `e178162` + `c1ed593` + `07afeb2` + `94d46e7` | Nine conditions evaluated every five minutes, collapsed into three CloudWatch alarms. Suppressed when the clinic is genuinely closed, so a practice with its lights off overnight does not page anyone |
@@ -118,12 +118,12 @@ patients told "confirmed" for appointments the practice will never see. Shipped 
 | **3** ✅ | Prevent the same booking being written twice — **done, `e294420`** | 1d | Connector + Cloud Service | Doc specified a deterministic key derived from booking content. What shipped reads back instead: the Connector asks the chart "did I already write this?", keyed on `CreatedUserId='ThirdPartyIntegrator'`, so a retry returns the existing id and writes nothing |
 | **1** ✅ | Check the clinic's schedule before writing — **done, `b066a8d`** | 1.5d | Connector | Patient-resolves + slot-free re-checked on the same connection immediately before the write. Cancelled statuses release their slot; touching boundaries are not overlaps |
 | **2** ✅ | A conflict outcome for writes that must not proceed — **done, `4adc67c`** | 1.5d | Cloud Service + Ops UI + **Platform mirror** | Terminal, never re-queued however many attempts remain, with its own webhook action. Surfaced per-location on `/api/admin/sync_status` as `conflicts` / `failed` / `oldest_unwritten`; an admin can still re-queue deliberately |
-| **4** ✅ | Tell the caller when a booking is not yet real — **done, `0d096f2` + `af01334`** | 0.5d | Cloud Service API + Platform | Ours landed first, as the doc requires. Booking response and appointment reads now carry `write_status` (`pending`/`written`/`failed`/`conflict`) + `foreign_id`, separate from `status`. PMS-origin rows read as `written`. **Remaining: run-history visibility, which arrives with Item 11** |
+| **4** ✅ | Tell the caller when a booking is not yet real — **done, `0d096f2` + `af01334`** | 0.5d | Cloud Service API + Platform | Ours landed first, as the doc requires. Booking response and appointment reads now carry `write_status` (`pending`/`written`/`failed`/`conflict`) + `foreign_id`, separate from `status`. PMS-origin rows read as `written`. Campaign run-history visibility is surfaced by Item 11 |
 | **5** ✅ | Recover in-flight writes after Connector restart — **done, `305ed2d`** | 0.5d | Connector | Doc expected a durable local record and Decision I to settle it. Items 3 and 5 converged on one mechanism instead — read back from the chart — so there is no local state, nothing to encrypt, and **Decision I never needed answering** |
 
 **What this closes and what it does not.** The double-booking and false-confirmation classes are
-both gone. Two things ride on elsewhere: **run-history visibility** for `pending` / `conflict`
-arrives with Item 11 in WS3, and **proof** — Items 41 and 42 are still the only end-to-end evidence
+both gone. Two things ride on elsewhere: **campaign-template policy** for `pending` / `conflict`
+branches belongs to WS4, and **proof** — Items 41 and 42 are still the only end-to-end evidence
 the write path holds against a seeded practice database, and that sandbox does not exist yet. The
 protections ship with their own coverage; the write-path suite remains outstanding. Item 7 in WS2
 is now fully unblocked, since the conflict count it was waiting on shipped with Item 2.
@@ -153,13 +153,14 @@ Shipped as backend `20260831-94d46e7` on staging and production. Test counts at 
 # WS3 · Campaign engine core
 **8 items · ≈ 9 days · Platform backend (+ builder UI) · TIER 1**
 
-**Remaining: Item 11, and the branching half of Item 15.** Everything else here is delivered.
+**Remaining: the branching half of Item 15.** Item 11's engine/builder capability is delivered;
+WS4 still needs the campaign templates to use it.
 
 Where the silent failures live. Everything here is in this repo.
 
 | # | Item | Size | Notes |
 |---|---|---|---|
-| **11** | A booking step inside campaigns | 3d | Hard blocker on Recall and Sales Qualification. Booking already works for the voice agent — it just isn't a campaign step. Needs booked / could-not-book / **pending** branches. Blocked on Decision B |
+| **11** ✅ | A booking step inside campaigns — **engine/builder done** | 3d | Adds a PMS-neutral `book_appointment` workflow node with booked / could-not-book / **pending** branches, live availability re-check, retry replay guard, campaign provenance, run appointment reference update, and workflow-channel reporting. Decision B now affects how WS4 templates route and message the pending branch, not whether the node exists |
 | **12** ✅ | Generate the three link types — **done, `797063d` `e43378d` → `e73786f` `96d86c4` `bc70361` `04ec54a` `fd30337` `0dc95ed`** | 3d | Signed run-scoped expiring tokens, three public endpoints, and the patient-facing slot picker: book, reschedule and cancel all finish unattended instead of raising a staff handoff. Reschedule patches the original appointment rather than cancel-and-rebook; a slot lost to someone else mid-flow is told apart from a failed booking and re-offered in one round trip |
 | **14** ✅ | Retry text messages — **done, `7116457`** | 0.5d | Email already does this correctly — copy it. Must ship *with* the provider idempotency key or retries become duplicates |
 | **15** ◐ | Delivery results into campaigns — **done bar branching, `cc3f28a`** | 0.5d | Terminal receipts now mark the step `sent:delivered` / `sent:undelivered`, so reporting tells arrival from acceptance. **Remaining: letting a campaign branch on a hard delivery failure** — by the time a receipt lands the run has usually advanced past the step, so it needs run-state work |
@@ -180,7 +181,7 @@ Two campaigns are live and good. Two are two-step placeholders and one does not 
 
 | # | Item | Size | Notes |
 |---|---|---|---|
-| **22** | Build out Appointment Reminder and Overdue Recall | 5d | Rebuild both to the depth of the live campaigns (~15–20 steps each). Reminder must re-check live practice data before every send. **Switching them on is the last action in this workstream.** Blocked on Decision D, needs Items 11, 12, 13, 25 |
+| **22** | Build out Appointment Reminder and Overdue Recall | 5d | Rebuild both to the depth of the live campaigns (~15–20 steps each). Reminder must re-check live practice data before every send. **Switching them on is the last action in this workstream.** Needs Items 12, 13, 25 and the new Item 11 booking node wired into the templates; Decision B still controls the pending-branch copy/path |
 | **24** ◐ | Build the Sales Qualification campaign — **intake and conversion done, `ecd1861` `db98a99` `a6e8932` `09e1986` `2f39b99`** | 4d | Was "does not exist in any form"; three of its five parts now do. **Intake**: a per-form credential a clinic issues itself, posted to by its own site or a hosted builder, with tolerant extraction of the answers array so a Typeform payload does not have to be reshaped first — plus staff entry by hand through the same path, so dedup and consent cannot diverge between the two. **Patient conversion**: the registration form and `create_patient`, which both adapters already implemented and only the voice agent could reach. **Working the lead**: a list, a stage derived from whether a practice-software record exists, and encrypted notes. **Remaining: the trigger and the template** — nothing enrols a landed lead into a campaign yet, and `BulkImportTrigger` is still a literal nothing implements. Decision C answered (signed webhook), and its open half answered too (staff may enter by hand) |
 | **23** | Run Overdue Recall for GoTracker clinics | 1d | Must refuse to run on a clinic whose history sync is incomplete — otherwise it tells last month's patients they haven't been seen in two years |
 
@@ -310,13 +311,13 @@ schedule instead.
 
 # What doesn't compress
 
-Agents collapse the writing. They do nothing to the seventeen items below, which wait on a person,
+Agents collapse the writing. They do nothing to the sixteen items below, which wait on a person,
 an environment, or the calendar. Start these clocks now and the ~63 build-days fit underneath them;
 leave them and they become the critical path.
 
 | Gate | Items | Why it doesn't compress |
 |---|---|---|
-| **Nine product decisions** | 4, 5, 11, 22, 24, 25, 27, 37 | Decisions A–I; six need the client. **B is urgent** — it blocks Item 4 in the first stage and Item 11 in the third. Parallelism does not route around an unanswered question |
+| **Nine product decisions** | 4, 5, 22, 24, 25, 27, 37 | Decisions A–I; six need the client. **B is urgent** — it blocks Item 4 behaviour and the WS4 pending-branch template copy/path. Parallelism does not route around an unanswered question |
 | **A practice-DB sandbox that doesn't exist** | 41, 42 — and 1, 3, 5 depend on it | No seeded GoTracker database to test writes against. The Tier 0 protections can be written but not proven, and proving them is the point |
 | **Staging observation windows** | 6, 35 | Both specify thresholds from real observed values. The alarms are an afternoon; the numbers in them need days of staging traffic |
 | **An unscheduled pentest** | 40 | Remediation cannot start before the test runs. Book it now and findings land while other lanes build |
@@ -350,10 +351,10 @@ not last in importance.
 
 # Flags before we start
 
-**1 · Decision B blocks Tier 0 and Tier 1.** When a GoTracker booking is accepted but not yet
+**1 · Decision B blocks Tier 0 behaviour and WS4 template policy.** When a GoTracker booking is accepted but not yet
 written, does the campaign pause and wait, or exit and hand the patient to staff? It is a client
-decision and it blocks Items 4 and 11 — one in the first stage, one in the third. Raise it now,
-not when we reach it.
+decision and it blocks Item 4 behaviour plus the WS4 pending-branch copy/path. Raise it now, not
+when we reach it.
 
 **2 · A fifth of the backlog is in someone else's codebase.** Items 1, 3, 5, 7, 9, 10 are pure
 Cloud Service / Connector work, and 2, 4, 6, 8, 34, 42 are split. That coordination — particularly
@@ -379,7 +380,7 @@ Everything below is Platform-side, in this repo, unblocked, and in dependency or
 1. **Item 4 — Platform half.** Handle `pending` as an outcome distinct from success and failure, and
    fix the message that always claims success. The doc explicitly requires our side to land before
    the Cloud Service starts sending the status. *(Confirm Decision B first — it shapes the campaign
-   behaviour, though the plumbing can be built either way.)*
+   behaviour and WS4 pending-branch copy, though the plumbing can be built either way.)*
 2. **Item 32 — campaign audit.** No dependencies, closes a genuine compliance gap, pure backend.
 3. **Item 12 — link generation.** Currently unsafe, and blocks Items 13 and 22.
 4. **Item 14 + 15 — text retry and delivery receipts.** Build 14 with the provider idempotency key
