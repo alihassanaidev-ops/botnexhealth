@@ -77,7 +77,7 @@ describe("Switch node", () => {
 
         await user.click(screen.getByRole("button", { name: /add case/i }))
 
-        const updated = onNodeChange.mock.calls.at(-1)?.[0] as SwitchNode
+        const updated = onNodeChange.mock.calls[onNodeChange.mock.calls.length - 1][0] as SwitchNode
         expect(updated.cases).toHaveLength(3)
         expect(updated.cases[2].label).toBe("Case 3")
         // One port per case, plus the default.
@@ -91,7 +91,7 @@ describe("Switch node", () => {
 
         await user.click(screen.getByRole("button", { name: "Move case 2 up" }))
 
-        const updated = onNodeChange.mock.calls.at(-1)?.[0] as SwitchNode
+        const updated = onNodeChange.mock.calls[onNodeChange.mock.calls.length - 1][0] as SwitchNode
         expect(updated.cases.map((c) => c.label)).toEqual(["Cancelled", "Confirmed"])
     })
 
@@ -112,7 +112,7 @@ describe("Switch node", () => {
         await user.clear(values[0])
         await user.type(values[0], "reschedule")
 
-        const updated = onNodeChange.mock.calls.at(-1)?.[0] as SwitchNode
+        const updated = onNodeChange.mock.calls[onNodeChange.mock.calls.length - 1][0] as SwitchNode
         expect(updated.cases[0].filter).toMatchObject({ kind: "rule", value: "reschedule" })
     })
 })

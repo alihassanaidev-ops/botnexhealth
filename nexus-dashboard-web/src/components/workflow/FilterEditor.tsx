@@ -28,6 +28,8 @@ import { cn } from "@/lib/utils"
 import {
     FILTER_OP_GROUPS,
     FILTER_OP_LABELS,
+    newGroup,
+    newRule,
     OPS_WITHOUT_VALUE,
     OPS_WITH_LIST_VALUE,
     valuePlaceholder,
@@ -53,19 +55,6 @@ export interface FilterEditorProps {
     /** Shown above the tree; omit inside a case row where the label is enough. */
     label?: string
     hint?: string
-}
-
-export function newRule(): FilterRule {
-    return { kind: "rule", field: "", op: "eq", value: "" }
-}
-
-export function newGroup(op: FilterGroup["op"] = "and"): FilterGroup {
-    return { kind: "group", op, children: [newRule()] }
-}
-
-/** A rule always renders; wrap it so the root can also grow into a group. */
-export function asGroup(expression: FilterExpression): FilterGroup {
-    return expression.kind === "group" ? expression : { kind: "group", op: "and", children: [expression] }
 }
 
 export default function FilterEditor({

@@ -4,7 +4,12 @@
  * Mirrors `src/app/services/automation/filter_expression.py`. Kept in its own
  * module so the pure validation logic can import it without pulling in React.
  */
-import type { FilterOp } from "@/types/workflow"
+import type {
+    FilterExpression,
+    FilterGroup,
+    FilterOp,
+    FilterRule,
+} from "@/types/workflow"
 
 /** Operators that test presence only — the editor hides the value input. */
 export const OPS_WITHOUT_VALUE: ReadonlySet<FilterOp> = new Set<FilterOp>([
@@ -116,3 +121,19 @@ export function valuePlaceholder(op: FilterOp): string {
 }
 
 export const ALL_FILTER_OPS: FilterOp[] = FILTER_OP_GROUPS.flatMap((g) => g.ops)
+
+// ---------------------------------------------------------------------------
+// Expression constructors
+// ---------------------------------------------------------------------------
+export function newRule(): FilterRule {
+    return { kind: "rule", field: "", op: "eq", value: "" }
+}
+
+export function newGroup(op: FilterGroup["op"] = "and"): FilterGroup {
+    return { kind: "group", op, children: [newRule()] }
+}
+
+/** A rule always renders; wrap it so the root can also grow into a group. */
+export function asGroup(expression: FilterExpression): FilterGroup {
+    return expression.kind === "group" ? expression : { kind: "group", op: "and", children: [expression] }
+}
