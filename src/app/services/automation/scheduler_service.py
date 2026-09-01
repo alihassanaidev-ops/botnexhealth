@@ -6,7 +6,7 @@ import logging
 import secrets
 from datetime import datetime, timedelta, timezone
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.app.models.automation_workflow import (
@@ -18,6 +18,11 @@ logger = logging.getLogger(__name__)
 
 _DEFAULT_CLAIM_TTL_SECONDS = 120
 _DEFAULT_CLAIM_BATCH = 50
+
+# How many extra rows to consider per claim so the fairness pass has a choice.
+# Four batches is enough to interleave several busy tenants without making the
+# locked read materially more expensive.
+_FAIRNESS_OVERSCAN = 4
 
 
 class AutomationWorkflowSchedulerService:
@@ -79,11 +84,15 @@ class AutomationWorkflowSchedulerService:
                 AutomationWorkflowTimer.due_at <= now,
             )
             .order_by(AutomationWorkflowTimer.due_at)
-            .limit(limit)
+            # Over-fetch so the fairness pass has something to choose between.
+            # Ordering by due_at alone means one tenant's bulk enrolment fills
+            # the whole batch and every other clinic waits behind it.
+            .limit(limit * _FAIRNESS_OVERSCAN)
             .with_for_update(skip_locked=True)
         )
         result = await self.session.execute(stmt)
-        timers = list(result.scalars().all())
+        candidates = list(result.scalars().all())
+        timers = _round_robin_by_institution(candidates, limit)
 
         for timer in timers:
             timer.status = AutomationTimerStatus.CLAIMED.value
@@ -94,6 +103,23 @@ class AutomationWorkflowSchedulerService:
         if timers:
             await self.session.flush()
         return timers
+
+    async def count_due(self, *, now: datetime | None = None) -> int:
+        """Pending timers already due.
+
+        Exposed so the poller can report the backlog it did not get to, rather
+        than leaving queue depth to be inferred from claim counts.
+        """
+        now = now or datetime.now(tz=timezone.utc)
+        result = await self.session.execute(
+            select(func.count())
+            .select_from(AutomationWorkflowTimer)
+            .where(
+                AutomationWorkflowTimer.status == AutomationTimerStatus.PENDING.value,
+                AutomationWorkflowTimer.due_at <= now,
+            )
+        )
+        return int(result.scalar_one() or 0)
 
     async def fire_timer(self, timer: AutomationWorkflowTimer) -> None:
         """Mark a claimed timer as fired. Caller dispatches the run step."""
@@ -158,3 +184,46 @@ class AutomationWorkflowSchedulerService:
         if timers:
             await self.session.flush()
         return len(timers)
+
+
+def _round_robin_by_institution(
+    candidates: list[AutomationWorkflowTimer], limit: int
+) -> list[AutomationWorkflowTimer]:
+    """Interleave due timers across institutions, oldest-first within each.
+
+    Without this, ``ORDER BY due_at`` alone hands the whole batch to whichever
+    tenant enqueued the most work — a 500-patient recall blast occupies every
+    claim cycle, and every other clinic's reminders sit behind it with nothing
+    in the logs to explain why they are late.
+
+    Deals one timer per institution per pass, so a tenant with a backlog still
+    progresses, just never at the cost of starving anyone else. Fairness must
+    not become a per-tenant rate limit: when one tenant is the only one with
+    work, it takes the whole batch.
+    """
+    if len(candidates) <= limit:
+        return candidates
+
+    by_institution: dict[str, list[AutomationWorkflowTimer]] = {}
+    for timer in candidates:
+        by_institution.setdefault(str(timer.institution_id), []).append(timer)
+
+    # Deal to the tenant whose longest-waiting work is oldest. Candidates
+    # arrive in due_at order, so each queue is already oldest-first.
+    queues = sorted(by_institution.values(), key=lambda group: group[0].due_at)
+
+    selected: list[AutomationWorkflowTimer] = []
+    cursor = 0
+    while len(selected) < limit:
+        progressed = False
+        for queue in queues:
+            if cursor >= len(queue):
+                continue
+            selected.append(queue[cursor])
+            progressed = True
+            if len(selected) >= limit:
+                break
+        if not progressed:
+            break
+        cursor += 1
+    return selected

@@ -58,8 +58,15 @@ export type FlowNodeData =
     | {
           kind: "trigger"
           trigger: WorkflowTrigger
+          /** False when no entry step is wired, which is when the port offers a `+`. */
+          hasEntry?: boolean
           issueLevel?: "error" | "warning" | null
           executionStatus?: ExecutionNodeStatus
+          /**
+           * Injected by the canvas, not by `definitionToFlow` — this module stays
+           * pure. Absent in read-only previews, which is what hides the `+`.
+           */
+          onAddFromPort?: (sourceId: string, handle?: string) => void
       }
     | {
           kind: "step"
@@ -68,6 +75,7 @@ export type FlowNodeData =
           issueLevel?: "error" | "warning" | null
           executionStatus?: ExecutionNodeStatus
           executionAttempts?: number
+          onAddFromPort?: (sourceId: string, handle?: string) => void
       }
 
 export type ExecutionNodeStatus =
@@ -300,7 +308,11 @@ export function definitionToFlow(def: WorkflowDefinition): {
         id: TRIGGER_NODE_ID,
         type: "trigger",
         position: layout[TRIGGER_NODE_ID] ?? { x: X0 + nextSlot(0) * COL_W, y: Y0 },
-        data: { kind: "trigger", trigger: def.trigger },
+        data: {
+            kind: "trigger",
+            trigger: def.trigger,
+            hasEntry: Boolean(def.entry_node_id),
+        },
         deletable: false,
     })
 

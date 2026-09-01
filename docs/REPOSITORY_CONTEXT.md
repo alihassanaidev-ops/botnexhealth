@@ -490,6 +490,40 @@ thirty or forty steps stays navigable. Selection is a set: shift/cmd-click
 toggles membership and a drag on the pane draws a selection box, while
 `selectedId` remains the single node the config panel edits.
 
+Every unconnected port carries a `+` that opens the step picker and wires the
+chosen step to that port. Dragging from the handle already worked, but it
+requires knowing the handle is draggable and landing the drop on empty canvas;
+the affordance every comparable builder offers is the click. The list of ports
+comes from `outgoing()`, so a node type with new ports gets its `+` for free —
+and the picker shows steps the clinic cannot run as disabled rather than hiding
+them, because "email is unavailable here" is useful where "email does not
+exist" misleads.
+
+Delete and Backspace remove the selection in one edit, so one undo brings back
+everything the keypress removed. Every canvas shortcut is suppressed while the
+focus is in a text field, which is what keeps Backspace deleting a character in
+a message body rather than the step being edited.
+
+### Timer throughput and fairness
+
+`poll_workflow_timers` drains due timers across several claim rounds within one
+beat instead of taking a single fixed batch. A fixed batch on a fixed beat was a
+platform-wide ceiling — 50 timers every 30 seconds is ~100/minute for every
+clinic combined — so one bulk enrolment took minutes to issue its first steps.
+Rounds stop when a batch comes back short, when the tick's budget is spent, or
+at a loop backstop, and the poll reports the backlog it left so queue depth is
+measured rather than inferred.
+
+`claim_due_timers` over-fetches and then deals round-robin across institutions
+(`_round_robin_by_institution`), oldest-first within each, dealing to the tenant
+whose longest-waiting work is oldest. Ordering by `due_at` alone handed the
+whole batch to whichever tenant enqueued the most, so a 500-patient recall
+delayed every other clinic's reminders with nothing in the logs to explain it.
+Fairness is not a per-tenant rate limit: a tenant alone with a backlog still
+takes the whole batch. Dispatch *priority* is deliberately absent — it is
+authored on the enrollment policy, which is not built, and a column nothing
+writes is worse than no column.
+
 `send_sms` is run-scoped and only sends the message. The node does **not** carry
 an arbitrary recipient number; it sends to the workflow run's `Contact.phone`
 from the resolved `InstitutionLocation.twilio_from_number`. New workflow SMS

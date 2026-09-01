@@ -46,6 +46,12 @@ export interface WorkflowCanvasProps {
      */
     selectedIds?: string[]
     onSelectionChange?: (ids: string[]) => void
+    /**
+     * Add a step from a node's unconnected port. Injected into node data rather
+     * than passed down, because React Flow owns the node components; leaving it
+     * undefined is what hides the `+` in read-only previews.
+     */
+    onAddFromPort?: (sourceId: string, handle?: string) => void
     /** Hide zoom controls + minimap for compact read-only previews. */
     minimal?: boolean
     /** Enable node dragging + drag-to-connect (author mode). Default: read-only. */
@@ -68,6 +74,7 @@ function InnerCanvas({
     onSelect,
     selectedIds,
     onSelectionChange,
+    onAddFromPort,
     minimal,
     editable,
     onConnectNodes,
@@ -88,9 +95,10 @@ function InnerCanvas({
             nodes.map((n) => ({
                 ...n,
                 selected: n.id === selectedId || multi.has(n.id),
+                data: { ...n.data, onAddFromPort },
             })),
         )
-    }, [nodes, selectedId, selectedIds, setRfNodes])
+    }, [nodes, selectedId, selectedIds, onAddFromPort, setRfNodes])
 
     const handleNodeClick: NodeMouseHandler = (event, node) => {
         // Shift/Cmd-click toggles membership; a plain click replaces the

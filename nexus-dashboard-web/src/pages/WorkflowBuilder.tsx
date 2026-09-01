@@ -34,6 +34,7 @@ import {
     copyNodes,
     createNode,
     definitionToFlow,
+    outgoing,
     duplicateNodes,
     genId,
     normalizeDefinition,
@@ -58,6 +59,7 @@ import WorkflowValidationPanel from "@/components/workflow/WorkflowValidationPan
 import WorkflowPublishControls from "@/components/workflow/WorkflowPublishControls"
 import WorkflowExecutionsView from "@/components/workflow/WorkflowExecutionsView"
 import TestRunDialog from "@/components/workflow/TestRunDialog"
+import StepPickerDialog from "@/components/workflow/StepPickerDialog"
 import type { AutomationWorkflow, RetellSmsChatProfile } from "@/types"
 import type { OutboundVoiceProfile } from "@/types"
 import type { CachedAppointmentType, CachedProvider } from "@/types"
@@ -78,6 +80,9 @@ const STATUS_STYLES: Record<string, string> = {
 
 const draftKey = (id: string) => `nex.workflow-draft.${id}`
 
+/** How far below its source a step added from a `+` lands. */
+const NEW_STEP_DROP = 170
+
 export default function WorkflowBuilder() {
     const { id } = useParams<{ id: string }>()
     const navigate = useNavigate()
@@ -94,6 +99,10 @@ export default function WorkflowBuilder() {
     /** Every selected node. `selectedId` stays the one the config panel edits. */
     const [selectedIds, setSelectedIds] = useState<string[]>([])
     const [nodeQuery, setNodeQuery] = useState("")
+    /** The port a `+` was clicked on, held while the step picker is open. */
+    const [addFrom, setAddFrom] = useState<
+        { sourceId: string; handle?: string; label?: string } | null
+    >(null)
     const [panelOpen, setPanelOpen] = useState(false)
     const [testOpen, setTestOpen] = useState(false)
     const [backendIssues, setBackendIssues] = useState<ValidationIssue[]>([])
@@ -318,14 +327,21 @@ export default function WorkflowBuilder() {
         setSelectedId(newIds[0])
     }, [applyDef, def])
 
-    // Ctrl/Cmd+Z and Ctrl/Cmd+Shift+Z, ignored while typing in a field so the
-    // browser's own text undo still works inside inputs.
+    /** Delete every selected step in one edit, so one undo restores them all. */
+    const onDeleteSelection = useCallback(() => {
+        if (!def || !actionTargets.length) return
+        applyDef(actionTargets.reduce((next, nodeId) => removeNode(next, nodeId), def))
+        setPanelOpen(false)
+        setSelectedId(null)
+        setSelectedIds([])
+    }, [def, applyDef, actionTargets])
+
+    // Canvas shortcuts. All of them are ignored while typing in a field, so
+    // the browser's own text editing — undo, and Backspace especially — still
+    // behaves normally inside inputs.
     useEffect(() => {
         if (readOnly) return
         const onKeyDown = (event: KeyboardEvent) => {
-            if (!(event.metaKey || event.ctrlKey)) return
-            const key = event.key.toLowerCase()
-            if (!["z", "d", "c", "v"].includes(key)) return
             const target = event.target as HTMLElement | null
             if (
                 target
@@ -333,9 +349,27 @@ export default function WorkflowBuilder() {
                     || target.tagName === "TEXTAREA"
                     || target.isContentEditable)
             ) {
-                // Inside a field the browser's own text editing wins.
                 return
             }
+
+            // Delete/Backspace with no modifier removes the selection. Both
+            // keys, because a Mac keyboard's Delete is what everyone else calls
+            // Backspace.
+            if (
+                (event.key === "Delete" || event.key === "Backspace")
+                && !event.metaKey
+                && !event.ctrlKey
+                && !event.altKey
+            ) {
+                if (!actionTargets.length) return
+                event.preventDefault()
+                onDeleteSelection()
+                return
+            }
+
+            if (!(event.metaKey || event.ctrlKey)) return
+            const key = event.key.toLowerCase()
+            if (!["z", "d", "c", "v"].includes(key)) return
             event.preventDefault()
             if (key === "z") {
                 if (event.shiftKey) handleRedo()
@@ -346,7 +380,16 @@ export default function WorkflowBuilder() {
         }
         window.addEventListener("keydown", onKeyDown)
         return () => window.removeEventListener("keydown", onKeyDown)
-    }, [readOnly, handleUndo, handleRedo, handleDuplicate, handleCopy, handlePaste])
+    }, [
+        readOnly,
+        handleUndo,
+        handleRedo,
+        handleDuplicate,
+        handleCopy,
+        handlePaste,
+        onDeleteSelection,
+        actionTargets,
+    ])
 
     const issues = useMemo(() => (def ? validateDefinitionLocally(def) : []), [def])
     const errorCount = [...issues, ...backendIssues].filter((i) => i.severity === "error").length
@@ -433,6 +476,7 @@ export default function WorkflowBuilder() {
             applyDef(removeNode(def, nodeId))
             setPanelOpen(false)
             setSelectedId(null)
+            setSelectedIds([])
         },
         [def, applyDef],
     )
@@ -456,6 +500,55 @@ export default function WorkflowBuilder() {
         },
         [def, applyDef],
     )
+    // Canvas coordinates for every node, including those the fallback layout
+    // derives rather than `def.layout` storing, so a step added from a `+`
+    // lands under the port that spawned it even before an Auto Layout.
+    const flowPositions = useMemo(() => {
+        const positions = new Map<string, { x: number; y: number }>()
+        if (def) {
+            for (const node of definitionToFlow(def).nodes) {
+                positions.set(node.id, node.position)
+            }
+        }
+        return positions
+    }, [def])
+
+    const onAddFromPort = useCallback(
+        (sourceId: string, handle?: string) => {
+            if (!def) return
+            const source = def.nodes.find((n) => n.id === sourceId)
+            const label = source
+                ? outgoing(source).find((port) => port.handle === handle)?.label
+                : undefined
+            setAddFrom({ sourceId, handle, label })
+        },
+        [def],
+    )
+
+    const onPickStep = useCallback(
+        (type: NodeType) => {
+            if (!def || !addFrom) return
+            const { sourceId, handle } = addFrom
+            const newId = genId(type, def.nodes.map((n) => n.id))
+            let next = addNode(def, createNode(type, newId))
+
+            // Place it under the port it extends, so it lands where the eye
+            // already is rather than in the auto-layout's trailing column.
+            const anchor = flowPositions.get(sourceId)
+            if (anchor) {
+                next = setNodePosition(next, newId, {
+                    x: anchor.x,
+                    y: anchor.y + NEW_STEP_DROP,
+                })
+            }
+
+            applyDef(connectNodes(next, sourceId, newId, handle))
+            setAddFrom(null)
+            onSelect(newId)
+        },
+        [def, addFrom, applyDef, flowPositions, onSelect],
+    )
+
     const onAutoLayout = useCallback(async () => {
         if (!def) return
         setLayouting(true)
@@ -709,6 +802,7 @@ export default function WorkflowBuilder() {
                         onSelect={onSelect}
                         selectedIds={selectedIds}
                         onSelectionChange={setSelectedIds}
+                        onAddFromPort={readOnly ? undefined : onAddFromPort}
                         editable={!readOnly}
                         onConnectNodes={onConnectNodes}
                         onNodePositionChange={onNodePositionChange}
@@ -746,6 +840,13 @@ export default function WorkflowBuilder() {
                 retellSmsProfiles={retellSmsProfiles}
                 readOnly={readOnly}
             />}
+            <StepPickerDialog
+                open={addFrom !== null}
+                onOpenChange={(open) => !open && setAddFrom(null)}
+                onPick={onPickStep}
+                supportedNodeTypes={supportedNodeTypes}
+                portLabel={addFrom?.label}
+            />
             <TestRunDialog open={testOpen} onOpenChange={setTestOpen} def={def} />
         </div>
     )
