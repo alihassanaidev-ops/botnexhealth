@@ -51,7 +51,7 @@ describe("StepConfigPanel voice outcome controls", () => {
 
         const next = onDefinitionChange.mock.calls[0][0] as WorkflowDefinition
         const condition = next.nodes.find((node) => node.type === "condition")
-        expect(condition?.type === "condition" && condition.rules[0].field).toBe("call_outcome")
+        expect(condition?.type === "condition" && condition.rules?.[0].field).toBe("call_outcome")
         expect(next.nodes.some((node) => node.type === "exit" && node.outcome === "staff_handoff")).toBe(true)
     })
 

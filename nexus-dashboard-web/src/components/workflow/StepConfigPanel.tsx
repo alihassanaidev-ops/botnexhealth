@@ -9,7 +9,17 @@
  * dragging on the canvas (Plan 02 architecture decision).
  */
 import { useEffect, useMemo, useState } from "react"
-import { Check, ChevronDown, ChevronsUpDown, GitBranch, Flag, Plus, Search, Trash2 } from "lucide-react"
+import {
+    Check,
+    ChevronDown,
+    ChevronsUpDown,
+    ChevronUp,
+    GitBranch,
+    Flag,
+    Plus,
+    Search,
+    Trash2,
+} from "lucide-react"
 import {
     Sheet,
     SheetContent,
@@ -52,6 +62,7 @@ import {
     type PmsAppointmentStatus,
 } from "@/lib/workflow-api"
 import { SmsPreview, EmailPreview } from "./MessagePreview"
+import FilterEditor from "./FilterEditor"
 import { useMergeFields } from "@/lib/workflow/merge-fields"
 import {
     addVoiceOutcomeBranch,
@@ -77,6 +88,11 @@ import type {
     ConditionNode,
     ConditionOp,
     ConditionRule,
+    FilterExpression,
+    FilterOp,
+    FilterRule,
+    SwitchCase,
+    SwitchNode,
     DripNode,
     EmailRecipient,
     JsonMapperNode,
@@ -431,8 +447,87 @@ function TriggerForm({
                         <ContextPreview triggerType={trigger.type} />
                     </>
                 )}
+
+                <TriggerEligibilityFilter
+                    trigger={trigger}
+                    onChange={onChange}
+                    readOnly={readOnly}
+                />
             </div>
         </>
+    )
+}
+
+/**
+ * Optional eligibility filter on the trigger.
+ *
+ * Evaluated before a run is created, so an ineligible subject costs one
+ * in-memory check instead of a run row, a step row and analytics rows that an
+ * opening condition node would then immediately exit.
+ */
+function TriggerEligibilityFilter({
+    trigger,
+    onChange,
+    readOnly,
+}: {
+    trigger: WorkflowTrigger
+    onChange: (t: WorkflowTrigger) => void
+    readOnly?: boolean
+}) {
+    const filter = trigger.filter ?? null
+
+    if (!filter) {
+        return (
+            <div className="rounded-md border border-dashed border-border p-3">
+                <p className="text-sm font-medium">Enrollment filter</p>
+                <p className="mt-0.5 text-xs text-muted-foreground">
+                    Optional. Decide eligibility here rather than in a first step, so
+                    contacts who do not qualify never enter the campaign at all.
+                </p>
+                {!readOnly && (
+                    <Button
+                        variant="outline"
+                        size="sm"
+                        className="mt-2 h-7 gap-1.5 text-xs"
+                        onClick={() =>
+                            onChange({
+                                ...trigger,
+                                filter: { kind: "rule", field: "", op: "eq", value: "" },
+                            })
+                        }
+                    >
+                        <Plus className="h-3.5 w-3.5" /> Add filter
+                    </Button>
+                )}
+            </div>
+        )
+    }
+
+    return (
+        <div className="space-y-2 rounded-md border border-border p-3">
+            <div className="flex items-start justify-between gap-2">
+                <div>
+                    <p className="text-sm font-medium">Enrollment filter</p>
+                    <p className="text-xs text-muted-foreground">Only enroll when this matches.</p>
+                </div>
+                {!readOnly && (
+                    <Button
+                        variant="ghost"
+                        size="sm"
+                        className="h-7 px-2 text-xs"
+                        onClick={() => onChange({ ...trigger, filter: null })}
+                    >
+                        Remove
+                    </Button>
+                )}
+            </div>
+            <FilterEditor
+                value={filter}
+                triggerType={trigger.type}
+                readOnly={readOnly}
+                onChange={(next) => onChange({ ...trigger, filter: next })}
+            />
+        </div>
     )
 }
 
@@ -521,6 +616,9 @@ function NodeForm({
                 )}
                 {node.type === "condition" && (
                     <ConditionFields node={node} def={def} onChange={onNodeChange} readOnly={readOnly} />
+                )}
+                {node.type === "switch" && (
+                    <SwitchFields node={node} def={def} onChange={onNodeChange} readOnly={readOnly} />
                 )}
                 {node.type === "exit" && (
                     <Field label="Outcome" hint="Label recorded when a contact ends here.">
@@ -2411,15 +2509,60 @@ function ConditionFields({
 }) {
     const contextFields = contextFieldsForTrigger(def.trigger.type)
     const contextFieldNames = new Set(contextFields.map((field) => field.name))
+    const legacyRules = node.rules ?? []
     const updateRule = (i: number, patch: Partial<ConditionRule>) => {
-        const rules = node.rules.map((r, idx) => (idx === i ? { ...r, ...patch } : r))
+        const rules = legacyRules.map((r, idx) => (idx === i ? { ...r, ...patch } : r))
         onChange({ ...node, rules })
     }
-    const addRule = () => onChange({ ...node, rules: [...node.rules, { field: "", op: "eq", value: "" }] })
-    const removeRule = (i: number) => onChange({ ...node, rules: node.rules.filter((_, idx) => idx !== i) })
+    const addRule = () => onChange({ ...node, rules: [...legacyRules, { field: "", op: "eq", value: "" }] })
+    const removeRule = (i: number) => onChange({ ...node, rules: legacyRules.filter((_, idx) => idx !== i) })
+
+    // A node authored with the filter DSL uses the shared editor. The legacy
+    // rule list below is only rendered for definitions that already use it,
+    // because the backend keeps executing those with exact-equality semantics
+    // and silently rewriting them could change how a live campaign branches.
+    if (node.filter) {
+        return (
+            <>
+                <FilterEditor
+                    value={node.filter}
+                    triggerType={def.trigger.type}
+                    readOnly={readOnly}
+                    label="Continue on the Yes branch when"
+                    onChange={(filter) => onChange({ ...node, filter })}
+                />
+                <ConditionBranchFields node={node} def={def} onChange={onChange} readOnly={readOnly} />
+            </>
+        )
+    }
 
     return (
         <>
+            <div className="rounded-md border border-amber-300/60 bg-amber-50 p-2.5 text-xs text-amber-900 dark:border-amber-700/50 dark:bg-amber-950/30 dark:text-amber-200">
+                <p className="font-medium">Using the original rule list</p>
+                <p className="mt-0.5">
+                    This step was authored before nested conditions and number/date
+                    operators existed. Converting changes how values are compared, so
+                    it is left as-is until you choose to switch.
+                </p>
+                {!readOnly && (
+                    <Button
+                        variant="outline"
+                        size="sm"
+                        className="mt-2 h-7 text-xs"
+                        onClick={() =>
+                            onChange({
+                                ...node,
+                                rules: undefined,
+                                logic: undefined,
+                                filter: rulesToFilter(legacyRules, node.logic ?? "AND"),
+                            })
+                        }
+                    >
+                        Convert to the new editor
+                    </Button>
+                )}
+            </div>
             <Field label="Match logic">
                 <Select
                     value={node.logic ?? "AND"}
@@ -2436,7 +2579,7 @@ function ConditionFields({
 
             <div className="space-y-2">
                 <Label className="text-sm">Rules</Label>
-                {node.rules.map((rule, i) => {
+                {legacyRules.map((rule, i) => {
                     const needsValue = rule.op !== "is_null" && rule.op !== "is_not_null"
                     const selectedKnownField = contextFieldNames.has(rule.field) ? rule.field : CUSTOM_CONDITION_FIELD
                     return (
@@ -2469,7 +2612,7 @@ function ConditionFields({
                                         </SelectGroup>
                                     </SelectContent>
                                 </Select>
-                                {!readOnly && node.rules.length > 1 && (
+                                {!readOnly && legacyRules.length > 1 && (
                                     <Button variant="ghost" size="icon" className="h-9 w-9 shrink-0" onClick={() => removeRule(i)}>
                                         <Trash2 className="h-3.5 w-3.5" />
                                     </Button>
@@ -2521,6 +2664,25 @@ function ConditionFields({
                 )}
             </div>
 
+            <ConditionBranchFields node={node} def={def} onChange={onChange} readOnly={readOnly} />
+        </>
+    )
+}
+
+/** The Yes/No targets, shared by both condition authoring shapes. */
+function ConditionBranchFields({
+    node,
+    def,
+    onChange,
+    readOnly,
+}: {
+    node: ConditionNode
+    def: WorkflowDefinition
+    onChange: (n: WorkflowNode) => void
+    readOnly?: boolean
+}) {
+    return (
+        <>
             <NextStepField
                 label="If true → go to"
                 def={def}
@@ -2535,6 +2697,179 @@ function ConditionFields({
                 currentId={node.id}
                 value={node.false_next_node_id}
                 onChange={(v) => onChange({ ...node, false_next_node_id: v })}
+                readOnly={readOnly}
+            />
+        </>
+    )
+}
+
+/**
+ * Lift a legacy rule list into the filter DSL. Only ever run on an explicit
+ * author action, never automatically: the legacy evaluator compares exactly
+ * where the DSL coerces, so a silent conversion could change branching.
+ */
+function rulesToFilter(rules: ConditionRule[], logic: "AND" | "OR"): FilterExpression {
+    const children: FilterExpression[] = rules.map((rule) => ({
+        kind: "rule" as const,
+        field: rule.field,
+        op: rule.op as FilterOp,
+        value: (rule.value ?? null) as FilterRule["value"],
+        // Preserve the old exactness so the converted step behaves the same.
+        case_sensitive: rule.op === "in" || rule.op === "not_in" ? true : undefined,
+    }))
+    if (children.length === 1) return children[0]
+    return { kind: "group", op: logic === "OR" ? "or" : "and", children }
+}
+
+// ---------------------------------------------------------------------------
+// Switch
+// ---------------------------------------------------------------------------
+function SwitchFields({
+    node,
+    def,
+    onChange,
+    readOnly,
+}: {
+    node: SwitchNode
+    def: WorkflowDefinition
+    onChange: (n: WorkflowNode) => void
+    readOnly?: boolean
+}) {
+    const setCase = (index: number, patch: Partial<SwitchCase>) =>
+        onChange({
+            ...node,
+            cases: node.cases.map((c, i) => (i === index ? { ...c, ...patch } : c)),
+        })
+
+    const addCase = () =>
+        onChange({
+            ...node,
+            cases: [
+                ...node.cases,
+                {
+                    label: `Case ${node.cases.length + 1}`,
+                    filter: { kind: "rule", field: node.subject || "", op: "eq", value: "" },
+                    next_node_id: "",
+                },
+            ],
+        })
+
+    const removeCase = (index: number) =>
+        onChange({ ...node, cases: node.cases.filter((_, i) => i !== index) })
+
+    const move = (index: number, delta: number) => {
+        const target = index + delta
+        if (target < 0 || target >= node.cases.length) return
+        const cases = [...node.cases]
+        const [moved] = cases.splice(index, 1)
+        cases.splice(target, 0, moved)
+        onChange({ ...node, cases })
+    }
+
+    return (
+        <>
+            <Field
+                label="Routing on"
+                hint="Shown on the canvas and in execution traces. Each case still names its own field."
+            >
+                <Input
+                    value={node.subject ?? ""}
+                    placeholder="call_outcome"
+                    disabled={readOnly}
+                    onChange={(e) => onChange({ ...node, subject: e.target.value || null })}
+                />
+            </Field>
+
+            <div className="space-y-2">
+                <div>
+                    <Label className="text-sm">Cases</Label>
+                    <p className="text-xs text-muted-foreground">
+                        Checked top to bottom — the first match wins, so put the specific
+                        case above the general one.
+                    </p>
+                </div>
+
+                {node.cases.map((switchCase, index) => (
+                    <div key={index} className="space-y-2 rounded-md border border-border p-2">
+                        <div className="flex items-center gap-1.5">
+                            <span className="w-5 shrink-0 text-center text-xs tabular-nums text-muted-foreground">
+                                {index + 1}
+                            </span>
+                            <Input
+                                className="h-8 flex-1"
+                                aria-label={`Case ${index + 1} label`}
+                                placeholder="Confirmed"
+                                value={switchCase.label}
+                                disabled={readOnly}
+                                onChange={(e) => setCase(index, { label: e.target.value })}
+                            />
+                            {!readOnly && (
+                                <>
+                                    <Button
+                                        variant="ghost"
+                                        size="icon"
+                                        className="h-8 w-8 shrink-0"
+                                        aria-label={`Move case ${index + 1} up`}
+                                        disabled={index === 0}
+                                        onClick={() => move(index, -1)}
+                                    >
+                                        <ChevronUp className="h-3.5 w-3.5" />
+                                    </Button>
+                                    <Button
+                                        variant="ghost"
+                                        size="icon"
+                                        className="h-8 w-8 shrink-0"
+                                        aria-label={`Move case ${index + 1} down`}
+                                        disabled={index === node.cases.length - 1}
+                                        onClick={() => move(index, 1)}
+                                    >
+                                        <ChevronDown className="h-3.5 w-3.5" />
+                                    </Button>
+                                    <Button
+                                        variant="ghost"
+                                        size="icon"
+                                        className="h-8 w-8 shrink-0"
+                                        aria-label={`Remove case ${index + 1}`}
+                                        disabled={node.cases.length <= 1}
+                                        onClick={() => removeCase(index)}
+                                    >
+                                        <Trash2 className="h-3.5 w-3.5" />
+                                    </Button>
+                                </>
+                            )}
+                        </div>
+
+                        <FilterEditor
+                            value={switchCase.filter}
+                            triggerType={def.trigger.type}
+                            readOnly={readOnly}
+                            onChange={(filter) => setCase(index, { filter })}
+                        />
+
+                        <NextStepField
+                            label="Go to"
+                            def={def}
+                            currentId={node.id}
+                            value={switchCase.next_node_id}
+                            onChange={(v) => setCase(index, { next_node_id: v })}
+                            readOnly={readOnly}
+                        />
+                    </div>
+                ))}
+
+                {!readOnly && (
+                    <Button variant="outline" size="sm" className="gap-1.5" onClick={addCase}>
+                        <Plus className="h-3.5 w-3.5" /> Add case
+                    </Button>
+                )}
+            </div>
+
+            <NextStepField
+                label="Otherwise → go to"
+                def={def}
+                currentId={node.id}
+                value={node.default_next_node_id}
+                onChange={(v) => onChange({ ...node, default_next_node_id: v })}
                 readOnly={readOnly}
             />
         </>

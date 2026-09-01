@@ -20,6 +20,7 @@ from src.app.services.automation.definition_schema import (
     SendEmailNode,
     SendSmsNode,
     SendVoiceNode,
+    SwitchNode,
     TimeWaitConfig,
     UpdateAppointmentNode,
     UpdateGoTrackerAppointmentNode,
@@ -88,11 +89,17 @@ def simulate_run(
     *,
     context: dict | None = None,
     condition_choices: dict[str, bool] | None = None,
+    switch_case_choices: dict[str, str] | None = None,
 ) -> DryRunResult:
-    """Walk the definition from the entry node, describing each step. Conditions
-    follow ``condition_choices[node_id]`` (default True). Bounded by _MAX_STEPS."""
+    """Walk the definition from the entry node, describing each step.
+
+    Conditions follow ``condition_choices[node_id]`` (default True) and switches
+    follow ``switch_case_choices[node_id]``, naming the case label to take
+    (default: the fallback branch). Bounded by _MAX_STEPS.
+    """
     ctx = _sample_context(context)
     choices = condition_choices or {}
+    case_choices = switch_case_choices or {}
     node_map = {n.id: n for n in definition.nodes}
     result = DryRunResult()
     current: str | None = definition.entry_node_id
@@ -229,6 +236,25 @@ def simulate_run(
                 DryRunStep(node.id, "condition", f"Condition → {'Yes' if branch else 'No'} branch")
             )
             current = node.true_next_node_id if branch else node.false_next_node_id
+        elif isinstance(node, SwitchNode):
+            # `case_choices` names the case to take, so a preview can walk any
+            # branch. Unset (or an unknown label) previews the default.
+            wanted = case_choices.get(node.id)
+            chosen = next(
+                (case for case in node.cases if case.label == wanted), None
+            )
+            subject = f" on {node.subject}" if node.subject else ""
+            result.steps.append(
+                DryRunStep(
+                    node.id,
+                    "switch",
+                    f"Switch{subject} → {chosen.label if chosen else 'Default'}",
+                    detail=", ".join(case.label for case in node.cases),
+                )
+            )
+            current = (
+                chosen.next_node_id if chosen else node.default_next_node_id
+            )
         elif isinstance(node, ExitNode):
             result.steps.append(DryRunStep(node.id, "exit", f"Exit — {node.outcome or 'done'}"))
             result.outcome = node.outcome or "exit"

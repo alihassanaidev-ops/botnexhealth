@@ -380,7 +380,8 @@ Current schema version `1.0` supports triggers such as `appointment_offset`,
 `callback_requested`, `patient_status_changed`, `sms_reply`, and `email_reply`;
 node types include `wait`, `drip`, `send_sms`, `send_voice`, `send_email`,
 `retell_sms_conversation`, `update_patient_status`, `update_appointment`,
-`update_gotracker_appointment`, `json_mapper`, `llm`, `condition`, and `exit`.
+`update_gotracker_appointment`, `json_mapper`, `llm`, `condition`, `switch`, and
+`exit`.
 
 Two of those triggers are accepted by the schema but are **not offered in the
 builder**, because nothing enrols from them yet: `bulk_import` has no import
@@ -391,6 +392,53 @@ should use the PMS-neutral `update_appointment`. The excluded set lives in
 `UNAVAILABLE_TRIGGER_TYPES` in `nexus-dashboard-web/src/lib/workflow/catalog.ts`,
 and `tests/unit/test_workflow_schema_frontend_parity.py` fails if the builder's
 TypeScript model drifts from `definition_schema.py` in either direction.
+
+### Filter expressions
+
+`src/app/services/automation/filter_expression.py` defines one nested boolean
+filter language shared by trigger eligibility, condition nodes and switch cases.
+An expression is a tree of `{kind: "group", op: and|or|not, children}` and
+`{kind: "rule", field, op, value}`, with roughly thirty operators covering
+equality, membership, text, numeric comparison, relative time (`before`,
+`after`, `within`, `older_than`), presence, arrays, and field-to-field
+comparison. The builder renders it with one recursive component
+(`components/workflow/FilterEditor.tsx`), so a new operator is added in
+`filter-ops.ts` once rather than in each screen.
+
+Two evaluation rules matter. Comparisons coerce across wire types, because
+webhook context delivers numbers as strings and datetimes as ISO text; a value
+that cannot be coerced yields `False` rather than raising, so a bad filter never
+aborts a run. And a missing field never matches anything except the presence
+operators, so "the data never arrived" cannot read as "the value did not match".
+Date-only values and naive datetimes resolve in the location timezone.
+
+The legacy `ConditionNode` shape (`logic` + `rules`) is deliberately **not**
+up-converted. Its equality is exact where the DSL coerces, so rewriting
+published rules could change how a live campaign branches; old definitions keep
+the original evaluator and the builder offers an explicit opt-in conversion.
+
+### Multi-way branching
+
+The `switch` node routes to the first of up to twenty labelled cases whose
+filter matches, falling back to a required `default_next_node_id`. Its ports are
+variable-count, which `node_registry.py` now models through `outgoing_list_fields`
+— graph validation reports a mis-wired branch as `cases[2].next_node_id` rather
+than blaming the node as a whole.
+
+### Trigger eligibility filters
+
+Every trigger accepts an optional `filter`, evaluated against the event context
+*before* a run is created (`services/automation/trigger_filter.py`). Deciding
+eligibility there rather than in an opening condition node is what stops
+ineligible subjects writing a run, a step execution and analytics rows only to
+exit at node one; `trigger_appointment_workflows` reports the saving as
+`skipped_filter`. A filter that cannot be evaluated is treated as not matching,
+because the safe direction on malformed input is to contact fewer people.
+
+The surgery pre-appointment template uses both: its eligibility moved onto the
+trigger, and each call attempt's six chained conditions became one switch on
+`call_outcome`. The definition went from 48 nodes to 31, and from 22 condition
+nodes to 3.
 
 ### Trigger location scoping
 
@@ -416,6 +464,31 @@ builder, so labels are not duplicated in the frontend. `NON_ATTENDING_STATUS_IDS
 and the webhook route's status labelling both derive from it. Note that the
 `writable` flag is not yet verified against the installed Synchronizer build and
 currently reports every status as writable, which preserves prior behaviour.
+
+### Canvas editing
+
+Undo/redo is recorded at the single `applyDef` seam in `pages/WorkflowBuilder.tsx`
+rather than per editor, with rapid edits coalesced so one undo steps over a typed
+word rather than a character. Applying a definition and recording it are separate
+calls (`commitDef` vs `applyDef`) — undo restores a definition that is already in
+the history, and re-pushing it would make undo and redo cancel each other. The
+history resets on load and on discard, so undo cannot walk back into a draft the
+author has just thrown away.
+
+Duplicate, copy and paste rewrite ids through `cloneNodes` in
+`lib/workflow/graph.ts`: edges *inside* the copied set are repointed at the
+copies, and edges leaving it are cleared rather than left pointing at the
+originals — a copy that silently rejoins the original graph is almost never what
+"duplicate" means, and a dangling pointer is at least visible in validation.
+Every forward pointer must be listed there, which is the same knowledge
+`outgoing()` carries; `patient_registration.on_abandoned_node_id` is the one that
+is not called `next_node_id`, and a blanket rewrite would miss it. Optional
+pointers that leave the copied set drop to `null`, since `""` is not a valid id.
+
+Node search matches id, type and configured content, which is how a graph of
+thirty or forty steps stays navigable. Selection is a set: shift/cmd-click
+toggles membership and a drag on the pane draws a selection box, while
+`selectedId` remains the single node the config panel edits.
 
 `send_sms` is run-scoped and only sends the message. The node does **not** carry
 an arbitrary recipient number; it sends to the workflow run's `Contact.phone`

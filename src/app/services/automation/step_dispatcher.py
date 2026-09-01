@@ -35,6 +35,10 @@ from src.app.services.automation.campaign_action_links import (
     REGISTRATION_PLACEHOLDER,
     registration_link,
 )
+from src.app.services.automation.filter_expression import (
+    EvaluationContext,
+    evaluate as evaluate_filter,
+)
 from src.app.services.automation.definition_schema import (
     AppointmentRelativeDelay,
     CalendarDelay,
@@ -49,6 +53,8 @@ from src.app.services.automation.definition_schema import (
     SendEmailNode,
     SendSmsNode,
     SendVoiceNode,
+    SwitchCase,
+    SwitchNode,
     TimeWaitConfig,
     BookingLinkNode,
     PatientRegistrationNode,
@@ -789,7 +795,9 @@ class WorkflowStepDispatcher:
                 current_node_id = node.next_node_id
 
             elif isinstance(node, ConditionNode):
-                branch = _evaluate_condition(node, context)
+                branch = evaluate_condition_node(
+                    node, context, location_timezone=location_timezone, now=now
+                )
                 step = await self.runtime.begin_step(run, step_id=node.id, step_type="condition")
                 await self.runtime.complete_step(
                     step,
@@ -804,6 +812,30 @@ class WorkflowStepDispatcher:
                 current_node_id = (
                     node.true_next_node_id if branch else node.false_next_node_id
                 )
+
+            elif isinstance(node, SwitchNode):
+                matched = select_switch_case(
+                    node, context, location_timezone=location_timezone, now=now
+                )
+                step = await self.runtime.begin_step(run, step_id=node.id, step_type="switch")
+                target = (
+                    matched.next_node_id
+                    if matched is not None
+                    else node.default_next_node_id
+                )
+                await self.runtime.complete_step(
+                    step,
+                    # The label, not the index, so a trace stays readable after
+                    # the author reorders cases.
+                    result_code=f"case_{matched.label}" if matched else "case_default",
+                    result_metadata={
+                        "case": matched.label if matched else None,
+                        "matched": matched is not None,
+                        "subject": node.subject,
+                        "next_node_id": target,
+                    },
+                )
+                current_node_id = target
 
             elif isinstance(node, ExitNode):
                 step = await self.runtime.begin_step(run, step_id=node.id, step_type="exit")
@@ -1709,9 +1741,54 @@ def _inject_action_links(run: AutomationWorkflowRun, context: dict) -> None:
         booking.setdefault(placeholder, url)
 
 
-def _evaluate_condition(node: ConditionNode, context: dict) -> bool:
+def evaluate_condition_node(
+    node: ConditionNode,
+    context: dict,
+    *,
+    location_timezone: str = "UTC",
+    now: datetime | None = None,
+) -> bool:
+    """Evaluate either condition shape.
+
+    A definition authored with ``filter`` uses the shared DSL. One authored with
+    ``rules`` keeps the original evaluator, whose equality is exact where the
+    DSL coerces types — rewriting those rules could change how a published
+    campaign branches, so they are left alone.
+    """
+    if node.filter is not None:
+        return evaluate_filter(
+            node.filter,
+            EvaluationContext(
+                values=context,
+                now=now or datetime.now(tz=timezone.utc),
+                timezone_name=location_timezone,
+            ),
+        )
     results = [_evaluate_rule(rule, context) for rule in node.rules]
     return all(results) if node.logic == "AND" else any(results)
+
+
+def select_switch_case(
+    node: SwitchNode,
+    context: dict,
+    *,
+    location_timezone: str = "UTC",
+    now: datetime | None = None,
+) -> SwitchCase | None:
+    """First matching case, or None to take the default branch."""
+    evaluation = EvaluationContext(
+        values=context,
+        now=now or datetime.now(tz=timezone.utc),
+        timezone_name=location_timezone,
+    )
+    for case in node.cases:
+        if evaluate_filter(case.filter, evaluation):
+            return case
+    return None
+
+
+# Retained under its original name for existing callers and tests.
+_evaluate_condition = evaluate_condition_node
 
 
 def _evaluate_rule(rule: ConditionRule, context: dict) -> bool:
