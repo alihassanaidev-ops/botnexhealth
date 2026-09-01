@@ -36,6 +36,8 @@ DURABLE_AUDIT_ACTIONS: frozenset[str] = frozenset({
     AuditAction.RESCHEDULE_APPOINTMENT.value,
     AuditAction.CREATE_PATIENT.value,
     AuditAction.UPDATE_PATIENT.value,
+    AuditAction.CONTACT_CREATE.value,
+    AuditAction.CONTACT_UPDATE.value,
     AuditAction.VIEW_FULL_TRANSCRIPT.value,
     AuditAction.VIEW_CALL_RECORDING.value,
     AuditAction.VIEW_FULL_PHONE.value,

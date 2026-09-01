@@ -86,6 +86,34 @@ InstitutionGroup          (e.g. a DSO — read-only oversight tier; optional)
 
 ---
 
+### 2.1 One person identity, two staff views
+
+`Contact` is the platform's canonical local person record. A lead, caller and
+patient are not three tables that must be converted between:
+
+- **lead** — `nexhealth_patient_id IS NULL` and `lead_status IS NOT NULL`;
+- **contact** — no PMS id and no lead lifecycle (typically an inbound caller);
+- **patient** — the same row after a PMS id is attached. Despite the historical
+  column name, the id may come from either NexHealth or GoTracker.
+
+The dashboard deliberately exposes only two person directories. **Contacts**
+is the relationship workspace for non-PMS people (leads and callers), including
+manual entry, consent, notes and call history. **Patients** contains only
+PMS-linked people and is shown only to PMS-connected tenants. It reads the local
+projection maintained by signed NexHealth/GoTracker patient webhooks rather
+than making a live vendor request for every page view. That keeps paging and
+location scope deterministic and leaves the directory usable during a vendor
+outage; the PMS remains the system of record.
+
+The former `/enquiries` page redirects to `/contacts`. The legacy
+`campaign_enquiries` table and `/institution/enquiries` API remain temporarily
+for expand/contract and campaign compatibility, but active intake creates or
+matches `Contact` rows. When a location admin enters a contact manually, the
+backend pins it to their assigned location and creates the same
+`ContactLocationAccess` grant used by webhook and call ingestion.
+
+---
+
 ## 3. RBAC & permission model
 
 > SECURITY.md carries the high-level authorization model. This section keeps the
@@ -128,7 +156,7 @@ The auth dependency also sets the Postgres **RLS context** for the request
 (`RlsContext.for_user(user)`), bridging the role model to the DB-level isolation
 described in ARCHITECTURE.md / SECURITY.md.
 
-### 3.3 "How a location user only sees their patients" — `ContactLocationAccess`
+### 3.3 "How a location user only sees their contacts and patients" — `ContactLocationAccess`
 
 This is the non-obvious part. A location-scoped user does **not** see every
 contact in the institution. Visibility is granted per-contact via the
@@ -137,6 +165,8 @@ contact in the institution. Visibility is granted per-contact via the
 
 - Grants are **auto-created on call ingestion**: when a call resolves to a
   location, `post_call_service.py` upserts a `(contact_id, location_id)` grant.
+- Signed PMS patient projection and manual contact entry create the same grant;
+  a location-admin write is pinned to the account's assigned location.
 - Contact reads filter through it (`src/app/api/routes/contacts.py`): a
   location-scoped user requesting a contact with no grant row gets **404, not 403**
   (existence is hidden). `INSTITUTION_ADMIN` (no `location_id`) bypasses the filter
@@ -151,7 +181,7 @@ contact in the institution. Visibility is granted per-contact via the
 | `/group/*` | **GROUP_ADMIN only** |
 | `/institution/setup`, `/institution/statuses` | INSTITUTION_ADMIN, LOCATION_ADMIN |
 | `/institution/email-templates`, `/custom-fields`, `/notification-recipients`, dashboard mutations | **INSTITUTION_ADMIN only** |
-| `/institution/contacts` (writes) | INSTITUTION_ADMIN, LOCATION_ADMIN |
+| `/institution/contacts` (create/update/merge) | INSTITUTION_ADMIN, LOCATION_ADMIN |
 | `/institution/sms` | all 3 institution roles |
 | `/institution/*` portal (reads) | all 3 institution roles + `require_location_scope()` |
 | `/institution/calls/{id}/notes` | all 3 institution roles (see §3.5) |

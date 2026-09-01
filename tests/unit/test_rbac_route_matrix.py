@@ -406,6 +406,8 @@ ROUTES_BY_BOUNDARY: dict[str, tuple[str, ...]] = {
         "DELETE /api/institution/locations/{loc_slug}/insurance-plans/{plan_id}",
         "POST /api/institution/contacts/{contact_id}/merge",
         "POST /api/institution/contacts/{contact_id}/unmerge",
+        "POST /api/institution/contacts",
+        "PATCH /api/institution/contacts/{contact_id}",
         "POST /api/institution/statuses",
         "PATCH /api/institution/statuses/{status_id}",
         "DELETE /api/institution/statuses/{status_id}",

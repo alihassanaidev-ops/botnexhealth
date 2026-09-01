@@ -1,6 +1,6 @@
 /* eslint-disable react-refresh/only-export-components */
 import { lazy, Suspense } from "react";
-import { createBrowserRouter } from "react-router-dom";
+import { createBrowserRouter, Navigate } from "react-router-dom";
 import DashboardWrapper from "./components/DashboardWrapper";
 import RoleRedirect from "./components/RoleRedirect";
 import RoleGuard from "./components/RoleGuard";
@@ -16,7 +16,6 @@ import Login from "./pages/Login";
 import BookingLink from "./pages/BookingLink";
 import CancelLink from "./pages/CancelLink";
 import EnquirySources from "./pages/EnquirySources";
-import Leads from "./pages/Leads";
 import IdentifyPatient from "./pages/IdentifyPatient";
 import RegisterPatient from "./pages/RegisterPatient";
 import SetPassword from "./pages/SetPassword";
@@ -54,6 +53,7 @@ const SmsPreferences = lazy(() => import("./pages/SmsPreferences"));
 const SmsTemplates = lazy(() => import("./pages/SmsTemplates"));
 const Security = lazy(() => import("./pages/Security"));
 const Patients = lazy(() => import("./pages/Patients"));
+const Contacts = lazy(() => import("./pages/Contacts"));
 const AppointmentSync = lazy(() => import("./pages/AppointmentSync"));
 const GroupDashboard = lazy(() => import("./pages/GroupDashboard"));
 const Groups = lazy(() => import("./pages/Groups"));
@@ -177,17 +177,21 @@ export const router = createBrowserRouter([
                         ),
                     },
                     {
-                        // SMS templates are patient-facing acknowledgements that
-                        // only no-PMS clinics send, so the page is guarded on both
-                        // the role and the tenant type.
-                        // Intake credentials for a clinic's own forms. Not
-                        // PMS-gated: a lead has no practice-software record by
-                        // definition, so this is exactly as relevant to an
-                        // integrated clinic as to a no-PMS one.
+                        path: "contacts",
+                        element: (
+                            <RoleGuard allowed={["INSTITUTION_ADMIN", "LOCATION_ADMIN", "STAFF"]}>
+                                <S><Contacts /></S>
+                            </RoleGuard>
+                        ),
+                    },
+                    {
+                        // Compatibility for bookmarks from the old third
+                        // people screen. Enquiries are contacts with a lead
+                        // lifecycle, not a separate user-facing object.
                         path: "enquiries",
                         element: (
                             <RoleGuard allowed={["INSTITUTION_ADMIN", "LOCATION_ADMIN"]}>
-                                <S><Leads /></S>
+                                <Navigate to="/contacts" replace />
                             </RoleGuard>
                         ),
                     },
@@ -469,7 +473,7 @@ export const router = createBrowserRouter([
                         path: "patients",
                         element: (
                             <RoleGuard allowed={["INSTITUTION_ADMIN", "LOCATION_ADMIN", "STAFF"]}>
-                                <S><Patients /></S>
+                                <PmsGuard redirectTo="/contacts"><S><Patients /></S></PmsGuard>
                             </RoleGuard>
                         ),
                     },

@@ -1,12 +1,10 @@
 """
-Contacts (patients) routes — institution-facing patient directory.
+Institution-facing person directory with Contacts and Patients projections.
 
-Primarily for no-PMS (call-intelligence-only) tenants, which have no PMS
-patient record: callers are captured as Contacts, auto-matched on phone + name
-(see PostCallService). This directory lists those patients (one row per primary
-contact), shows their call history, and lets staff manually merge/unmerge
-records that auto-match couldn't resolve (same person on two phones, a name
-typo, etc.).
+``Contact`` is the one local identity row. The relationship directory selects
+people without a PMS id (leads and callers); the patient directory selects only
+people linked by signed NexHealth/GoTracker projection events. Both show call
+history and let administrators merge/unmerge duplicates.
 
 Merge is non-destructive: an absorbed contact becomes an *alias*
 (``merged_into_id`` points at the primary) and its Calls are never reassigned,
@@ -17,11 +15,13 @@ via the audited reveal endpoint, mirroring the calls API.
 from __future__ import annotations
 
 import logging
-from typing import Annotated
+from typing import Annotated, Literal
+from uuid import uuid4
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from sqlalchemy import desc, func, nullslast, or_, select
+from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.orm import aliased, selectinload
 
 from src.app.api.deps import (
@@ -37,15 +37,23 @@ from src.app.api.routes.calls import (
 from src.app.database import get_db_session
 from src.app.models.audit_log import AuditAction, AuditActor, AuditOutcome
 from src.app.models.call import Call
+from src.app.models.campaign_enquiry import EnquiryStatus
 from src.app.models.contact import Contact
 from src.app.models.contact_location_access import ContactLocationAccess
-from src.app.models.user import User
+from src.app.models.institution_location import InstitutionLocation
+from src.app.models.patient_working_set import PatientWorkingSet
+from src.app.models.user import User, UserRole
+from src.app.services.audit_decorator import audit
+from src.app.services.automation.enquiry_intake_service import intake_enquiry
 from src.app.services.audit import log_audit_background, phi_reveal_audit
-from src.app.services.sms_privacy import mask_phone
+from src.app.services.sms_privacy import hash_email, hash_phone, mask_phone
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/institution/contacts", tags=["Contacts"])
+
+ContactLifecycle = Literal["lead", "contact", "patient"]
+ContactDirectory = Literal["all", "contacts", "patients"]
 
 
 # ── Response models ───────────────────────────────────────────────────────────
@@ -76,6 +84,12 @@ class ContactListItem(BaseModel):
     first_name: str | None
     last_name: str | None
     is_new_patient: bool
+    lifecycle: ContactLifecycle
+    lead_status: str | None = None
+    source: str | None = None
+    email_masked: str | None = None
+    has_notes: bool = False
+    pms_last_synced_at: str | None = None
     # Callback number, masked to the last 4 digits. Full value via the audited
     # POST /{contact_id}/reveal/phone endpoint.
     phone_masked: str | None = None
@@ -99,6 +113,12 @@ class ContactDetail(BaseModel):
     first_name: str | None
     last_name: str | None
     is_new_patient: bool
+    lifecycle: ContactLifecycle
+    lead_status: str | None = None
+    source: str | None = None
+    email_masked: str | None = None
+    notes: str | None = None
+    pms_last_synced_at: str | None = None
     phone_masked: str | None = None
     phone_reveal_available: bool = False
     created_at: str
@@ -109,6 +129,35 @@ class ContactDetail(BaseModel):
 
 class MergeRequest(BaseModel):
     alias_id: str
+
+
+class ContactCreateRequest(BaseModel):
+    """A relationship contact entered by clinic staff.
+
+    A manually entered person starts as a lead. Registration later attaches a
+    PMS id to this same row; it never creates a second local person.
+    """
+
+    first_name: str | None = Field(default=None, max_length=100)
+    last_name: str | None = Field(default=None, max_length=100)
+    phone: str | None = Field(default=None, max_length=80)
+    email: str | None = Field(default=None, max_length=320)
+    notes: str | None = Field(default=None, max_length=4000)
+    location_id: str | None = None
+    consent_sms: bool = False
+    consent_email: bool = False
+    consent_wording: str | None = Field(default=None, max_length=1000)
+
+
+class ContactCreateResponse(BaseModel):
+    contact: ContactDetail
+    created: bool
+    matched_existing_patient: bool
+
+
+class ContactUpdateRequest(BaseModel):
+    notes: str | None = Field(default=None, max_length=4000)
+    lead_status: str | None = Field(default=None, max_length=32)
 
 
 class PhoneRevealResponse(BaseModel):
@@ -124,6 +173,54 @@ def _phone_fields(contact: Contact) -> tuple[str | None, bool]:
     available = contact.phone_encrypted is not None
     masked = mask_phone(contact.phone) if available else None
     return masked, available
+
+
+def _mask_email(email: str | None) -> str | None:
+    if not email or "@" not in email:
+        return None
+    local, _, domain = email.partition("@")
+    head = local[0] if local else ""
+    return f"{head}{'*' * max(len(local) - 1, 1)}@{domain}"
+
+
+def _lifecycle(contact: Contact) -> ContactLifecycle:
+    if contact.nexhealth_patient_id:
+        return "patient"
+    if contact.lead_status is not None:
+        return "lead"
+    return "contact"
+
+
+def _item(
+    contact: Contact,
+    *,
+    call_count: int = 0,
+    last_call_at=None,
+    alias_count: int = 0,
+    pms_last_synced_at=None,
+) -> ContactListItem:
+    masked, available = _phone_fields(contact)
+    return ContactListItem(
+        id=contact.id,
+        full_name=contact.full_name,
+        first_name=contact.first_name,
+        last_name=contact.last_name,
+        is_new_patient=contact.is_new_patient,
+        lifecycle=_lifecycle(contact),
+        lead_status=contact.lead_status,
+        source=contact.lead_source,
+        email_masked=_mask_email(contact.email),
+        has_notes=bool(contact.notes_encrypted),
+        pms_last_synced_at=(
+            pms_last_synced_at.isoformat() if pms_last_synced_at else None
+        ),
+        phone_masked=masked,
+        phone_reveal_available=available,
+        call_count=int(call_count or 0),
+        last_call_at=last_call_at.isoformat() if last_call_at else None,
+        alias_count=int(alias_count or 0),
+        created_at=contact.created_at.isoformat(),
+    )
 
 
 async def _location_contact_ids_subq(current_user: User):
@@ -172,7 +269,7 @@ async def _scoped_contact(
     return contact
 
 
-# ── List patients ─────────────────────────────────────────────────────────────
+# ── List people ───────────────────────────────────────────────────────────────
 
 
 @router.get("", response_model=ContactsListResponse)
@@ -182,14 +279,22 @@ async def list_contacts(
     current_user: Annotated[User, Depends(get_current_active_user)],
     limit: int = Query(25, ge=1, le=100),
     offset: int = Query(0, ge=0),
+    directory: ContactDirectory = Query(
+        "all",
+        description="All people, non-PMS contacts, or PMS-linked patients.",
+    ),
+    lifecycle: ContactLifecycle | None = Query(
+        None,
+        description="Optional lifecycle filter for the relationship workspace.",
+    ),
     search: str | None = Query(
         None,
-        max_length=64,
+        max_length=200,
         pattern=r"^[^%_]*$",
-        description="Filter by patient name (partial, case-insensitive). Wildcards not allowed.",
+        description="Filter by person name (partial, case-insensitive). Wildcards not allowed.",
     ),
 ) -> ContactsListResponse:
-    """List patients (primary contacts) for the authenticated institution.
+    """List primary person records for the authenticated institution.
 
     Aggregates call counts and last-call timestamp across each primary contact
     and all of its merged aliases.
@@ -224,17 +329,56 @@ async def list_contacts(
             .correlate(Contact)
             .scalar_subquery()
         )
+        patient_sync_expr = (
+            select(func.max(PatientWorkingSet.last_synced_at))
+            .where(PatientWorkingSet.contact_id == Contact.id)
+            .correlate(Contact)
+            .scalar_subquery()
+        )
 
         base_filters = [
             Contact.institution_id == current_user.institution_id,
             # Primary contacts only — aliases roll up into their primary.
             Contact.merged_into_id.is_(None),
         ]
+        if directory == "contacts":
+            base_filters.append(Contact.nexhealth_patient_id.is_(None))
+        elif directory == "patients":
+            base_filters.append(Contact.nexhealth_patient_id.isnot(None))
+
+        if lifecycle == "patient":
+            base_filters.append(Contact.nexhealth_patient_id.isnot(None))
+        elif lifecycle == "lead":
+            base_filters.extend(
+                [
+                    Contact.nexhealth_patient_id.is_(None),
+                    Contact.lead_status.isnot(None),
+                ]
+            )
+        elif lifecycle == "contact":
+            base_filters.extend(
+                [
+                    Contact.nexhealth_patient_id.is_(None),
+                    Contact.lead_status.is_(None),
+                ]
+            )
         loc_subq = await _location_contact_ids_subq(current_user)
         if loc_subq is not None:
             base_filters.append(Contact.id.in_(loc_subq))
         if search:
-            base_filters.append(Contact.full_name.ilike(f"%{search}%"))
+            term = search.strip()
+            search_filters = [
+                Contact.full_name.ilike(f"%{term}%"),
+                Contact.first_name.ilike(f"{term}%"),
+                Contact.last_name.ilike(f"{term}%"),
+            ]
+            phone_h = hash_phone(term)
+            email_h = hash_email(term) if "@" in term else None
+            if phone_h:
+                search_filters.append(Contact.phone_hash == phone_h)
+            if email_h:
+                search_filters.append(Contact.email_hash == email_h)
+            base_filters.append(or_(*search_filters))
 
         total = (
             await session.execute(
@@ -249,6 +393,7 @@ async def list_contacts(
                     call_count_expr.label("call_count"),
                     last_call_expr.label("last_call_at"),
                     alias_count_expr.label("alias_count"),
+                    patient_sync_expr.label("pms_last_synced_at"),
                 )
                 .where(*base_filters)
                 .order_by(nullslast(desc(last_call_expr)), desc(Contact.created_at))
@@ -257,29 +402,21 @@ async def list_contacts(
             )
         ).all()
 
-        items: list[ContactListItem] = []
-        for contact, call_count, last_call_at, alias_count in rows:
-            masked, available = _phone_fields(contact)
-            items.append(
-                ContactListItem(
-                    id=contact.id,
-                    full_name=contact.full_name,
-                    first_name=contact.first_name,
-                    last_name=contact.last_name,
-                    is_new_patient=contact.is_new_patient,
-                    phone_masked=masked,
-                    phone_reveal_available=available,
-                    call_count=int(call_count or 0),
-                    last_call_at=last_call_at.isoformat() if last_call_at else None,
-                    alias_count=int(alias_count or 0),
-                    created_at=contact.created_at.isoformat(),
-                )
+        items = [
+            _item(
+                contact,
+                call_count=call_count,
+                last_call_at=last_call_at,
+                alias_count=alias_count,
+                pms_last_synced_at=pms_last_synced_at,
             )
+            for contact, call_count, last_call_at, alias_count, pms_last_synced_at in rows
+        ]
 
         return ContactsListResponse(total=total, limit=limit, offset=offset, items=items)
 
 
-# ── Patient detail ────────────────────────────────────────────────────────────
+# ── Person detail ─────────────────────────────────────────────────────────────
 
 
 async def _load_contact_detail(contact_id: str, current_user: User) -> ContactDetail:
@@ -310,6 +447,14 @@ async def _load_contact_detail(contact_id: str, current_user: User) -> ContactDe
             .scalars()
             .all()
         )
+
+        pms_last_synced_at = (
+            await session.execute(
+                select(func.max(PatientWorkingSet.last_synced_at)).where(
+                    PatientWorkingSet.contact_id == contact.id
+                )
+            )
+        ).scalar_one_or_none()
 
         masked, available = _phone_fields(contact)
         alias_out: list[ContactAlias] = []
@@ -345,6 +490,14 @@ async def _load_contact_detail(contact_id: str, current_user: User) -> ContactDe
             first_name=contact.first_name,
             last_name=contact.last_name,
             is_new_patient=contact.is_new_patient,
+            lifecycle=_lifecycle(contact),
+            lead_status=contact.lead_status,
+            source=contact.lead_source,
+            email_masked=_mask_email(contact.email),
+            notes=contact.notes,
+            pms_last_synced_at=(
+                pms_last_synced_at.isoformat() if pms_last_synced_at else None
+            ),
             phone_masked=masked,
             phone_reveal_available=available,
             created_at=contact.created_at.isoformat(),
@@ -354,6 +507,127 @@ async def _load_contact_detail(contact_id: str, current_user: User) -> ContactDe
         )
 
 
+async def _contact_location_id(
+    session,
+    current_user: User,
+    requested_location_id: str | None,
+) -> str | None:
+    """Resolve and validate the location that owns a manually entered contact."""
+    location_id = (
+        str(current_user.location_id)
+        if current_user.role == UserRole.LOCATION_ADMIN.value
+        else requested_location_id
+    )
+    if not location_id:
+        return None
+    exists = (
+        await session.execute(
+            select(InstitutionLocation.id).where(
+                InstitutionLocation.id == location_id,
+                InstitutionLocation.institution_id == current_user.institution_id,
+            )
+        )
+    ).scalar_one_or_none()
+    if not exists:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Location not found")
+    return str(exists)
+
+
+@router.post("", response_model=ContactCreateResponse, status_code=status.HTTP_201_CREATED)
+@limiter.limit(RATE_WRITE)
+@audit(
+    AuditAction.CONTACT_CREATE,
+    resource=lambda *a, **kw: "contact:manual",
+    actor=AuditActor.ADMIN,
+)
+async def create_contact(
+    request: Request,
+    data: ContactCreateRequest,
+    current_user: Annotated[User, Depends(get_current_institution_or_location_admin)],
+) -> ContactCreateResponse:
+    """Create a lead/contact through the canonical identity intake path."""
+    if not current_user.institution_id:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="No institution")
+    phone = (data.phone or "").strip() or None
+    email = (data.email or "").strip() or None
+    if not phone and not email:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="A phone number or email address is required.",
+        )
+
+    async with get_db_session() as session:
+        location_id = await _contact_location_id(session, current_user, data.location_id)
+        result = await intake_enquiry(
+            session,
+            institution_id=str(current_user.institution_id),
+            intake_key=f"manual:{uuid4()}",
+            source="manual",
+            location_id=location_id,
+            first_name=(data.first_name or "").strip() or None,
+            last_name=(data.last_name or "").strip() or None,
+            phone=phone,
+            email=email,
+            notes=(data.notes or "").strip() or None,
+            consent_channels=tuple(
+                channel
+                for channel, allowed in (
+                    ("sms", data.consent_sms),
+                    ("email", data.consent_email),
+                )
+                if allowed
+            ),
+            consent_wording=data.consent_wording,
+        )
+        if location_id:
+            await session.execute(
+                pg_insert(ContactLocationAccess)
+                .values(
+                    institution_id=str(current_user.institution_id),
+                    contact_id=str(result.enquiry.id),
+                    location_id=location_id,
+                )
+                .on_conflict_do_nothing(index_elements=["contact_id", "location_id"])
+            )
+        contact_id = str(result.enquiry.id)
+        await session.commit()
+
+    return ContactCreateResponse(
+        contact=await _load_contact_detail(contact_id, current_user),
+        created=result.created,
+        matched_existing_patient=result.matched_existing_contact,
+    )
+
+
+@router.patch("/{contact_id}", response_model=ContactDetail)
+@limiter.limit(RATE_WRITE)
+@audit(
+    AuditAction.CONTACT_UPDATE,
+    resource=lambda *a, **kw: f"contact:{kw.get('contact_id', '?')}",
+    actor=AuditActor.ADMIN,
+)
+async def update_contact(
+    request: Request,
+    contact_id: str,
+    data: ContactUpdateRequest,
+    current_user: Annotated[User, Depends(get_current_institution_or_location_admin)],
+) -> ContactDetail:
+    """Update relationship notes or a lead's working status."""
+    async with get_db_session() as session:
+        contact = await _scoped_contact(session, contact_id, current_user)
+        if "notes" in data.model_fields_set:
+            contact.notes = (data.notes or "").strip() or None
+        if "lead_status" in data.model_fields_set:
+            if data.lead_status not in {value.value for value in EnquiryStatus}:
+                raise HTTPException(
+                    status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                    detail="Unknown contact status",
+                )
+            contact.lead_status = data.lead_status
+        await session.commit()
+    return await _load_contact_detail(contact_id, current_user)
+
+
 @router.get("/{contact_id}", response_model=ContactDetail)
 @limiter.limit(RATE_READ)
 async def get_contact(
@@ -361,7 +635,7 @@ async def get_contact(
     contact_id: str,
     current_user: Annotated[User, Depends(get_current_active_user)],
 ) -> ContactDetail:
-    """Patient detail: identity, linked aliases, and the union of their calls."""
+    """Person detail: identity, linked aliases, and the union of their calls."""
     return await _load_contact_detail(contact_id, current_user)
 
 
@@ -375,7 +649,7 @@ async def reveal_contact_phone(
     contact_id: str,
     current_user: Annotated[User, Depends(get_current_active_user)],
 ) -> PhoneRevealResponse:
-    """Reveal a patient's full phone number for a scoped clinic user, audited.
+    """Reveal a contact's full phone number for a scoped clinic user, audited.
 
     Clinic users in the circle of care can reveal the full number (to call a
     patient back); platform SUPER_ADMIN is blocked (break-glass required).
@@ -432,7 +706,7 @@ async def merge_contact(
         if alias.merged_into_id is not None:
             raise HTTPException(
                 status_code=status.HTTP_409_CONFLICT,
-                detail="This contact is already merged into another patient.",
+                detail="This contact is already merged into another contact.",
             )
         alias_has_children = (
             await session.execute(
@@ -479,7 +753,7 @@ async def unmerge_contact(
         if alias.merged_into_id != contact_id:
             raise HTTPException(
                 status_code=status.HTTP_409_CONFLICT,
-                detail="That contact is not merged into this patient.",
+                detail="That contact is not merged into this contact.",
             )
         alias.merged_into_id = None
         await session.commit()

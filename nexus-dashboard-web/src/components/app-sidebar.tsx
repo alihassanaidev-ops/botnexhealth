@@ -360,11 +360,15 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
                                     }
                                 />
                             ))}
-                            {/* No-PMS tenants are call-intelligence-only: surface the
-                                patient directory in place of Practice Setup. */}
-                            {isInstitution && !hasPms && (
+                            {isInstitution && (
                                 <NavItem
-                                    item={{ title: "Patients", url: "/patients", icon: Users }}
+                                    item={{ title: "Contacts", url: "/contacts", icon: Users }}
+                                    isActive={location.pathname === "/contacts" || location.pathname.startsWith("/contacts/") || location.pathname === "/enquiries"}
+                                />
+                            )}
+                            {isInstitution && hasPms && (
+                                <NavItem
+                                    item={{ title: "Patients", url: "/patients", icon: ClipboardList }}
                                     isActive={location.pathname === "/patients" || location.pathname.startsWith("/patients/")}
                                 />
                             )}
@@ -410,20 +414,10 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
                                         isActive={location.pathname === "/institution-admin/email-templates"}
                                     />
                                 )}
-                                {/* Patient SMS acknowledgements only exist for
-                                    no-PMS clinics — nothing is booked to confirm. */}
-                                <NavItem
-                                    item={{
-                                        title: "Enquiries",
-                                        url: "/enquiries",
-                                        icon: InboxIcon,
-                                    }}
-                                    isActive={location.pathname === "/enquiries"}
-                                />
                                 {user?.role === "INSTITUTION_ADMIN" && (
                                     <NavItem
                                         item={{
-                                            title: "Enquiry Forms",
+                                            title: "Contact Forms",
                                             url: "/institution-admin/enquiry-forms",
                                             icon: InboxIcon,
                                         }}

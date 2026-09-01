@@ -59,7 +59,7 @@ export default function EnquirySources() {
             setSources(await listEnquirySources())
             setError("")
         } catch {
-            setError("Couldn't load your intake forms.")
+            setError("Couldn't load your contact forms.")
         } finally {
             setLoading(false)
         }
@@ -105,8 +105,8 @@ export default function EnquirySources() {
     return (
         <div className="space-y-6">
             <PageHeader
-                title="Enquiry forms"
-                description="Give an external form its own address to send new enquiries to."
+                title="Contact forms"
+                description="Give each website or marketing form its own secure address for adding contacts."
             />
 
             {revealed && (
@@ -152,7 +152,7 @@ export default function EnquirySources() {
                         <Input
                             id="label"
                             value={label}
-                            placeholder="Typeform — new patient enquiry"
+                            placeholder="Typeform — new patient interest"
                             onChange={(e) => setLabel(e.target.value)}
                         />
                         <p className="text-xs text-muted-foreground">
@@ -161,7 +161,7 @@ export default function EnquirySources() {
                     </div>
 
                     <div className="space-y-1.5">
-                        <Label>Location these enquiries belong to</Label>
+                        <Label>Location these contacts belong to</Label>
                         <Select value={locationId} onValueChange={setLocationId}>
                             <SelectTrigger><SelectValue /></SelectTrigger>
                             <SelectContent>
@@ -225,7 +225,7 @@ export default function EnquirySources() {
                                         )}
                                     </p>
                                     <p className="text-xs text-muted-foreground">
-                                        Last enquiry: {formatWhen(source.last_used_at)}
+                                        Last contact received: {formatWhen(source.last_used_at)}
                                         {source.has_signing_secret && " · signed"}
                                     </p>
                                 </div>
