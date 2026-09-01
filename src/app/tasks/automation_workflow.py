@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import random
+import time
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
@@ -115,6 +116,11 @@ NEXHEALTH_VISIT_COMPLETED = "Completed"
 
 _CLAIM_BATCH = 50
 _CLAIM_TTL_SECONDS = 120
+# Keep one poll comfortably inside the 30-second beat so ticks never overlap.
+_CLAIM_BUDGET_SECONDS = 20.0
+# Backstop against an unbounded loop if timers are being re-queued as fast as
+# they are claimed.
+_MAX_CLAIM_ROUNDS = 40
 # How long to defer a waiting run whose workflow is currently paused.
 _PAUSED_DEFER_SECONDS = 300
 
@@ -188,31 +194,65 @@ def poll_workflow_timers(self) -> dict:
 
 
 async def _claim_and_enqueue_async() -> dict:
-    now = datetime.now(tz=timezone.utc)
-    async with _superadmin_system_session("workflow_scheduler_poll") as session:
-        svc = AutomationWorkflowSchedulerService(session)
-        timers = await svc.claim_due_timers(
-            now=now, limit=_CLAIM_BATCH, claim_ttl_seconds=_CLAIM_TTL_SECONDS
-        )
-        await session.commit()
+    """Drain due timers, rather than taking one fixed batch per tick.
 
-    claimed = [
-        (t.id, t.institution_id, t.location_id, t.workflow_run_id) for t in timers
-    ]
-    logger.info("poll_workflow_timers: claimed %d timer(s)", len(claimed))
+    A fixed batch on a fixed beat is a hard throughput ceiling: 50 timers every
+    30 seconds is ~100/minute for the whole platform, so one large recall
+    campaign took minutes just to issue its first steps and every other tenant
+    queued behind it. Claiming repeatedly until the backlog clears — or until
+    the tick's budget is spent — removes the ceiling without making the beat
+    itself faster.
+    """
+    total_claimed = 0
+    rounds = 0
+    started = time.monotonic()
+    queue_depth = 0
 
-    for timer_id, institution_id, location_id, run_id in claimed:
-        dispatch_workflow_timer.apply_async(
-            kwargs={
-                "timer_id": timer_id,
-                "institution_id": institution_id,
-                "location_id": location_id,
-                "run_id": run_id,
-            },
-            queue="workflow",
-        )
+    while rounds < _MAX_CLAIM_ROUNDS:
+        now = datetime.now(tz=timezone.utc)
+        async with _superadmin_system_session("workflow_scheduler_poll") as session:
+            svc = AutomationWorkflowSchedulerService(session)
+            timers = await svc.claim_due_timers(
+                now=now, limit=_CLAIM_BATCH, claim_ttl_seconds=_CLAIM_TTL_SECONDS
+            )
+            claimed = [
+                (t.id, t.institution_id, t.location_id, t.workflow_run_id)
+                for t in timers
+            ]
+            await session.commit()
 
-    return {"claimed": len(claimed)}
+        for timer_id, institution_id, location_id, run_id in claimed:
+            dispatch_workflow_timer.apply_async(
+                kwargs={
+                    "timer_id": timer_id,
+                    "institution_id": institution_id,
+                    "location_id": location_id,
+                    "run_id": run_id,
+                },
+                queue="workflow",
+            )
+
+        total_claimed += len(claimed)
+        rounds += 1
+        # A short batch means the backlog is drained; nothing left to claim.
+        if len(claimed) < _CLAIM_BATCH:
+            break
+        # Stop before the next beat would overlap this one, and report what is
+        # left so a persistent backlog is visible rather than inferred.
+        if time.monotonic() - started >= _CLAIM_BUDGET_SECONDS:
+            async with _superadmin_system_session("workflow_scheduler_poll") as session:
+                queue_depth = await AutomationWorkflowSchedulerService(
+                    session
+                ).count_due()
+            break
+
+    logger.info(
+        "poll_workflow_timers: claimed %d timer(s) in %d round(s) remaining=%d",
+        total_claimed,
+        rounds,
+        queue_depth,
+    )
+    return {"claimed": total_claimed, "rounds": rounds, "remaining": queue_depth}
 
 
 # ---------------------------------------------------------------------------

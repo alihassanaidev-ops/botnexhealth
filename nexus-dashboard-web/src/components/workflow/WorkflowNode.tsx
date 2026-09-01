@@ -5,13 +5,15 @@
  * nodes expose two bottom source handles (`true`/`false`) matching the derived edges.
  */
 import { Handle, Position, type NodeProps } from "@xyflow/react"
-import { CheckCircle2, CircleDashed, Clock3, XCircle } from "lucide-react"
+import { CheckCircle2, CircleDashed, Clock3, Plus, XCircle } from "lucide-react"
 import { cn } from "@/lib/utils"
 import { NODE_META, TRIGGER_META } from "@/lib/workflow/catalog"
 import { humanizeSeconds } from "@/lib/workflow/test-run"
 import {
+    outgoing,
     SWITCH_DEFAULT_HANDLE,
     switchCaseHandle,
+    TRIGGER_NODE_ID,
     type FlowNode,
 } from "@/lib/workflow/graph"
 import type {
@@ -163,7 +165,55 @@ export function TriggerNodeCard({ data }: NodeProps<FlowNode>) {
                 </div>
             </div>
             <Handle type="source" position={Position.Bottom} className={HANDLE} />
+            {data.onAddFromPort && !data.hasEntry && (
+                <AddStepPort left="50%" onClick={() => data.onAddFromPort?.(TRIGGER_NODE_ID)} />
+            )}
         </div>
+    )
+}
+
+/**
+ * Where a source port sits along the bottom edge. Mirrors the `Handle` offsets
+ * below, so a `+` is always directly under the port it belongs to.
+ */
+function portLeft(node: WfNode, index: number, total: number): string {
+    if (node.type === "condition") return index === 0 ? "38%" : "62%"
+    if (node.type === "switch") return handleOffset(index, total)
+    return "50%"
+}
+
+/**
+ * The `+` under an unconnected port: click it and pick the step that follows.
+ *
+ * Dragging from the handle already worked, but it requires knowing the handle
+ * is draggable and landing on empty canvas. Every builder people arrive from
+ * offers this instead, so its absence reads as the canvas being unfinished.
+ * `nodrag`/`nopan` stop the click reaching React Flow as a node drag.
+ */
+function AddStepPort({
+    left,
+    label,
+    onClick,
+}: {
+    left: string
+    label?: string
+    onClick: () => void
+}) {
+    const description = label ? `Add step after "${label}"` : "Add step"
+    return (
+        <button
+            type="button"
+            title={description}
+            aria-label={description}
+            onClick={(event) => {
+                event.stopPropagation()
+                onClick()
+            }}
+            className="nodrag nopan absolute -bottom-4 z-10 grid size-5 -translate-x-1/2 place-items-center rounded-full border border-border bg-background text-muted-foreground opacity-70 shadow-sm transition hover:border-primary hover:text-primary hover:opacity-100"
+            style={{ left }}
+        >
+            <Plus className="h-3 w-3" />
+        </button>
     )
 }
 
@@ -243,6 +293,18 @@ export function StepNodeCard({ data, selected }: NodeProps<FlowNode>) {
             ) : node.type !== "exit" ? (
                 <Handle type="source" position={Position.Bottom} className={HANDLE} />
             ) : null}
+
+            {data.onAddFromPort &&
+                outgoing(node).map((port, index, ports) =>
+                    port.targetId ? null : (
+                        <AddStepPort
+                            key={port.handle ?? "next"}
+                            left={portLeft(node, index, ports.length)}
+                            label={port.label}
+                            onClick={() => data.onAddFromPort?.(node.id, port.handle)}
+                        />
+                    ),
+                )}
         </div>
     )
 }

@@ -705,7 +705,7 @@ async def test_claim_and_enqueue_no_timers() -> None:
     ):
         result = await _claim_and_enqueue_async()
 
-    assert result == {"claimed": 0}
+    assert result == {"claimed": 0, "rounds": 1, "remaining": 0}
     superadmin_session.assert_called_once_with("workflow_scheduler_poll")
     mock_dispatch.apply_async.assert_not_called()
 
@@ -738,7 +738,8 @@ async def test_claim_and_enqueue_enqueues_per_timer() -> None:
     ):
         result = await _claim_and_enqueue_async()
 
-    assert result == {"claimed": 2}
+    # One round: a short batch means the backlog is drained, so it stops.
+    assert result == {"claimed": 2, "rounds": 1, "remaining": 0}
     superadmin_session.assert_called_once_with("workflow_scheduler_poll")
     assert mock_dispatch.apply_async.call_count == 2
 
