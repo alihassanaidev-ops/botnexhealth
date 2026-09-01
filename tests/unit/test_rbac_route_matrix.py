@@ -65,6 +65,10 @@ ROUTES_BY_BOUNDARY: dict[str, tuple[str, ...]] = {
         # discloses an appointment or destroys one.
         "GET /api/campaigns/link/identify/context",
         "POST /api/campaigns/link/identify",
+        # External form intake (Decision C). Public in the session sense, but
+        # not unauthenticated: the path carries a per-form bearer token that is
+        # stored hashed, and a source may additionally require a body HMAC.
+        "POST /api/enquiries/intake/{token}",
         "GET /livez",
         "GET /readyz",
         "POST /api/auth/login",
