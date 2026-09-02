@@ -99,9 +99,14 @@ export default function WorkflowBuilder() {
     /** Every selected node. `selectedId` stays the one the config panel edits. */
     const [selectedIds, setSelectedIds] = useState<string[]>([])
     const [nodeQuery, setNodeQuery] = useState("")
-    /** The port a `+` was clicked on, held while the step picker is open. */
+    /**
+     * The port a `+` was clicked on, held while the step picker is open.
+     * `insertBefore` is set when the `+` came from an existing connection rather
+     * than a free port: the picked step is spliced in ahead of that node instead
+     * of being left as a new dead end.
+     */
     const [addFrom, setAddFrom] = useState<
-        { sourceId: string; handle?: string; label?: string } | null
+        { sourceId: string; handle?: string; label?: string; insertBefore?: string } | null
     >(null)
     const [panelOpen, setPanelOpen] = useState(false)
     const [testOpen, setTestOpen] = useState(false)
@@ -525,10 +530,22 @@ export default function WorkflowBuilder() {
         [def],
     )
 
+    const onInsertOnEdge = useCallback(
+        (sourceId: string, targetId: string, handle?: string) => {
+            if (!def) return
+            const source = def.nodes.find((n) => n.id === sourceId)
+            const label = source
+                ? outgoing(source).find((port) => port.handle === handle)?.label
+                : undefined
+            setAddFrom({ sourceId, handle, label, insertBefore: targetId })
+        },
+        [def],
+    )
+
     const onPickStep = useCallback(
         (type: NodeType) => {
             if (!def || !addFrom) return
-            const { sourceId, handle } = addFrom
+            const { sourceId, handle, insertBefore } = addFrom
             const newId = genId(type, def.nodes.map((n) => n.id))
             let next = addNode(def, createNode(type, newId))
 
@@ -542,6 +559,11 @@ export default function WorkflowBuilder() {
                 })
             }
 
+            // Splice before repointing the source, so the downstream node is
+            // still reachable if anything below throws.
+            if (insertBefore) {
+                next = connectNodes(next, newId, insertBefore)
+            }
             applyDef(connectNodes(next, sourceId, newId, handle))
             setAddFrom(null)
             onSelect(newId)
@@ -803,6 +825,7 @@ export default function WorkflowBuilder() {
                         selectedIds={selectedIds}
                         onSelectionChange={setSelectedIds}
                         onAddFromPort={readOnly ? undefined : onAddFromPort}
+                        onInsertOnEdge={readOnly ? undefined : onInsertOnEdge}
                         editable={!readOnly}
                         onConnectNodes={onConnectNodes}
                         onNodePositionChange={onNodePositionChange}

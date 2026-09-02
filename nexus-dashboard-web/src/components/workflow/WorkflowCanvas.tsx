@@ -8,7 +8,7 @@
  * Auto layout action persists a computed presentational layout. Read-only previews
  * (default) keep nodes fixed & non-connectable.
  */
-import { useCallback, useEffect } from "react"
+import { useCallback, useEffect, useMemo, useState } from "react"
 import {
     Background,
     BackgroundVariant,
@@ -25,6 +25,7 @@ import {
 import "@xyflow/react/dist/style.css"
 import { LayoutGrid, Loader2 } from "lucide-react"
 import { StepNodeCard, TriggerNodeCard } from "./WorkflowNode"
+import { InsertableEdge } from "./WorkflowEdge"
 import { WORKFLOW_NODE_DND_MIME } from "@/lib/workflow/catalog"
 import type { FlowEdge, FlowNode } from "@/lib/workflow/graph"
 import type { NodePosition, NodeType } from "@/types/workflow"
@@ -34,6 +35,13 @@ const workflowNodeTypes = {
     trigger: TriggerNodeCard,
     step: StepNodeCard,
 }
+
+const workflowEdgeTypes = {
+    insertable: InsertableEdge,
+}
+
+/** How far a node not attached to the hovered one fades. */
+const DIMMED_OPACITY = 0.18
 
 export interface WorkflowCanvasProps {
     nodes: FlowNode[]
@@ -63,6 +71,12 @@ export interface WorkflowCanvasProps {
     /** Re-run the auto-layout and persist fresh presentational positions. */
     onAutoLayout?: () => void | Promise<void>
     autoLayoutBusy?: boolean
+    /**
+     * Insert a step into an existing connection: the new node takes `targetId`
+     * as its own next, and the source port repoints at it. Leaving this
+     * undefined is what hides the `+` on edges in read-only previews.
+     */
+    onInsertOnEdge?: (sourceId: string, targetId: string, handle?: string) => void
     /** Palette node dropped on the canvas at a flow-space position (author mode). */
     onAddNodeAt?: (type: NodeType, position: NodePosition) => void
 }
@@ -82,8 +96,13 @@ function InnerCanvas({
     onAutoLayout,
     autoLayoutBusy,
     onAddNodeAt,
+    onInsertOnEdge,
 }: WorkflowCanvasProps) {
     const { screenToFlowPosition } = useReactFlow()
+    // Hover focus. A campaign of this size has edges spanning the whole canvas;
+    // fading everything not attached to the hovered node is what makes a single
+    // path followable without changing the layout.
+    const [hoveredId, setHoveredId] = useState<string | null>(null)
     // Local node state so React Flow can drive drag interactions smoothly; we re-sync
     // from the derived prop whenever the definition/selection changes. (Prop remains the
     // single source of truth — drag results are bubbled up via onNodeDragStop.)
@@ -99,6 +118,51 @@ function InnerCanvas({
             })),
         )
     }, [nodes, selectedId, selectedIds, onAddFromPort, setRfNodes])
+
+    /** The hovered node, its direct neighbours, and the edges between them. */
+    const focus = useMemo(() => {
+        if (!hoveredId) return null
+        const nodeIds = new Set<string>([hoveredId])
+        const edgeIds = new Set<string>()
+        for (const edge of edges) {
+            if (edge.source !== hoveredId && edge.target !== hoveredId) continue
+            edgeIds.add(edge.id)
+            nodeIds.add(edge.source)
+            nodeIds.add(edge.target)
+        }
+        return { nodeIds, edgeIds }
+    }, [hoveredId, edges])
+
+    const displayNodes = useMemo(() => {
+        if (!focus) return rfNodes
+        return rfNodes.map((node) =>
+            focus.nodeIds.has(node.id)
+                ? node
+                : { ...node, style: { ...node.style, opacity: DIMMED_OPACITY } },
+        )
+    }, [rfNodes, focus])
+
+    const displayEdges = useMemo(
+        () =>
+            edges.map((edge) => ({
+                ...edge,
+                type: "insertable",
+                data: {
+                    branchLabel: typeof edge.label === "string" ? edge.label : undefined,
+                    dimmed: focus ? !focus.edgeIds.has(edge.id) : false,
+                    onInsert:
+                        editable && onInsertOnEdge
+                            ? () =>
+                                  onInsertOnEdge(
+                                      edge.source,
+                                      edge.target,
+                                      edge.sourceHandle ?? undefined,
+                                  )
+                            : undefined,
+                },
+            })),
+        [edges, focus, editable, onInsertOnEdge],
+    )
 
     const handleNodeClick: NodeMouseHandler = (event, node) => {
         // Shift/Cmd-click toggles membership; a plain click replaces the
@@ -165,11 +229,14 @@ function InnerCanvas({
 
     return (
         <ReactFlow
-            nodes={rfNodes}
-            edges={edges}
+            nodes={displayNodes}
+            edges={displayEdges}
             nodeTypes={workflowNodeTypes}
+            edgeTypes={workflowEdgeTypes}
             onNodesChange={onNodesChange}
             onNodeClick={handleNodeClick}
+            onNodeMouseEnter={(_event, node) => setHoveredId(node.id)}
+            onNodeMouseLeave={() => setHoveredId(null)}
             onPaneClick={() => {
                 onSelect?.(null)
                 onSelectionChange?.([])
