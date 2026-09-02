@@ -57,6 +57,7 @@ import {
     enrollContactInCampaign,
     emergencyHaltCampaign,
     getCampaign,
+    getCampaignAnalytics,
     getCampaignOverview,
     getUsageByCampaign,
     listCampaignRuns,
@@ -68,6 +69,7 @@ import { cn } from "@/lib/utils"
 import type {
     AutomationWorkflow,
     AutomationWorkflowRun,
+    CampaignAnalytics,
     CampaignOverview,
     CampaignRunFilters,
     CampaignRunListItem,
@@ -393,6 +395,190 @@ function InfoRow({ label, value }: { label: string; value: string }) {
     )
 }
 
+const OUTCOME_GROUP_TONES: Record<string, string> = {
+    success: "text-emerald-600",
+    failure: "text-red-600",
+    neutral: "text-muted-foreground",
+}
+
+function rate(value: number | null): string {
+    if (value === null) return "-"
+    return `${(value * 100).toFixed(1)}%`
+}
+
+function money(value: number | null, currency: string): string {
+    if (value === null) return "-"
+    return new Intl.NumberFormat(undefined, { style: "currency", currency }).format(value)
+}
+
+/**
+ * What the campaign achieved, as opposed to what it did.
+ *
+ * Every figure here comes from the daily rollup, so it answers per campaign and
+ * per clinic and lags live runs by a rollup cycle — hence the freshness line.
+ * The outcome vocabulary is chosen by the campaign's own category, which is why
+ * a recall campaign reads "Recall Booked" where a sales one reads "Qualified"
+ * rather than both reporting an anonymous count.
+ */
+function OutcomesTab({
+    analytics,
+    loading,
+}: {
+    analytics: CampaignAnalytics | null
+    loading: boolean
+}) {
+    if (loading) {
+        return (
+            <div className="space-y-4">
+                <div className="grid gap-3 md:grid-cols-4">
+                    {Array.from({ length: 4 }).map((_, i) => (
+                        <Skeleton key={i} className="h-20 w-full" />
+                    ))}
+                </div>
+                <Skeleton className="h-64 w-full" />
+            </div>
+        )
+    }
+
+    if (!analytics) {
+        return (
+            <Card>
+                <CardContent className="py-10 text-center text-sm text-muted-foreground">
+                    Outcome reporting is unavailable for this campaign right now.
+                </CardContent>
+            </Card>
+        )
+    }
+
+    const headline = analytics.outcomes.filter((row) => row.group === "success").slice(0, 4)
+    const enrollments = analytics.summary.enrollments ?? 0
+
+    return (
+        <div className="space-y-4">
+            <div className="grid gap-3 md:grid-cols-4">
+                <Stat
+                    icon={<UserPlus className="h-3.5 w-3.5" />}
+                    label="Enrolled"
+                    value={number(enrollments)}
+                />
+                {headline.map((row) => (
+                    <Stat
+                        key={row.key}
+                        icon={<CheckCircle2 className="h-3.5 w-3.5" />}
+                        label={row.label}
+                        value={number(row.count)}
+                        tone="text-emerald-600"
+                    />
+                ))}
+            </div>
+
+            <Card>
+                <CardHeader className="pb-3">
+                    <CardTitle className="text-base font-semibold">Outcomes</CardTitle>
+                </CardHeader>
+                <CardContent>
+                    {analytics.outcomes.length ? (
+                        <table className="w-full text-sm">
+                            <thead>
+                                <tr className="border-b border-border text-left text-xs text-muted-foreground">
+                                    <th className="pb-2 font-medium">Outcome</th>
+                                    <th className="pb-2 text-right font-medium">Count</th>
+                                    <th className="pb-2 text-right font-medium">Of enrolled</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                {analytics.outcomes.map((row) => (
+                                    <tr key={row.key} className="border-b border-border/50 last:border-0">
+                                        <td className="py-2">
+                                            <p className={cn("font-medium", OUTCOME_GROUP_TONES[row.group])}>
+                                                {row.label}
+                                            </p>
+                                            <p className="text-xs text-muted-foreground">{row.description}</p>
+                                        </td>
+                                        <td className="py-2 text-right tabular-nums">{number(row.count)}</td>
+                                        <td className="py-2 text-right tabular-nums text-muted-foreground">
+                                            {rate(row.rate)}
+                                        </td>
+                                    </tr>
+                                ))}
+                            </tbody>
+                        </table>
+                    ) : (
+                        <p className="text-sm text-muted-foreground">No outcomes recorded yet.</p>
+                    )}
+                </CardContent>
+            </Card>
+
+            <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_360px]">
+                <Card>
+                    <CardHeader className="pb-3">
+                        <CardTitle className="text-base font-semibold">Delivery by channel</CardTitle>
+                    </CardHeader>
+                    <CardContent>
+                        <table className="w-full text-sm">
+                            <thead>
+                                <tr className="border-b border-border text-left text-xs text-muted-foreground">
+                                    <th className="pb-2 font-medium">Channel</th>
+                                    <th className="pb-2 text-right font-medium">Sent</th>
+                                    <th className="pb-2 text-right font-medium">Delivered</th>
+                                    <th className="pb-2 text-right font-medium">Failed</th>
+                                    <th className="pb-2 text-right font-medium">Responded</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                {analytics.channels.map((row) => (
+                                    <tr key={row.channel} className="border-b border-border/50 last:border-0">
+                                        <td className="py-2 capitalize">{row.channel}</td>
+                                        <td className="py-2 text-right tabular-nums">{number(row.attempted)}</td>
+                                        <td className="py-2 text-right tabular-nums">{number(row.delivered)}</td>
+                                        <td className="py-2 text-right tabular-nums">{number(row.failed)}</td>
+                                        <td className="py-2 text-right tabular-nums">{number(row.responded)}</td>
+                                    </tr>
+                                ))}
+                            </tbody>
+                        </table>
+                    </CardContent>
+                </Card>
+
+                <Card>
+                    <CardHeader className="pb-3">
+                        <CardTitle className="text-base font-semibold">Cost per outcome</CardTitle>
+                    </CardHeader>
+                    <CardContent className="grid gap-3 text-sm">
+                        <InfoRow
+                            label="Total spend"
+                            value={money(analytics.cost.total_cost, analytics.cost.currency)}
+                        />
+                        <InfoRow
+                            label="Per booking"
+                            value={money(analytics.cost.cost_per_booking, analytics.cost.currency)}
+                        />
+                        <InfoRow
+                            label="Per confirmation"
+                            value={money(analytics.cost.cost_per_confirmation, analytics.cost.currency)}
+                        />
+                        {/* Revenue attribution is deliberately absent: the rule that
+                            decides it has not been agreed, and the figure has to be
+                            shown next to its rule or it starts arguments instead of
+                            settling them. */}
+                        <p className="border-t border-border pt-3 text-xs text-muted-foreground">
+                            Revenue attributed to this campaign is not reported yet. It needs an
+                            agreed attribution rule, which is shown alongside the figure once set.
+                        </p>
+                    </CardContent>
+                </Card>
+            </div>
+
+            <p className="text-xs text-muted-foreground">
+                {analytics.start_date} to {analytics.end_date}
+                {analytics.rollup_fresh_at
+                    ? ` · rolled up ${fmt(analytics.rollup_fresh_at)}`
+                    : " · not yet rolled up"}
+            </p>
+        </div>
+    )
+}
+
 function ExecutionsTab({
     runs,
     loading,
@@ -604,6 +790,7 @@ export default function CampaignDetail() {
     const [runs, setRuns] = useState<CampaignRunListItem[]>([])
     const [nextCursor, setNextCursor] = useState<string | null>(null)
     const [campaignUsage, setCampaignUsage] = useState<CampaignUsage | null>(null)
+    const [analytics, setAnalytics] = useState<CampaignAnalytics | null>(null)
     const [filters, setFilters] = useState<CampaignRunFilters>({ limit: 50 })
     const [loading, setLoading] = useState(true)
     const [runsLoading, setRunsLoading] = useState(true)
@@ -624,14 +811,19 @@ export default function CampaignDetail() {
         if (!id) return
         setLoading(true)
         try {
-            const [wf, ov, byCampaign] = await Promise.all([
+            const [wf, ov, byCampaign, outcomes] = await Promise.all([
                 getCampaign(id),
                 getCampaignOverview(id),
                 getUsageByCampaign(undefined, 1, { workflowId: id }),
+                // Outcome analytics read the daily rollup rather than live runs.
+                // A stale or failed rollup should cost the reporting tab its
+                // numbers, not take the whole campaign page down with it.
+                getCampaignAnalytics(id).catch(() => null),
             ])
             setCampaign(wf)
             setOverview(ov)
             setCampaignUsage(byCampaign.campaigns.find((row) => row.workflow_id === id) ?? null)
+            setAnalytics(outcomes)
         } catch {
             toast.error("Failed to load campaign")
         } finally {
@@ -843,6 +1035,7 @@ export default function CampaignDetail() {
             <Tabs defaultValue="overview" className="space-y-4">
                 <TabsList>
                     <TabsTrigger value="overview">Overview</TabsTrigger>
+                    <TabsTrigger value="outcomes">Outcomes</TabsTrigger>
                     <TabsTrigger value="executions">Executions</TabsTrigger>
                 </TabsList>
                 <TabsContent value="overview">
@@ -851,6 +1044,9 @@ export default function CampaignDetail() {
                         campaignUsage={campaignUsage}
                         loading={loading}
                     />
+                </TabsContent>
+                <TabsContent value="outcomes">
+                    <OutcomesTab analytics={analytics} loading={loading} />
                 </TabsContent>
                 <TabsContent value="executions">
                     <ExecutionsTab

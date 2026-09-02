@@ -94,6 +94,15 @@ class CampaignMetricsDaily(Base):
     staff_handoff: Mapped[int] = mapped_column(BigInteger, nullable=False, default=0)
     opt_out: Mapped[int] = mapped_column(BigInteger, nullable=False, default=0)
 
+    # Qualification outcomes. The sales and callback vocabularies in
+    # ``campaign_analytics_service`` have named these keys since they were
+    # written, but no column ever produced them, so every campaign that reached
+    # one reported a zero rather than nothing.
+    qualified: Mapped[int] = mapped_column(BigInteger, nullable=False, default=0)
+    not_qualified: Mapped[int] = mapped_column(BigInteger, nullable=False, default=0)
+    unreachable: Mapped[int] = mapped_column(BigInteger, nullable=False, default=0)
+    transferred: Mapped[int] = mapped_column(BigInteger, nullable=False, default=0)
+
     total_cost: Mapped[float] = mapped_column(Numeric(16, 5), nullable=False, default=0)
     cost_per_booking: Mapped[float | None] = mapped_column(Numeric(16, 5), nullable=True)
     cost_per_confirmation: Mapped[float | None] = mapped_column(Numeric(16, 5), nullable=True)
