@@ -30,6 +30,17 @@ Use a JSON config per environment:
 - [`config/staging.json`](./config/staging.json)
 - [`config/production.example.json`](./config/production.example.json)
 
+The `email` block keeps SES onboarding separate from activation:
+
+- `sesSendingDomain` is the managed parent used for per-clinic subdomains;
+- `sesSendingHostedZoneName` is the Route 53 zone where DKIM is published;
+- `sesClinicSendingEnabled` is the deployment interlock and must remain false
+  until delivery events, suppression, monitoring, and production access are ready.
+
+The stack injects the resolved hosted-zone ID and grants the API only the SES
+identity/configuration lifecycle plus DNS changes. The worker can check
+verification and send, but cannot create or delete identities or DNS records.
+
 Run CDK with a specific config file:
 
 ```bash

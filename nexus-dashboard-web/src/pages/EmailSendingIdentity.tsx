@@ -13,8 +13,12 @@ import {
     Copy,
     Loader2,
     MailCheck,
+    Plus,
+    Power,
+    PowerOff,
     RefreshCw,
     Save,
+    Trash2,
 } from "lucide-react"
 import { toast } from "sonner"
 
@@ -22,17 +26,40 @@ import { PageHeader } from "@/components/PageHeader"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
+import {
+    Dialog,
+    DialogContent,
+    DialogDescription,
+    DialogFooter,
+    DialogHeader,
+    DialogTitle,
+} from "@/components/ui/dialog"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
+import {
+    Select,
+    SelectContent,
+    SelectItem,
+    SelectTrigger,
+    SelectValue,
+} from "@/components/ui/select"
 import { CardsSkeleton } from "@/components/ui/skeletons"
 import { useInstitutionScope } from "@/hooks/useInstitutionScope"
+import { listAdminInstitutionLocations } from "@/lib/admin-api"
 import {
+    activateEmailSendingIdentity,
+    deactivateEmailSendingIdentity,
+    deleteEmailSendingIdentity,
     listEmailSendingIdentities,
+    provisionEmailSendingIdentity,
     updateEmailSendingIdentity,
     verifyEmailSendingIdentity,
     type EmailIdentityStatus,
     type EmailSendingIdentity as Identity,
 } from "@/lib/email-sending-identities-api"
+import type { Location } from "@/types"
+
+const INSTITUTION_SCOPE = "__institution__"
 
 const STATUS_META: Record<
     EmailIdentityStatus,
@@ -41,7 +68,7 @@ const STATUS_META: Record<
     verified: {
         label: "Verified",
         tone: "ok",
-        explain: "Patients receive email from this address.",
+        explain: "The sending domain is authenticated.",
     },
     pending_dns: {
         label: "Waiting on DNS",
@@ -99,10 +126,42 @@ export default function EmailSendingIdentityPage() {
         Record<string, { from_name: string; reply_to_address: string }>
     >({})
     const [copied, setCopied] = useState<string | null>(null)
+    const [locations, setLocations] = useState<Location[]>([])
+    const [provisionOpen, setProvisionOpen] = useState(false)
+    const [provisioning, setProvisioning] = useState(false)
+    const [provisionScope, setProvisionScope] = useState(INSTITUTION_SCOPE)
+    const [newFromName, setNewFromName] = useState("")
+    const [newReplyTo, setNewReplyTo] = useState("")
+    const [newLocalPart, setNewLocalPart] = useState("hello")
+    const [deleteTarget, setDeleteTarget] = useState<Identity | null>(null)
 
     // A platform admin administers any practice and picks which; a clinic
     // admin has no choice to make and never sees the picker.
-    const { institutionId, ready, picker } = useInstitutionScope()
+    const {
+        institutionId,
+        ready,
+        picker,
+        selectedInstitution,
+        isPlatformAdmin,
+    } = useInstitutionScope()
+
+    useEffect(() => {
+        if (!isPlatformAdmin || !selectedInstitution) {
+            setLocations([])
+            return
+        }
+        let cancelled = false
+        listAdminInstitutionLocations(selectedInstitution.slug)
+            .then((rows) => {
+                if (!cancelled) setLocations(rows.filter((row) => row.is_active))
+            })
+            .catch(() => {
+                if (!cancelled) toast.error("Failed to load practice locations")
+            })
+        return () => {
+            cancelled = true
+        }
+    }, [isPlatformAdmin, selectedInstitution])
 
     const load = useCallback(async () => {
         if (!ready) {
@@ -176,6 +235,94 @@ export default function EmailSendingIdentityPage() {
         }
     }
 
+    const openProvision = () => {
+        const institutionExists = identities.some((identity) => !identity.location_id)
+        const firstAvailableLocation = locations.find(
+            (location) =>
+                !identities.some((identity) => identity.location_id === location.id),
+        )
+        const scope = institutionExists
+            ? (firstAvailableLocation?.id ?? INSTITUTION_SCOPE)
+            : INSTITUTION_SCOPE
+        setProvisionScope(scope)
+        setNewFromName(
+            scope === INSTITUTION_SCOPE
+                ? (selectedInstitution?.name ?? "")
+                : (firstAvailableLocation?.name ?? ""),
+        )
+        setNewReplyTo("")
+        setNewLocalPart("hello")
+        setProvisionOpen(true)
+    }
+
+    const changeProvisionScope = (scope: string) => {
+        setProvisionScope(scope)
+        setNewFromName(
+            scope === INSTITUTION_SCOPE
+                ? (selectedInstitution?.name ?? "")
+                : (locations.find((location) => location.id === scope)?.name ?? ""),
+        )
+    }
+
+    const provision = async () => {
+        if (!institutionId) return
+        setProvisioning(true)
+        try {
+            await provisionEmailSendingIdentity({
+                institution_id: institutionId,
+                location_id:
+                    provisionScope === INSTITUTION_SCOPE ? null : provisionScope,
+                from_name: newFromName.trim() || null,
+                reply_to_address: newReplyTo.trim() || null,
+                local_part: newLocalPart.trim(),
+            })
+            setProvisionOpen(false)
+            toast.success("Sending address provisioned", {
+                description:
+                    "DNS verification runs automatically. Live sending remains off until explicitly activated.",
+            })
+            await load()
+        } catch (err) {
+            toast.error(errorMessage(err, "Could not provision sending address"))
+        } finally {
+            setProvisioning(false)
+        }
+    }
+
+    const setActive = async (identity: Identity, active: boolean) => {
+        setBusyId(identity.id)
+        try {
+            const updated = active
+                ? await activateEmailSendingIdentity(identity.id)
+                : await deactivateEmailSendingIdentity(identity.id)
+            replaceIdentity(updated)
+            toast.success(active ? "SES sending activated" : "SES sending deactivated", {
+                description: active
+                    ? "New workflow email for this scope now uses this address."
+                    : "Workflow email now falls back to the platform address.",
+            })
+        } catch (err) {
+            toast.error(errorMessage(err, `Could not ${active ? "activate" : "deactivate"}`))
+        } finally {
+            setBusyId(null)
+        }
+    }
+
+    const remove = async () => {
+        if (!deleteTarget) return
+        setBusyId(deleteTarget.id)
+        try {
+            await deleteEmailSendingIdentity(deleteTarget.id)
+            setDeleteTarget(null)
+            toast.success("Sending address removed")
+            await load()
+        } catch (err) {
+            toast.error(errorMessage(err, "Could not remove sending address"))
+        } finally {
+            setBusyId(null)
+        }
+    }
+
     const copy = async (value: string, key: string) => {
         try {
             await navigator.clipboard.writeText(value)
@@ -185,6 +332,13 @@ export default function EmailSendingIdentityPage() {
             toast.error("Could not copy to clipboard")
         }
     }
+
+    const hasAvailableProvisionScope =
+        !identities.some((identity) => !identity.location_id) ||
+        locations.some(
+            (location) =>
+                !identities.some((identity) => identity.location_id === location.id),
+        )
 
     if (loading) return <CardsSkeleton />
 
@@ -197,6 +351,21 @@ export default function EmailSendingIdentityPage() {
             />
 
             {picker}
+
+            {ready && isPlatformAdmin && (
+                <div className="flex items-center justify-between gap-3 rounded-md border border-border bg-muted/20 px-4 py-3">
+                    <div>
+                        <p className="text-sm font-medium">Platform-managed email identity</p>
+                        <p className="text-xs text-muted-foreground">
+                            Provisioning and verification do not change live sending until you activate it.
+                        </p>
+                    </div>
+                    <Button onClick={openProvision} disabled={!hasAvailableProvisionScope}>
+                        <Plus className="mr-2 h-4 w-4" />
+                        Add sending address
+                    </Button>
+                </div>
+            )}
 
             {!ready && (
                 <Card>
@@ -213,10 +382,12 @@ export default function EmailSendingIdentityPage() {
                             No sending address is set up yet, so patient email goes out
                             from the ScaleNexus platform address.
                         </p>
-                        <p className="text-sm text-muted-foreground">
-                            Contact support to have your clinic’s own address set up —
-                            there is nothing for you to configure.
-                        </p>
+                        {!isPlatformAdmin && (
+                            <p className="text-sm text-muted-foreground">
+                                Contact support to have your clinic’s own address set up —
+                                there is nothing for you to configure.
+                            </p>
+                        )}
                     </CardContent>
                 </Card>
             )}
@@ -238,9 +409,20 @@ export default function EmailSendingIdentityPage() {
                                         ? "Location address"
                                         : "Clinic-wide address"}
                                 </CardTitle>
-                                <StatusBadge status={identity.status} />
+                                <div className="flex items-center gap-2">
+                                    <Badge variant={identity.is_active ? "default" : "outline"}>
+                                        {identity.is_active ? "Active" : "Standby"}
+                                    </Badge>
+                                    <StatusBadge status={identity.status} />
+                                </div>
                             </div>
-                            <p className="text-sm text-muted-foreground">{meta.explain}</p>
+                            <p className="text-sm text-muted-foreground">
+                                {identity.status === "verified"
+                                    ? identity.is_active
+                                        ? "Patients receive workflow email from this address."
+                                        : "Verified and ready, but live email still uses the platform address."
+                                    : meta.explain}
+                            </p>
                         </CardHeader>
 
                         <CardContent className="space-y-4">
@@ -257,6 +439,13 @@ export default function EmailSendingIdentityPage() {
                                 <div className="flex gap-2 rounded-md border border-destructive/40 bg-destructive/5 px-3 py-2">
                                     <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-destructive" />
                                     <p className="text-sm">{identity.failure_reason}</p>
+                                </div>
+                            )}
+
+                            {!identity.is_active && identity.activation_blocker && (
+                                <div className="flex gap-2 rounded-md border border-amber-300/60 bg-amber-50 px-3 py-2 text-amber-900 dark:bg-amber-950/30 dark:text-amber-200">
+                                    <PowerOff className="mt-0.5 h-4 w-4 shrink-0" />
+                                    <p className="text-sm">{identity.activation_blocker}</p>
                                 </div>
                             )}
 
@@ -372,6 +561,40 @@ export default function EmailSendingIdentityPage() {
                                     <RefreshCw className="mr-2 h-4 w-4" />
                                     Check verification
                                 </Button>
+                                {isPlatformAdmin && identity.is_active && (
+                                    <Button
+                                        variant="outline"
+                                        onClick={() => void setActive(identity, false)}
+                                        disabled={busyId === identity.id}
+                                    >
+                                        <PowerOff className="mr-2 h-4 w-4" />
+                                        Deactivate
+                                    </Button>
+                                )}
+                                {isPlatformAdmin && !identity.is_active && (
+                                    <Button
+                                        variant="outline"
+                                        onClick={() => void setActive(identity, true)}
+                                        disabled={
+                                            busyId === identity.id || !identity.can_activate
+                                        }
+                                        title={identity.activation_blocker ?? undefined}
+                                    >
+                                        <Power className="mr-2 h-4 w-4" />
+                                        Activate
+                                    </Button>
+                                )}
+                                {isPlatformAdmin && (
+                                    <Button
+                                        variant="ghost"
+                                        className="text-destructive hover:text-destructive"
+                                        onClick={() => setDeleteTarget(identity)}
+                                        disabled={busyId === identity.id}
+                                    >
+                                        <Trash2 className="mr-2 h-4 w-4" />
+                                        Remove
+                                    </Button>
+                                )}
                                 {identity.last_checked_at && (
                                     <span className="self-center text-xs text-muted-foreground">
                                         Last checked{" "}
@@ -383,6 +606,127 @@ export default function EmailSendingIdentityPage() {
                     </Card>
                 )
             })}
+
+            <Dialog open={provisionOpen} onOpenChange={setProvisionOpen}>
+                <DialogContent className="max-w-lg">
+                    <DialogHeader>
+                        <DialogTitle>Add sending address</DialogTitle>
+                        <DialogDescription>
+                            Create an authenticated SES identity for this practice. It stays
+                            on standby after verification until a platform administrator activates it.
+                        </DialogDescription>
+                    </DialogHeader>
+                    <div className="space-y-4">
+                        <div className="space-y-1.5">
+                            <Label htmlFor="identity-scope">Applies to</Label>
+                            <Select value={provisionScope} onValueChange={changeProvisionScope}>
+                                <SelectTrigger id="identity-scope">
+                                    <SelectValue />
+                                </SelectTrigger>
+                                <SelectContent>
+                                    <SelectItem
+                                        value={INSTITUTION_SCOPE}
+                                        disabled={identities.some((identity) => !identity.location_id)}
+                                    >
+                                        Entire practice
+                                    </SelectItem>
+                                    {locations.map((location) => (
+                                        <SelectItem
+                                            key={location.id}
+                                            value={location.id}
+                                            disabled={identities.some(
+                                                (identity) => identity.location_id === location.id,
+                                            )}
+                                        >
+                                            {location.name}
+                                        </SelectItem>
+                                    ))}
+                                </SelectContent>
+                            </Select>
+                            <p className="text-xs text-muted-foreground">
+                                A location address overrides the practice-wide address for that location.
+                            </p>
+                        </div>
+                        <div className="grid gap-3 sm:grid-cols-2">
+                            <div className="space-y-1.5">
+                                <Label htmlFor="new-from-name">Display name</Label>
+                                <Input
+                                    id="new-from-name"
+                                    value={newFromName}
+                                    onChange={(event) => setNewFromName(event.target.value)}
+                                />
+                            </div>
+                            <div className="space-y-1.5">
+                                <Label htmlFor="new-local-part">Address prefix</Label>
+                                <Input
+                                    id="new-local-part"
+                                    value={newLocalPart}
+                                    pattern="[a-z0-9._-]+"
+                                    placeholder="hello"
+                                    onChange={(event) =>
+                                        setNewLocalPart(event.target.value.toLowerCase())
+                                    }
+                                />
+                                <p className="text-xs text-muted-foreground">
+                                    Usually “hello”; the domain is managed automatically.
+                                </p>
+                            </div>
+                        </div>
+                        <div className="space-y-1.5">
+                            <Label htmlFor="new-reply-to">Reply-to address</Label>
+                            <Input
+                                id="new-reply-to"
+                                type="email"
+                                value={newReplyTo}
+                                placeholder="frontdesk@yourclinic.com"
+                                onChange={(event) => setNewReplyTo(event.target.value)}
+                            />
+                            <p className="text-xs text-muted-foreground">
+                                Until the shared inbox is enabled, patient replies go here.
+                            </p>
+                        </div>
+                    </div>
+                    <DialogFooter>
+                        <Button
+                            variant="outline"
+                            onClick={() => setProvisionOpen(false)}
+                            disabled={provisioning}
+                        >
+                            Cancel
+                        </Button>
+                        <Button
+                            onClick={() => void provision()}
+                            disabled={provisioning || !newLocalPart.trim()}
+                        >
+                            {provisioning && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+                            Provision
+                        </Button>
+                    </DialogFooter>
+                </DialogContent>
+            </Dialog>
+
+            <Dialog open={deleteTarget !== null} onOpenChange={(open) => !open && setDeleteTarget(null)}>
+                <DialogContent className="max-w-md">
+                    <DialogHeader>
+                        <DialogTitle>Remove sending address?</DialogTitle>
+                        <DialogDescription>
+                            This removes the SES identity and managed DNS records. Workflow email
+                            for this scope will fall back to the platform address.
+                        </DialogDescription>
+                    </DialogHeader>
+                    <DialogFooter>
+                        <Button variant="outline" onClick={() => setDeleteTarget(null)}>
+                            Cancel
+                        </Button>
+                        <Button variant="destructive" onClick={() => void remove()}>
+                            {deleteTarget && busyId === deleteTarget.id && (
+                                <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                            )}
+                            Remove
+                        </Button>
+                    </DialogFooter>
+                </DialogContent>
+            </Dialog>
         </div>
     )
 }

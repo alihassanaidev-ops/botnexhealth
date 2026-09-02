@@ -6,9 +6,9 @@ be published straight into Route 53 — no DNS work, no IT ticket, no waiting on
 the practice.
 
 Alongside the identity, each clinic gets an SES **tenant** and a **configuration
-set**. That is what keeps one clinic's bounce rate from pausing everyone else's
-sending, and lets bounce and complaint events be attributed back to the clinic
-that caused them.
+set** for attribution. Tenant creation alone does not isolate suppression or
+reputation: explicit tenant suppression policies and event destinations are
+rollout gates documented in ``docs/EMAIL_AUTOMATION.md``.
 
 boto3 is synchronous; every call here runs in a worker thread.
 """
@@ -174,7 +174,9 @@ class SesProvisioningClient:
             code = exc.response.get("Error", {}).get("Code", "")
             if code in ("AlreadyExistsException", "ConflictException"):
                 return
-            logger.warning("SES configuration set %s could not be created (%s)", name, code)
+            logger.warning(
+                "SES configuration set %s could not be created (%s)", name, code
+            )
 
     def associate_tenant_resource(self, tenant_name: str, resource_arn: str) -> None:
         from botocore.exceptions import ClientError
@@ -189,7 +191,9 @@ class SesProvisioningClient:
                 return
             logger.warning(
                 "SES tenant association failed tenant=%s resource=%s (%s)",
-                tenant_name, resource_arn, code,
+                tenant_name,
+                resource_arn,
+                code,
             )
 
     def delete_identity(self, domain: str) -> None:
@@ -200,7 +204,9 @@ class SesProvisioningClient:
         except ClientError as exc:
             code = exc.response.get("Error", {}).get("Code", "")
             if code != "NotFoundException":
-                raise SesProvisioningError(f"Could not delete {domain} ({code})") from exc
+                raise SesProvisioningError(
+                    f"Could not delete {domain} ({code})"
+                ) from exc
 
     def delete_tenant(self, tenant_name: str) -> None:
         from botocore.exceptions import ClientError
@@ -210,7 +216,9 @@ class SesProvisioningClient:
         except ClientError as exc:
             code = exc.response.get("Error", {}).get("Code", "")
             if code != "NotFoundException":
-                logger.warning("SES tenant %s could not be deleted (%s)", tenant_name, code)
+                logger.warning(
+                    "SES tenant %s could not be deleted (%s)", tenant_name, code
+                )
 
     def delete_configuration_set(self, name: str) -> None:
         from botocore.exceptions import ClientError
@@ -252,7 +260,9 @@ class SesProvisioningClient:
             )
         except ClientError as exc:
             code = exc.response.get("Error", {}).get("Code", "")
-            raise SesProvisioningError(f"Could not publish DNS records ({code})") from exc
+            raise SesProvisioningError(
+                f"Could not publish DNS records ({code})"
+            ) from exc
 
     def delete_records(self, hosted_zone_id: str, records: list[DnsRecord]) -> None:
         from botocore.exceptions import ClientError
@@ -278,7 +288,9 @@ class SesProvisioningClient:
             code = exc.response.get("Error", {}).get("Code", "")
             # Already gone is a success for teardown purposes.
             if "NotFound" not in code and code != "InvalidChangeBatch":
-                raise SesProvisioningError(f"Could not delete DNS records ({code})") from exc
+                raise SesProvisioningError(
+                    f"Could not delete DNS records ({code})"
+                ) from exc
 
 
 class SesProvisioningService:

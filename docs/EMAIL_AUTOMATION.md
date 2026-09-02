@@ -22,7 +22,7 @@ workflow run without putting those identifiers in clear text.
 | Capability | Application | Staging AWS / UI | Result |
 |---|---|---|---|
 | Workflow Send Email node | Recipient resolution, templates, Jinja merge fields, consent/DNC gate, retries, breaker, and usage metering | Patient provider is Resend | Sends work; recent staging logs confirmed provider acceptance |
-| Clinic sending identities | Institution/location model and admin UI; Resend and SES providers supported | No SES identities are verified | Resend only in practice |
+| Clinic sending identities | Institution/location model, Super Admin provision/remove/activate controls, managed DNS, hourly verification, and audited mutations | Staging provisioning configuration and IAM are defined with activation locked | Identities can be safely onboarded without changing live delivery after deployment |
 | SES outbound | SES v2 sender, tenant name, configuration set, and message tags supported | SES account is still in sandbox (200/day, 1/second); no identities or configuration sets | Not production-ready |
 | Patient Reply-To | Signed address generator and parser implemented | `SES_INBOUND_DOMAIN` is absent | Workflow messages do not enter the inbound router |
 | SES inbound processing | MIME parser, spam/virus quarantine, encrypted persistence, tenant/contact/run routing, wait-resume, and staff forwarding implemented | No active receipt rules, inbound S3 bucket, SQS queue, or runtime URLs | Unreachable in staging |
@@ -40,6 +40,42 @@ Two code-level limitations matter before SES is enabled:
   bounce/complaint suppression must be configured explicitly. SES otherwise uses
   account-level suppression; one clinic must not silently suppress another
   clinic's recipient.
+
+### Super Admin onboarding boundary
+
+Super Admin owns the provider-changing operations: provision an institution or
+location identity, remove it, and explicitly activate/deactivate live SES
+routing. Institution admins can edit only the display name/reply-to address and
+request a verification recheck. Provisioning always creates an inactive row;
+DNS becoming verified never changes the live provider by itself.
+
+`SES_CLINIC_SENDING_ENABLED` is a deployment-controlled global interlock. Keep
+it false until the rollout gates below pass. Super Admin can still provision and
+verify identities while it is false, but the activation endpoint refuses the
+transition. AWS region, hosted zone, IAM, event destinations and this interlock
+remain versioned infrastructure settings rather than dashboard fields.
+
+### Custom SMTP / app passwords
+
+Bring-your-own SMTP is a separate provider option, not another kind of SES
+identity. HighLevel asks a sub-account for host, port, username, password/API
+key, From name and From email, then requires it to be selected as active. Gmail
+and similar providers use an app-specific password when MFA is enabled. It also
+documents important losses with generic SMTP, including managed deliverability
+and bounce classification: [HighLevel custom SMTP](https://help.gohighlevel.com/support/solutions/articles/155000007765-how-to-add-your-own-email-service-smtp-).
+
+ScaleNexus should add this only behind the durable outbound ledger and provider
+health model. The credential must be encrypted at rest, write-only in every API
+response, tested with TLS before activation, independently rotatable, and scoped
+to one institution/location. The From address must match the authenticated
+mailbox. SMTP alone does not provide inbound replies or trustworthy bounce and
+complaint events; Gmail/Microsoft two-way mail should ultimately use OAuth, and
+other SMTP providers need a supported webhook or separate inbound connection.
+
+ScaleNexus itself should continue using the SES API with its ECS task role—not
+create or store SES SMTP passwords. AWS documents that SES SMTP passwords are
+region-specific long-lived IAM-derived credentials, whereas the SDK can use the
+task's temporary role credentials: [AWS SES SMTP credentials](https://docs.aws.amazon.com/ses/latest/dg/smtp-credentials.html).
 
 ## What “like GHL” requires
 

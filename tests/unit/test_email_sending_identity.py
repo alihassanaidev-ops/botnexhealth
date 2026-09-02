@@ -27,6 +27,7 @@ from src.app.services.email.identity_service import (
     EmailIdentityService,
 )
 from src.app.services.email.ses_provisioning import (
+    ProvisionedIdentity,
     SesProvisioningError,
     safe_name,
     subdomain_for,
@@ -77,7 +78,12 @@ def test_safe_name_applies_prefix_and_cap():
 # ---------------------------------------------------------------------------
 
 
-def _identity(status=EmailIdentityStatus.VERIFIED.value, location_id=None, **kw):
+def _identity(
+    status=EmailIdentityStatus.VERIFIED.value,
+    location_id=None,
+    is_active=True,
+    **kw,
+):
     identity = EmailSendingIdentity(
         institution_id="inst-1",
         location_id=location_id,
@@ -86,6 +92,7 @@ def _identity(status=EmailIdentityStatus.VERIFIED.value, location_id=None, **kw)
         from_address="hello@brightsmile.mail.scalenexus.ai",
         from_name="Bright Smile",
         status=status,
+        is_active=is_active,
     )
     for key, value in kw.items():
         setattr(identity, key, value)
@@ -106,10 +113,43 @@ def _resolve(svc):
 
 def test_verified_identity_is_used():
     svc = _service(effective=_identity())
-    resolved = _resolve(svc)
+    with patch("src.app.services.email.identity_service.settings") as settings_mock:
+        settings_mock.ses_clinic_sending_enabled = True
+        resolved = _resolve(svc)
     assert resolved.from_address == "hello@brightsmile.mail.scalenexus.ai"
     assert resolved.provider == "ses"
     assert resolved.is_platform_fallback is False
+
+
+def test_verified_but_inactive_identity_falls_back_to_platform():
+    institution = MagicMock()
+    institution.email_from_address = None
+    svc = _service(effective=_identity(is_active=False), institution=institution)
+
+    with patch("src.app.services.email.identity_service.settings") as s:
+        s.resend_from_email = "platform@scalenexus.ai"
+        s.resend_reply_to = None
+        s.patient_email_provider = "resend"
+        resolved = _resolve(svc)
+
+    assert resolved.from_address == "platform@scalenexus.ai"
+    assert resolved.is_platform_fallback is True
+
+
+def test_global_ses_interlock_falls_back_even_for_active_verified_identity():
+    institution = MagicMock()
+    institution.email_from_address = None
+    svc = _service(effective=_identity(is_active=True), institution=institution)
+
+    with patch("src.app.services.email.identity_service.settings") as s:
+        s.resend_from_email = "platform@scalenexus.ai"
+        s.resend_reply_to = None
+        s.patient_email_provider = "resend"
+        s.ses_clinic_sending_enabled = False
+        resolved = _resolve(svc)
+
+    assert resolved.from_address == "platform@scalenexus.ai"
+    assert resolved.provider == "resend"
 
 
 @pytest.mark.parametrize(
@@ -168,6 +208,46 @@ def test_platform_address_is_the_last_resort():
     assert resolved.is_platform_fallback is True
 
 
+def test_provision_rejects_location_from_another_institution():
+    institution = MagicMock(id="inst-1", name="Clinic", slug="clinic")
+    location = MagicMock(
+        id="loc-2", institution_id="inst-2", name="Other", slug="other"
+    )
+    session = AsyncMock()
+    session.get = AsyncMock(side_effect=[institution, location])
+    provisioning = AsyncMock()
+    service = EmailIdentityService(session, provisioning=provisioning)
+
+    with pytest.raises(SesProvisioningError, match="does not belong"):
+        asyncio.run(service.provision(institution_id="inst-1", location_id="loc-2"))
+
+    provisioning.provision.assert_not_awaited()
+
+
+def test_provisioned_identity_starts_inactive():
+    institution = MagicMock(id="inst-1", name="Clinic", slug="clinic")
+    session = AsyncMock()
+    session.add = MagicMock()
+    session.get = AsyncMock(return_value=institution)
+    provisioning = AsyncMock()
+    provisioning.provision = AsyncMock(
+        return_value=ProvisionedIdentity(
+            domain="clinic.mail.scalenexus.ai",
+            dns_records=[],
+            tenant_name="clinic-inst-1",
+            configuration_set="scalenexus-clinic-inst-1",
+            dns_published=True,
+        )
+    )
+    service = EmailIdentityService(session, provisioning=provisioning)
+    service.get_effective_identity = AsyncMock(return_value=None)
+
+    identity = asyncio.run(service.provision(institution_id="inst-1"))
+
+    assert identity.is_active is False
+    assert identity.is_sendable is False
+
+
 def test_resolution_is_unsendable_when_nothing_is_configured():
     institution = MagicMock()
     institution.email_from_address = None
@@ -217,7 +297,9 @@ def test_pending_stays_verifying_within_the_timeout():
 
 def test_pending_past_the_timeout_fails():
     identity = _identity(status=EmailIdentityStatus.VERIFYING.value)
-    identity.created_at = datetime.now(timezone.utc) - VERIFICATION_TIMEOUT - timedelta(hours=1)
+    identity.created_at = (
+        datetime.now(timezone.utc) - VERIFICATION_TIMEOUT - timedelta(hours=1)
+    )
 
     refreshed = _refresh(identity, "PENDING")
 
@@ -235,6 +317,7 @@ def test_previously_verified_domain_going_pending_is_revoked_not_failed():
     refreshed = _refresh(identity, "PENDING")
 
     assert refreshed.status == EmailIdentityStatus.REVOKED.value
+    assert refreshed.is_active is False
     assert "DNS" in refreshed.failure_reason
 
 
@@ -246,6 +329,7 @@ def test_deleted_identity_is_revoked_when_it_had_verified():
     refreshed = _refresh(identity, "NOT_FOUND", "gone")
 
     assert refreshed.status == EmailIdentityStatus.REVOKED.value
+    assert refreshed.is_active is False
 
 
 def test_failed_identity_that_never_verified_is_failed():
@@ -269,4 +353,10 @@ def test_refresh_stamps_last_checked_at():
 
 def test_is_sendable_only_for_verified():
     assert _identity(status=EmailIdentityStatus.VERIFIED.value).is_sendable is True
+    assert (
+        _identity(
+            status=EmailIdentityStatus.VERIFIED.value, is_active=False
+        ).is_sendable
+        is False
+    )
     assert _identity(status=EmailIdentityStatus.REVOKED.value).is_sendable is False

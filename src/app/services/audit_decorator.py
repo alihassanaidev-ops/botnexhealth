@@ -61,6 +61,13 @@ DURABLE_AUDIT_ACTIONS: frozenset[str] = frozenset(
         AuditAction.CAMPAIGN_EMERGENCY_HALT.value,
         AuditAction.CAMPAIGN_HALT_RELEASE.value,
         AuditAction.CAMPAIGN_COMPLIANCE_UPDATE.value,
+        # Changing the identity behind patient email is a high-consequence
+        # external side effect. Refuse it if the intent cannot be recorded.
+        AuditAction.EMAIL_IDENTITY_PROVISION.value,
+        AuditAction.EMAIL_IDENTITY_UPDATE.value,
+        AuditAction.EMAIL_IDENTITY_ACTIVATE.value,
+        AuditAction.EMAIL_IDENTITY_DEACTIVATE.value,
+        AuditAction.EMAIL_IDENTITY_DELETE.value,
     }
 )
 
@@ -213,9 +220,8 @@ def audit(
             institution_id = _resolve_institution_id(
                 args, kwargs, actor_ctx.get("institution_id")
             )
-            location_id = (
-                actor_ctx.get("location_id")
-                or _resolve_location_id_from_retell_context()
+            location_id = actor_ctx.get("location_id") or _resolve_location_id(
+                args, kwargs
             )
             if location_id and "location_id" not in base_metadata:
                 base_metadata["location_id"] = location_id
@@ -279,8 +285,11 @@ def _resolve_institution_id(
     args: tuple, kwargs: dict, fallback: str | None = None
 ) -> str | None:
     """Resolve institution ID from request.state, current_user, or Retell call context."""
-    for arg in args:
-        if hasattr(arg, "state") and hasattr(arg.state, "institution"):
+    for arg in (*args, *kwargs.values()):
+        if hasattr(arg, "state"):
+            explicit = getattr(arg.state, "audit_institution_id", None)
+            if explicit:
+                return str(explicit)
             institution = getattr(arg.state, "institution", None)
             if institution:
                 return str(institution.id)
@@ -297,6 +306,16 @@ def _resolve_institution_id(
         pass
 
     return fallback
+
+
+def _resolve_location_id(args: tuple, kwargs: dict) -> str | None:
+    """Resolve a route-supplied audit location, then fall back to Retell."""
+    for arg in list(args) + list(kwargs.values()):
+        if hasattr(arg, "state"):
+            explicit = getattr(arg.state, "audit_location_id", None)
+            if explicit:
+                return str(explicit)
+    return _resolve_location_id_from_retell_context()
 
 
 def _augment_metadata_for_action(

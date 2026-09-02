@@ -31,6 +31,9 @@ interface InstitutionScope {
     ready: boolean
     /** Null for anyone who has no choice to make. */
     picker: ReactNode
+    /** Selected tenant metadata for platform-only setup screens. */
+    selectedInstitution: InstitutionDetail | undefined
+    isPlatformAdmin: boolean
 }
 
 export function useInstitutionScope(): InstitutionScope {
@@ -96,5 +99,7 @@ export function useInstitutionScope(): InstitutionScope {
         institutionId: isPlatformAdmin ? selected : undefined,
         ready: !isPlatformAdmin || Boolean(selected),
         picker,
+        selectedInstitution: institutions.find((row) => row.id === selected),
+        isPlatformAdmin,
     }
 }

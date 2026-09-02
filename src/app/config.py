@@ -142,11 +142,15 @@ class Settings(BaseSettings):
 
     ses_region: str = "ca-central-1"
     # Parent domain that per-clinic sending subdomains are created under, e.g.
-    # "brightsmile.mail.scalenexus.ai". Must be a Route 53 hosted zone this
-    # account controls, so DKIM records can be published without the clinic
-    # touching DNS.
+    # "mail.scalenexus.ai" → "brightsmile.mail.scalenexus.ai". Its parent
+    # Route 53 zone must be controlled by this account so DKIM can be published
+    # without the clinic touching DNS.
     ses_sending_domain: str | None = None
     ses_sending_hosted_zone_id: str | None = None
+    # Global rollout gate. Domains can be provisioned and verified while this
+    # remains false, but no clinic can be activated for SES sending until event
+    # capture, suppression and operational monitoring are ready.
+    ses_clinic_sending_enabled: bool = False
     # Prefix for the per-clinic configuration set that carries event
     # destinations (bounce/complaint) and reputation options.
     ses_configuration_set_prefix: str = "scalenexus"

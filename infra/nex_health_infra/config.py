@@ -84,6 +84,9 @@ class RetentionConfig:
 class EmailConfig:
     patient_email_provider: str = "resend"
     ses_region: str = "ca-central-1"
+    ses_sending_domain: str | None = None
+    ses_sending_hosted_zone_name: str | None = None
+    ses_clinic_sending_enabled: bool = False
     ses_configuration_set_prefix: str = "scalenexus"
     ses_inbound_prefix: str = "inbound/"
     inbound_email_max_body_bytes: int = 256_000
@@ -147,6 +150,7 @@ class EnvironmentConfig:
     # reverting staging to v2 while the deploy looked successful.
     nexhealth_api_version: str | None = None
 
+
 def _read_json(path: Path) -> dict[str, Any]:
     try:
         return json.loads(path.read_text())
@@ -166,6 +170,10 @@ def load_config(path: str | Path) -> EnvironmentConfig:
     frontend = raw.get("frontend", {})
     retention = raw.get("retention", {})
     email = raw.get("email", {})
+    if email.get("sesClinicSendingEnabled") and not email.get("sesSendingDomain"):
+        raise ValueError(
+            "email.sesSendingDomain is required when SES clinic sending is enabled"
+        )
 
     return EnvironmentConfig(
         app_name=raw["appName"],
@@ -259,6 +267,11 @@ def load_config(path: str | Path) -> EnvironmentConfig:
         email=EmailConfig(
             patient_email_provider=email.get("patientEmailProvider", "resend"),
             ses_region=email.get("sesRegion", "ca-central-1"),
+            ses_sending_domain=email.get("sesSendingDomain") or None,
+            ses_sending_hosted_zone_name=email.get("sesSendingHostedZoneName") or None,
+            ses_clinic_sending_enabled=bool(
+                email.get("sesClinicSendingEnabled", False)
+            ),
             ses_configuration_set_prefix=email.get(
                 "sesConfigurationSetPrefix", "scalenexus"
             ),

@@ -25,6 +25,9 @@
   "email": {
     "patientEmailProvider": "resend",
     "sesRegion": "ca-central-1",
+    "sesSendingDomain": "mail.staging.scalenexus.ai",
+    "sesSendingHostedZoneName": "staging.scalenexus.ai",
+    "sesClinicSendingEnabled": false,
     "sesConfigurationSetPrefix": "scalenexus",
     "sesInboundPrefix": "inbound/",
     "inboundEmailMaxBodyBytes": 256000,

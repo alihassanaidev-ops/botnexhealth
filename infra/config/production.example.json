@@ -19,6 +19,17 @@
   "authFrontendBaseUrl": "https://dashboard.example.com",
   "webauthnRpName": "ScaleNexus Dashboard",
   "recordingsBucketName": "nex-health-production-recordings",
+  "email": {
+    "patientEmailProvider": "resend",
+    "sesRegion": "ca-central-1",
+    "sesSendingDomain": "mail.example.com",
+    "sesSendingHostedZoneName": "example.com",
+    "sesClinicSendingEnabled": false,
+    "sesConfigurationSetPrefix": "scalenexus",
+    "sesInboundPrefix": "inbound/",
+    "inboundEmailMaxBodyBytes": 256000,
+    "inboundEmailSenderHourlyLimit": 60
+  },
   "retention": {
     "clinicalRecordDays": 3650,
     "minorRecordAgeYears": 28,

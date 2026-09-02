@@ -84,7 +84,11 @@ class EmailIdentityService:
     ) -> ResolvedSendingIdentity:
         """The identity a send from this institution/location should use."""
         identity = await self.get_effective_identity(institution_id, location_id)
-        if identity is not None and identity.is_sendable:
+        if (
+            identity is not None
+            and identity.is_sendable
+            and _provider_enabled(identity)
+        ):
             return ResolvedSendingIdentity(
                 from_address=identity.from_address,
                 from_name=identity.from_name,
@@ -185,6 +189,10 @@ class EmailIdentityService:
             location = await self.session.get(InstitutionLocation, location_id)
             if location is None:
                 raise SesProvisioningError("Location not found")
+            if str(location.institution_id) != str(institution_id):
+                raise SesProvisioningError(
+                    "Location does not belong to the selected institution"
+                )
 
         slug = _identity_slug(institution, location)
         display_name = from_name or (location.name if location else institution.name)
@@ -196,7 +204,9 @@ class EmailIdentityService:
         identity = await self.get_effective_identity(institution_id, location_id)
         # get_effective_identity falls back to the institution row, which must
         # not be overwritten when provisioning a location.
-        if identity is not None and str(identity.location_id or "") != str(location_id or ""):
+        if identity is not None and str(identity.location_id or "") != str(
+            location_id or ""
+        ):
             identity = None
 
         if identity is None:
@@ -219,6 +229,10 @@ class EmailIdentityService:
             if provisioned.dns_published
             else EmailIdentityStatus.PENDING_DNS.value
         )
+        # Provisioning/re-provisioning never changes live routing by itself.
+        # A super admin activates the identity only after verification and the
+        # platform-wide SES safety gate have both passed.
+        identity.is_active = False
         identity.failure_reason = None
         identity.verified_at = None
         identity.last_checked_at = None
@@ -262,6 +276,7 @@ class EmailIdentityService:
                 if identity.verified_at
                 else EmailIdentityStatus.FAILED.value
             )
+            identity.is_active = False
             identity.failure_reason = detail or f"Provider reported {status}"
 
         else:  # PENDING / TEMPORARY_FAILURE
@@ -270,8 +285,10 @@ class EmailIdentityService:
                 # records were removed. Distinct from never having verified,
                 # because mail *was* flowing and is now failing authentication.
                 identity.status = EmailIdentityStatus.REVOKED.value
+                identity.is_active = False
                 identity.failure_reason = (
-                    detail or "Domain no longer verifies; DNS records may have been removed"
+                    detail
+                    or "Domain no longer verifies; DNS records may have been removed"
                 )
             elif now - _as_utc(identity.created_at) > VERIFICATION_TIMEOUT:
                 identity.status = EmailIdentityStatus.FAILED.value
@@ -332,3 +349,8 @@ def _as_utc(value: datetime | None) -> datetime:
     if value is None:
         return datetime.now(timezone.utc)
     return value if value.tzinfo else value.replace(tzinfo=timezone.utc)
+
+
+def _provider_enabled(identity: EmailSendingIdentity) -> bool:
+    """Deployment interlock for a verified/active provider identity."""
+    return identity.provider != "ses" or settings.ses_clinic_sending_enabled

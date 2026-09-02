@@ -19,6 +19,7 @@ from enum import Enum
 from uuid import uuid4
 
 from sqlalchemy import (
+    Boolean,
     JSON,
     DateTime,
     ForeignKey,
@@ -95,6 +96,13 @@ class EmailSendingIdentity(Base):
     status: Mapped[str] = mapped_column(
         String(24), nullable=False, default=EmailIdentityStatus.PENDING_DNS.value
     )
+    #: Verification proves the domain is authenticated; activation is the
+    #: separate operator decision to route live clinic traffic through it.
+    #: Keeping these states independent prevents a DNS poll from silently
+    #: changing providers while SES is still being commissioned.
+    is_active: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default="false"
+    )
     #: DNS records the provider requires, as returned at creation. Kept so the
     #: dashboard can show them for a clinic-owned domain the platform cannot
     #: publish into itself.
@@ -126,7 +134,9 @@ class EmailSendingIdentity(Base):
 
     @property
     def is_sendable(self) -> bool:
-        return self.status == EmailIdentityStatus.VERIFIED.value
+        return (
+            bool(self.is_active) and self.status == EmailIdentityStatus.VERIFIED.value
+        )
 
     def __repr__(self) -> str:
         return (

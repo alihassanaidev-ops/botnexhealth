@@ -39,7 +39,14 @@ from .config import EnvironmentConfig
 
 
 class NexHealthPlatformStack(Stack):
-    def __init__(self, scope: Construct, construct_id: str, *, config: EnvironmentConfig, **kwargs) -> None:
+    def __init__(
+        self,
+        scope: Construct,
+        construct_id: str,
+        *,
+        config: EnvironmentConfig,
+        **kwargs,
+    ) -> None:
         super().__init__(scope, construct_id, **kwargs)
         self.config = config
 
@@ -48,7 +55,9 @@ class NexHealthPlatformStack(Stack):
         Tags.of(self).add("managed-by", "cdk")
 
         vpc = self._build_vpc()
-        private_subnets = ec2.SubnetSelection(subnet_type=ec2.SubnetType.PRIVATE_WITH_EGRESS)
+        private_subnets = ec2.SubnetSelection(
+            subnet_type=ec2.SubnetType.PRIVATE_WITH_EGRESS
+        )
 
         cluster = ecs.Cluster(
             self,
@@ -123,6 +132,14 @@ class NexHealthPlatformStack(Stack):
 
         frontend_bundle = self._build_frontend()
         frontend_base_url = config.auth_frontend_base_url or frontend_bundle["url"]
+
+        ses_sending_zone: route53.IHostedZone | None = None
+        if config.email.ses_sending_hosted_zone_name:
+            ses_sending_zone = route53.HostedZone.from_lookup(
+                self,
+                "SesSendingHostedZone",
+                domain_name=config.email.ses_sending_hosted_zone_name,
+            )
 
         jwt_secret = secretsmanager.Secret(
             self,
@@ -316,6 +333,7 @@ class NexHealthPlatformStack(Stack):
             recordings_bucket,
             database_host_for_runtime,
             database.db_instance_endpoint_port,
+            ses_sending_zone.hosted_zone_id if ses_sending_zone else None,
         )
         runtime_secrets = self._build_app_runtime_secrets(
             jwt_secret,
@@ -420,14 +438,19 @@ class NexHealthPlatformStack(Stack):
                 log_group=api_log_group,
             ),
             health_check=ecs.HealthCheck(
-                command=["CMD-SHELL", "curl --fail http://localhost:8000/livez || exit 1"],
+                command=[
+                    "CMD-SHELL",
+                    "curl --fail http://localhost:8000/livez || exit 1",
+                ],
                 interval=Duration.seconds(30),
                 timeout=Duration.seconds(10),
                 retries=3,
                 start_period=Duration.seconds(20),
             ),
         )
-        api_container.add_port_mappings(ecs.PortMapping(container_port=config.api.container_port))
+        api_container.add_port_mappings(
+            ecs.PortMapping(container_port=config.api.container_port)
+        )
 
         api_service = self._build_api_service(
             cluster=cluster,
@@ -436,7 +459,9 @@ class NexHealthPlatformStack(Stack):
             subnet_selection=private_subnets,
         )
         api_service.load_balancer.set_attribute("idle_timeout.timeout_seconds", "300")
-        api_service.target_group.configure_health_check(path="/livez", healthy_http_codes="200")
+        api_service.target_group.configure_health_check(
+            path="/livez", healthy_http_codes="200"
+        )
 
         if hasattr(self, "frontend_distribution"):
             # CloudFront → ALB origin protocol must match the ALB listener.
@@ -517,7 +542,9 @@ class NexHealthPlatformStack(Stack):
             scale_in_cooldown=Duration.seconds(180),
             scale_out_cooldown=Duration.seconds(60),
         )
-        api_scaling.scale_on_memory_utilization("ApiMemoryScaling", target_utilization_percent=75)
+        api_scaling.scale_on_memory_utilization(
+            "ApiMemoryScaling", target_utilization_percent=75
+        )
         if config.api.requests_per_target:
             api_scaling.scale_on_request_count(
                 "ApiRequestCountScaling",
@@ -546,7 +573,10 @@ class NexHealthPlatformStack(Stack):
                 log_group=worker_log_group,
             ),
             health_check=ecs.HealthCheck(
-                command=["CMD-SHELL", "celery -A src.app.worker inspect ping || exit 1"],
+                command=[
+                    "CMD-SHELL",
+                    "celery -A src.app.worker inspect ping || exit 1",
+                ],
                 interval=Duration.seconds(30),
                 timeout=Duration.seconds(10),
                 retries=3,
@@ -567,12 +597,58 @@ class NexHealthPlatformStack(Stack):
             min_healthy_percent=100,
             max_healthy_percent=200,
         )
+
+        if config.email.ses_sending_domain:
+            # The API owns the onboarding lifecycle; the worker only verifies
+            # and sends. Keep the worker unable to create/delete identities or
+            # DNS records even though both tasks run the same image.
+            api_task_definition.task_role.add_to_principal_policy(
+                iam.PolicyStatement(
+                    actions=[
+                        "ses:CreateEmailIdentity",
+                        "ses:GetEmailIdentity",
+                        "ses:DeleteEmailIdentity",
+                        "ses:CreateConfigurationSet",
+                        "ses:DeleteConfigurationSet",
+                        "ses:CreateTenant",
+                        "ses:DeleteTenant",
+                        "ses:CreateTenantResourceAssociation",
+                    ],
+                    resources=["*"],
+                    conditions={
+                        "StringEquals": {"aws:RequestedRegion": config.email.ses_region}
+                    },
+                )
+            )
+            worker_task_definition.task_role.add_to_principal_policy(
+                iam.PolicyStatement(
+                    actions=["ses:GetEmailIdentity", "ses:SendEmail"],
+                    resources=["*"],
+                    conditions={
+                        "StringEquals": {"aws:RequestedRegion": config.email.ses_region}
+                    },
+                )
+            )
+            if ses_sending_zone is not None:
+                api_task_definition.task_role.add_to_principal_policy(
+                    iam.PolicyStatement(
+                        actions=["route53:ChangeResourceRecordSets"],
+                        resources=[
+                            f"arn:{self.partition}:route53:::hostedzone/"
+                            f"{ses_sending_zone.hosted_zone_id}"
+                        ],
+                    )
+                )
         worker_scaling = worker_service.auto_scale_task_count(
             min_capacity=config.worker.min_count,
             max_capacity=config.worker.max_count,
         )
-        worker_scaling.scale_on_cpu_utilization("WorkerCpuScaling", target_utilization_percent=65)
-        worker_scaling.scale_on_memory_utilization("WorkerMemoryScaling", target_utilization_percent=75)
+        worker_scaling.scale_on_cpu_utilization(
+            "WorkerCpuScaling", target_utilization_percent=65
+        )
+        worker_scaling.scale_on_memory_utilization(
+            "WorkerMemoryScaling", target_utilization_percent=75
+        )
         if config.worker.queue_scale_up_depth is not None:
             queue_metrics_security_group = ec2.SecurityGroup(
                 self,
@@ -916,17 +992,31 @@ class NexHealthPlatformStack(Stack):
 
         CfnOutput(self, "ClusterName", value=cluster.cluster_name)
         CfnOutput(self, "ApiBaseUrl", value=api_url)
-        CfnOutput(self, "AppSecurityGroupId", value=api_service.service.connections.security_groups[0].security_group_id)
-        CfnOutput(self, "MigrationSecurityGroupId", value=migration_security_group.security_group_id)
+        CfnOutput(
+            self,
+            "AppSecurityGroupId",
+            value=api_service.service.connections.security_groups[0].security_group_id,
+        )
+        CfnOutput(
+            self,
+            "MigrationSecurityGroupId",
+            value=migration_security_group.security_group_id,
+        )
         CfnOutput(
             self,
             "PrivateSubnetIds",
             value=",".join(subnet.subnet_id for subnet in vpc.private_subnets),
         )
-        CfnOutput(self, "MigrationTaskDefinitionArn", value=migration_task_definition.task_definition_arn)
+        CfnOutput(
+            self,
+            "MigrationTaskDefinitionArn",
+            value=migration_task_definition.task_definition_arn,
+        )
         CfnOutput(self, "RecordingsBucketName", value=recordings_bucket.bucket_name)
         CfnOutput(self, "RedisUrl", value=redis_url)
-        CfnOutput(self, "DatabaseEndpointAddress", value=database.db_instance_endpoint_address)
+        CfnOutput(
+            self, "DatabaseEndpointAddress", value=database.db_instance_endpoint_address
+        )
         if database_proxy is not None:
             CfnOutput(self, "DatabaseProxyEndpoint", value=database_proxy.endpoint)
         CfnOutput(self, "DatabasePort", value=database.db_instance_endpoint_port)
@@ -939,13 +1029,21 @@ class NexHealthPlatformStack(Stack):
             ),
         )
         if database.secret is not None:
-            CfnOutput(self, "DatabaseCredentialsSecretArn", value=database.secret.secret_arn)
+            CfnOutput(
+                self, "DatabaseCredentialsSecretArn", value=database.secret.secret_arn
+            )
         CfnOutput(self, "GeneratedJwtSecretArn", value=jwt_secret.secret_arn)
-        CfnOutput(self, "GeneratedEncryptionKeySecretArn", value=encryption_key_secret.secret_arn)
+        CfnOutput(
+            self,
+            "GeneratedEncryptionKeySecretArn",
+            value=encryption_key_secret.secret_arn,
+        )
         if frontend_bundle["bucket_name"]:
             CfnOutput(self, "FrontendBucketName", value=frontend_bundle["bucket_name"])
         if frontend_bundle["distribution_id"]:
-            CfnOutput(self, "FrontendDistributionId", value=frontend_bundle["distribution_id"])
+            CfnOutput(
+                self, "FrontendDistributionId", value=frontend_bundle["distribution_id"]
+            )
             CfnOutput(self, "FrontendUrl", value=frontend_bundle["url"])
 
     def _build_vpc(self) -> ec2.IVpc:
@@ -967,6 +1065,7 @@ class NexHealthPlatformStack(Stack):
         recordings_bucket: s3.Bucket,
         database_host: str,
         database_port: str,
+        ses_sending_hosted_zone_id: str | None,
     ) -> dict[str, str]:
         cors_origins = list(self.config.cors_allowed_origins)
         if frontend_bundle_url and frontend_bundle_url not in cors_origins:
@@ -998,20 +1097,17 @@ class NexHealthPlatformStack(Stack):
             ),
             "RETENTION_RECORDING_DAYS": str(self.config.retention.recording_days),
             "RETENTION_SMS_BODY_DAYS": str(self.config.retention.sms_body_days),
-            "RETENTION_SMS_METADATA_DAYS": str(
-                self.config.retention.sms_metadata_days
-            ),
-            "RETENTION_NOTIFICATION_DAYS": str(
-                self.config.retention.notification_days
-            ),
+            "RETENTION_SMS_METADATA_DAYS": str(self.config.retention.sms_metadata_days),
+            "RETENTION_NOTIFICATION_DAYS": str(self.config.retention.notification_days),
             "RETENTION_DEAD_LETTER_RAW_DAYS": str(
                 self.config.retention.dead_letter_raw_days
             ),
-            "RETENTION_IDEMPOTENCY_DAYS": str(
-                self.config.retention.idempotency_days
-            ),
+            "RETENTION_IDEMPOTENCY_DAYS": str(self.config.retention.idempotency_days),
             "PATIENT_EMAIL_PROVIDER": self.config.email.patient_email_provider,
             "SES_REGION": self.config.email.ses_region,
+            "SES_CLINIC_SENDING_ENABLED": str(
+                self.config.email.ses_clinic_sending_enabled
+            ).lower(),
             "SES_CONFIGURATION_SET_PREFIX": self.config.email.ses_configuration_set_prefix,
             "SES_INBOUND_PREFIX": self.config.email.ses_inbound_prefix,
             "INBOUND_EMAIL_MAX_BODY_BYTES": str(
@@ -1021,6 +1117,10 @@ class NexHealthPlatformStack(Stack):
                 self.config.email.inbound_email_sender_hourly_limit
             ),
         }
+        if self.config.email.ses_sending_domain:
+            environment["SES_SENDING_DOMAIN"] = self.config.email.ses_sending_domain
+        if ses_sending_hosted_zone_id:
+            environment["SES_SENDING_HOSTED_ZONE_ID"] = ses_sending_hosted_zone_id
         if self.config.api.web_concurrency:
             environment["WEB_CONCURRENCY"] = str(self.config.api.web_concurrency)
         if self.config.nexhealth_api_version:
@@ -1038,7 +1138,9 @@ class NexHealthPlatformStack(Stack):
             # a link we sent them".
             environment["PUBLIC_BASE_URL"] = frontend_base_url
         if self.config.trusted_proxy_cidrs:
-            environment["TRUSTED_PROXY_CIDRS"] = ",".join(self.config.trusted_proxy_cidrs)
+            environment["TRUSTED_PROXY_CIDRS"] = ",".join(
+                self.config.trusted_proxy_cidrs
+            )
         # WebAuthn — falls back to frontend host / origin when the config
         # didn't override. Required: without these the container resolves
         # rp_id = "localhost" and the browser rejects passkey registration
@@ -1046,6 +1148,7 @@ class NexHealthPlatformStack(Stack):
         rp_id = self.config.webauthn_rp_id
         if not rp_id and frontend_base_url:
             from urllib.parse import urlparse
+
             rp_id = urlparse(frontend_base_url).hostname
         if rp_id:
             environment["WEBAUTHN_RP_ID"] = rp_id
@@ -1089,8 +1192,12 @@ class NexHealthPlatformStack(Stack):
         secrets: dict[str, ecs.Secret] = {
             "JWT_SECRET": ecs.Secret.from_secrets_manager(jwt_secret),
             "ENCRYPTION_KEY": ecs.Secret.from_secrets_manager(encryption_key_secret),
-            "DATABASE_USER": ecs.Secret.from_secrets_manager(app_role_secret, "username"),
-            "DATABASE_PASSWORD": ecs.Secret.from_secrets_manager(app_role_secret, "password"),
+            "DATABASE_USER": ecs.Secret.from_secrets_manager(
+                app_role_secret, "username"
+            ),
+            "DATABASE_PASSWORD": ecs.Secret.from_secrets_manager(
+                app_role_secret, "password"
+            ),
         }
         return self._add_external_secrets(secrets, "AppRuntime")
 
@@ -1111,8 +1218,12 @@ class NexHealthPlatformStack(Stack):
             "ENCRYPTION_KEY": ecs.Secret.from_secrets_manager(encryption_key_secret),
         }
         if database.secret is not None:
-            secrets["DATABASE_USER"] = ecs.Secret.from_secrets_manager(database.secret, "username")
-            secrets["DATABASE_PASSWORD"] = ecs.Secret.from_secrets_manager(database.secret, "password")
+            secrets["DATABASE_USER"] = ecs.Secret.from_secrets_manager(
+                database.secret, "username"
+            )
+            secrets["DATABASE_PASSWORD"] = ecs.Secret.from_secrets_manager(
+                database.secret, "password"
+            )
         return self._add_external_secrets(secrets, "Migration")
 
     def _add_external_secrets(
@@ -1230,7 +1341,11 @@ class NexHealthPlatformStack(Stack):
             "max_healthy_percent": 200,
         }
 
-        if service_config.domain_name and service_config.certificate_arn and service_config.hosted_zone_name:
+        if (
+            service_config.domain_name
+            and service_config.certificate_arn
+            and service_config.hosted_zone_name
+        ):
             zone = route53.HostedZone.from_lookup(
                 self,
                 "ApiHostedZone",
@@ -1314,7 +1429,9 @@ class NexHealthPlatformStack(Stack):
                 self.config.frontend.certificate_arn,
             )
 
-        distribution = cloudfront.Distribution(self, "FrontendDistribution", **distribution_kwargs)
+        distribution = cloudfront.Distribution(
+            self, "FrontendDistribution", **distribution_kwargs
+        )
         self.frontend_distribution = distribution
 
         if self.config.frontend.domain_name and self.config.frontend.hosted_zone_name:
@@ -1328,14 +1445,18 @@ class NexHealthPlatformStack(Stack):
                 "FrontendAliasRecord",
                 zone=hosted_zone,
                 record_name=self.config.frontend.domain_name,
-                target=route53.RecordTarget.from_alias(route53_targets.CloudFrontTarget(distribution)),
+                target=route53.RecordTarget.from_alias(
+                    route53_targets.CloudFrontTarget(distribution)
+                ),
             )
             route53.AaaaRecord(
                 self,
                 "FrontendAliasRecordIpv6",
                 zone=hosted_zone,
                 record_name=self.config.frontend.domain_name,
-                target=route53.RecordTarget.from_alias(route53_targets.CloudFrontTarget(distribution)),
+                target=route53.RecordTarget.from_alias(
+                    route53_targets.CloudFrontTarget(distribution)
+                ),
             )
 
         frontend_url = (
@@ -1826,22 +1947,35 @@ class NexHealthPlatformStack(Stack):
         dashboard.add_widgets(
             cloudwatch.GraphWidget(
                 title="ALB — Requests / min",
-                left=[lb.metric_request_count(period=m1, statistic="Sum", label="requests")],
-                width=8, height=6,
+                left=[
+                    lb.metric_request_count(
+                        period=m1, statistic="Sum", label="requests"
+                    )
+                ],
+                width=8,
+                height=6,
             ),
             cloudwatch.GraphWidget(
                 title="ALB — Target latency (s)",
                 left=[
-                    lb.metric_target_response_time(period=m1, statistic="p50", label="p50"),
-                    lb.metric_target_response_time(period=m1, statistic="p95", label="p95"),
-                    lb.metric_target_response_time(period=m1, statistic="p99", label="p99"),
+                    lb.metric_target_response_time(
+                        period=m1, statistic="p50", label="p50"
+                    ),
+                    lb.metric_target_response_time(
+                        period=m1, statistic="p95", label="p95"
+                    ),
+                    lb.metric_target_response_time(
+                        period=m1, statistic="p99", label="p99"
+                    ),
                 ],
-                width=8, height=6,
+                width=8,
+                height=6,
             ),
             cloudwatch.GraphWidget(
                 title="ALB — Target 5xx / min",
                 left=[alb_5xx_1m],
-                width=8, height=6,
+                width=8,
+                height=6,
             ),
         )
         dashboard.add_widgets(
@@ -1851,44 +1985,57 @@ class NexHealthPlatformStack(Stack):
                     api_service.service.metric_cpu_utilization(period=m1, label="api"),
                     worker_service.metric_cpu_utilization(period=m1, label="worker"),
                 ],
-                width=12, height=6,
+                width=12,
+                height=6,
             ),
             cloudwatch.GraphWidget(
                 title="ECS — Memory %",
                 left=[
-                    api_service.service.metric_memory_utilization(period=m1, label="api"),
+                    api_service.service.metric_memory_utilization(
+                        period=m1, label="api"
+                    ),
                     worker_service.metric_memory_utilization(period=m1, label="worker"),
                 ],
-                width=12, height=6,
+                width=12,
+                height=6,
             ),
         )
         dashboard.add_widgets(
             cloudwatch.GraphWidget(
                 title="RDS — CPU %",
                 left=[database.metric_cpu_utilization(period=m1)],
-                width=8, height=6,
+                width=8,
+                height=6,
             ),
             cloudwatch.GraphWidget(
                 title="RDS — Connections",
                 left=[database.metric_database_connections(period=m1)],
-                width=8, height=6,
+                width=8,
+                height=6,
             ),
             cloudwatch.GraphWidget(
                 title="RDS — Free storage (bytes)",
                 left=[database.metric_free_storage_space(period=m1)],
-                width=8, height=6,
+                width=8,
+                height=6,
             ),
         )
         dashboard.add_widgets(
             cloudwatch.GraphWidget(
                 title="Celery — queue depth",
                 left=[celery_depth],
-                width=12, height=6,
+                width=12,
+                height=6,
             ),
             cloudwatch.GraphWidget(
                 title="Audit-write failures (5m)",
-                left=[audit_failure_filter.metric(statistic="Sum", period=Duration.minutes(5))],
-                width=12, height=6,
+                left=[
+                    audit_failure_filter.metric(
+                        statistic="Sum", period=Duration.minutes(5)
+                    )
+                ],
+                width=12,
+                height=6,
             ),
         )
         CfnOutput(
@@ -1900,7 +2047,9 @@ class NexHealthPlatformStack(Stack):
             ),
         )
 
-    def _api_base_url(self, api_service: ecs_patterns.ApplicationLoadBalancedFargateService) -> str:
+    def _api_base_url(
+        self, api_service: ecs_patterns.ApplicationLoadBalancedFargateService
+    ) -> str:
         if self.config.api.domain_name and self.config.api.certificate_arn:
             return f"https://{self.config.api.domain_name}"
         return f"http://{api_service.load_balancer.load_balancer_dns_name}"

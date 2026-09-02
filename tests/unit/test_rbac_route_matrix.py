@@ -475,6 +475,8 @@ ROUTES_BY_BOUNDARY: dict[str, tuple[str, ...]] = {
         # institution admin acting as "an admin" is not sufficient here.
         "POST /api/institution/email-sending-identities/provision",
         "DELETE /api/institution/email-sending-identities/{identity_id}",
+        "POST /api/institution/email-sending-identities/{identity_id}/activate",
+        "POST /api/institution/email-sending-identities/{identity_id}/deactivate",
     ),
     INSTITUTION_OR_SUPER_ADMIN: (
         # Clinic-authored campaign email templates. Institution-scoped content

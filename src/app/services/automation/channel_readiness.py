@@ -282,9 +282,15 @@ class ChannelReadinessService:
                 str(location.id) if location is not None else None,
             )
         except Exception:  # noqa: BLE001 — readiness must not fail the publish path
-            logger.warning("could not load the sending identity for readiness", exc_info=True)
+            logger.warning(
+                "could not load the sending identity for readiness", exc_info=True
+            )
 
-        if identity is not None and identity.status != EmailIdentityStatus.VERIFIED.value:
+        if (
+            identity is not None
+            and identity.is_active
+            and identity.status != EmailIdentityStatus.VERIFIED.value
+        ):
             if identity.status == EmailIdentityStatus.REVOKED.value:
                 return (
                     "error",
@@ -299,7 +305,11 @@ class ChannelReadinessService:
                 "fails authentication and lands in spam without reporting an error.",
             )
 
-        if identity is not None:
+        if (
+            identity is not None
+            and identity.is_sendable
+            and (identity.provider != "ses" or settings.ses_clinic_sending_enabled)
+        ):
             return None
 
         # No per-clinic identity: fall back to the legacy address plus a provider

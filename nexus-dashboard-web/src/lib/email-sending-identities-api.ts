@@ -25,8 +25,12 @@ export interface EmailSendingIdentity {
     from_name: string | null
     reply_to_address: string | null
     status: EmailIdentityStatus
+    /** Explicit operator rollout state; verification alone does not enable sending. */
+    is_active: boolean
     /** Only a verified domain is actually used for sending. */
     is_sendable: boolean
+    can_activate: boolean
+    activation_blocker: string | null
     dns_records: EmailDnsRecord[]
     /** False means the records below still have to be published by hand. */
     dns_self_published: boolean
@@ -95,4 +99,20 @@ export async function provisionEmailSendingIdentity(body: {
 /** Super admin only. */
 export async function deleteEmailSendingIdentity(id: string): Promise<void> {
     await api.delete(`${BASE}/${id}`)
+}
+
+/** Super admin only. */
+export async function activateEmailSendingIdentity(
+    id: string,
+): Promise<EmailSendingIdentity> {
+    const { data } = await api.post<EmailSendingIdentity>(`${BASE}/${id}/activate`)
+    return data
+}
+
+/** Super admin only. */
+export async function deactivateEmailSendingIdentity(
+    id: string,
+): Promise<EmailSendingIdentity> {
+    const { data } = await api.post<EmailSendingIdentity>(`${BASE}/${id}/deactivate`)
+    return data
 }

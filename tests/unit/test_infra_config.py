@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import importlib.util
+import json
 import sys
 from pathlib import Path
 
@@ -35,6 +36,9 @@ def test_staging_config_loads_scale_controls() -> None:
     assert config.worker.queue_scale_up_depth == 25
     assert config.worker.queue_scale_down_depth == 2
     assert config.waf_count_oversize_body_requests is True
+    assert config.email.ses_sending_domain == "mail.staging.scalenexus.ai"
+    assert config.email.ses_sending_hosted_zone_name == "staging.scalenexus.ai"
+    assert config.email.ses_clinic_sending_enabled is False
 
     assert config.retention.clinical_record_days == 3650
     assert config.retention.minor_record_age_years == 28
@@ -49,3 +53,18 @@ def test_production_keeps_oversize_body_waf_blocking() -> None:
     config = load_config(INFRA_ROOT / "config" / "production.json")
 
     assert config.waf_count_oversize_body_requests is False
+
+
+def test_ses_activation_requires_a_sending_domain(tmp_path: Path) -> None:
+    source = json.loads((INFRA_ROOT / "config" / "staging.json").read_text())
+    source["email"]["sesClinicSendingEnabled"] = True
+    source["email"].pop("sesSendingDomain")
+    path = tmp_path / "invalid.json"
+    path.write_text(json.dumps(source))
+
+    try:
+        load_config(path)
+    except ValueError as exc:
+        assert "sesSendingDomain" in str(exc)
+    else:
+        raise AssertionError("enabled SES sending without a domain must fail")
