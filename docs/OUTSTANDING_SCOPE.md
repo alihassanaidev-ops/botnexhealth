@@ -2001,12 +2001,29 @@ outcomes.
 
 ### Current implementation status
 
-**Partially implemented.** Campaign reporting is real and working — enrolments, active runs,
-completions, failures, cancellations and suppressions, with daily roll-ups. Usage and cost tracking
-per clinic and per campaign also works, covering message volumes, call minutes and spend.
+**Delivered bar revenue.** Campaign reporting was already real and working — enrolments, active
+runs, completions, failures, cancellations and suppressions, with daily roll-ups, plus usage and
+cost tracking per clinic and per campaign.
 
-The three outcome figures above are not produced. Two have dependencies: recalls booked needs the
-booking step (Item 11), and enquiries qualified needs the Sales Qualification campaign (Item 24).
+**Recalls booked** and **enquiries qualified** now report per campaign per clinic, in the daily
+roll-up and on the campaign screen's **Outcomes** tab. Three things had to be fixed to make them
+true rather than merely present:
+
+- The sales and callback outcome vocabularies named `qualified`, `not_qualified`, `unreachable` and
+  `transferred`, but no roll-up column ever produced them, so each read as a real zero rather than
+  as a missing figure. They are columns now, and a test asserts every declared outcome key has one.
+- A booking made through a campaign link was counted twice — once as the run's terminal outcome and
+  once as the response event that caused it. Each run now counts once per outcome.
+- Terminal outcomes were dated by enrolment rather than completion, which is what allowed the two
+  halves of that pair to fall into different recompute windows.
+
+Because of the second and third points, historical roll-up rows keep their old figures until
+recomputed: run `python -m src.app.scripts.recompute_campaign_analytics --start <first-campaign-day>`
+after the migration.
+
+**Revenue attributed is not produced**, and is the only part still outstanding. It waits on the
+attribution rule (Decision A), not on code. The Outcomes tab states that the figure is absent and
+why, rather than showing a number that cannot be defended.
 
 ### Remaining work
 

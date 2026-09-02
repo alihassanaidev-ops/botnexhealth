@@ -347,3 +347,68 @@ describe("CampaignDetail executions tab", () => {
         )).toBeInTheDocument()
     })
 })
+
+describe("CampaignDetail outcome reporting", () => {
+    function renderPage() {
+        render(
+            <MemoryRouter initialEntries={["/campaigns/wf-1"]}>
+                <Routes>
+                    <Route path="/campaigns/:id" element={<CampaignDetail />} />
+                </Routes>
+            </MemoryRouter>,
+        )
+    }
+
+    it("reports the outcome under the label its campaign category gives it", async () => {
+        const user = userEvent.setup()
+        renderPage()
+
+        await screen.findByText("Recall campaign")
+        await user.click(screen.getByRole("tab", { name: "Outcomes" }))
+
+        // "Recall Booked", not an anonymous count — the figure is only useful
+        // when it names what the campaign was trying to achieve. It reads twice:
+        // once as a headline stat and once in the breakdown.
+        await waitFor(() =>
+            expect(screen.getAllByText("Recall Booked")).toHaveLength(2),
+        )
+        expect(screen.getByText("Patient booked from recall outreach.")).toBeInTheDocument()
+        expect(screen.getByText("25.0%")).toBeInTheDocument()
+    })
+
+    it("says why revenue is missing rather than showing an unexplained number", async () => {
+        const user = userEvent.setup()
+        renderPage()
+
+        await screen.findByText("Recall campaign")
+        await user.click(screen.getByRole("tab", { name: "Outcomes" }))
+
+        expect(
+            await screen.findByText(/Revenue attributed to this campaign is not reported yet/),
+        ).toBeInTheDocument()
+    })
+
+    it("keeps the campaign page usable when the rollup read fails", async () => {
+        const user = userEvent.setup()
+        analytics.mockRejectedValue(new Error("rollup unavailable"))
+        renderPage()
+
+        await screen.findByText("Recall campaign")
+        await user.click(screen.getByRole("tab", { name: "Outcomes" }))
+
+        expect(
+            await screen.findByText(/Outcome reporting is unavailable/),
+        ).toBeInTheDocument()
+        expect(errorToast).not.toHaveBeenCalled()
+    })
+
+    it("shows how stale the figures are, since they come from a daily rollup", async () => {
+        const user = userEvent.setup()
+        renderPage()
+
+        await screen.findByText("Recall campaign")
+        await user.click(screen.getByRole("tab", { name: "Outcomes" }))
+
+        expect(await screen.findByText(/rolled up/)).toBeInTheDocument()
+    })
+})
