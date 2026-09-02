@@ -175,6 +175,107 @@ async def test_first_name_shape_remains_supported(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_zero_full_name_matches_retries_with_first_name_dob_and_phone(
+    monkeypatch,
+    caplog,
+):
+    patient = _patient(
+        first_name="Shelley",
+        last_name="St. Julien",
+        dob="1970-05-05",
+        phone="+12269757455",
+    )
+    ctx = _ctx([])
+    ctx.adapter.search_patients.side_effect = [[], [patient]]
+    ctx.adapter.get_patient.return_value = patient
+
+    result = await _invoke(
+        monkeypatch,
+        ctx,
+        _verified_args(
+            name="Shelley St. Julian",
+            date_of_birth="1970-05-05",
+            phone_number="+1 226 975 7455",
+        ),
+    )
+
+    assert result["verification_status"] == "verified"
+    assert result["patient_id"] == "p1"
+    assert ctx.adapter.search_patients.await_count == 2
+    initial, retry = ctx.adapter.search_patients.await_args_list
+    assert initial.args[0] == "shelley st. julian"
+    assert initial.kwargs["name"] == "shelley st. julian"
+    assert retry.args[0] == "shelley"
+    assert retry.kwargs == {
+        "name": "shelley",
+        "email": None,
+        "phone_number": "+1 226 975 7455",
+        "date_of_birth": "1970-05-05",
+        "include": None,
+    }
+    assert "Shelley" not in caplog.text
+    assert "St. Julian" not in caplog.text
+    assert "1970-05-05" not in caplog.text
+    assert "2269757455" not in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_first_name_retry_still_denies_wrong_first_name(monkeypatch):
+    ctx = _ctx([])
+    ctx.adapter.search_patients.side_effect = [
+        [],
+        [_patient(first_name="Mallory", last_name="Julian")],
+    ]
+
+    result = await _invoke(
+        monkeypatch,
+        ctx,
+        _verified_args(name="Alice Julian"),
+    )
+
+    assert result == handlers._verification_failed_response()
+    assert ctx.adapter.search_patients.await_count == 2
+
+
+@pytest.mark.asyncio
+async def test_first_name_retry_still_denies_ambiguous_matches(monkeypatch):
+    ctx = _ctx([])
+    ctx.adapter.search_patients.side_effect = [
+        [],
+        [_patient(pid="p1"), _patient(pid="p2")],
+    ]
+
+    result = await _invoke(monkeypatch, ctx, _verified_args())
+
+    assert result == handlers._verification_failed_response()
+    assert ctx.adapter.search_patients.await_count == 2
+
+
+@pytest.mark.asyncio
+async def test_first_name_retry_requires_a_phone(monkeypatch):
+    ctx = _ctx([])
+
+    result = await _invoke(
+        monkeypatch,
+        ctx,
+        _verified_args(phone_number=None, email="alice@example.com"),
+    )
+
+    assert result == handlers._verification_failed_response()
+    assert ctx.adapter.search_patients.await_count == 1
+
+
+@pytest.mark.asyncio
+async def test_single_name_miss_is_not_retried(monkeypatch):
+    ctx = _ctx([])
+
+    result = await _invoke(monkeypatch, ctx, _verified_args(name="Alice"))
+
+    assert result == handlers._verification_failed_response()
+    assert ctx.adapter.search_patients.await_count == 1
+
+
+@pytest.mark.asyncio
 async def test_future_split_name_shape_is_supported(monkeypatch):
     ctx = _ctx([_patient()])
     args = _verified_args(name=None, first_name="Alice", last_name="Doe")

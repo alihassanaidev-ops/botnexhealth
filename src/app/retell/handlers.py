@@ -457,6 +457,22 @@ def _supplied_patient_name(args: dict[str, Any]) -> str | None:
     return _normalize_name_for_identity(split_name)
 
 
+def _supplied_patient_first_name(args: dict[str, Any]) -> str | None:
+    """Return the caller-stated first name for a narrow lookup retry.
+
+    Prefer the explicit future ``first_name`` field.  The current Retell tool
+    sends one combined ``name`` value, so fall back to its first whitespace-
+    separated component.  This value is never logged or returned.
+    """
+    explicit = _normalize_name_for_identity(args.get("first_name"))
+    if explicit:
+        return explicit
+    combined = _normalize_name_for_identity(args.get("name"))
+    if not combined:
+        return None
+    return combined.split(" ", 1)[0]
+
+
 def _verification_required_response(args: dict[str, Any]) -> dict[str, Any]:
     """Return a neutral response before any PMS search is attempted."""
     required_fields: list[str] = []
@@ -597,6 +613,8 @@ async def lookup_patient(args: dict[str, Any]) -> dict[str, Any]:
 
     supplied_name = _supplied_patient_name(args)
     query = supplied_name or ""
+    verification_args = args
+    match_strategy = "full_name"
 
     full_detail_include = [
         "upcoming_appts",
@@ -614,6 +632,32 @@ async def lookup_patient(args: dict[str, Any]) -> dict[str, Any]:
             date_of_birth=args.get("date_of_birth"),
             include=None,
         )
+        supplied_first_name = _supplied_patient_first_name(args)
+        if (
+            not patients
+            and supplied_first_name
+            and supplied_first_name != supplied_name
+            and _normalize_phone_for_identity(args.get("phone_number"))
+        ):
+            logger.info(
+                "Patient lookup retry attempted: "
+                "strategy=first_name_dob_phone initial_candidates=0"
+            )
+            patients = await ctx.adapter.search_patients(
+                supplied_first_name,
+                name=supplied_first_name,
+                email=args.get("email"),
+                phone_number=args.get("phone_number"),
+                date_of_birth=args.get("date_of_birth"),
+                include=None,
+            )
+            verification_args = {**args, "name": supplied_first_name}
+            match_strategy = "first_name_dob_phone"
+            logger.info(
+                "Patient lookup retry completed: "
+                "strategy=first_name_dob_phone candidates=%d",
+                len(patients),
+            )
     except Exception as e:
         logger.error(
             "Patient lookup failed: %s",
@@ -627,7 +671,7 @@ async def lookup_patient(args: dict[str, Any]) -> dict[str, Any]:
     verified_patients: list[Any] = []
     failure_reasons: list[str] = []
     for patient in patients:
-        passed, failure_reason = _identity_gate_passes(patient, args)
+        passed, failure_reason = _identity_gate_passes(patient, verification_args)
         if passed:
             verified_patients.append(patient)
         elif failure_reason:
@@ -656,6 +700,7 @@ async def lookup_patient(args: dict[str, Any]) -> dict[str, Any]:
                 "source": "retell_lookup_patient",
                 "detail_level": detail_level,
                 "identity_gate": "passed",
+                "match_strategy": match_strategy,
                 "search_criteria": _patient_lookup_criteria(args),
             },
         ):

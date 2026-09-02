@@ -306,7 +306,11 @@ binding is strictly **1 Retell agent ↔ 1 InstitutionLocation**.
 - **Identity gate:** `lookup_patient` requires the caller-stated patient name,
   date of birth, and an exact full phone number or email match before any patient
   ID is returned. Failed, missing, and ambiguous matches return the same neutral
-  no-data response.
+  no-data response. When a combined full-name search returns no candidates and
+  a full phone number was supplied, the backend retries once with the
+  caller-stated first name plus the same DOB and phone. The retry still requires
+  exactly one candidate and exact first-name, DOB, and full-phone verification;
+  it does not fuzzy-match or disclose whether a surname differed.
 - **GoTracker full lookup:** after that identity gate passes,
   `lookup_patient(detail_level="full")` queries the Synchronizer's appointment
   list for the verified `contactId` from the clinic-local current day onward,
