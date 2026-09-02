@@ -94,6 +94,7 @@ class NexHealthSubscriptionLifecycleService:
         *,
         callback_url: str | None = None,
         event_types: list[str] | None = None,
+        create_missing_remote: bool = True,
     ) -> dict[str, int]:
         """Ensure a local subscription row exists for every PMS-configured location.
 
@@ -139,6 +140,10 @@ class NexHealthSubscriptionLifecycleService:
         if callback_url:
             for members in grouped.values():
                 rows = [item[0] for item in members]
+                if not create_missing_remote and not any(
+                    row.provider_subscription_id for row in rows
+                ):
+                    continue
                 await self._ensure_remote_group(
                     rows=rows,
                     institution=members[0][1],

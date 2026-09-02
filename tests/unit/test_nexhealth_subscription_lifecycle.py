@@ -174,6 +174,32 @@ async def test_ensure_for_configured_locations_only_targets_nexhealth_institutio
 
 
 @pytest.mark.asyncio
+async def test_scheduled_ensure_does_not_create_unapproved_remote_connection():
+    location = SimpleNamespace(
+        id="loc-1", nexhealth_subdomain="practice", nexhealth_location_id="11"
+    )
+    institution = SimpleNamespace(id="inst-1")
+    result = MagicMock()
+    result.all.return_value = [(location, institution)]
+    svc = NexHealthSubscriptionLifecycleService(_session(result))
+    row = SimpleNamespace(
+        provider_subscription_id=None,
+        api_key_hash="hash-1",
+        credential_mode="platform",
+        status=NexHealthWebhookSubscriptionStatus.PENDING.value,
+    )
+    svc.ensure_location_subscription = AsyncMock(return_value=(row, True))
+    svc._ensure_remote_group = AsyncMock()
+
+    await svc.ensure_for_configured_locations(
+        callback_url="https://api.example.test/api/v1/nexhealth/webhooks/appointments",
+        create_missing_remote=False,
+    )
+
+    svc._ensure_remote_group.assert_not_awaited()
+
+
+@pytest.mark.asyncio
 async def test_configured_subscription_targets_only_returns_nexhealth_institutions():
     result = MagicMock()
     result.scalars.return_value.all.return_value = []

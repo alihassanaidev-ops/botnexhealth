@@ -383,9 +383,10 @@ The callback defaults to
 `<PUBLIC_API_URL>/api/v1/nexhealth/webhooks/appointments`; an explicit
 `NEXHEALTH_WEBHOOK_CALLBACK_URL` overrides it. The shared live route accepts the
 appointment, patient and sync-status event families. Celery's hourly ensure task
-uses the same grouped setup path as the UI. Once a managed endpoint exists, the
-receiver verifies its signature against the encrypted provider-returned secret;
-the secret is never returned to Super Admin.
+repairs only connections already created through the Super Admin action; it does
+not opt new institutions into provider webhooks. Once a managed endpoint exists,
+the receiver verifies its signature against the encrypted provider-returned
+secret; the secret is never returned to Super Admin.
 
 Required subscriptions are `appointment_insertion`, `appointment_created`,
 `appointment_updated`, `patient_created`, `patient_updated`,

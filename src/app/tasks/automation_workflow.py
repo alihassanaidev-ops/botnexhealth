@@ -1698,6 +1698,9 @@ async def _ensure_nexhealth_webhook_subscriptions_async() -> dict:
                 public_api_url=settings.public_api_url,
                 explicit_callback_url=settings.nexhealth_webhook_callback_url,
             ),
+            # Provider creation is an explicit Super Admin action. This task
+            # repairs connections that have already been approved.
+            create_missing_remote=False,
         )
         health = await svc.health_check()
         await session.commit()
