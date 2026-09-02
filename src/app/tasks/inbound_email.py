@@ -196,12 +196,16 @@ async def _handle_one(queue_message: dict, store) -> bool:  # noqa: ANN001
                 resumed_run_id, result.message.id,
             )
 
+        await _stop_other_automation_after_reply(session, result)
+
         if result.needs_staff_attention:
             await _hand_off(session, result)
 
         await session.commit()
 
-    if result.message.status == "routed":
+    if result.message.status == "routed" and not (
+        result.message.status_reason or ""
+    ).startswith("Body truncated"):
         # The body is now encrypted in the database; a second plaintext copy in
         # object storage widens the PHI footprint for no benefit.
         await asyncio.to_thread(store.delete, key)
@@ -305,12 +309,64 @@ async def _hand_off(session, result) -> None:  # noqa: ANN001
         conversation_thread_id=(
             str(message.conversation_thread_id) if message.conversation_thread_id else None
         ),
-        reason=f"email_{message.intent}",
+        reason=(
+            "reschedule_requested"
+            if message.intent == "reschedule"
+            else "clinical_question"
+            if message.intent == "question"
+            else "free_text"
+        ),
         status="open",
     )
     session.add(handoff)
     if result.thread is not None:
         result.thread.status = "handoff"
+
+
+async def _stop_other_automation_after_reply(session, result) -> int:  # noqa: ANN001
+    """Cancel follow-up runs after a human reply, preserving its owning run."""
+    message = result.message
+    if (
+        message.status != "routed"
+        or not message.contact_id
+        or not message.institution_id
+        or message.intent == "auto_reply"
+    ):
+        return 0
+
+    from sqlalchemy import select
+    from src.app.models.automation_workflow import AutomationRunStatus, AutomationWorkflowRun
+    from src.app.services.automation.enrollment_service import AutomationWorkflowEnrollmentService
+    from src.app.services.automation.scheduler_service import AutomationWorkflowSchedulerService
+    from src.app.services.email.inbox_settings_service import InboxSettingsService
+
+    configured = await InboxSettingsService(session).get(
+        str(message.institution_id),
+        str(message.location_id) if message.location_id else None,
+    )
+    if not configured.stop_automation_on_reply:
+        return 0
+
+    query = select(AutomationWorkflowRun).where(
+        AutomationWorkflowRun.institution_id == str(message.institution_id),
+        AutomationWorkflowRun.contact_id == str(message.contact_id),
+        AutomationWorkflowRun.status.in_(
+            (
+                AutomationRunStatus.PENDING.value,
+                AutomationRunStatus.RUNNING.value,
+                AutomationRunStatus.WAITING.value,
+            )
+        ),
+    )
+    if message.workflow_run_id:
+        query = query.where(AutomationWorkflowRun.id != str(message.workflow_run_id))
+    runs = list((await session.execute(query)).scalars().all())
+    scheduler = AutomationWorkflowSchedulerService(session)
+    enrollment = AutomationWorkflowEnrollmentService(session)
+    for run in runs:
+        await scheduler.cancel_timers_for_run(str(run.id))
+        await enrollment.cancel_run(run, reason="patient_replied_by_email")
+    return len(runs)
 
 
 @celery_app.task(
@@ -339,7 +395,8 @@ def _forward_to_clinic(self, *, inbound_message_id: str) -> dict:
 async def _forward_async(inbound_message_id: str) -> dict:
     from src.app.models.inbound_email_message import InboundEmailMessage
     from src.app.services.email.identity_service import EmailIdentityService
-    from src.app.services.email.sender import EmailMessage
+    from src.app.services.email.inbox_settings_service import InboxSettingsService
+    from src.app.services.email.sender import EmailMessage, EmailSendError
     from src.app.services.automation.email_node_executor import (
         get_patient_email_sender_for,
     )
@@ -374,7 +431,11 @@ async def _forward_async(inbound_message_id: str) -> dict:
             str(message.institution_id),
             str(message.location_id) if message.location_id else None,
         )
-        destination = identity.reply_to
+        inbox_settings = await InboxSettingsService(session).get(
+            str(message.institution_id),
+            str(message.location_id) if message.location_id else None,
+        )
+        destination = inbox_settings.forward_to
         if not destination or not identity.from_address:
             return {"skipped": "no clinic destination configured"}
 
@@ -389,22 +450,41 @@ async def _forward_async(inbound_message_id: str) -> dict:
         )
 
         sender = get_patient_email_sender_for(identity.provider)
-        await sender.send(
-            EmailMessage(
-                from_address=identity.from_address,
-                from_name=f"{identity.from_name or 'ScaleNexus'} (patient reply)",
-                to=[destination],
-                subject=f"Patient reply: {subject}",
-                text=body,
-                # The clinic's answer comes back through the router, so the
-                # thread stays complete instead of continuing off-record.
-                reply_to=_router_reply_to(message),
-                idempotency_key=f"forward:{message.id}",
-                institution_id=str(message.institution_id),
-                tenant_name=identity.tenant_name,
-                configuration_set=identity.configuration_set,
-            )
+        outbound = EmailMessage(
+            from_address=identity.from_address,
+            from_name=f"{identity.from_name or 'ScaleNexus'} (patient reply)",
+            to=[destination],
+            subject=f"Patient reply: {subject}",
+            text=body,
+            # The clinic's answer comes back through the router, so the
+            # thread stays complete instead of continuing off-record.
+            reply_to=_router_reply_to(message),
+            idempotency_key=f"forward:{message.id}",
+            institution_id=str(message.institution_id),
+            tenant_name=identity.tenant_name,
+            configuration_set=identity.configuration_set,
         )
+        try:
+            await sender.send(outbound)
+        except EmailSendError as exc:
+            # A transport failure may happen after SES accepted the message.
+            # Retrying that state can send the clinic two copies; leave the
+            # source message in the inbox and surface the uncertain result.
+            if exc.outcome_uncertain:
+                logger.error(
+                    "clinic forward outcome uncertain: inbound_message=%s error=%s",
+                    inbound_message_id,
+                    exc,
+                )
+                return {"uncertain": inbound_message_id}
+            raise
+        except Exception as exc:  # noqa: BLE001 — unknown means unknown outcome
+            logger.error(
+                "clinic forward outcome uncertain: inbound_message=%s error=%s",
+                inbound_message_id,
+                exc,
+            )
+            return {"uncertain": inbound_message_id}
         await session.commit()
     return {"forwarded": inbound_message_id}
 

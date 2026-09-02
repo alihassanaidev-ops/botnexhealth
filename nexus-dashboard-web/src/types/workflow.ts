@@ -341,6 +341,8 @@ export interface SendEmailNode {
     html_template?: string | null
     /** Key of a saved campaign email template owned by this institution. */
     template_key?: string | null
+    /** Approved clinic sender. Omit to inherit the location/practice default. */
+    sender_address_id?: string | null
     next_node_id: string
     respect_quiet_hours?: boolean
     max_attempts?: number

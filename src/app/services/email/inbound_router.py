@@ -29,12 +29,16 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from src.app.config import settings
 from src.app.models.campaign_conversation_thread import CampaignConversationThread
 from src.app.models.contact import Contact
+from src.app.models.contact_location_access import ContactLocationAccess
 from src.app.models.inbound_email_message import (
     InboundEmailIntent,
     InboundEmailMessage,
     InboundEmailStatus,
 )
 from src.app.models.institution import Institution
+from src.app.models.institution_location import InstitutionLocation
+from src.app.models.email_sending_identity import EmailSendingIdentity
+from src.app.services.email.inbox_settings_service import InboxSettingsService
 from src.app.services.email.inbound_parser import ParsedEmail, classify_intent
 from src.app.services.email.reply_address import ReplyRoute, find_reply_address, parse_reply_address
 from src.app.services.sms_privacy import hash_email
@@ -136,6 +140,58 @@ class InboundEmailRouter:
             return RoutingResult(message=message)
 
         message.institution_id = str(institution.id)
+        routing_domain = self._routing_domain(parsed)
+        if not await self._domain_belongs_to_institution(institution, routing_domain):
+            message.status = InboundEmailStatus.UNROUTABLE.value
+            message.status_reason = "Reply address domain does not belong to this clinic"
+            await self.session.flush()
+            return RoutingResult(message=message)
+
+        location = await self._resolve_location(institution, route) if route.is_inbox else None
+        if location is not None:
+            message.location_id = str(location.id)
+
+        # A direct inbox address is deliberately location-specific. If that
+        # signed location no longer exists (or its abbreviated id is
+        # ambiguous), inheriting the institution default would accept mail that
+        # has nowhere safe to land.
+        if route.is_inbox and location is None:
+            message.status = InboundEmailStatus.UNROUTABLE.value
+            message.status_reason = "Inbox address does not match a known location"
+            await self.session.flush()
+            return RoutingResult(message=message)
+
+        inbox_settings = (
+            await InboxSettingsService(self.session).get(
+                str(institution.id), str(location.id) if location else None
+            )
+            if route.is_inbox
+            else None
+        )
+        if (
+            route.is_inbox
+            and inbox_settings is not None
+            and (inbox_settings.inbound_domain or "").lower()
+            != (routing_domain or "").lower()
+        ):
+            message.status = InboundEmailStatus.UNROUTABLE.value
+            message.status_reason = "Inbox address was sent to the wrong clinic domain"
+            await self.session.flush()
+            return RoutingResult(message=message)
+        # Direct-to-clinic aliases are an explicit opt-in. Conversation reply
+        # tokens remain accepted after disabling so a patient replying to an
+        # older message is not silently lost.
+        if route.is_inbox and inbox_settings is not None and (
+            not inbox_settings.is_enabled or not inbox_settings.platform_ready
+        ):
+            message.status = InboundEmailStatus.UNROUTABLE.value
+            message.status_reason = (
+                "Clinic inbound email is disabled"
+                if not inbox_settings.is_enabled
+                else "Platform inbound email is not ready"
+            )
+            await self.session.flush()
+            return RoutingResult(message=message)
 
         # A flood on the catch-all is stored but not routed, so it cannot bury a
         # clinic's real conversations.
@@ -146,9 +202,33 @@ class InboundEmailRouter:
             return RoutingResult(message=message)
 
         contact = await self._resolve_contact(institution, route, parsed)
+        if (
+            contact is None
+            and route.is_inbox
+            and inbox_settings is not None
+            and inbox_settings.allow_new_contacts
+            and parsed.from_address
+        ):
+            contact = Contact(
+                institution_id=str(institution.id),
+                lead_source="email",
+                lead_status="new",
+            )
+            contact.email = parsed.from_address
+            self.session.add(contact)
+            await self.session.flush()
+            if location is not None:
+                self.session.add(
+                    ContactLocationAccess(
+                        institution_id=str(institution.id),
+                        contact_id=str(contact.id),
+                        location_id=str(location.id),
+                    )
+                )
         if contact is not None:
             message.contact_id = str(contact.id)
-            message.location_id = _first_id(contact, "location_id")
+            if not message.location_id:
+                message.location_id = _first_id(contact, "location_id")
             # The token proves which conversation, never who is writing.
             message.sender_mismatch = _addresses_differ(contact.email, parsed.from_address)
 
@@ -206,6 +286,27 @@ class InboundEmailRouter:
         address = find_reply_address(parsed.all_recipients)
         return parse_reply_address(address) if address else None
 
+    def _routing_domain(self, parsed: ParsedEmail) -> str | None:
+        address = find_reply_address(parsed.all_recipients)
+        if not address or "@" not in address:
+            return None
+        return address.rsplit("@", 1)[1].strip().lower().rstrip(".")
+
+    async def _domain_belongs_to_institution(
+        self, institution: Institution, domain: str | None
+    ) -> bool:
+        if not domain:
+            return False
+        if settings.ses_inbound_domain and domain == settings.ses_inbound_domain.lower():
+            return True
+        result = await self.session.execute(
+            select(EmailSendingIdentity.id).where(
+                EmailSendingIdentity.institution_id == institution.id,
+                func.lower(EmailSendingIdentity.inbound_domain) == domain,
+            )
+        )
+        return result.scalar_one_or_none() is not None
+
     async def _resolve_institution(self, route: ReplyRoute) -> Institution | None:
         """Match the institution by id prefix.
 
@@ -253,7 +354,7 @@ class InboundEmailRouter:
                 select(Contact)
                 .where(
                     Contact.institution_id == institution.id,
-                    func.lower(Contact.email) == parsed.from_address.lower(),
+                    Contact.email_hash == hash_email(parsed.from_address),
                 )
                 .limit(2)
             )
@@ -261,6 +362,20 @@ class InboundEmailRouter:
             if len(matches) == 1:
                 return matches[0]
         return None
+
+    async def _resolve_location(
+        self, institution: Institution, route: ReplyRoute
+    ) -> InstitutionLocation | None:
+        query = select(InstitutionLocation).where(
+            InstitutionLocation.institution_id == str(institution.id)
+        )
+        if route.location_prefix:
+            query = query.where(
+                _id_prefix_matches(InstitutionLocation.id, route.location_prefix)
+            )
+        result = await self.session.execute(query.limit(2))
+        matches = list(result.scalars().all())
+        return matches[0] if len(matches) == 1 else None
 
     async def _resolve_run(self, institution: Institution, route: ReplyRoute):  # noqa: ANN201
         """Find the workflow run the token points at, scoped to the institution."""
@@ -293,16 +408,23 @@ class InboundEmailRouter:
             # is nothing coherent to attach to. The message is still stored.
             return None
 
+        query = select(CampaignConversationThread).where(
+            CampaignConversationThread.institution_id == str(institution.id),
+            CampaignConversationThread.location_id == str(message.location_id),
+            CampaignConversationThread.contact_id == str(contact.id),
+            CampaignConversationThread.channel == "email",
+            CampaignConversationThread.status.in_(("open", "handoff")),
+        )
+        # A workflow reply belongs to that exact run. A direct email belongs to
+        # the location's cold-email thread. Mixing them makes a staff response
+        # appear in the wrong automation history.
+        query = query.where(
+            CampaignConversationThread.workflow_run_id == message.workflow_run_id
+            if message.workflow_run_id
+            else CampaignConversationThread.workflow_run_id.is_(None)
+        )
         result = await self.session.execute(
-            select(CampaignConversationThread)
-            .where(
-                CampaignConversationThread.institution_id == str(institution.id),
-                CampaignConversationThread.contact_id == str(contact.id),
-                CampaignConversationThread.channel == "email",
-                CampaignConversationThread.status.in_(("open", "handoff")),
-            )
-            .order_by(CampaignConversationThread.last_message_at.desc())
-            .limit(1)
+            query.order_by(CampaignConversationThread.last_message_at.desc()).limit(1)
         )
         thread = result.scalar_one_or_none()
 

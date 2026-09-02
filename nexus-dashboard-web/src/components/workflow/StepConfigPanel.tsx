@@ -54,6 +54,8 @@ import {
     listCampaignEmailTemplates,
     type CampaignEmailTemplate,
 } from "@/lib/campaign-email-templates-api"
+import { listEmailSendingIdentities, type EmailSenderAddress } from "@/lib/email-sending-identities-api"
+import { useInstitutionScope } from "@/hooks/useInstitutionScope"
 import {
     listPhoneCountryRegions,
     listPmsAppointmentStatuses,
@@ -1004,6 +1006,8 @@ function EmailFields({
     readOnly?: boolean
 }) {
     const [savedTemplates, setSavedTemplates] = useState<CampaignEmailTemplate[]>([])
+    const [senderAddresses, setSenderAddresses] = useState<EmailSenderAddress[]>([])
+    const institutionScope = useInstitutionScope()
     const usingSavedTemplate = Boolean(node.template_key)
 
     useEffect(() => {
@@ -1019,6 +1023,23 @@ function EmailFields({
             cancelled = true
         }
     }, [])
+
+    useEffect(() => {
+        if (!institutionScope.ready) return
+        let cancelled = false
+        listEmailSendingIdentities(institutionScope.institutionId)
+            .then((domains) => {
+                if (!cancelled) {
+                    setSenderAddresses(
+                        domains
+                            .filter((domain) => domain.is_active && domain.status === "verified")
+                            .flatMap((domain) => domain.addresses.filter((address) => address.is_active)),
+                    )
+                }
+            })
+            .catch(() => { if (!cancelled) setSenderAddresses([]) })
+        return () => { cancelled = true }
+    }, [institutionScope.ready, institutionScope.institutionId])
 
     // The backend rejects a node carrying both a template key and inline
     // content, so switching clears the other side rather than leaving a
@@ -1056,6 +1077,29 @@ function EmailFields({
 
     return (
         <>
+            <Field
+                label="Send from"
+                hint="Inherit uses the location default, then the practice default. A pinned address will never silently switch brands."
+            >
+                <Select
+                    value={node.sender_address_id ?? NONE}
+                    disabled={readOnly}
+                    onValueChange={(value) => onChange({
+                        ...node,
+                        sender_address_id: value === NONE ? null : value,
+                    })}
+                >
+                    <SelectTrigger><SelectValue /></SelectTrigger>
+                    <SelectContent>
+                        <SelectItem value={NONE}>Inherit default sender</SelectItem>
+                        {senderAddresses.map((address) => (
+                            <SelectItem key={address.id} value={address.id}>
+                                {address.from_address}{address.is_default ? " — default" : ""}
+                            </SelectItem>
+                        ))}
+                    </SelectContent>
+                </Select>
+            </Field>
             <Field
                 label="Send to"
                 hint={

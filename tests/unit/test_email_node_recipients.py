@@ -161,6 +161,7 @@ def _make_executor(contact=None, institution=None, location=None):
     from src.app.services.automation.email_node_executor import EmailNodeExecutor
 
     session = AsyncMock()
+    session.execute.return_value.scalar_one_or_none = MagicMock(return_value=None)
     runtime = AsyncMock()
 
     async def _get(model, pk):

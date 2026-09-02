@@ -23,12 +23,16 @@ from aws_cdk import (
     aws_events as events,
     aws_events_targets as events_targets,
     aws_iam as iam,
+    aws_kms as kms,
     aws_logs as logs,
     aws_rds as rds,
     aws_route53 as route53,
     aws_route53_targets as route53_targets,
     aws_s3 as s3,
+    aws_ses as ses,
+    aws_ses_actions as ses_actions,
     aws_secretsmanager as secretsmanager,
+    aws_sqs as sqs,
     aws_sns as sns,
     aws_sns_subscriptions as sns_subs,
     aws_wafv2 as wafv2,
@@ -139,6 +143,164 @@ class NexHealthPlatformStack(Stack):
                 self,
                 "SesSendingHostedZone",
                 domain_name=config.email.ses_sending_hosted_zone_name,
+            )
+
+        inbound_bucket: s3.Bucket | None = None
+        inbound_queue: sqs.Queue | None = None
+        inbound_dlq: sqs.Queue | None = None
+        if config.email.ses_inbound_enabled:
+            if not (
+                config.email.ses_inbound_domain
+                and config.email.ses_inbound_hosted_zone_name
+            ):
+                raise ValueError(
+                    "sesInboundDomain and sesInboundHostedZoneName are required "
+                    "when sesInboundEnabled is true"
+                )
+            if config.email.ses_region != config.region:
+                raise ValueError(
+                    "sesRegion must match the stack region when inbound email is enabled"
+                )
+            inbound_zone = route53.HostedZone.from_lookup(
+                self,
+                "SesInboundHostedZone",
+                domain_name=config.email.ses_inbound_hosted_zone_name,
+            )
+            inbound_identity = ses.EmailIdentity(
+                self,
+                "InboundEmailIdentity",
+                identity=ses.Identity.domain(config.email.ses_inbound_domain),
+            )
+            for index, (name, value) in enumerate(
+                (
+                    (inbound_identity.dkim_dns_token_name1, inbound_identity.dkim_dns_token_value1),
+                    (inbound_identity.dkim_dns_token_name2, inbound_identity.dkim_dns_token_value2),
+                    (inbound_identity.dkim_dns_token_name3, inbound_identity.dkim_dns_token_value3),
+                ),
+                start=1,
+            ):
+                # The DKIM name is a CloudFormation token that already resolves
+                # to an FQDN. CnameRecord cannot see that at synth time and
+                # appends the hosted-zone name a second time; use the L1 record
+                # so SES's exact returned hostname is published.
+                route53.CfnRecordSet(
+                    self,
+                    f"InboundEmailDkim{index}",
+                    hosted_zone_id=inbound_zone.hosted_zone_id,
+                    name=name,
+                    type="CNAME",
+                    resource_records=[value],
+                    ttl="1800",
+                )
+            route53.MxRecord(
+                self,
+                "InboundEmailMx",
+                zone=inbound_zone,
+                record_name=config.email.ses_inbound_domain,
+                values=[
+                    route53.MxRecordValue(
+                        host_name=f"inbound-smtp.{config.email.ses_region}.amazonaws.com",
+                        priority=10,
+                    )
+                ],
+            )
+
+            inbound_bucket = s3.Bucket(
+                self,
+                "InboundEmailBucket",
+                encryption=s3.BucketEncryption.S3_MANAGED,
+                block_public_access=s3.BlockPublicAccess.BLOCK_ALL,
+                enforce_ssl=True,
+                lifecycle_rules=[
+                    s3.LifecycleRule(
+                        id="expire-processed-and-orphaned-mail",
+                        enabled=True,
+                        expiration=Duration.days(7),
+                        abort_incomplete_multipart_upload_after=Duration.days(1),
+                    )
+                ],
+                removal_policy=RemovalPolicy.RETAIN,
+            )
+            inbound_dlq = sqs.Queue(
+                self,
+                "InboundEmailDeadLetterQueue",
+                encryption=sqs.QueueEncryption.SQS_MANAGED,
+                retention_period=Duration.days(14),
+            )
+            inbound_queue = sqs.Queue(
+                self,
+                "InboundEmailQueue",
+                encryption=sqs.QueueEncryption.SQS_MANAGED,
+                visibility_timeout=Duration.minutes(5),
+                retention_period=Duration.days(14),
+                dead_letter_queue=sqs.DeadLetterQueue(
+                    max_receive_count=5, queue=inbound_dlq
+                ),
+            )
+            inbound_notification_key = kms.Key(
+                self,
+                "InboundEmailNotificationKey",
+                enable_key_rotation=True,
+                removal_policy=RemovalPolicy.RETAIN,
+                description="Encrypts inbound SES receipt metadata carried through SNS",
+            )
+            inbound_notification_key.add_to_resource_policy(
+                iam.PolicyStatement(
+                    sid="AllowSesReceiptEncryption",
+                    effect=iam.Effect.ALLOW,
+                    principals=[iam.ServicePrincipal("ses.amazonaws.com")],
+                    actions=["kms:GenerateDataKey*", "kms:Decrypt"],
+                    resources=["*"],
+                    conditions={"StringEquals": {"aws:SourceAccount": self.account}},
+                )
+            )
+            inbound_topic = sns.Topic(
+                self,
+                "InboundEmailTopic",
+                master_key=inbound_notification_key,
+            )
+            inbound_publish_policy = inbound_topic.add_to_resource_policy(
+                iam.PolicyStatement(
+                    sid="AllowSesReceiptPublish",
+                    effect=iam.Effect.ALLOW,
+                    principals=[iam.ServicePrincipal("ses.amazonaws.com")],
+                    actions=["sns:Publish"],
+                    resources=[inbound_topic.topic_arn],
+                    conditions={"StringEquals": {"aws:SourceAccount": self.account}},
+                )
+            )
+            inbound_topic.add_subscription(sns_subs.SqsSubscription(inbound_queue))
+            receipt_rules = ses.ReceiptRuleSet(
+                self,
+                "InboundEmailReceiptRules",
+                receipt_rule_set_name=f"{config.app_name}-{config.environment_name}-inbound",
+            )
+            receipt_rule = receipt_rules.add_rule(
+                "StoreAndNotify",
+                # Catch every SES-verified receiving identity in this account:
+                # the platform fallback plus clinic-owned reply subdomains.
+                # Application routing still requires a signed token and checks
+                # custom recipient-domain ownership before tenant attribution.
+                scan_enabled=True,
+                tls_policy=ses.TlsPolicy.REQUIRE,
+                actions=[
+                    ses_actions.S3(
+                        bucket=inbound_bucket,
+                        object_key_prefix=config.email.ses_inbound_prefix,
+                        topic=inbound_topic,
+                    )
+                ],
+            )
+            if inbound_publish_policy.policy_dependable is not None:
+                receipt_rule.node.add_dependency(
+                    inbound_publish_policy.policy_dependable
+                )
+            # SES validates access to the notification topic while creating a
+            # receipt rule. Make the generated L1 dependency explicit; a normal
+            # ARN reference orders the topic itself but not its resource policy.
+            topic_policy = inbound_topic.node.find_child("Policy")
+            receipt_rule.node.default_child.add_dependency(
+                topic_policy.node.default_child
             )
 
         jwt_secret = secretsmanager.Secret(
@@ -334,6 +496,8 @@ class NexHealthPlatformStack(Stack):
             database_host_for_runtime,
             database.db_instance_endpoint_port,
             ses_sending_zone.hosted_zone_id if ses_sending_zone else None,
+            inbound_bucket,
+            inbound_queue,
         )
         runtime_secrets = self._build_app_runtime_secrets(
             jwt_secret,
@@ -607,6 +771,7 @@ class NexHealthPlatformStack(Stack):
                     actions=[
                         "ses:CreateEmailIdentity",
                         "ses:GetEmailIdentity",
+                        "ses:PutEmailIdentityMailFromAttributes",
                         "ses:DeleteEmailIdentity",
                         "ses:CreateConfigurationSet",
                         "ses:DeleteConfigurationSet",
@@ -639,6 +804,9 @@ class NexHealthPlatformStack(Stack):
                         ],
                     )
                 )
+        if inbound_bucket is not None and inbound_queue is not None:
+            inbound_bucket.grant_read_write(worker_task_definition.task_role)
+            inbound_queue.grant_consume_messages(worker_task_definition.task_role)
         worker_scaling = worker_service.auto_scale_task_count(
             min_capacity=config.worker.min_count,
             max_capacity=config.worker.max_count,
@@ -987,10 +1155,20 @@ class NexHealthPlatformStack(Stack):
             worker_service=worker_service,
             database=database,
             audit_failure_filter=audit_failure_filter,
+            inbound_queue=inbound_queue,
+            inbound_dlq=inbound_dlq,
         )
         api_url = self._api_base_url(api_service)
 
         CfnOutput(self, "ClusterName", value=cluster.cluster_name)
+        if inbound_bucket is not None and inbound_queue is not None:
+            CfnOutput(self, "InboundEmailBucketName", value=inbound_bucket.bucket_name)
+            CfnOutput(self, "InboundEmailQueueUrl", value=inbound_queue.queue_url)
+            CfnOutput(
+                self,
+                "InboundEmailDomain",
+                value=config.email.ses_inbound_domain or "",
+            )
         CfnOutput(self, "ApiBaseUrl", value=api_url)
         CfnOutput(
             self,
@@ -1066,6 +1244,8 @@ class NexHealthPlatformStack(Stack):
         database_host: str,
         database_port: str,
         ses_sending_hosted_zone_id: str | None,
+        inbound_bucket: s3.Bucket | None,
+        inbound_queue: sqs.Queue | None,
     ) -> dict[str, str]:
         cors_origins = list(self.config.cors_allowed_origins)
         if frontend_bundle_url and frontend_bundle_url not in cors_origins:
@@ -1119,6 +1299,10 @@ class NexHealthPlatformStack(Stack):
         }
         if self.config.email.ses_sending_domain:
             environment["SES_SENDING_DOMAIN"] = self.config.email.ses_sending_domain
+        if self.config.email.ses_inbound_domain and inbound_bucket and inbound_queue:
+            environment["SES_INBOUND_DOMAIN"] = self.config.email.ses_inbound_domain
+            environment["SES_INBOUND_BUCKET"] = inbound_bucket.bucket_name
+            environment["SES_INBOUND_QUEUE_URL"] = inbound_queue.queue_url
         if ses_sending_hosted_zone_id:
             environment["SES_SENDING_HOSTED_ZONE_ID"] = ses_sending_hosted_zone_id
         if self.config.api.web_concurrency:
@@ -1634,6 +1818,8 @@ class NexHealthPlatformStack(Stack):
         worker_service: ecs.FargateService,
         database: rds.DatabaseInstance,
         audit_failure_filter: logs.MetricFilter,
+        inbound_queue: sqs.Queue | None,
+        inbound_dlq: sqs.Queue | None,
     ) -> None:
         """Provision a SNS topic + CloudWatch alarms.
 
@@ -1916,6 +2102,36 @@ class NexHealthPlatformStack(Stack):
             ),
         )
         breaker_alarm.add_alarm_action(action)
+
+        if inbound_queue is not None:
+            inbound_age = cloudwatch.Alarm(
+                self,
+                "InboundEmailQueueAgeAlarm",
+                metric=inbound_queue.metric_approximate_age_of_oldest_message(
+                    period=Duration.minutes(5)
+                ),
+                threshold=600,
+                evaluation_periods=2,
+                datapoints_to_alarm=2,
+                comparison_operator=cloudwatch.ComparisonOperator.GREATER_THAN_THRESHOLD,
+                treat_missing_data=cloudwatch.TreatMissingData.NOT_BREACHING,
+                alarm_description="Inbound patient email has waited more than 10 minutes.",
+            )
+            inbound_age.add_alarm_action(action)
+        if inbound_dlq is not None:
+            inbound_dead_letters = cloudwatch.Alarm(
+                self,
+                "InboundEmailDeadLetterAlarm",
+                metric=inbound_dlq.metric_approximate_number_of_messages_visible(
+                    period=Duration.minutes(5)
+                ),
+                threshold=1,
+                evaluation_periods=1,
+                comparison_operator=cloudwatch.ComparisonOperator.GREATER_THAN_OR_EQUAL_TO_THRESHOLD,
+                treat_missing_data=cloudwatch.TreatMissingData.NOT_BREACHING,
+                alarm_description="An inbound patient email could not be processed after retries.",
+            )
+            inbound_dead_letters.add_alarm_action(action)
 
         CfnOutput(self, "AlarmTopicArn", value=topic.topic_arn)
 

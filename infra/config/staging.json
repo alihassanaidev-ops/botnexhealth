@@ -29,6 +29,9 @@
     "sesSendingHostedZoneName": "staging.scalenexus.ai",
     "sesClinicSendingEnabled": false,
     "sesConfigurationSetPrefix": "scalenexus",
+    "sesInboundEnabled": true,
+    "sesInboundDomain": "inbound.staging.scalenexus.ai",
+    "sesInboundHostedZoneName": "staging.scalenexus.ai",
     "sesInboundPrefix": "inbound/",
     "inboundEmailMaxBodyBytes": 256000,
     "inboundEmailSenderHourlyLimit": 60

@@ -1,732 +1,209 @@
-/**
- * Email sending identity — the address patients see mail from.
- *
- * The page is deliberately blunt about verification state. An unverified
- * domain does not fail loudly: it sends, lands in spam, and reports nothing.
- * So an unverified identity is shown as a problem to act on, not as a neutral
- * "pending" chip that reads like progress.
- */
-import { useCallback, useEffect, useState } from "react"
-import {
-    AlertTriangle,
-    Check,
-    Copy,
-    Loader2,
-    MailCheck,
-    Plus,
-    Power,
-    PowerOff,
-    RefreshCw,
-    Save,
-    Trash2,
-} from "lucide-react"
+import { useCallback, useEffect, useMemo, useState } from "react"
+import { Check, Copy, Loader2, MailCheck, Plus, Power, PowerOff, RefreshCw, Save, Trash2 } from "lucide-react"
 import { toast } from "sonner"
 
 import { PageHeader } from "@/components/PageHeader"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
-import {
-    Dialog,
-    DialogContent,
-    DialogDescription,
-    DialogFooter,
-    DialogHeader,
-    DialogTitle,
-} from "@/components/ui/dialog"
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
-import {
-    Select,
-    SelectContent,
-    SelectItem,
-    SelectTrigger,
-    SelectValue,
-} from "@/components/ui/select"
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { CardsSkeleton } from "@/components/ui/skeletons"
 import { useInstitutionScope } from "@/hooks/useInstitutionScope"
 import { listAdminInstitutionLocations } from "@/lib/admin-api"
 import {
     activateEmailSendingIdentity,
+    activateInboundDomain,
+    createEmailSenderAddress,
     deactivateEmailSendingIdentity,
+    deactivateInboundDomain,
+    deleteEmailSenderAddress,
     deleteEmailSendingIdentity,
     listEmailSendingIdentities,
+    makeEmailSenderAddressDefault,
     provisionEmailSendingIdentity,
-    updateEmailSendingIdentity,
+    updateEmailSenderAddress,
     verifyEmailSendingIdentity,
-    type EmailIdentityStatus,
-    type EmailSendingIdentity as Identity,
+    type EmailSenderAddress,
+    type EmailSendingIdentity,
 } from "@/lib/email-sending-identities-api"
-import type { Location } from "@/types"
+import { listInstitutionPortalLocations } from "@/lib/institution-portal-api"
 
-const INSTITUTION_SCOPE = "__institution__"
+const PRACTICE = "__practice__"
 
-const STATUS_META: Record<
-    EmailIdentityStatus,
-    { label: string; tone: "ok" | "warn" | "bad"; explain: string }
-> = {
-    verified: {
-        label: "Verified",
-        tone: "ok",
-        explain: "The sending domain is authenticated.",
-    },
-    pending_dns: {
-        label: "Waiting on DNS",
-        tone: "warn",
-        explain:
-            "The records below have not been published yet. Until they are, email cannot be sent from this address.",
-    },
-    verifying: {
-        label: "Verifying",
-        tone: "warn",
-        explain:
-            "Records published — waiting for them to propagate. This usually takes a few minutes.",
-    },
-    failed: {
-        label: "Not verified",
-        tone: "bad",
-        explain:
-            "Verification did not complete. Email is being sent from the platform address instead.",
-    },
-    revoked: {
-        label: "Stopped verifying",
-        tone: "bad",
-        explain:
-            "This domain was verified and no longer is — the DNS records may have been removed. Email is falling back to the platform address.",
-    },
-}
-
-function errorMessage(err: unknown, fallback: string): string {
-    const detail = (err as { response?: { data?: { detail?: unknown } } })?.response?.data
-        ?.detail
-    return typeof detail === "string" ? detail : fallback
-}
-
-function StatusBadge({ status }: { status: EmailIdentityStatus }) {
-    const meta = STATUS_META[status]
-    if (meta.tone === "ok") {
-        return (
-            <Badge className="bg-emerald-100 text-emerald-800 dark:bg-emerald-950/50 dark:text-emerald-300">
-                {meta.label}
-            </Badge>
-        )
-    }
-    return (
-        <Badge variant={meta.tone === "bad" ? "destructive" : "secondary"}>
-            {meta.label}
-        </Badge>
-    )
+function detail(err: unknown, fallback: string) {
+    const value = (err as { response?: { data?: { detail?: unknown } } })?.response?.data?.detail
+    return typeof value === "string" ? value : fallback
 }
 
 export default function EmailSendingIdentityPage() {
-    const [identities, setIdentities] = useState<Identity[]>([])
+    const { institutionId, ready, picker, selectedInstitution, isPlatformAdmin } = useInstitutionScope()
+    const [domains, setDomains] = useState<EmailSendingIdentity[]>([])
+    const [locations, setLocations] = useState<Array<{ id: string; name: string }>>([])
     const [loading, setLoading] = useState(true)
-    const [busyId, setBusyId] = useState<string | null>(null)
-    const [drafts, setDrafts] = useState<
-        Record<string, { from_name: string; reply_to_address: string }>
-    >({})
+    const [busy, setBusy] = useState<string | null>(null)
     const [copied, setCopied] = useState<string | null>(null)
-    const [locations, setLocations] = useState<Location[]>([])
-    const [provisionOpen, setProvisionOpen] = useState(false)
-    const [provisioning, setProvisioning] = useState(false)
-    const [provisionScope, setProvisionScope] = useState(INSTITUTION_SCOPE)
-    const [newFromName, setNewFromName] = useState("")
-    const [newReplyTo, setNewReplyTo] = useState("")
-    const [newLocalPart, setNewLocalPart] = useState("hello")
-    const [deleteTarget, setDeleteTarget] = useState<Identity | null>(null)
-
-    // A platform admin administers any practice and picks which; a clinic
-    // admin has no choice to make and never sees the picker.
-    const {
-        institutionId,
-        ready,
-        picker,
-        selectedInstitution,
-        isPlatformAdmin,
-    } = useInstitutionScope()
-
-    useEffect(() => {
-        if (!isPlatformAdmin || !selectedInstitution) {
-            setLocations([])
-            return
-        }
-        let cancelled = false
-        listAdminInstitutionLocations(selectedInstitution.slug)
-            .then((rows) => {
-                if (!cancelled) setLocations(rows.filter((row) => row.is_active))
-            })
-            .catch(() => {
-                if (!cancelled) toast.error("Failed to load practice locations")
-            })
-        return () => {
-            cancelled = true
-        }
-    }, [isPlatformAdmin, selectedInstitution])
+    const [domainOpen, setDomainOpen] = useState(false)
+    const [addressDomain, setAddressDomain] = useState<EmailSendingIdentity | null>(null)
+    const [deleteDomain, setDeleteDomain] = useState<EmailSendingIdentity | null>(null)
+    const [deleteAddress, setDeleteAddress] = useState<EmailSenderAddress | null>(null)
+    const [domainName, setDomainName] = useState("")
+    const [inboundDomain, setInboundDomain] = useState("")
+    const [scope, setScope] = useState(PRACTICE)
+    const [localPart, setLocalPart] = useState("appointments")
+    const [fromName, setFromName] = useState("")
+    const [externalReplyTo, setExternalReplyTo] = useState("")
+    const [drafts, setDrafts] = useState<Record<string, { from_name: string; external_reply_to: string }>>({})
 
     const load = useCallback(async () => {
-        if (!ready) {
-            setIdentities([])
-            setLoading(false)
-            return
-        }
+        if (!ready) return setLoading(false)
         setLoading(true)
         try {
-            const list = await listEmailSendingIdentities(institutionId)
-            setIdentities(list)
-            setDrafts(
-                Object.fromEntries(
-                    list.map((i) => [
-                        i.id,
-                        {
-                            from_name: i.from_name ?? "",
-                            reply_to_address: i.reply_to_address ?? "",
-                        },
-                    ]),
-                ),
-            )
-        } catch {
-            toast.error("Failed to load sending identities")
+            const rows = await listEmailSendingIdentities(institutionId)
+            setDomains(rows)
+            setDrafts(Object.fromEntries(rows.flatMap((domain) => domain.addresses.map((address) => [address.id, {
+                from_name: address.from_name ?? "",
+                external_reply_to: address.external_reply_to ?? "",
+            }]))))
+        } catch (err) {
+            toast.error(detail(err, "Could not load email domains"))
         } finally {
             setLoading(false)
         }
-    }, [ready, institutionId])
+    }, [institutionId, ready])
 
+    useEffect(() => { void load() }, [load])
     useEffect(() => {
-        void load()
-    }, [load])
+        if (!ready) return
+        const request = isPlatformAdmin && selectedInstitution
+            ? listAdminInstitutionLocations(selectedInstitution.slug)
+            : listInstitutionPortalLocations()
+        request.then((rows) => setLocations(rows.map((row) => ({ id: row.id, name: row.name })))).catch(() => setLocations([]))
+    }, [isPlatformAdmin, ready, selectedInstitution])
 
-    const replaceIdentity = (updated: Identity) =>
-        setIdentities((prev) => prev.map((i) => (i.id === updated.id ? updated : i)))
-
-    const recheck = async (identity: Identity) => {
-        setBusyId(identity.id)
-        try {
-            const updated = await verifyEmailSendingIdentity(identity.id, institutionId)
-            replaceIdentity(updated)
-            toast[updated.is_sendable ? "success" : "message"](
-                STATUS_META[updated.status].label,
-                { description: STATUS_META[updated.status].explain },
-            )
-        } catch (err) {
-            toast.error(errorMessage(err, "Could not check verification"))
-        } finally {
-            setBusyId(null)
-        }
+    const resetAddress = (domain?: EmailSendingIdentity) => {
+        setAddressDomain(domain ?? null)
+        setScope(PRACTICE)
+        setLocalPart("appointments")
+        setFromName(selectedInstitution?.name ?? "")
+        setExternalReplyTo("")
     }
 
-    const save = async (identity: Identity) => {
-        const draft = drafts[identity.id]
-        setBusyId(identity.id)
-        try {
-            const updated = await updateEmailSendingIdentity(
-                identity.id,
-                {
-                    from_name: draft.from_name.trim() || null,
-                    reply_to_address: draft.reply_to_address.trim() || null,
-                },
-                institutionId,
-            )
-            replaceIdentity(updated)
-            toast.success("Saved")
-        } catch (err) {
-            toast.error(errorMessage(err, "Could not save"))
-        } finally {
-            setBusyId(null)
-        }
-    }
-
-    const openProvision = () => {
-        const institutionExists = identities.some((identity) => !identity.location_id)
-        const firstAvailableLocation = locations.find(
-            (location) =>
-                !identities.some((identity) => identity.location_id === location.id),
-        )
-        const scope = institutionExists
-            ? (firstAvailableLocation?.id ?? INSTITUTION_SCOPE)
-            : INSTITUTION_SCOPE
-        setProvisionScope(scope)
-        setNewFromName(
-            scope === INSTITUTION_SCOPE
-                ? (selectedInstitution?.name ?? "")
-                : (firstAvailableLocation?.name ?? ""),
-        )
-        setNewReplyTo("")
-        setNewLocalPart("hello")
-        setProvisionOpen(true)
-    }
-
-    const changeProvisionScope = (scope: string) => {
-        setProvisionScope(scope)
-        setNewFromName(
-            scope === INSTITUTION_SCOPE
-                ? (selectedInstitution?.name ?? "")
-                : (locations.find((location) => location.id === scope)?.name ?? ""),
-        )
+    const openDomain = () => {
+        setDomainName("")
+        setInboundDomain("")
+        resetAddress()
+        setDomainOpen(true)
     }
 
     const provision = async () => {
         if (!institutionId) return
-        setProvisioning(true)
+        setBusy("provision")
         try {
             await provisionEmailSendingIdentity({
                 institution_id: institutionId,
-                location_id:
-                    provisionScope === INSTITUTION_SCOPE ? null : provisionScope,
-                from_name: newFromName.trim() || null,
-                reply_to_address: newReplyTo.trim() || null,
-                local_part: newLocalPart.trim(),
+                location_id: scope === PRACTICE ? null : scope,
+                domain: domainName.trim() || null,
+                inbound_domain: inboundDomain.trim() || null,
+                local_part: localPart.trim(),
+                from_name: fromName.trim() || null,
+                reply_to_address: externalReplyTo.trim() || null,
             })
-            setProvisionOpen(false)
-            toast.success("Sending address provisioned", {
-                description:
-                    "DNS verification runs automatically. Live sending remains off until explicitly activated.",
-            })
+            setDomainOpen(false)
+            toast.success("Domain registered", { description: "Publish the displayed DNS records, then verify and activate it." })
             await load()
-        } catch (err) {
-            toast.error(errorMessage(err, "Could not provision sending address"))
-        } finally {
-            setProvisioning(false)
-        }
+        } catch (err) { toast.error(detail(err, "Could not register domain")) }
+        finally { setBusy(null) }
     }
 
-    const setActive = async (identity: Identity, active: boolean) => {
-        setBusyId(identity.id)
+    const addAddress = async () => {
+        if (!addressDomain) return
+        setBusy("add-address")
         try {
-            const updated = active
-                ? await activateEmailSendingIdentity(identity.id)
-                : await deactivateEmailSendingIdentity(identity.id)
-            replaceIdentity(updated)
-            toast.success(active ? "SES sending activated" : "SES sending deactivated", {
-                description: active
-                    ? "New workflow email for this scope now uses this address."
-                    : "Workflow email now falls back to the platform address.",
+            await createEmailSenderAddress(addressDomain.id, {
+                location_id: scope === PRACTICE ? null : scope,
+                local_part: localPart.trim(),
+                from_name: fromName.trim() || null,
+                external_reply_to: externalReplyTo.trim() || null,
             })
-        } catch (err) {
-            toast.error(errorMessage(err, `Could not ${active ? "activate" : "deactivate"}`))
-        } finally {
-            setBusyId(null)
-        }
+            setAddressDomain(null)
+            toast.success("Sender address added")
+            await load()
+        } catch (err) { toast.error(detail(err, "Could not add sender address")) }
+        finally { setBusy(null) }
     }
 
-    const remove = async () => {
-        if (!deleteTarget) return
-        setBusyId(deleteTarget.id)
-        try {
-            await deleteEmailSendingIdentity(deleteTarget.id)
-            setDeleteTarget(null)
-            toast.success("Sending address removed")
-            await load()
-        } catch (err) {
-            toast.error(errorMessage(err, "Could not remove sending address"))
-        } finally {
-            setBusyId(null)
-        }
+    const act = async (key: string, action: () => Promise<unknown>, success: string) => {
+        setBusy(key)
+        try { await action(); toast.success(success); await load() }
+        catch (err) { toast.error(detail(err, "Could not update email setup")) }
+        finally { setBusy(null) }
     }
 
     const copy = async (value: string, key: string) => {
-        try {
-            await navigator.clipboard.writeText(value)
-            setCopied(key)
-            setTimeout(() => setCopied(null), 1500)
-        } catch {
-            toast.error("Could not copy to clipboard")
-        }
+        await navigator.clipboard.writeText(value)
+        setCopied(key)
+        window.setTimeout(() => setCopied(null), 1200)
     }
 
-    const hasAvailableProvisionScope =
-        !identities.some((identity) => !identity.location_id) ||
-        locations.some(
-            (location) =>
-                !identities.some((identity) => identity.location_id === location.id),
-        )
+    const scopeName = (address: EmailSenderAddress) => address.location_id
+        ? locations.find((location) => location.id === address.location_id)?.name ?? "Location"
+        : "Practice default"
 
+    const activeAddresses = useMemo(() => domains.flatMap((domain) => domain.addresses).filter((a) => a.is_active), [domains])
     if (loading) return <CardsSkeleton />
 
-    return (
-        <div className="space-y-6">
-            <PageHeader
-                icon={MailCheck}
-                title="Email Sending Address"
-                description="The address patients see when your clinic emails them."
-            />
+    return <div className="space-y-6">
+        <PageHeader icon={MailCheck} title="Email domains & addresses" description="Clinic-owned domains, receiving subdomains, and the addresses workflows can use." />
+        {picker}
+        {ready && <div className="flex flex-wrap items-center justify-between gap-3 rounded-md border bg-muted/20 px-4 py-3">
+            <div><p className="text-sm font-medium">{domains.length} domain{domains.length === 1 ? "" : "s"}, {activeAddresses.length} active sender address{activeAddresses.length === 1 ? "" : "es"}</p><p className="text-xs text-muted-foreground">Locations inherit the practice default unless a location default is selected.</p></div>
+            {isPlatformAdmin && <Button onClick={openDomain}><Plus className="mr-2 h-4 w-4" />Register domain</Button>}
+        </div>}
 
-            {picker}
+        {ready && domains.length === 0 && <Card><CardContent className="py-10 text-center text-sm text-muted-foreground">No clinic domain is registered. Workflow email uses the ScaleNexus fallback until a platform administrator registers one.</CardContent></Card>}
 
-            {ready && isPlatformAdmin && (
-                <div className="flex items-center justify-between gap-3 rounded-md border border-border bg-muted/20 px-4 py-3">
-                    <div>
-                        <p className="text-sm font-medium">Platform-managed email identity</p>
-                        <p className="text-xs text-muted-foreground">
-                            Provisioning and verification do not change live sending until you activate it.
-                        </p>
-                    </div>
-                    <Button onClick={openProvision} disabled={!hasAvailableProvisionScope}>
-                        <Plus className="mr-2 h-4 w-4" />
-                        Add sending address
-                    </Button>
-                </div>
-            )}
+        {domains.map((domain) => {
+            const records = [...domain.dns_records, ...domain.inbound_dns_records]
+            return <Card key={domain.id}>
+                <CardHeader className="pb-3"><div className="flex flex-wrap items-start justify-between gap-3"><div><CardTitle className="text-base font-mono">{domain.domain}</CardTitle><p className="mt-1 text-xs text-muted-foreground">{domain.inbound_domain ? `Replies: ${domain.inbound_domain}` : "Uses the ScaleNexus reply domain unless an external Reply-To is set."}</p></div><div className="flex gap-2"><Badge variant={domain.status === "verified" ? "default" : "secondary"}>{domain.status.replace(/_/g, " ")}</Badge><Badge variant={domain.is_active ? "default" : "outline"}>{domain.is_active ? "Sending active" : "Standby"}</Badge>{domain.inbound_domain && <Badge variant={domain.inbound_enabled ? "default" : "outline"}>{domain.inbound_enabled ? "Receiving active" : "Receiving standby"}</Badge>}</div></div></CardHeader>
+                <CardContent className="space-y-5">
+                    {records.length > 0 && <div className="space-y-2"><Label>DNS records</Label><div className="overflow-x-auto rounded-md border"><table className="w-full text-xs"><thead className="bg-muted/50"><tr><th className="px-2 py-1.5 text-left">Purpose</th><th className="px-2 py-1.5 text-left">Type</th><th className="px-2 py-1.5 text-left">Name</th><th className="px-2 py-1.5 text-left">Value</th><th /></tr></thead><tbody>{records.map((record, index) => <tr className="border-t" key={`${record.name}-${record.type}-${index}`}><td className="px-2 py-1.5 capitalize">{record.purpose.replace(/_/g, " ")}</td><td className="px-2 py-1.5 font-mono">{record.type}</td><td className="px-2 py-1.5 font-mono break-all">{record.name}</td><td className="px-2 py-1.5 font-mono break-all">{record.value}</td><td className="px-2"><button onClick={() => void copy(record.value, `${domain.id}-${index}`)}>{copied === `${domain.id}-${index}` ? <Check className="h-3.5 w-3.5" /> : <Copy className="h-3.5 w-3.5" />}</button></td></tr>)}</tbody></table></div></div>}
 
-            {!ready && (
-                <Card>
-                    <CardContent className="py-10 text-center text-sm text-muted-foreground">
-                        Choose a practice to see its sending address.
-                    </CardContent>
-                </Card>
-            )}
+                    <div className="space-y-3"><div className="flex items-center justify-between"><Label>Sender addresses</Label><Button variant="outline" size="sm" onClick={() => resetAddress(domain)}><Plus className="mr-1 h-3.5 w-3.5" />Add address</Button></div>{domain.addresses.length === 0 && <p className="text-sm text-muted-foreground">No addresses use this domain yet.</p>}{domain.addresses.map((address) => {
+                        const draft = drafts[address.id] ?? { from_name: "", external_reply_to: "" }
+                        return <div key={address.id} className="space-y-3 rounded-md border p-3"><div className="flex flex-wrap items-center justify-between gap-2"><div><p className="font-mono text-sm">{address.from_address}</p><p className="text-xs text-muted-foreground">{scopeName(address)}</p></div><div className="flex gap-2">{address.is_default && <Badge>Default</Badge>}<Badge variant={address.is_active ? "outline" : "secondary"}>{address.is_active ? "Enabled" : "Disabled"}</Badge></div></div><div className="grid gap-3 md:grid-cols-2"><div><Label>Display name</Label><Input value={draft.from_name} onChange={(e) => setDrafts((all) => ({ ...all, [address.id]: { ...draft, from_name: e.target.value } }))} /></div><div><Label>External Reply-To (optional)</Label><Input type="email" placeholder="Leave blank for managed inbox" value={draft.external_reply_to} onChange={(e) => setDrafts((all) => ({ ...all, [address.id]: { ...draft, external_reply_to: e.target.value } }))} /></div></div><div className="flex flex-wrap gap-2"><Button size="sm" onClick={() => void act(`save-${address.id}`, () => updateEmailSenderAddress(address.id, { from_name: draft.from_name || null, external_reply_to: draft.external_reply_to || null }), "Address saved")} disabled={busy === `save-${address.id}`}><Save className="mr-1 h-3.5 w-3.5" />Save</Button>{!address.is_default && <Button size="sm" variant="outline" onClick={() => void act(`default-${address.id}`, () => makeEmailSenderAddressDefault(address.id), "Default sender changed")}>Make default</Button>}<Button size="sm" variant="outline" disabled={address.is_default} onClick={() => void act(`toggle-${address.id}`, () => updateEmailSenderAddress(address.id, { is_active: !address.is_active }), address.is_active ? "Address disabled" : "Address enabled")}>{address.is_active ? <PowerOff className="mr-1 h-3.5 w-3.5" /> : <Power className="mr-1 h-3.5 w-3.5" />}{address.is_active ? "Disable" : "Enable"}</Button><Button size="sm" variant="ghost" className="text-destructive" disabled={address.is_default} onClick={() => setDeleteAddress(address)}><Trash2 className="mr-1 h-3.5 w-3.5" />Remove</Button></div></div>
+                    })}</div>
 
-            {ready && identities.length === 0 && (
-                <Card>
-                    <CardContent className="space-y-2 py-10 text-center">
-                        <p className="text-sm text-muted-foreground">
-                            No sending address is set up yet, so patient email goes out
-                            from the ScaleNexus platform address.
-                        </p>
-                        {!isPlatformAdmin && (
-                            <p className="text-sm text-muted-foreground">
-                                Contact support to have your clinic’s own address set up —
-                                there is nothing for you to configure.
-                            </p>
-                        )}
-                    </CardContent>
-                </Card>
-            )}
+                    <div className="flex flex-wrap gap-2"><Button variant="outline" onClick={() => void act(`verify-${domain.id}`, () => verifyEmailSendingIdentity(domain.id, institutionId), "Verification refreshed")}><RefreshCw className="mr-2 h-4 w-4" />Check DNS</Button>{isPlatformAdmin && <>{domain.is_active ? <Button variant="outline" onClick={() => void act(`off-${domain.id}`, () => deactivateEmailSendingIdentity(domain.id), "Sending domain deactivated")}><PowerOff className="mr-2 h-4 w-4" />Deactivate sending</Button> : <Button variant="outline" disabled={!domain.can_activate} onClick={() => void act(`on-${domain.id}`, () => activateEmailSendingIdentity(domain.id), "Sending domain activated")}><Power className="mr-2 h-4 w-4" />Activate sending</Button>}{domain.inbound_domain && (domain.inbound_enabled ? <Button variant="outline" onClick={() => void act(`inoff-${domain.id}`, () => deactivateInboundDomain(domain.id), "Receiving domain deactivated")}>Deactivate receiving</Button> : <Button variant="outline" onClick={() => void act(`inon-${domain.id}`, () => activateInboundDomain(domain.id), "Receiving domain activated")}>Activate receiving</Button>)}<Button variant="ghost" className="text-destructive" onClick={() => setDeleteDomain(domain)}><Trash2 className="mr-2 h-4 w-4" />Remove domain</Button></>}</div>
+                </CardContent>
+            </Card>
+        })}
 
-            {identities.map((identity) => {
-                const meta = STATUS_META[identity.status]
-                const draft = drafts[identity.id] ?? {
-                    from_name: "",
-                    reply_to_address: "",
-                }
-                const needsDns = !identity.dns_self_published && identity.dns_records.length > 0
+        <DomainDialog open={domainOpen} onOpenChange={setDomainOpen} locations={locations} values={{ domainName, inboundDomain, scope, localPart, fromName, externalReplyTo }} setters={{ setDomainName, setInboundDomain, setScope, setLocalPart, setFromName, setExternalReplyTo }} busy={busy === "provision"} onSave={() => void provision()} />
+        <AddressDialog domain={addressDomain} onClose={() => setAddressDomain(null)} locations={locations} scope={scope} setScope={setScope} localPart={localPart} setLocalPart={setLocalPart} fromName={fromName} setFromName={setFromName} externalReplyTo={externalReplyTo} setExternalReplyTo={setExternalReplyTo} busy={busy === "add-address"} onSave={() => void addAddress()} />
+        <ConfirmDelete open={Boolean(deleteDomain)} title="Remove this domain?" description="Its sender addresses and provider resources will be removed. Existing reply tokens should be allowed to age out before doing this." onClose={() => setDeleteDomain(null)} onConfirm={() => deleteDomain && void act(`delete-${deleteDomain.id}`, () => deleteEmailSendingIdentity(deleteDomain.id), "Domain removed").then(() => setDeleteDomain(null))} />
+        <ConfirmDelete open={Boolean(deleteAddress)} title="Remove this sender address?" description="Published workflows pinned to it will stop instead of silently changing brands." onClose={() => setDeleteAddress(null)} onConfirm={() => deleteAddress && void act(`delete-address-${deleteAddress.id}`, () => deleteEmailSenderAddress(deleteAddress.id), "Address removed").then(() => setDeleteAddress(null))} />
+    </div>
+}
 
-                return (
-                    <Card key={identity.id}>
-                        <CardHeader className="pb-3">
-                            <div className="flex flex-wrap items-center justify-between gap-2">
-                                <CardTitle className="text-base">
-                                    {identity.location_id
-                                        ? "Location address"
-                                        : "Clinic-wide address"}
-                                </CardTitle>
-                                <div className="flex items-center gap-2">
-                                    <Badge variant={identity.is_active ? "default" : "outline"}>
-                                        {identity.is_active ? "Active" : "Standby"}
-                                    </Badge>
-                                    <StatusBadge status={identity.status} />
-                                </div>
-                            </div>
-                            <p className="text-sm text-muted-foreground">
-                                {identity.status === "verified"
-                                    ? identity.is_active
-                                        ? "Patients receive workflow email from this address."
-                                        : "Verified and ready, but live email still uses the platform address."
-                                    : meta.explain}
-                            </p>
-                        </CardHeader>
+type DomainValues = { domainName: string; inboundDomain: string; scope: string; localPart: string; fromName: string; externalReplyTo: string }
+type DomainSetters = { setDomainName: (v: string) => void; setInboundDomain: (v: string) => void; setScope: (v: string) => void; setLocalPart: (v: string) => void; setFromName: (v: string) => void; setExternalReplyTo: (v: string) => void }
 
-                        <CardContent className="space-y-4">
-                            <div className="rounded-md border border-border px-3 py-2">
-                                <p className="text-xs text-muted-foreground">Sends from</p>
-                                <p className="font-mono text-sm">
-                                    {identity.from_name
-                                        ? `${identity.from_name} <${identity.from_address}>`
-                                        : identity.from_address}
-                                </p>
-                            </div>
+function ScopeFields({ locations, scope, setScope, localPart, setLocalPart, fromName, setFromName, externalReplyTo, setExternalReplyTo }: { locations: Array<{ id: string; name: string }>; scope: string; setScope: (v: string) => void; localPart: string; setLocalPart: (v: string) => void; fromName: string; setFromName: (v: string) => void; externalReplyTo: string; setExternalReplyTo: (v: string) => void }) {
+    return <><div><Label>Address applies to</Label><Select value={scope} onValueChange={setScope}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent><SelectItem value={PRACTICE}>Entire practice</SelectItem>{locations.map((location) => <SelectItem value={location.id} key={location.id}>{location.name}</SelectItem>)}</SelectContent></Select></div><div className="grid gap-3 sm:grid-cols-2"><div><Label>Address prefix</Label><Input value={localPart} onChange={(e) => setLocalPart(e.target.value.toLowerCase())} placeholder="appointments" /></div><div><Label>Display name</Label><Input value={fromName} onChange={(e) => setFromName(e.target.value)} /></div></div><div><Label>External Reply-To (optional)</Label><Input type="email" value={externalReplyTo} onChange={(e) => setExternalReplyTo(e.target.value)} placeholder="Leave blank for the managed inbox" /></div></>
+}
 
-                            {identity.failure_reason && (
-                                <div className="flex gap-2 rounded-md border border-destructive/40 bg-destructive/5 px-3 py-2">
-                                    <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-destructive" />
-                                    <p className="text-sm">{identity.failure_reason}</p>
-                                </div>
-                            )}
+function DomainDialog({ open, onOpenChange, locations, values, setters, busy, onSave }: { open: boolean; onOpenChange: (v: boolean) => void; locations: Array<{ id: string; name: string }>; values: DomainValues; setters: DomainSetters; busy: boolean; onSave: () => void }) {
+    return <Dialog open={open} onOpenChange={onOpenChange}><DialogContent><DialogHeader><DialogTitle>Register clinic email domain</DialogTitle><DialogDescription>The clinic publishes the generated DKIM, SPF and MX records. Leave Domain blank only when deliberately creating a ScaleNexus fallback subdomain.</DialogDescription></DialogHeader><div className="space-y-4"><div><Label>Clinic sending domain</Label><Input value={values.domainName} onChange={(e) => setters.setDomainName(e.target.value.toLowerCase())} placeholder="clinic.com" /></div><div><Label>Managed receiving subdomain</Label><Input value={values.inboundDomain} onChange={(e) => setters.setInboundDomain(e.target.value.toLowerCase())} placeholder="reply.clinic.com" /><p className="text-xs text-muted-foreground">Use a dedicated subdomain. Never replace the clinic’s main mailbox MX.</p></div><ScopeFields locations={locations} scope={values.scope} setScope={setters.setScope} localPart={values.localPart} setLocalPart={setters.setLocalPart} fromName={values.fromName} setFromName={setters.setFromName} externalReplyTo={values.externalReplyTo} setExternalReplyTo={setters.setExternalReplyTo} /></div><DialogFooter><Button variant="outline" onClick={() => onOpenChange(false)}>Cancel</Button><Button disabled={busy || !values.localPart.trim()} onClick={onSave}>{busy && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}Register</Button></DialogFooter></DialogContent></Dialog>
+}
 
-                            {!identity.is_active && identity.activation_blocker && (
-                                <div className="flex gap-2 rounded-md border border-amber-300/60 bg-amber-50 px-3 py-2 text-amber-900 dark:bg-amber-950/30 dark:text-amber-200">
-                                    <PowerOff className="mt-0.5 h-4 w-4 shrink-0" />
-                                    <p className="text-sm">{identity.activation_blocker}</p>
-                                </div>
-                            )}
+function AddressDialog({ domain, onClose, locations, scope, setScope, localPart, setLocalPart, fromName, setFromName, externalReplyTo, setExternalReplyTo, busy, onSave }: { domain: EmailSendingIdentity | null; onClose: () => void; locations: Array<{ id: string; name: string }>; scope: string; setScope: (v: string) => void; localPart: string; setLocalPart: (v: string) => void; fromName: string; setFromName: (v: string) => void; externalReplyTo: string; setExternalReplyTo: (v: string) => void; busy: boolean; onSave: () => void }) {
+    return <Dialog open={Boolean(domain)} onOpenChange={(open) => !open && onClose()}><DialogContent><DialogHeader><DialogTitle>Add sender address</DialogTitle><DialogDescription>Create another address on {domain?.domain}. It can be assigned to the practice or one location.</DialogDescription></DialogHeader><div className="space-y-4"><ScopeFields locations={locations} scope={scope} setScope={setScope} localPart={localPart} setLocalPart={setLocalPart} fromName={fromName} setFromName={setFromName} externalReplyTo={externalReplyTo} setExternalReplyTo={setExternalReplyTo} /></div><DialogFooter><Button variant="outline" onClick={onClose}>Cancel</Button><Button disabled={busy || !localPart.trim()} onClick={onSave}>{busy && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}Add address</Button></DialogFooter></DialogContent></Dialog>
+}
 
-                            {needsDns && (
-                                <div className="space-y-2">
-                                    <div>
-                                        <Label className="text-sm">DNS records to publish</Label>
-                                        <p className="text-xs text-muted-foreground">
-                                            Add these to your domain’s DNS, then check again.
-                                            Email cannot be sent from this address until they
-                                            are live.
-                                        </p>
-                                    </div>
-                                    <div className="overflow-x-auto rounded-md border border-border">
-                                        <table className="w-full text-xs">
-                                            <thead className="bg-muted/50">
-                                                <tr>
-                                                    <th className="px-2 py-1.5 text-left font-medium">Type</th>
-                                                    <th className="px-2 py-1.5 text-left font-medium">Name</th>
-                                                    <th className="px-2 py-1.5 text-left font-medium">Value</th>
-                                                    <th className="w-8" />
-                                                </tr>
-                                            </thead>
-                                            <tbody>
-                                                {identity.dns_records.map((record) => (
-                                                    <tr key={record.name} className="border-t border-border">
-                                                        <td className="px-2 py-1.5 font-mono">{record.type}</td>
-                                                        <td className="px-2 py-1.5 font-mono break-all">{record.name}</td>
-                                                        <td className="px-2 py-1.5 font-mono break-all">{record.value}</td>
-                                                        <td className="px-2 py-1.5">
-                                                            <button
-                                                                type="button"
-                                                                aria-label={`Copy ${record.name}`}
-                                                                onClick={() =>
-                                                                    void copy(record.value, record.name)
-                                                                }
-                                                            >
-                                                                {copied === record.name ? (
-                                                                    <Check className="h-3.5 w-3.5 text-emerald-600" />
-                                                                ) : (
-                                                                    <Copy className="h-3.5 w-3.5 text-muted-foreground" />
-                                                                )}
-                                                            </button>
-                                                        </td>
-                                                    </tr>
-                                                ))}
-                                            </tbody>
-                                        </table>
-                                    </div>
-                                </div>
-                            )}
-
-                            <div className="grid gap-3 sm:grid-cols-2">
-                                <div className="space-y-1.5">
-                                    <Label htmlFor={`name-${identity.id}`}>Display name</Label>
-                                    <Input
-                                        id={`name-${identity.id}`}
-                                        value={draft.from_name}
-                                        placeholder="Bright Smile Dental"
-                                        onChange={(e) =>
-                                            setDrafts((d) => ({
-                                                ...d,
-                                                [identity.id]: {
-                                                    ...draft,
-                                                    from_name: e.target.value,
-                                                },
-                                            }))
-                                        }
-                                    />
-                                    <p className="text-xs text-muted-foreground">
-                                        What patients see as the sender.
-                                    </p>
-                                </div>
-                                <div className="space-y-1.5">
-                                    <Label htmlFor={`reply-${identity.id}`}>Reply-to address</Label>
-                                    <Input
-                                        id={`reply-${identity.id}`}
-                                        value={draft.reply_to_address}
-                                        placeholder="frontdesk@yourclinic.com"
-                                        onChange={(e) =>
-                                            setDrafts((d) => ({
-                                                ...d,
-                                                [identity.id]: {
-                                                    ...draft,
-                                                    reply_to_address: e.target.value,
-                                                },
-                                            }))
-                                        }
-                                    />
-                                    <p className="text-xs text-muted-foreground">
-                                        Where patient replies go.
-                                    </p>
-                                </div>
-                            </div>
-
-                            <div className="flex flex-wrap gap-2">
-                                <Button
-                                    onClick={() => void save(identity)}
-                                    disabled={busyId === identity.id}
-                                >
-                                    {busyId === identity.id ? (
-                                        <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                                    ) : (
-                                        <Save className="mr-2 h-4 w-4" />
-                                    )}
-                                    Save
-                                </Button>
-                                <Button
-                                    variant="outline"
-                                    onClick={() => void recheck(identity)}
-                                    disabled={busyId === identity.id}
-                                >
-                                    <RefreshCw className="mr-2 h-4 w-4" />
-                                    Check verification
-                                </Button>
-                                {isPlatformAdmin && identity.is_active && (
-                                    <Button
-                                        variant="outline"
-                                        onClick={() => void setActive(identity, false)}
-                                        disabled={busyId === identity.id}
-                                    >
-                                        <PowerOff className="mr-2 h-4 w-4" />
-                                        Deactivate
-                                    </Button>
-                                )}
-                                {isPlatformAdmin && !identity.is_active && (
-                                    <Button
-                                        variant="outline"
-                                        onClick={() => void setActive(identity, true)}
-                                        disabled={
-                                            busyId === identity.id || !identity.can_activate
-                                        }
-                                        title={identity.activation_blocker ?? undefined}
-                                    >
-                                        <Power className="mr-2 h-4 w-4" />
-                                        Activate
-                                    </Button>
-                                )}
-                                {isPlatformAdmin && (
-                                    <Button
-                                        variant="ghost"
-                                        className="text-destructive hover:text-destructive"
-                                        onClick={() => setDeleteTarget(identity)}
-                                        disabled={busyId === identity.id}
-                                    >
-                                        <Trash2 className="mr-2 h-4 w-4" />
-                                        Remove
-                                    </Button>
-                                )}
-                                {identity.last_checked_at && (
-                                    <span className="self-center text-xs text-muted-foreground">
-                                        Last checked{" "}
-                                        {new Date(identity.last_checked_at).toLocaleString()}
-                                    </span>
-                                )}
-                            </div>
-                        </CardContent>
-                    </Card>
-                )
-            })}
-
-            <Dialog open={provisionOpen} onOpenChange={setProvisionOpen}>
-                <DialogContent className="max-w-lg">
-                    <DialogHeader>
-                        <DialogTitle>Add sending address</DialogTitle>
-                        <DialogDescription>
-                            Create an authenticated SES identity for this practice. It stays
-                            on standby after verification until a platform administrator activates it.
-                        </DialogDescription>
-                    </DialogHeader>
-                    <div className="space-y-4">
-                        <div className="space-y-1.5">
-                            <Label htmlFor="identity-scope">Applies to</Label>
-                            <Select value={provisionScope} onValueChange={changeProvisionScope}>
-                                <SelectTrigger id="identity-scope">
-                                    <SelectValue />
-                                </SelectTrigger>
-                                <SelectContent>
-                                    <SelectItem
-                                        value={INSTITUTION_SCOPE}
-                                        disabled={identities.some((identity) => !identity.location_id)}
-                                    >
-                                        Entire practice
-                                    </SelectItem>
-                                    {locations.map((location) => (
-                                        <SelectItem
-                                            key={location.id}
-                                            value={location.id}
-                                            disabled={identities.some(
-                                                (identity) => identity.location_id === location.id,
-                                            )}
-                                        >
-                                            {location.name}
-                                        </SelectItem>
-                                    ))}
-                                </SelectContent>
-                            </Select>
-                            <p className="text-xs text-muted-foreground">
-                                A location address overrides the practice-wide address for that location.
-                            </p>
-                        </div>
-                        <div className="grid gap-3 sm:grid-cols-2">
-                            <div className="space-y-1.5">
-                                <Label htmlFor="new-from-name">Display name</Label>
-                                <Input
-                                    id="new-from-name"
-                                    value={newFromName}
-                                    onChange={(event) => setNewFromName(event.target.value)}
-                                />
-                            </div>
-                            <div className="space-y-1.5">
-                                <Label htmlFor="new-local-part">Address prefix</Label>
-                                <Input
-                                    id="new-local-part"
-                                    value={newLocalPart}
-                                    pattern="[a-z0-9._-]+"
-                                    placeholder="hello"
-                                    onChange={(event) =>
-                                        setNewLocalPart(event.target.value.toLowerCase())
-                                    }
-                                />
-                                <p className="text-xs text-muted-foreground">
-                                    Usually “hello”; the domain is managed automatically.
-                                </p>
-                            </div>
-                        </div>
-                        <div className="space-y-1.5">
-                            <Label htmlFor="new-reply-to">Reply-to address</Label>
-                            <Input
-                                id="new-reply-to"
-                                type="email"
-                                value={newReplyTo}
-                                placeholder="frontdesk@yourclinic.com"
-                                onChange={(event) => setNewReplyTo(event.target.value)}
-                            />
-                            <p className="text-xs text-muted-foreground">
-                                Until the shared inbox is enabled, patient replies go here.
-                            </p>
-                        </div>
-                    </div>
-                    <DialogFooter>
-                        <Button
-                            variant="outline"
-                            onClick={() => setProvisionOpen(false)}
-                            disabled={provisioning}
-                        >
-                            Cancel
-                        </Button>
-                        <Button
-                            onClick={() => void provision()}
-                            disabled={provisioning || !newLocalPart.trim()}
-                        >
-                            {provisioning && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
-                            Provision
-                        </Button>
-                    </DialogFooter>
-                </DialogContent>
-            </Dialog>
-
-            <Dialog open={deleteTarget !== null} onOpenChange={(open) => !open && setDeleteTarget(null)}>
-                <DialogContent className="max-w-md">
-                    <DialogHeader>
-                        <DialogTitle>Remove sending address?</DialogTitle>
-                        <DialogDescription>
-                            This removes the SES identity and managed DNS records. Workflow email
-                            for this scope will fall back to the platform address.
-                        </DialogDescription>
-                    </DialogHeader>
-                    <DialogFooter>
-                        <Button variant="outline" onClick={() => setDeleteTarget(null)}>
-                            Cancel
-                        </Button>
-                        <Button variant="destructive" onClick={() => void remove()}>
-                            {deleteTarget && busyId === deleteTarget.id && (
-                                <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                            )}
-                            Remove
-                        </Button>
-                    </DialogFooter>
-                </DialogContent>
-            </Dialog>
-        </div>
-    )
+function ConfirmDelete({ open, title, description, onClose, onConfirm }: { open: boolean; title: string; description: string; onClose: () => void; onConfirm: () => void }) {
+    return <Dialog open={open} onOpenChange={(value) => !value && onClose()}><DialogContent><DialogHeader><DialogTitle>{title}</DialogTitle><DialogDescription>{description}</DialogDescription></DialogHeader><DialogFooter><Button variant="outline" onClick={onClose}>Cancel</Button><Button variant="destructive" onClick={onConfirm}>Remove</Button></DialogFooter></DialogContent></Dialog>
 }

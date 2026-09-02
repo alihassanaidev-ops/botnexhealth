@@ -17,7 +17,7 @@ class CampaignConversationThread(Base):
 
     __tablename__ = "campaign_conversation_threads"
     __table_args__ = (
-        CheckConstraint("channel IN ('sms')", name="ck_campaign_conversation_threads_channel"),
+        CheckConstraint("channel IN ('sms', 'email')", name="ck_campaign_conversation_threads_channel"),
         CheckConstraint(
             "status IN ('open', 'completed', 'handoff')",
             name="ck_campaign_conversation_threads_status",
@@ -36,6 +36,18 @@ class CampaignConversationThread(Base):
             "channel",
             unique=True,
             postgresql_where=text("status IN ('open', 'handoff')"),
+        ),
+        Index(
+            "uq_campaign_conversation_threads_active_cold_email",
+            "institution_id",
+            "location_id",
+            "contact_id",
+            "channel",
+            unique=True,
+            postgresql_where=text(
+                "workflow_run_id IS NULL AND channel = 'email' "
+                "AND status IN ('open', 'handoff')"
+            ),
         ),
     )
 
@@ -60,16 +72,16 @@ class CampaignConversationThread(Base):
         nullable=False,
         index=True,
     )
-    workflow_id: Mapped[str] = mapped_column(
+    workflow_id: Mapped[str | None] = mapped_column(
         UUID(as_uuid=False),
         ForeignKey("automation_workflows.id", ondelete="CASCADE"),
-        nullable=False,
+        nullable=True,
         index=True,
     )
-    workflow_run_id: Mapped[str] = mapped_column(
+    workflow_run_id: Mapped[str | None] = mapped_column(
         UUID(as_uuid=False),
         ForeignKey("automation_workflow_runs.id", ondelete="CASCADE"),
-        nullable=False,
+        nullable=True,
         index=True,
     )
     channel: Mapped[str] = mapped_column(String(24), nullable=False, default="sms")

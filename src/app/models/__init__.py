@@ -108,6 +108,9 @@ from src.app.models.email_sending_identity import (  # noqa: F401 — model regi
     EmailIdentityStatus,
     EmailSendingIdentity,
 )
+from src.app.models.email_inbox_setting import EmailInboxSetting  # noqa: F401
+from src.app.models.email_sender_address import EmailSenderAddress  # noqa: F401
+from src.app.models.outbound_email_message import OutboundEmailMessage  # noqa: F401
 from src.app.models.email_template import EmailTemplate, EmailTemplateType
 from src.app.models.sms_template import SmsTemplate, SmsTemplateType
 from src.app.models.external_notification_recipient import ExternalNotificationRecipient
@@ -223,6 +226,9 @@ __all__ = [
     "CampaignEmailTemplate",
     "EmailIdentityStatus",
     "EmailSendingIdentity",
+    "EmailSenderAddress",
+    "EmailInboxSetting",
+    "OutboundEmailMessage",
     "EmailTemplate",
     "EmailTemplateType",
     "SmsTemplate",

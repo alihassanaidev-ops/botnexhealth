@@ -9,6 +9,7 @@ from fastapi import HTTPException
 
 from src.app.api.deps import (
     get_current_institution_admin,
+    get_current_institution_location_or_super_admin,
     get_current_institution_or_location_user,
     get_current_location_admin,
     get_current_super_admin,
@@ -57,6 +58,28 @@ async def test_location_admin_dependency_requires_location_scope():
 
     with pytest.raises(HTTPException):
         await get_current_location_admin(_user(UserRole.STAFF, location_id="loc-1"))
+
+
+@pytest.mark.asyncio
+async def test_inbound_settings_admin_boundary_pins_location_admin():
+    for role in (UserRole.SUPER_ADMIN, UserRole.INSTITUTION_ADMIN):
+        allowed = await get_current_institution_location_or_super_admin(_user(role))
+        assert allowed.role == role.value
+
+    allowed = await get_current_institution_location_or_super_admin(
+        _user(UserRole.LOCATION_ADMIN, location_id="loc-1"), location_id="loc-1"
+    )
+    assert allowed.location_id == "loc-1"
+
+    with pytest.raises(HTTPException):
+        await get_current_institution_location_or_super_admin(
+            _user(UserRole.LOCATION_ADMIN, location_id="loc-1"),
+            location_id="loc-2",
+        )
+    with pytest.raises(HTTPException):
+        await get_current_institution_location_or_super_admin(
+            _user(UserRole.STAFF, location_id="loc-1")
+        )
 
 
 @pytest.mark.asyncio

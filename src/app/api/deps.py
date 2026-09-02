@@ -184,6 +184,40 @@ async def get_current_institution_or_super_admin(
     return current_user
 
 
+async def get_current_institution_location_or_super_admin(
+    current_user: Annotated[User, Depends(get_current_active_user)],
+    location_id: str | None = None,
+) -> User:
+    """Allow platform, institution, or location admins for location-owned setup.
+
+    Location admins are pinned here, before a handler opens a session. This is
+    intentionally a separate boundary from sending-domain administration:
+    receiving controls are operational settings for one clinic, while DNS and
+    sender verification remain institution/platform responsibilities.
+    """
+    if current_user.role not in (
+        UserRole.SUPER_ADMIN.value,
+        UserRole.INSTITUTION_ADMIN.value,
+        UserRole.LOCATION_ADMIN.value,
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Requires SUPER_ADMIN, INSTITUTION_ADMIN, or LOCATION_ADMIN role",
+        )
+    if current_user.role == UserRole.LOCATION_ADMIN.value:
+        if not current_user.location_id:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Location-scoped account is missing location assignment",
+            )
+        if location_id and str(location_id) != str(current_user.location_id):
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Cannot administer another location",
+            )
+    return current_user
+
+
 def resolve_target_institution(user: User, institution_id: str | None) -> str:
     """Which institution this request acts on.
 

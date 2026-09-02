@@ -21,7 +21,7 @@ from src.app.services.email.inbound_router import (
     _addresses_differ,
     _mask_email,
 )
-from src.app.services.email.reply_address import make_reply_address
+from src.app.services.email.reply_address import make_inbox_address, make_reply_address
 
 INST_ID = "11111111-2222-3333-4444-555555555555"
 CONTACT_ID = "99999999-8888-7777-6666-555555555555"
@@ -75,6 +75,7 @@ def _route(router, parsed=None, **kw):
     with patch("src.app.services.email.inbound_router.settings") as s:
         s.inbound_email_max_body_bytes = 256_000
         s.inbound_email_sender_hourly_limit = 60
+        s.ses_inbound_domain = INBOUND_DOMAIN
         return asyncio.run(router.route(parsed or _parsed(), **kw))
 
 
@@ -129,6 +130,80 @@ def test_unknown_institution_is_unroutable():
     router = _router(institution=None)
     result = _route(router)
     assert result.message.status == InboundEmailStatus.UNROUTABLE.value
+
+
+def test_valid_token_on_another_clinics_custom_domain_is_rejected():
+    router = _router(institution=_institution(), contact=_contact())
+    no_domain = MagicMock()
+    no_domain.scalar_one_or_none.return_value = None
+    router.session.execute.return_value = no_domain
+    parsed = _parsed(
+        to_addresses=[
+            make_reply_address(
+                "reply.other-clinic.com",
+                institution_id=INST_ID,
+                location_id="aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
+                contact_id=CONTACT_ID,
+            )
+        ]
+    )
+
+    result = _route(router, parsed)
+
+    assert result.message.status == InboundEmailStatus.UNROUTABLE.value
+    assert "domain" in result.message.status_reason.lower()
+    router._resolve_contact.assert_not_awaited()
+
+
+def test_direct_inbox_address_requires_its_exact_location():
+    router = _router(institution=_institution(), contact=_contact())
+    router._resolve_location = AsyncMock(return_value=None)
+    parsed = _parsed(
+        to_addresses=[
+            make_inbox_address(
+                INBOUND_DOMAIN,
+                institution_id=INST_ID,
+                location_id="aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
+            )
+        ]
+    )
+
+    result = _route(router, parsed)
+
+    assert result.message.status == InboundEmailStatus.UNROUTABLE.value
+    assert "location" in result.message.status_reason.lower()
+    router._resolve_contact.assert_not_awaited()
+
+
+def test_enabled_direct_inbox_routes_known_contact_to_location():
+    router = _router(institution=_institution(), contact=_contact())
+    location = MagicMock(id="aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee")
+    router._resolve_location = AsyncMock(return_value=location)
+    configured = MagicMock(
+        is_enabled=True,
+        platform_ready=True,
+        allow_new_contacts=False,
+        inbound_domain=INBOUND_DOMAIN,
+    )
+    parsed = _parsed(
+        to_addresses=[
+            make_inbox_address(
+                INBOUND_DOMAIN,
+                institution_id=INST_ID,
+                location_id=str(location.id),
+            )
+        ]
+    )
+
+    with patch(
+        "src.app.services.email.inbound_router.InboxSettingsService"
+    ) as service:
+        service.return_value.get = AsyncMock(return_value=configured)
+        result = _route(router, parsed)
+
+    assert result.message.status == InboundEmailStatus.ROUTED.value
+    assert str(result.message.location_id) == str(location.id)
+    router._attach_thread.assert_awaited_once()
 
 
 def test_duplicate_delivery_is_ignored():

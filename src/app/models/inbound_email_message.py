@@ -5,12 +5,12 @@ and the same storage discipline: hashed and masked addresses, an **encrypted**
 body, nothing PHI-bearing in clear.
 
 Email needs more than SMS did. Subject lines carry PHI as readily as bodies, so
-they are encrypted too. Threading has to be reconstructed from message headers,
-because a reply may arrive without the routing token — some clients rewrite or
-drop Reply-To — and ``Message-ID`` / ``In-Reply-To`` is then the only way back to
-the conversation. And a message the provider flagged as spam or malware is
-recorded rather than silently dropped, so an address that keeps getting
-quarantined is visible instead of looking like patient silence.
+they are encrypted too. ``Message-ID`` / ``In-Reply-To`` are retained for future
+standards-based display threading, but tenant attribution still requires the
+signed routing address and never guesses from a header. A message the provider
+flags as spam or malware is recorded rather than silently dropped, so an
+address that keeps getting quarantined is visible instead of looking like
+patient silence.
 """
 
 from __future__ import annotations

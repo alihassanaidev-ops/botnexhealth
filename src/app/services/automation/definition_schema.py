@@ -821,6 +821,9 @@ class SendEmailNode(BaseModel):
     # the saved template supplies subject, text and HTML, so editing it once
     # updates every campaign that uses it.
     template_key: str | None = Field(default=None, max_length=80)
+    # Optional explicit clinic-owned From address. Omit to inherit the
+    # location default and then the institution default.
+    sender_address_id: str | None = Field(default=None, max_length=64)
     next_node_id: str
     respect_quiet_hours: bool = True
     # Once a patient responds the engine stops the rest of this run's sends on

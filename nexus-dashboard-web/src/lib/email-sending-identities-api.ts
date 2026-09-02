@@ -13,6 +13,20 @@ export interface EmailDnsRecord {
     name: string
     type: string
     value: string
+    purpose: "sending" | "mail_from" | "receiving"
+}
+
+export interface EmailSenderAddress {
+    id: string
+    email_identity_id: string
+    institution_id: string
+    location_id: string | null
+    local_part: string
+    from_address: string
+    from_name: string | null
+    external_reply_to: string | null
+    is_active: boolean
+    is_default: boolean
 }
 
 export interface EmailSendingIdentity {
@@ -37,6 +51,10 @@ export interface EmailSendingIdentity {
     verified_at: string | null
     last_checked_at: string | null
     failure_reason: string | null
+    inbound_domain: string | null
+    inbound_enabled: boolean
+    inbound_dns_records: EmailDnsRecord[]
+    addresses: EmailSenderAddress[]
 }
 
 /**
@@ -91,6 +109,8 @@ export async function provisionEmailSendingIdentity(body: {
     from_name?: string | null
     reply_to_address?: string | null
     local_part?: string
+    domain?: string | null
+    inbound_domain?: string | null
 }): Promise<EmailSendingIdentity> {
     const { data } = await api.post<EmailSendingIdentity>(`${BASE}/provision`, body)
     return data
@@ -115,4 +135,45 @@ export async function deactivateEmailSendingIdentity(
 ): Promise<EmailSendingIdentity> {
     const { data } = await api.post<EmailSendingIdentity>(`${BASE}/${id}/deactivate`)
     return data
+}
+
+export async function activateInboundDomain(id: string): Promise<EmailSendingIdentity> {
+    const { data } = await api.post<EmailSendingIdentity>(`${BASE}/${id}/activate-inbound`)
+    return data
+}
+
+export async function deactivateInboundDomain(id: string): Promise<EmailSendingIdentity> {
+    const { data } = await api.post<EmailSendingIdentity>(`${BASE}/${id}/deactivate-inbound`)
+    return data
+}
+
+export async function createEmailSenderAddress(
+    identityId: string,
+    body: {
+        location_id?: string | null
+        local_part: string
+        from_name?: string | null
+        external_reply_to?: string | null
+        make_default?: boolean | null
+    },
+): Promise<EmailSenderAddress> {
+    const { data } = await api.post<EmailSenderAddress>(`${BASE}/${identityId}/addresses`, body)
+    return data
+}
+
+export async function updateEmailSenderAddress(
+    addressId: string,
+    body: { from_name?: string | null; external_reply_to?: string | null; is_active?: boolean },
+): Promise<EmailSenderAddress> {
+    const { data } = await api.put<EmailSenderAddress>(`${BASE}/addresses/${addressId}`, body)
+    return data
+}
+
+export async function makeEmailSenderAddressDefault(addressId: string): Promise<EmailSenderAddress> {
+    const { data } = await api.post<EmailSenderAddress>(`${BASE}/addresses/${addressId}/default`)
+    return data
+}
+
+export async function deleteEmailSenderAddress(addressId: string): Promise<void> {
+    await api.delete(`${BASE}/addresses/${addressId}`)
 }

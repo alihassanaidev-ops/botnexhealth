@@ -85,6 +85,11 @@ const adminNav: NavItemDef[] = [
         icon: MailCheck,
     },
     {
+        title: "Inbound Email",
+        url: "/institution-admin/email-inbox",
+        icon: InboxIcon,
+    },
+    {
         title: "Phone Numbers",
         url: "/admin/twilio",
         icon: MessageSquare,
@@ -418,6 +423,16 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
                                 {user?.role === "INSTITUTION_ADMIN" && (
                                     <NavItem
                                         item={{
+                                            title: "Inbound Email",
+                                            url: "/institution-admin/email-inbox",
+                                            icon: InboxIcon,
+                                        }}
+                                        isActive={location.pathname.startsWith("/institution-admin/email-inbox")}
+                                    />
+                                )}
+                                {user?.role === "INSTITUTION_ADMIN" && (
+                                    <NavItem
+                                        item={{
                                             title: "Contact Forms",
                                             url: "/institution-admin/enquiry-forms",
                                             icon: InboxIcon,
@@ -467,7 +482,7 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
                                         isActive={location.pathname.startsWith("/institution-admin/campaign-email-templates")}
                                     />
                                 )}
-                                {user?.role === "INSTITUTION_ADMIN" && (
+                                {(user?.role === "INSTITUTION_ADMIN" || user?.role === "LOCATION_ADMIN") && (
                                     <NavItem
                                         item={{
                                             title: "Sending Address",
