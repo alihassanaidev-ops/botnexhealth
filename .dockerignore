@@ -42,6 +42,11 @@ docs/
 .env.development
 .env.test
 
+# Frontend is published separately to S3/CloudFront. It is not used by the
+# backend Dockerfile, and including its dependency tree can exhaust the CDK
+# staging volume before Docker even starts.
+nexus-dashboard-web/
+
 # Scripts not needed in production
 scripts/
 test_*.sh
