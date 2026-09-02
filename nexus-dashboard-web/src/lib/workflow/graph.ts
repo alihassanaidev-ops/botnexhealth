@@ -45,6 +45,12 @@ const AUTO_COL_W = 340
 const AUTO_ROW_H = 170
 const NODE_W = 240
 const NODE_H = 92
+/** Column an exit chip claims — narrower than a step card (see StepNodeCard). */
+const AUTO_EXIT_W = 200
+/** Column reserved for a long edge routed through a layer it does not stop at. */
+const AUTO_LANE_W = 80
+/** Down+up ordering passes. Gains flatten out well before this on real graphs. */
+const BARYCENTER_SWEEPS = 4
 
 // ---------------------------------------------------------------------------
 // React Flow node/edge data payloads
@@ -135,9 +141,13 @@ function smartEdge(edge: Omit<FlowEdge, "type"> & { type?: FlowEdge["type"] }): 
                   ? 26
                   : 22
     return {
-        type: "step",
+        // Rounded orthogonal routing. Sharp "step" corners read as noise once a
+        // layer carries several parallel edges; the radius makes each run of an
+        // edge easy to follow across the canvas.
+        type: "smoothstep",
         pathOptions: {
             offset: isBranch ? branchOffset : 14,
+            borderRadius: 12,
         },
         interactionWidth: 18,
         style: EDGE_STYLE,
@@ -408,13 +418,99 @@ function branchBias(refs: ParentRef[]): number {
     return 0
 }
 
-function parentAverage(refs: ParentRef[], rowIndex: Map<string, number>): number {
-    if (refs.length === 0) return Number.POSITIVE_INFINITY
-    const rows = refs
-        .map((r) => rowIndex.get(r.parentId))
-        .filter((r): r is number => r !== undefined)
-    if (rows.length === 0) return Number.POSITIVE_INFINITY
-    return rows.reduce((a, b) => a + b, 0) / rows.length
+/**
+ * A layered graph over the definition, with one synthetic "lane" node per layer
+ * that a multi-layer edge passes through.
+ *
+ * Without lanes, an edge from a switch on layer 2 to a shared write-back on layer
+ * 9 is invisible to the ordering pass: it is drawn straight across every layer in
+ * between, over whatever happens to sit there. Giving it a placeholder in each
+ * intermediate layer makes it participate in ordering like any other node, so the
+ * sweep routes it through a gap instead of over the graph. This is the standard
+ * Sugiyama dummy-vertex step.
+ */
+interface LayeredGraph {
+    layers: Map<number, string[]>
+    successors: Map<string, string[]>
+    predecessors: Map<string, string[]>
+}
+
+const LANE_PREFIX = "__lane__"
+
+const isLane = (id: string): boolean => id.startsWith(LANE_PREFIX)
+
+function buildLayeredGraph(
+    def: WorkflowDefinition,
+    depth: Map<string, number>,
+): LayeredGraph {
+    const layers = new Map<number, string[]>()
+    const successors = new Map<string, string[]>()
+    const predecessors = new Map<string, string[]>()
+
+    const place = (id: string, d: number) => {
+        const list = layers.get(d) ?? []
+        list.push(id)
+        layers.set(d, list)
+    }
+    const link = (from: string, to: string) => {
+        successors.set(from, [...(successors.get(from) ?? []), to])
+        predecessors.set(to, [...(predecessors.get(to) ?? []), from])
+    }
+
+    for (const id of allGraphIds(def)) place(id, depth.get(id) ?? 1)
+
+    const ids = new Set(def.nodes.map((n) => n.id))
+    const edges: Array<[string, string]> = []
+    if (ids.has(def.entry_node_id)) edges.push([TRIGGER_NODE_ID, def.entry_node_id])
+    for (const node of def.nodes) {
+        for (const target of referencedIds(node)) {
+            if (ids.has(target)) edges.push([node.id, target])
+        }
+    }
+
+    for (const [source, target] of edges) {
+        const from = depth.get(source) ?? 0
+        const to = depth.get(target) ?? 0
+        // Same-layer and backward edges get no lanes: there are no intermediate
+        // layers to route through, and a loop must not fabricate them.
+        if (to - from <= 1) {
+            link(source, target)
+            continue
+        }
+        let previous = source
+        for (let d = from + 1; d < to; d += 1) {
+            const lane = `${LANE_PREFIX}${source}->${target}@${d}`
+            place(lane, d)
+            link(previous, lane)
+            previous = lane
+        }
+        link(previous, target)
+    }
+
+    return { layers, successors, predecessors }
+}
+
+/**
+ * Mean index of `neighbours` in the previous pass, or `null` when a node has
+ * none on that side — those keep their current index rather than being swept to
+ * one end of the layer.
+ */
+function barycenter(
+    neighbours: string[] | undefined,
+    order: Map<string, number>,
+): number | null {
+    if (!neighbours || neighbours.length === 0) return null
+    const indices = neighbours
+        .map((id) => order.get(id))
+        .filter((index): index is number => index !== undefined)
+    if (indices.length === 0) return null
+    return indices.reduce((a, b) => a + b, 0) / indices.length
+}
+
+/** Horizontal room an id claims in its layer. */
+function slotWidth(id: string, nodeType: Map<string, NodeType>): number {
+    if (isLane(id)) return AUTO_LANE_W
+    return nodeType.get(id) === "exit" ? AUTO_EXIT_W : AUTO_COL_W
 }
 
 /** Return a new definition with a freshly computed presentational layout. */
@@ -423,44 +519,87 @@ export function autoLayoutDefinition(def: WorkflowDefinition): WorkflowDefinitio
     const incoming = incomingRefs(def)
     const definitionOrder = new Map(allGraphIds(def).map((id, index) => [id, index]))
 
-    const layers = new Map<number, string[]>()
-    for (const id of allGraphIds(def)) {
-        const d = depth.get(id) ?? 1
-        const list = layers.get(d) ?? []
-        list.push(id)
-        layers.set(d, list)
-    }
-
-    const rowIndex = new Map<string, number>()
+    const { layers, successors, predecessors } = buildLayeredGraph(def, depth)
     const sortedDepths = Array.from(layers.keys()).sort((a, b) => a - b)
+    const nodeType = new Map<string, NodeType>(def.nodes.map((n) => [n.id, n.type]))
 
+    // Seed each layer in definition order so the result is deterministic, then
+    // let the sweeps below reorder it. Lanes sort after real nodes on the first
+    // pass; from the second sweep on their position is driven by their edge.
+    const rowIndex = new Map<string, number>()
     for (const d of sortedDepths) {
-        const ids = layers.get(d) ?? []
-        ids.sort((a, b) => {
-            const aRefs = incoming.get(a) ?? []
-            const bRefs = incoming.get(b) ?? []
-            const parentDelta =
-                parentAverage(aRefs, rowIndex) + branchBias(aRefs) -
-                (parentAverage(bRefs, rowIndex) + branchBias(bRefs))
-            if (Number.isFinite(parentDelta) && Math.abs(parentDelta) > 0.001) {
-                return parentDelta
-            }
-            return (definitionOrder.get(a) ?? 0) - (definitionOrder.get(b) ?? 0)
+        const ids = (layers.get(d) ?? []).slice().sort((a, b) => {
+            const aOrder = definitionOrder.get(a)
+            const bOrder = definitionOrder.get(b)
+            if (aOrder === undefined && bOrder === undefined) return a < b ? -1 : 1
+            if (aOrder === undefined) return 1
+            if (bOrder === undefined) return -1
+            return aOrder - bOrder
         })
+        layers.set(d, ids)
         ids.forEach((id, index) => rowIndex.set(id, index))
     }
+
+    /**
+     * One ordering sweep. A single pass can only see one side of each node, so
+     * downward sweeps settle a node against its parents and upward sweeps against
+     * its children; alternating them is what actually untangles the crossings.
+     */
+    const sweep = (direction: "down" | "up") => {
+        const order = direction === "down" ? sortedDepths : [...sortedDepths].reverse()
+        const side = direction === "down" ? predecessors : successors
+        for (const d of order) {
+            const ids = layers.get(d) ?? []
+            const keys = new Map<string, number>()
+            ids.forEach((id, index) => {
+                const mean = barycenter(side.get(id), rowIndex)
+                const bias = isLane(id) ? 0 : branchBias(incoming.get(id) ?? [])
+                // No neighbours on this side: hold position rather than drift.
+                keys.set(id, (mean ?? index) + bias)
+            })
+            const sorted = ids
+                .map((id, index) => ({ id, index }))
+                .sort((a, b) => {
+                    const delta = (keys.get(a.id) ?? 0) - (keys.get(b.id) ?? 0)
+                    // Stable on ties, so an unconstrained node never jitters.
+                    return Math.abs(delta) > 0.001 ? delta : a.index - b.index
+                })
+                .map((entry) => entry.id)
+            layers.set(d, sorted)
+            sorted.forEach((id, index) => rowIndex.set(id, index))
+        }
+    }
+
+    for (let pass = 0; pass < BARYCENTER_SWEEPS; pass += 1) {
+        sweep("down")
+        sweep("up")
+    }
+
+    // Width-aware placement: an exit chip claims less room than a step card, and
+    // a lane less again, so layers pack tighter than a uniform grid allows.
+    const layerWidths = new Map<number, number>()
+    for (const d of sortedDepths) {
+        const width = (layers.get(d) ?? []).reduce(
+            (total, id) => total + slotWidth(id, nodeType),
+            0,
+        )
+        layerWidths.set(d, width)
+    }
+    const widest = Math.max(AUTO_COL_W, ...layerWidths.values())
 
     const layout: Record<string, NodePosition> = {}
     for (const d of sortedDepths) {
         const ids = layers.get(d) ?? []
-        const layerWidth = Math.max(0, (ids.length - 1) * AUTO_COL_W)
-        const xOffset = Math.max(0, (AUTO_COL_W * 1.1 - layerWidth) / 2)
-        ids.forEach((id, index) => {
-            layout[id] = {
-                x: X0 + xOffset + index * AUTO_COL_W,
-                y: Y0 + d * AUTO_ROW_H,
+        let x = X0 + (widest - (layerWidths.get(d) ?? 0)) / 2
+        for (const id of ids) {
+            const width = slotWidth(id, nodeType)
+            // Lanes are routing hints, not nodes: they reserve a column and are
+            // then dropped, so nothing renders for them.
+            if (!isLane(id)) {
+                layout[id] = { x: x + (width - NODE_W) / 2, y: Y0 + d * AUTO_ROW_H }
             }
-        })
+            x += width
+        }
     }
 
     // Unreachable islands tend to end up compressed into the trailing layer.

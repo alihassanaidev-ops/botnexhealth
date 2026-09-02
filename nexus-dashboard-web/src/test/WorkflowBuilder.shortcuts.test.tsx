@@ -95,8 +95,9 @@ describe("builder keyboard shortcuts", () => {
         await waitFor(() => {
             expect(screen.queryByText("Send SMS")).not.toBeInTheDocument()
         })
-        // The rest of the campaign survives.
-        expect(screen.getByText("Exit")).toBeInTheDocument()
+        // The rest of the campaign survives. Exits render as outcome chips, so
+        // the surviving node is identified by its outcome rather than "Exit".
+        expect(screen.getByText("sent")).toBeInTheDocument()
     })
 
     it("leaves the canvas alone when nothing is selected", async () => {
