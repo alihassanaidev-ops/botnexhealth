@@ -435,6 +435,7 @@ async def test_cleanup_idempotency_prunes_old_rows_keeps_recent(
     "module",
     [
         "src.app.scripts.recompute_dashboard_rollup",
+        "src.app.scripts.recompute_campaign_analytics",
         "src.app.scripts.cleanup_idempotency",
         "src.app.scripts.apply_retention_policy",
     ],

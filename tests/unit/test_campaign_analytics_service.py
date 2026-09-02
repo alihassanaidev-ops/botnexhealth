@@ -15,6 +15,7 @@ from src.app.models.automation_workflow import (
 from src.app.models.campaign_analytics import CampaignMetricsDaily
 from src.app.models.usage_cost_rollup import NULL_LOCATION_SENTINEL
 from src.app.services.automation import campaign_analytics_service as analytics
+from src.app.services.automation import campaign_templates
 
 
 def _workflow(
@@ -148,6 +149,52 @@ def test_every_outcome_key_is_a_real_rollup_column() -> None:
                 f"outcome {definition.key!r} in category {category!r} has no rollup "
                 "column, so it can only ever report zero"
             )
+
+
+def test_every_template_exit_outcome_is_accounted_for() -> None:
+    """The other half of the coverage check, walked from the templates in.
+
+    ``test_every_outcome_key_is_a_real_rollup_column`` asks whether every label
+    on the screen has a column behind it. It does not ask whether the strings
+    campaigns actually exit with reach those columns, and they did not: the
+    pre-appointment template exits ``appointment_confirmed``, the rollup looked
+    for ``confirmed``, and a campaign with 38 confirmed runs reported none of
+    them. Anything a template can exit with has to be either mapped or named as
+    deliberately unrolled.
+    """
+    mapped = {
+        outcome
+        for outcomes in analytics._TERMINAL_OUTCOMES.values()
+        for outcome in outcomes
+    }
+    for template in campaign_templates.list_templates():
+        for node in template.definition.get("nodes", ()):
+            if node.get("type") != "exit":
+                continue
+            outcome = node.get("outcome")
+            if outcome is None:
+                continue
+            assert (
+                outcome in mapped or outcome in analytics.UNROLLED_TERMINAL_OUTCOMES
+            ), (
+                f"template {template.id!r} exits with outcome {outcome!r}, which "
+                "no rollup branch counts and which is not listed in "
+                "UNROLLED_TERMINAL_OUTCOMES, so it reports as a silent zero"
+            )
+
+
+def test_confirmed_counts_the_outcome_the_preappointment_template_exits_with() -> None:
+    """The regression that staging surfaced: prefixed names were not mapped."""
+    assert "appointment_confirmed" in analytics._TERMINAL_OUTCOMES["confirmed"]
+    assert (
+        "appointment_rescheduled"
+        in analytics._TERMINAL_OUTCOMES["reschedule_requested"]
+    )
+    assert (
+        "callback_requested_after_max_attempts"
+        in analytics._TERMINAL_OUTCOMES["callback_requested"]
+    )
+    assert "'appointment_confirmed'" in str(analytics._INSERT_ROLLUP_SQL.text)
 
 
 def test_qualified_counts_the_outcome_the_sales_template_exits_with() -> None:

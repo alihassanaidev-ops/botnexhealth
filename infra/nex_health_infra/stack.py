@@ -1070,6 +1070,34 @@ class NexHealthPlatformStack(Stack):
             schedule=events.Schedule.rate(Duration.minutes(15)),
         )
 
+        # Recompute the campaign analytics rollup. ``campaign_metrics_daily`` is
+        # the table behind the campaign Outcomes tab. The recompute script has
+        # existed since the rollup was written but was never scheduled, so the
+        # table stayed empty in every deployed environment and the tab reported
+        # zero for campaigns with dozens of completed runs. Admin role for the
+        # same reason as the other two — one cross-tenant query, RLS bypassed.
+        # 15-min cadence: outcome counts are read by humans reviewing a campaign,
+        # not by anything that reacts to them, so they tolerate the same lag as
+        # usage.
+        recompute_campaign_analytics_task = self._build_scheduled_admin_task(
+            id_prefix="RecomputeCampaignAnalytics",
+            command=[
+                "python",
+                "-m",
+                "src.app.scripts.recompute_campaign_analytics",
+            ],
+            log_group=scheduled_jobs_log_group,
+            log_stream_prefix="campaign-analytics",
+            image=app_image,
+            environment=migration_environment,
+            secrets=migration_secrets,
+            vpc=vpc,
+            cluster=cluster,
+            db_security_group=db_security_group,
+            private_subnets=private_subnets,
+            schedule=events.Schedule.rate(Duration.minutes(15)),
+        )
+
         # Ensure audit_logs has the next N monthly partitions pre-created
         # so any INSERT lands in a real partition instead of the DEFAULT
         # catch-all (where queries lose partition pruning). Daily at
@@ -1138,6 +1166,14 @@ class NexHealthPlatformStack(Stack):
             self,
             "RecomputeDashboardRollupTaskArn",
             value=recompute_rollup_task.task_definition_arn,
+        )
+        # Exported because this is the task an operator runs by hand, with
+        # ``--start``/``--end``, to backfill campaign_metrics_daily for the
+        # period before the schedule existed.
+        CfnOutput(
+            self,
+            "RecomputeCampaignAnalyticsTaskArn",
+            value=recompute_campaign_analytics_task.task_definition_arn,
         )
         CfnOutput(
             self,

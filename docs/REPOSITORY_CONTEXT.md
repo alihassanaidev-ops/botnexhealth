@@ -1118,9 +1118,13 @@ NexHealth, GoTracker, Resend, Meta and Typeform are plain `httpx` HTTP calls. S3
 | `email_identity_verification.py` | Poll newly provisioned sending domains and re-check verified ones so removed DNS is caught as an alert |
 | `form_integrations.py` | Warn before a Meta/Typeform authorisation expires, and reconcile lead submissions the webhook never delivered |
 
-Recurring jobs (dashboard rollup, audit-partition pre-creation, idempotency/
-dead-letter pruning) run as **EventBridge-triggered ECS tasks**, not Celery beat —
-see [SCHEDULED_JOBS.md](SCHEDULED_JOBS.md).
+Recurring jobs (dashboard rollup, usage/cost rollup, campaign analytics rollup,
+audit-partition pre-creation, idempotency/dead-letter pruning) run as
+**EventBridge-triggered ECS tasks**, not Celery beat — see
+[SCHEDULED_JOBS.md](SCHEDULED_JOBS.md). Every reporting table that a screen reads
+needs one of these; `campaign_metrics_daily` had a recompute script but no
+schedule, so the campaign Outcomes tab reported zero for campaigns with dozens of
+completed runs until `RecomputeCampaignAnalytics` was added.
 
 ### Notable services (`src/app/services/`)
 

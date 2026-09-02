@@ -420,10 +420,20 @@ _DELETE_ROLLUP_SQL = text(
 # the terminal ``outcome`` values campaign templates exit with; the response
 # vocabularies below are what a patient action records while a run is still live.
 _TERMINAL_OUTCOMES: dict[str, tuple[str, ...]] = {
-    "confirmed": ("confirmed", "confirmed_by_reply"),
+    "confirmed": ("confirmed", "confirmed_by_reply", "appointment_confirmed"),
     "booked": ("booked", "appointment_booked", "callback_booked"),
-    "reschedule_requested": ("reschedule_requested", "skipped_rescheduled"),
-    "callback_requested": ("callback_requested", "patient_asks_for_staff"),
+    "reschedule_requested": (
+        "reschedule_requested",
+        "appointment_rescheduled",
+        "reschedule_time_missing",
+        "skipped_rescheduled",
+    ),
+    "callback_requested": (
+        "callback_requested",
+        "callback_requested_after_max_attempts",
+        "callback_time_missing",
+        "patient_asks_for_staff",
+    ),
     "opt_out": (
         "opt_out",
         "unsubscribed",
@@ -435,6 +445,34 @@ _TERMINAL_OUTCOMES: dict[str, tuple[str, ...]] = {
     "not_qualified": ("not_qualified", "not_a_fit", "declined"),
     "unreachable": ("unreachable", "unreachable_after_max_attempts"),
 }
+
+# Exit outcomes that deliberately roll up to nothing *from the outcome column*.
+# Each is either counted from its own table (``staff_handoff`` and ``handoff``
+# come from ``campaign_staff_handoffs``), a lifecycle marker rather than a
+# patient result (``email_sent``), a non-event (``no_response``), or a result no
+# category puts on the screen (cancellations — ``cancelled`` in
+# ``appointment_ops`` counts cancelled *runs*, which is a different thing from a
+# patient cancelling their appointment).
+# ``test_every_template_exit_outcome_is_accounted_for`` fails when a template
+# grows an outcome that appears in neither this set nor _TERMINAL_OUTCOMES, so a
+# new exit cannot silently report as a zero the way ``appointment_confirmed``
+# did.
+UNROLLED_TERMINAL_OUTCOMES: frozenset[str] = frozenset(
+    {
+        "answered",
+        "appointment_cancelled",
+        "cancel_requested",
+        "email_sent",
+        "handoff",
+        "ineligible_reason",
+        "no_response",
+        "not_applicable",
+        "post_op_complete",
+        "post_op_cooldown_expired",
+        "rebooking_link_sent",
+        "staff_handoff",
+    }
+)
 
 # What a response event has to look like to count toward the same metric. A run
 # reaching its terminal outcome and the patient action that caused it are two
