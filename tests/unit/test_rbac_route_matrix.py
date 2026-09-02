@@ -221,6 +221,9 @@ ROUTES_BY_BOUNDARY: dict[str, tuple[str, ...]] = {
         # clinic's own API key.
         "GET /api/admin/institutions/{slug}/nexhealth/locations",
         "POST /api/admin/institutions/{slug}/nexhealth/verify",
+        "GET /api/admin/institutions/{slug}/nexhealth/webhook",
+        "POST /api/admin/institutions/{slug}/nexhealth/webhook/connect",
+        "POST /api/admin/institutions/{slug}/nexhealth/webhook/verify",
         "GET /api/admin/institutions/audit-logs",
         "GET /api/admin/institutions",
         "POST /api/admin/institutions",

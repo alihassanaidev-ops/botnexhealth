@@ -362,6 +362,35 @@ patient who never turned up is indistinguishable from one who was treated. Their
 appointment is not cancelled, so the sweep marks it complete and the follow-up
 campaign calls them. Suppressing that needs a real status signal from NexHealth.
 
+## Live webhook setup and ownership
+
+Live webhook setup is controlled from the Super Admin institution credentials
+screen. Operators do not paste provider endpoint or subscription ids. The
+**Connect** action creates or repairs the provider endpoint, all required event
+subscriptions, and the encrypted endpoint signing secret; **Verify** compares
+the callback, active event set, and local location routing with NexHealth.
+
+NexHealth webhook endpoints belong to the authenticated API account and event
+subscriptions are scoped by NexHealth `subdomain`, not by location. ScaleNexus
+therefore reuses one managed endpoint for each API credential and creates an
+event subscription set for every configured subdomain. Locations under a
+subdomain share that set, and each delivery's provider `location_id` resolves
+the actual local location. The local lifecycle table still has one row per
+location because reconciliation watermarks are location-specific; endpoint
+state is copied across sibling rows as one control group.
+
+The callback defaults to
+`<PUBLIC_API_URL>/api/v1/nexhealth/webhooks/appointments`; an explicit
+`NEXHEALTH_WEBHOOK_CALLBACK_URL` overrides it. The shared live route accepts the
+appointment, patient and sync-status event families. Celery's hourly ensure task
+uses the same grouped setup path as the UI. Once a managed endpoint exists, the
+receiver verifies its signature against the encrypted provider-returned secret;
+the secret is never returned to Super Admin.
+
+Required subscriptions are `appointment_insertion`, `appointment_created`,
+`appointment_updated`, `patient_created`, `patient_updated`,
+`sync_status_read_change`, and `sync_status_write_change`.
+
 ## V3 webhook shadow validation
 
 REST cutover and webhook cutover stay separate. Existing live subscriptions

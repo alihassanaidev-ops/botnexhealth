@@ -411,10 +411,9 @@ def _verify_signature(
     """Raise 403 if HMAC-SHA256 signature does not match.
 
     When nexhealth_webhook_secret is empty verification is skipped — this is
-    permitted only in local/test, where the endpoint is firewalled. Production
-    startup already fails closed if the secret is unset (see config.py), but we
-    defend in depth here too: in production an unset secret rejects the request
-    rather than accepting an unauthenticated, potentially cross-tenant enroll.
+    permitted only in local/test, where the endpoint is firewalled. Staging and
+    production reject unsigned traffic so a missing deployment setting cannot
+    become an unauthenticated, potentially cross-tenant enrollment path.
     """
     secrets = [secret for secret in candidate_secrets or [] if secret]
     if not secrets:
@@ -423,7 +422,7 @@ def _verify_signature(
             secrets = [secret]
 
     if not secrets:
-        if settings.is_production:
+        if settings.is_production or settings.app_env == "staging":
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail="Webhook signature secret is not configured",
@@ -450,6 +449,21 @@ def _verify_signature(
     )
 
 
+async def _live_signature_candidates() -> list[str]:
+    # Local/unit-test receivers retain the existing optional-signature behavior.
+    # Staging must exercise the same stored endpoint-secret path as production.
+    if not settings.is_production and settings.app_env != "staging":
+        return []
+    from src.app.services.automation.nexhealth_subscription_service import (
+        live_signature_secrets,
+    )
+
+    async with get_system_db_session(
+        "celery", external_id="nexhealth_live_signature_lookup"
+    ) as session:
+        return await live_signature_secrets(session)
+
+
 @router.post("/appointments", status_code=status.HTTP_200_OK)
 async def nexhealth_appointment_webhook(request: Request) -> dict[str, Any]:
     """Handle NexHealth appointment.created and appointment.updated events.
@@ -464,11 +478,13 @@ async def nexhealth_appointment_webhook(request: Request) -> dict[str, Any]:
     with ``"status": "ignored"`` bodies.
     """
     raw_body = await request.body()
+    candidate_secrets = await _live_signature_candidates()
     _verify_signature(
         raw_body,
         request.headers.get("signature")
         or request.headers.get("X-NexHealth-Signature"),
         request.headers.get("timestamp"),
+        candidate_secrets=candidate_secrets,
     )
 
     try:
@@ -533,11 +549,13 @@ async def nexhealth_appointment_webhook(request: Request) -> dict[str, Any]:
 async def nexhealth_patient_webhook(request: Request) -> dict[str, Any]:
     """Handle NexHealth patient.created and patient.updated events."""
     raw_body = await request.body()
+    candidate_secrets = await _live_signature_candidates()
     _verify_signature(
         raw_body,
         request.headers.get("signature")
         or request.headers.get("X-NexHealth-Signature"),
         request.headers.get("timestamp"),
+        candidate_secrets=candidate_secrets,
     )
 
     try:
@@ -564,11 +582,13 @@ async def nexhealth_patient_webhook(request: Request) -> dict[str, Any]:
 async def nexhealth_sync_status_webhook(request: Request) -> dict[str, Any]:
     """Handle NexHealth sync-status read/write recovery events."""
     raw_body = await request.body()
+    candidate_secrets = await _live_signature_candidates()
     _verify_signature(
         raw_body,
         request.headers.get("signature")
         or request.headers.get("X-NexHealth-Signature"),
         request.headers.get("timestamp"),
+        candidate_secrets=candidate_secrets,
     )
 
     try:

@@ -21,13 +21,20 @@ from src.app.models.gotracker_webhook_subscription import (
     GoTrackerWebhookSubscription,
     GoTrackerWebhookSubscriptionStatus,
 )
+from src.app.models.nexhealth_webhook_subscription import NexHealthWebhookSubscription
 from src.app.models.institution import DEFAULT_JURISDICTION, Jurisdiction
+from src.app.models.institution_location import InstitutionLocation
 from src.app.models.outbound_voice import OutboundVoiceProfile
 from src.app.models.user import User, UserRole
 from src.app.services.automation.gotracker_subscription_service import (
     GoTrackerSubscriptionReconnectError,
     GoTrackerSubscriptionLifecycleService,
     _location_callback_url,
+)
+from src.app.services.automation.nexhealth_subscription_service import (
+    DEFAULT_WEBHOOK_EVENTS,
+    NexHealthSubscriptionLifecycleService,
+    nexhealth_live_callback_url,
 )
 from src.app.services.audit import log_audit
 from src.app.services.audit_decorator import audit
@@ -49,6 +56,7 @@ from src.app.api.models import (
 )
 from src.app.api.helpers import handle_nexhealth_request
 from src.app.dependencies import (
+    NexHealthCredentialError,
     NexHealthCredentialContext,
     get_nexhealth_client_dependency,
     get_nexhealth_client_for_credential,
@@ -59,6 +67,156 @@ from src.app.nexhealth.client import NexHealthClient
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/admin/institutions", tags=["Admin - Institutions"])
+
+
+class NexHealthWebhookLocationMapping(BaseModel):
+    location_id: str
+    location_name: str
+    nexhealth_location_id: str
+
+
+class NexHealthWebhookGroupStatus(BaseModel):
+    subdomain: str
+    status: str
+    callback_url: str | None = None
+    provider_endpoint_id: str | None = None
+    provider_subscription_count: int = 0
+    required_events: list[str]
+    missing_events: list[str] = Field(default_factory=list)
+    signing_secret_configured: bool
+    last_event_at: str | None = None
+    last_health_check_at: str | None = None
+    locations: list[NexHealthWebhookLocationMapping]
+    error_metadata: dict[str, Any] | None = None
+
+
+class NexHealthWebhookStatusResponse(BaseModel):
+    callback_url: str | None
+    callback_ready: bool
+    groups: list[NexHealthWebhookGroupStatus]
+
+
+class NexHealthWebhookVerifyResponse(NexHealthWebhookStatusResponse):
+    verified: list[dict[str, Any]]
+
+
+def _nexhealth_live_callback_url(*, required: bool = False) -> str | None:
+    callback_url = nexhealth_live_callback_url(
+        public_api_url=settings.public_api_url,
+        explicit_callback_url=settings.nexhealth_webhook_callback_url,
+    )
+    if callback_url:
+        return callback_url
+    if required:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="PUBLIC_API_URL or NEXHEALTH_WEBHOOK_CALLBACK_URL must be configured",
+        )
+    return None
+
+
+async def _nexhealth_webhook_status(
+    session: Any, institution: Any
+) -> NexHealthWebhookStatusResponse:
+    locations = list(
+        (
+            await session.execute(
+                select(InstitutionLocation).where(
+                    InstitutionLocation.institution_id == str(institution.id),
+                    InstitutionLocation.nexhealth_subdomain.is_not(None),
+                    InstitutionLocation.nexhealth_location_id.is_not(None),
+                )
+            )
+        )
+        .scalars()
+        .all()
+    )
+    rows = list(
+        (
+            await session.execute(
+                select(NexHealthWebhookSubscription).where(
+                    NexHealthWebhookSubscription.institution_id == str(institution.id)
+                )
+            )
+        )
+        .scalars()
+        .all()
+    )
+    rows_by_location = {str(row.location_id): row for row in rows}
+    groups: dict[str, list[Any]] = {}
+    for location in locations:
+        groups.setdefault(str(location.nexhealth_subdomain), []).append(location)
+
+    response_groups: list[NexHealthWebhookGroupStatus] = []
+    for subdomain, group_locations in sorted(groups.items()):
+        group_rows = [
+            rows_by_location[str(location.id)]
+            for location in group_locations
+            if str(location.id) in rows_by_location
+        ]
+        controller = next(
+            (row for row in group_rows if row.provider_subscription_id),
+            group_rows[0] if group_rows else None,
+        )
+        error_metadata = controller.error_metadata if controller else None
+        missing_events = (
+            list(error_metadata.get("missing_events") or [])
+            if isinstance(error_metadata, dict)
+            else []
+        )
+        response_groups.append(
+            NexHealthWebhookGroupStatus(
+                subdomain=subdomain,
+                status=controller.status if controller else "not_configured",
+                callback_url=controller.callback_url if controller else None,
+                provider_endpoint_id=(
+                    controller.provider_subscription_id if controller else None
+                ),
+                provider_subscription_count=(
+                    len(controller.provider_subscription_ids or []) if controller else 0
+                ),
+                required_events=list(DEFAULT_WEBHOOK_EVENTS),
+                missing_events=missing_events,
+                signing_secret_configured=bool(
+                    controller and controller.secret_key_encrypted
+                ),
+                last_event_at=(
+                    max(
+                        (row.last_event_at for row in group_rows if row.last_event_at),
+                        default=None,
+                    ).isoformat()
+                    if any(row.last_event_at for row in group_rows)
+                    else None
+                ),
+                last_health_check_at=(
+                    max(
+                        (
+                            row.last_health_check_at
+                            for row in group_rows
+                            if row.last_health_check_at
+                        ),
+                        default=None,
+                    ).isoformat()
+                    if any(row.last_health_check_at for row in group_rows)
+                    else None
+                ),
+                locations=[
+                    NexHealthWebhookLocationMapping(
+                        location_id=str(location.id),
+                        location_name=location.name,
+                        nexhealth_location_id=str(location.nexhealth_location_id),
+                    )
+                    for location in group_locations
+                ],
+                error_metadata=error_metadata,
+            )
+        )
+    callback_url = _nexhealth_live_callback_url()
+    return NexHealthWebhookStatusResponse(
+        callback_url=callback_url,
+        callback_ready=bool(callback_url),
+        groups=response_groups,
+    )
 
 
 class RetellPhoneNumberResponse(BaseModel):
@@ -520,7 +678,9 @@ async def list_institution_nexhealth_locations(
         params = {}
         if subdomain:
             params["subdomain"] = subdomain
-        return await handle_nexhealth_request(client, "GET", "/locations", params=params)
+        return await handle_nexhealth_request(
+            client, "GET", "/locations", params=params
+        )
 
 
 def _nexhealth_location_response_contains_id(
@@ -550,7 +710,9 @@ def _nexhealth_location_response_contains_id(
     return walk(payload.get("data", payload))
 
 
-@router.post("/{slug}/nexhealth/verify", response_model=NexHealthCredentialVerifyResponse)
+@router.post(
+    "/{slug}/nexhealth/verify", response_model=NexHealthCredentialVerifyResponse
+)
 async def verify_institution_nexhealth_credentials(
     slug: str,
     data: NexHealthCredentialVerifyRequest,
@@ -619,6 +781,114 @@ async def verify_institution_nexhealth_credentials(
             location_found=location_found,
             message=message,
         )
+
+
+async def _nexhealth_institution_or_404(session: Any, slug: str) -> Any:
+    institution = await InstitutionService(session).get_by_slug(
+        slug, include_inactive=True
+    )
+    if not institution:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Institution '{slug}' not found",
+        )
+    if institution.pms_type != "nexhealth":
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="NexHealth webhooks are only available for NexHealth institutions",
+        )
+    return institution
+
+
+@router.get(
+    "/{slug}/nexhealth/webhook",
+    response_model=NexHealthWebhookStatusResponse,
+)
+@audit(
+    AuditAction.READ_LOCATIONS,
+    resource=lambda request, slug, _: f"institution:{slug}/nexhealth-webhook",
+    actor=AuditActor.ADMIN,
+)
+async def get_institution_nexhealth_webhook(
+    request: Request,
+    slug: str,
+    _: User = Depends(get_current_admin),
+) -> NexHealthWebhookStatusResponse:
+    """Show provider endpoint state and location routing for one institution."""
+    async with get_db_session() as session:
+        institution = await _nexhealth_institution_or_404(session, slug)
+        return await _nexhealth_webhook_status(session, institution)
+
+
+@router.post(
+    "/{slug}/nexhealth/webhook/connect",
+    response_model=NexHealthWebhookStatusResponse,
+)
+@audit(
+    AuditAction.INSTITUTION_UPDATE,
+    resource=lambda request, slug, _: f"institution:{slug}/nexhealth-webhook:connect",
+    actor=AuditActor.ADMIN,
+)
+async def connect_institution_nexhealth_webhook(
+    request: Request,
+    slug: str,
+    _: User = Depends(get_current_admin),
+) -> NexHealthWebhookStatusResponse:
+    """Create or repair the subdomain-scoped NexHealth webhook connection."""
+    callback_url = _nexhealth_live_callback_url(required=True)
+    assert callback_url is not None
+    async with get_db_session() as session:
+        institution = await _nexhealth_institution_or_404(session, slug)
+        try:
+            rows = await NexHealthSubscriptionLifecycleService(
+                session
+            ).ensure_for_institution(
+                institution=institution,
+                callback_url=callback_url,
+            )
+        except NexHealthCredentialError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail=str(exc),
+            ) from exc
+        if not rows:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail=(
+                    "Configure at least one location with a NexHealth subdomain "
+                    "and location ID before connecting webhooks"
+                ),
+            )
+        await session.flush()
+        return await _nexhealth_webhook_status(session, institution)
+
+
+@router.post(
+    "/{slug}/nexhealth/webhook/verify",
+    response_model=NexHealthWebhookVerifyResponse,
+)
+@audit(
+    AuditAction.INSTITUTION_UPDATE,
+    resource=lambda request, slug, _: f"institution:{slug}/nexhealth-webhook:verify",
+    actor=AuditActor.ADMIN,
+)
+async def verify_institution_nexhealth_webhook(
+    request: Request,
+    slug: str,
+    _: User = Depends(get_current_admin),
+) -> NexHealthWebhookVerifyResponse:
+    """Compare the configured callback and required events with NexHealth."""
+    async with get_db_session() as session:
+        institution = await _nexhealth_institution_or_404(session, slug)
+        verified = await NexHealthSubscriptionLifecycleService(
+            session
+        ).verify_for_institution(
+            institution=institution,
+            expected_callback_url=_nexhealth_live_callback_url(required=True),
+        )
+        await session.flush()
+        current = await _nexhealth_webhook_status(session, institution)
+        return NexHealthWebhookVerifyResponse(**current.model_dump(), verified=verified)
 
 
 @router.get("/audit-logs", response_model=AuditLogPaginatedResponse)

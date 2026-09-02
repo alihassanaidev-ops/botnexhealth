@@ -66,9 +66,7 @@ def _make_session(location=None, contact=None, appointment_reason=None):
 
     # First execute → location lookup; second → contact lookup; third → the
     # appointment-type label that feeds trigger metadata (task list item 1.2).
-    session.execute = AsyncMock(
-        side_effect=[loc_result, contact_result, reason_result]
-    )
+    session.execute = AsyncMock(side_effect=[loc_result, contact_result, reason_result])
     return session
 
 
@@ -361,6 +359,19 @@ def test_verify_signature_rejects_in_production_without_secret():
     with patch("src.app.api.routes.nexhealth_webhooks.settings") as mock_settings:
         mock_settings.nexhealth_webhook_secret = ""
         mock_settings.is_production = True
+        with pytest.raises(HTTPException) as exc:
+            _verify_signature(b"body", None, None)
+    assert exc.value.status_code == 403
+
+
+def test_verify_signature_rejects_in_staging_without_secret():
+    """Staging is internet-facing and must never accept unsigned webhooks."""
+    from fastapi import HTTPException
+
+    with patch("src.app.api.routes.nexhealth_webhooks.settings") as mock_settings:
+        mock_settings.nexhealth_webhook_secret = ""
+        mock_settings.is_production = False
+        mock_settings.app_env = "staging"
         with pytest.raises(HTTPException) as exc:
             _verify_signature(b"body", None, None)
     assert exc.value.status_code == 403

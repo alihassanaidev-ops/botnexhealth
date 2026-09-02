@@ -2,7 +2,7 @@ import { useState, useEffect } from "react";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import * as z from "zod";
-import { AlertCircle, CheckCircle2, KeyRound, Loader2, Pencil, Trash2, X } from "lucide-react";
+import { AlertCircle, CheckCircle2, KeyRound, Loader2, Pencil, RefreshCw, Trash2, Webhook, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
     Form,
@@ -53,6 +53,183 @@ const twilioCredentialsSchema = z.object({
 });
 
 type TwilioCredentialsFormValues = z.infer<typeof twilioCredentialsSchema>;
+
+interface NexHealthWebhookGroup {
+    subdomain: string;
+    status: string;
+    callback_url: string | null;
+    provider_endpoint_id: string | null;
+    provider_subscription_count: number;
+    required_events: string[];
+    missing_events: string[];
+    signing_secret_configured: boolean;
+    last_event_at: string | null;
+    last_health_check_at: string | null;
+    locations: Array<{
+        location_id: string;
+        location_name: string;
+        nexhealth_location_id: string;
+    }>;
+}
+
+interface NexHealthWebhookStatus {
+    callback_url: string | null;
+    callback_ready: boolean;
+    groups: NexHealthWebhookGroup[];
+}
+
+function NexHealthWebhookCard({ institution }: { institution: InstitutionDetail }) {
+    const [webhookStatus, setWebhookStatus] = useState<NexHealthWebhookStatus | null>(null);
+    const [isLoading, setIsLoading] = useState(true);
+    const [action, setAction] = useState<"connect" | "verify" | null>(null);
+
+    const load = async () => {
+        setIsLoading(true);
+        try {
+            const { data } = await api.get<NexHealthWebhookStatus>(
+                `/admin/institutions/${institution.slug}/nexhealth/webhook`,
+            );
+            setWebhookStatus(data);
+        } catch (err: unknown) {
+            const error = err as { response?: { data?: { detail?: string } } };
+            toast.error(error.response?.data?.detail || "Failed to load NexHealth webhook status");
+        } finally {
+            setIsLoading(false);
+        }
+    };
+
+    useEffect(() => {
+        void load();
+        // Institution slug is the identity of this control; status refreshes after actions.
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [institution.slug]);
+
+    const runAction = async (nextAction: "connect" | "verify") => {
+        setAction(nextAction);
+        try {
+            const { data } = await api.post<NexHealthWebhookStatus>(
+                `/admin/institutions/${institution.slug}/nexhealth/webhook/${nextAction}`,
+            );
+            setWebhookStatus(data);
+            const allHealthy = data.groups.length > 0 && data.groups.every(
+                (group) => group.status === "active"
+                    && group.signing_secret_configured
+                    && group.missing_events.length === 0,
+            );
+            if (allHealthy) {
+                toast.success(
+                    nextAction === "connect"
+                        ? "NexHealth webhook configured"
+                        : "NexHealth webhook verified",
+                );
+            } else {
+                toast.error("NexHealth webhook needs attention; review the status below");
+            }
+        } catch (err: unknown) {
+            const error = err as { response?: { data?: { detail?: string } } };
+            toast.error(error.response?.data?.detail || `Failed to ${nextAction} NexHealth webhook`);
+        } finally {
+            setAction(null);
+        }
+    };
+
+    const groups = webhookStatus?.groups ?? [];
+    const healthy = groups.length > 0 && groups.every(
+        (group) => group.status === "active"
+            && group.signing_secret_configured
+            && group.missing_events.length === 0,
+    );
+
+    return (
+        <Card className="overflow-hidden border-border bg-gradient-to-br from-card to-accent/20">
+            <div className="space-y-4 p-4">
+                <div className="flex flex-col justify-between gap-3 sm:flex-row sm:items-start">
+                    <div className="space-y-1">
+                        <div className="flex items-center gap-2">
+                            <Webhook className="h-4 w-4 text-primary" />
+                            <h3 className="text-sm font-semibold">NexHealth webhooks</h3>
+                        </div>
+                        <p className="max-w-2xl text-xs text-muted-foreground">
+                            One signed endpoint per NexHealth practice subdomain. Appointment location IDs route each delivery to the correct ScaleNexus location.
+                        </p>
+                        <div className="flex items-center gap-1.5 pt-1">
+                            <span className={`h-1.5 w-1.5 rounded-full ${healthy ? "bg-emerald-500" : "bg-amber-500"}`} />
+                            <span className="text-xs font-medium text-muted-foreground">
+                                {isLoading ? "Loading..." : healthy ? "Connected and signed" : "Setup or repair required"}
+                            </span>
+                        </div>
+                    </div>
+                    <div className="flex gap-2">
+                        <Button
+                            type="button"
+                            size="sm"
+                            variant="outline"
+                            disabled={isLoading || !!action || !webhookStatus?.callback_ready}
+                            onClick={() => void runAction("connect")}
+                        >
+                            {action === "connect" && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+                            {healthy ? "Repair" : "Connect"}
+                        </Button>
+                        <Button
+                            type="button"
+                            size="sm"
+                            variant="outline"
+                            disabled={isLoading || !!action || groups.length === 0}
+                            onClick={() => void runAction("verify")}
+                        >
+                            {action === "verify" ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <RefreshCw className="mr-2 h-4 w-4" />}
+                            Verify
+                        </Button>
+                    </div>
+                </div>
+
+                {webhookStatus?.callback_url && (
+                    <div className="rounded-md border bg-muted/40 px-3 py-2">
+                        <p className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">Callback</p>
+                        <p className="break-all font-mono text-xs">{webhookStatus.callback_url}</p>
+                    </div>
+                )}
+
+                {!isLoading && groups.length === 0 && (
+                    <p className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">
+                        Add a NexHealth subdomain and location ID to at least one location first.
+                    </p>
+                )}
+
+                {groups.map((group) => (
+                    <div key={group.subdomain} className="space-y-2 rounded-md border px-3 py-3">
+                        <div className="flex flex-wrap items-center justify-between gap-2">
+                            <div>
+                                <p className="text-sm font-medium">{group.subdomain}</p>
+                                <p className="text-xs text-muted-foreground">
+                                    {group.provider_subscription_count}/{group.required_events.length} events · endpoint {group.provider_endpoint_id || "not created"}
+                                </p>
+                            </div>
+                            <span className={`rounded-full px-2 py-0.5 text-xs font-medium ${group.status === "active" && group.signing_secret_configured ? "bg-emerald-100 text-emerald-700" : "bg-amber-100 text-amber-800"}`}>
+                                {group.status.replace(/_/g, " ")}
+                            </span>
+                        </div>
+                        <div className="grid gap-1 text-xs text-muted-foreground">
+                            {group.locations.map((location) => (
+                                <div key={location.location_id} className="flex justify-between gap-4">
+                                    <span>{location.location_name}</span>
+                                    <span className="font-mono">location {location.nexhealth_location_id}</span>
+                                </div>
+                            ))}
+                        </div>
+                        {group.missing_events.length > 0 && (
+                            <p className="text-xs text-destructive">Missing: {group.missing_events.join(", ")}</p>
+                        )}
+                        <p className="text-[11px] text-muted-foreground">
+                            {group.last_event_at ? `Last delivery ${new Date(group.last_event_at).toLocaleString()}` : "No delivery received yet"}
+                            {group.signing_secret_configured ? " · signature verification ready" : " · signing secret missing"}
+                        </p>
+                    </div>
+                ))}
+            </div>
+        </Card>
+    );
+}
 
 function TwilioCredentialsCard({ institutionSlug }: { institutionSlug: string }) {
     const [status, setStatus] = useState<InstitutionProvisioningStatus | null>(null);
@@ -561,6 +738,9 @@ export function TenantCredentialsForm({ institution, onUpdated }: InstitutionCre
                     )}
                 </form>
             </Form>
+            {institution.pms_type === "nexhealth" && (
+                <NexHealthWebhookCard institution={institution} />
+            )}
             <TwilioCredentialsCard institutionSlug={institution.slug} />
         </div>
     );
