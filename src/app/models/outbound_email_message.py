@@ -39,6 +39,11 @@ class OutboundEmailMessage(Base):
         nullable=True,
     )
     conversation_thread_id: Mapped[str] = mapped_column(UUID(as_uuid=False), ForeignKey("campaign_conversation_threads.id", ondelete="CASCADE"), nullable=False)
+    sender_address_id: Mapped[str | None] = mapped_column(
+        UUID(as_uuid=False),
+        ForeignKey("email_sender_addresses.id", ondelete="SET NULL"),
+        nullable=True,
+    )
     created_by_user_id: Mapped[str | None] = mapped_column(UUID(as_uuid=False), ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
     source: Mapped[str] = mapped_column(String(24), nullable=False, default="inbox")
     idempotency_key: Mapped[str] = mapped_column(String(160), nullable=False, unique=True)

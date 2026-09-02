@@ -59,6 +59,8 @@ def test_location_inherits_institution_default_and_gets_signed_address():
         configured.ses_inbound_queue_url = "queue"
         value = asyncio.run(InboxSettingsService(session).get(INST, LOCATION))
         assert value.platform_ready is True
+        assert value.receiving_pipeline_ready is True
+        assert value.platform_fallback_ready is True
         assert value.inbox_address.endswith("@inbound.example.com")
 
     assert value.inherited is True
@@ -81,3 +83,77 @@ def test_institution_default_is_control_only_not_a_shared_address():
         value = asyncio.run(InboxSettingsService(session).get(INST))
 
     assert value.inbox_address is None
+
+
+def test_location_can_use_its_institution_custom_receiving_domain():
+    row = EmailInboxSetting(
+        institution_id=INST,
+        location_id=LOCATION,
+        email_identity_id="22222222-3333-4444-5555-666666666666",
+        is_enabled=True,
+    )
+    result = MagicMock()
+    result.scalar_one_or_none.return_value = row
+    identity = MagicMock(
+        institution_id=INST,
+        inbound_domain="reply.clinic.com",
+        inbound_enabled=True,
+    )
+    session = AsyncMock()
+    session.execute.return_value = result
+    session.get.return_value = identity
+
+    with patch("src.app.services.email.inbox_settings_service.settings") as configured:
+        configured.ses_inbound_domain = "inbound.scalenexus.ai"
+        configured.ses_inbound_bucket = "bucket"
+        configured.ses_inbound_queue_url = "queue"
+        value = asyncio.run(InboxSettingsService(session).get(INST, LOCATION))
+
+    assert value.email_identity_id == row.email_identity_id
+    assert value.inbound_domain == "reply.clinic.com"
+    assert value.inbox_address.endswith("@reply.clinic.com")
+
+
+def test_unactivated_custom_receiving_domain_cannot_be_enabled():
+    identity = MagicMock(
+        institution_id=INST,
+        inbound_domain="reply.clinic.com",
+        inbound_enabled=False,
+    )
+    session = AsyncMock()
+    session.get.return_value = identity
+
+    with patch("src.app.services.email.inbox_settings_service.settings") as configured:
+        configured.ses_inbound_bucket = "bucket"
+        configured.ses_inbound_queue_url = "queue"
+        with pytest.raises(ValueError, match="verified and activated"):
+            asyncio.run(
+                InboxSettingsService(session).upsert(
+                    INST,
+                    None,
+                    is_enabled=True,
+                    allow_new_contacts=False,
+                    stop_automation_on_reply=True,
+                    forward_to=None,
+                    email_identity_id="22222222-3333-4444-5555-666666666666",
+                )
+            )
+
+
+def test_inbound_cannot_be_enabled_without_the_shared_receiving_pipeline():
+    session = AsyncMock()
+    with patch("src.app.services.email.inbox_settings_service.settings") as configured:
+        configured.ses_inbound_bucket = None
+        configured.ses_inbound_queue_url = None
+        configured.ses_inbound_domain = "inbound.scalenexus.ai"
+        with pytest.raises(ValueError, match="infrastructure is not ready"):
+            asyncio.run(
+                InboxSettingsService(session).upsert(
+                    INST,
+                    None,
+                    is_enabled=True,
+                    allow_new_contacts=False,
+                    stop_automation_on_reply=True,
+                    forward_to=None,
+                )
+            )

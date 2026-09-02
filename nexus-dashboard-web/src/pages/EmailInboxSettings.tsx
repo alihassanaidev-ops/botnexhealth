@@ -20,9 +20,11 @@ import {
     updateEmailInboxSettings,
     type EmailInboxSettings,
 } from "@/lib/email-inbox-settings-api"
+import { listEmailSendingIdentities, type EmailSendingIdentity } from "@/lib/email-sending-identities-api"
 import type { Location, LocationInfo } from "@/types"
 
 const DEFAULT = "__default__"
+const PLATFORM_DOMAIN = "__platform__"
 
 function errorMessage(err: unknown, fallback: string) {
     const detail = (err as { response?: { data?: { detail?: unknown } } })?.response?.data?.detail
@@ -40,6 +42,7 @@ export default function EmailInboxSettingsPage() {
     const [loading, setLoading] = useState(false)
     const [saving, setSaving] = useState(false)
     const [copied, setCopied] = useState(false)
+    const [domains, setDomains] = useState<EmailSendingIdentity[]>([])
 
     useEffect(() => {
         if (!scope.isPlatformAdmin || !scope.selectedInstitution) {
@@ -59,6 +62,10 @@ export default function EmailInboxSettingsPage() {
         ? locationContext.selectedLocationId ?? undefined
         : selectedScope === DEFAULT ? undefined : selectedScope
 
+    useEffect(() => {
+        setSelectedScope(DEFAULT)
+    }, [scope.institutionId])
+
     const load = useCallback(async () => {
         if (!scope.ready || (isLocationAdmin && !locationId)) {
             setValue(null)
@@ -75,6 +82,21 @@ export default function EmailInboxSettingsPage() {
     }, [scope.ready, scope.institutionId, isLocationAdmin, locationId])
 
     useEffect(() => { void load() }, [load])
+    useEffect(() => {
+        if (!scope.ready) return
+        listEmailSendingIdentities(scope.institutionId)
+            .then(setDomains)
+            .catch(() => setDomains([]))
+    }, [scope.ready, scope.institutionId])
+
+    const receivingReady = useMemo(() => {
+        if (!value) return false
+        if (!value.email_identity_id) return value.platform_fallback_ready
+        return Boolean(
+            value.receiving_pipeline_ready
+            && domains.find((domain) => domain.id === value.email_identity_id)?.inbound_enabled,
+        )
+    }, [domains, value])
 
     const save = async () => {
         if (!value) return
@@ -86,6 +108,7 @@ export default function EmailInboxSettingsPage() {
                     allow_new_contacts: value.allow_new_contacts,
                     stop_automation_on_reply: value.stop_automation_on_reply,
                     forward_to: value.forward_to || null,
+                    email_identity_id: value.email_identity_id,
                 },
                 scope.institutionId,
                 locationId,
@@ -126,9 +149,9 @@ export default function EmailInboxSettingsPage() {
                     <CardHeader>
                         <div className="flex items-center justify-between gap-3">
                             <CardTitle className="text-base">Receiving and routing</CardTitle>
-                            {value.platform_ready ? (
-                                <Badge className="bg-emerald-100 text-emerald-800"><Check className="mr-1 h-3 w-3" />AWS ready</Badge>
-                            ) : <Badge variant="destructive"><AlertTriangle className="mr-1 h-3 w-3" />Platform setup pending</Badge>}
+                            {receivingReady ? (
+                                <Badge className="bg-emerald-100 text-emerald-800"><Check className="mr-1 h-3 w-3" />Receiving ready</Badge>
+                            ) : <Badge variant="destructive"><AlertTriangle className="mr-1 h-3 w-3" />Receiving setup pending</Badge>}
                         </div>
                         {value.inherited && <p className="text-xs text-muted-foreground">This location currently inherits the practice default. Saving creates a location override.</p>}
                     </CardHeader>
@@ -138,7 +161,39 @@ export default function EmailInboxSettingsPage() {
                             <Switch checked={value.is_enabled} onCheckedChange={(checked) => setValue({ ...value, is_enabled: checked })} />
                         </div>
                         <div className="space-y-2">
-                            <Label>ScaleNexus inbox address</Label>
+                            <Label>Receiving domain</Label>
+                            <Select
+                                value={value.email_identity_id ?? PLATFORM_DOMAIN}
+                                onValueChange={(selected) => {
+                                    const emailIdentityId = selected === PLATFORM_DOMAIN ? null : selected
+                                    const selectedReady = emailIdentityId === null
+                                        ? value.platform_fallback_ready
+                                        : Boolean(
+                                            value.receiving_pipeline_ready
+                                            && domains.find((domain) => domain.id === emailIdentityId)?.inbound_enabled,
+                                        )
+                                    setValue({
+                                        ...value,
+                                        email_identity_id: emailIdentityId,
+                                        is_enabled: selectedReady ? value.is_enabled : false,
+                                        inbox_address: null,
+                                    })
+                                }}
+                            >
+                                <SelectTrigger><SelectValue /></SelectTrigger>
+                                <SelectContent>
+                                    <SelectItem value={PLATFORM_DOMAIN}>ScaleNexus fallback domain</SelectItem>
+                                    {domains.filter((domain) => domain.inbound_domain).map((domain) => (
+                                        <SelectItem key={domain.id} value={domain.id} disabled={!domain.inbound_enabled}>
+                                            {domain.inbound_domain}{domain.inbound_enabled ? "" : " — awaiting activation"}
+                                        </SelectItem>
+                                    ))}
+                                </SelectContent>
+                            </Select>
+                            <p className="text-xs text-muted-foreground">A clinic-owned receiving subdomain keeps patient-facing reply addresses on the clinic’s brand.</p>
+                        </div>
+                        <div className="space-y-2">
+                            <Label>Inbox address</Label>
                             <div className="flex gap-2">
                                 <Input readOnly value={value.inbox_address ?? (value.platform_ready ? "Select a location to get its address" : "Available after AWS receiving is deployed")} />
                                 <Button variant="outline" disabled={!value.inbox_address} onClick={async () => {
@@ -161,7 +216,10 @@ export default function EmailInboxSettingsPage() {
                             <div><Label>Stop other automation after a reply</Label><p className="text-xs text-muted-foreground">Prevents follow-up workflows continuing after a patient has responded.</p></div>
                             <Switch checked={value.stop_automation_on_reply} onCheckedChange={(checked) => setValue({ ...value, stop_automation_on_reply: checked })} />
                         </div>
-                        <Button onClick={() => void save()} disabled={saving || !value.platform_ready}>
+                        <Button
+                            onClick={() => void save()}
+                            disabled={saving || (value.is_enabled && !receivingReady)}
+                        >
                             {saving ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Save className="mr-2 h-4 w-4" />}Save settings
                         </Button>
                     </CardContent>

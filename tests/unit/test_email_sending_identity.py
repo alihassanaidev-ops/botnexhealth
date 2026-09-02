@@ -22,13 +22,17 @@ from src.app.models.email_sending_identity import (
     EmailIdentityStatus,
     EmailSendingIdentity,
 )
+from src.app.models.email_sender_address import EmailSenderAddress
 from src.app.services.email.identity_service import (
     VERIFICATION_TIMEOUT,
     EmailIdentityService,
 )
 from src.app.services.email.ses_provisioning import (
+    DnsRecord,
     ProvisionedIdentity,
     SesProvisioningError,
+    SesProvisioningService,
+    normalize_domain,
     safe_name,
     subdomain_for,
 )
@@ -73,6 +77,83 @@ def test_safe_name_applies_prefix_and_cap():
     assert len(name) <= 64
 
 
+def test_custom_domain_is_normalized():
+    assert normalize_domain("Mail.Example.COM.") == "mail.example.com"
+
+
+@pytest.mark.parametrize("value", ["https://clinic.com", "hello@clinic.com", "localhost"])
+def test_custom_domain_rejects_non_domain_input(value):
+    with pytest.raises(SesProvisioningError):
+        normalize_domain(value)
+
+
+class _ProvisioningClient:
+    region = "ca-central-1"
+
+    def __init__(self):
+        self.created = []
+        self.published = []
+
+    def create_identity(self, domain):
+        self.created.append(domain)
+        return [DnsRecord(f"dkim.{domain}", "CNAME", "token.amazonses.com")]
+
+    def configure_mail_from(self, domain):
+        return [DnsRecord(f"bounce.{domain}", "TXT", "spf", purpose="mail_from")]
+
+    def ensure_configuration_set(self, _name):
+        return None
+
+    def ensure_tenant(self, _name):
+        return None
+
+    def associate_tenant_resources(self, _tenant, _domain, _configuration_set):
+        return None
+
+    def publish_records(self, zone, records):
+        self.published.append((zone, records))
+
+
+def test_clinic_owned_domain_returns_sending_and_receiving_dns_without_publishing():
+    client = _ProvisioningClient()
+    service = SesProvisioningService(client=client)
+    with patch("src.app.services.email.ses_provisioning.settings") as configured:
+        configured.ses_sending_domain = "mail.scalenexus.ai"
+        configured.ses_sending_hosted_zone_id = "platform-zone"
+        configured.ses_configuration_set_prefix = "scalenexus"
+        result = asyncio.run(
+            service.provision(
+                slug="clinic",
+                institution_id="11111111-2222",
+                domain="clinic.com",
+                inbound_domain="reply.clinic.com",
+            )
+        )
+
+    assert client.created == ["clinic.com", "reply.clinic.com"]
+    assert client.published == []
+    assert result.dns_published is False
+    assert result.inbound_domain == "reply.clinic.com"
+    assert any(record.type == "MX" for record in result.inbound_dns_records)
+
+
+def test_receiving_domain_must_be_dedicated_subdomain():
+    service = SesProvisioningService(client=_ProvisioningClient())
+    with patch("src.app.services.email.ses_provisioning.settings") as configured:
+        configured.ses_sending_domain = "mail.scalenexus.ai"
+        configured.ses_sending_hosted_zone_id = None
+        configured.ses_configuration_set_prefix = "scalenexus"
+        with pytest.raises(SesProvisioningError, match="dedicated receiving"):
+            asyncio.run(
+                service.provision(
+                    slug="clinic",
+                    institution_id="11111111-2222",
+                    domain="clinic.com",
+                    inbound_domain="clinic.com",
+                )
+            )
+
+
 # ---------------------------------------------------------------------------
 # Resolution precedence
 # ---------------------------------------------------------------------------
@@ -99,11 +180,30 @@ def _identity(
     return identity
 
 
+def _address(location_id=None, **kw):
+    address = EmailSenderAddress(
+        id="address-1",
+        institution_id="inst-1",
+        email_identity_id="identity-1",
+        location_id=location_id,
+        local_part="hello",
+        from_address="hello@brightsmile.mail.scalenexus.ai",
+        from_name="Bright Smile",
+        is_active=True,
+        is_default=True,
+    )
+    for key, value in kw.items():
+        setattr(address, key, value)
+    return address
+
+
 def _service(effective=None, institution=None):
     session = AsyncMock()
     session.get = AsyncMock(return_value=institution)
     svc = EmailIdentityService(session, provisioning=AsyncMock())
-    svc.get_effective_identity = AsyncMock(return_value=effective)
+    svc.get_effective_sender = AsyncMock(
+        return_value=((_address() if effective is not None else None), effective)
+    )
     return svc
 
 
@@ -118,6 +218,27 @@ def test_verified_identity_is_used():
         resolved = _resolve(svc)
     assert resolved.from_address == "hello@brightsmile.mail.scalenexus.ai"
     assert resolved.provider == "ses"
+    assert resolved.is_platform_fallback is False
+
+
+def test_custom_receiving_domain_is_carried_to_workflow_reply():
+    identity = _identity(inbound_domain="reply.clinic.com", inbound_enabled=True)
+    svc = _service(effective=identity)
+    with patch("src.app.services.email.identity_service.settings") as configured:
+        configured.ses_clinic_sending_enabled = True
+        resolved = _resolve(svc)
+    assert resolved.inbound_domain == "reply.clinic.com"
+
+
+def test_missing_explicit_sender_never_falls_back_to_another_brand():
+    institution = MagicMock(email_from_address="platform@example.com")
+    svc = _service(effective=None, institution=institution)
+    with patch("src.app.services.email.identity_service.settings") as configured:
+        configured.patient_email_provider = "resend"
+        resolved = asyncio.run(
+            svc.resolve("inst-1", "loc-1", sender_address_id="missing")
+        )
+    assert resolved.from_address is None
     assert resolved.is_platform_fallback is False
 
 
@@ -229,6 +350,9 @@ def test_provisioned_identity_starts_inactive():
     session = AsyncMock()
     session.add = MagicMock()
     session.get = AsyncMock(return_value=institution)
+    empty = MagicMock()
+    empty.scalar_one_or_none.return_value = None
+    session.execute = AsyncMock(return_value=empty)
     provisioning = AsyncMock()
     provisioning.provision = AsyncMock(
         return_value=ProvisionedIdentity(
@@ -240,12 +364,110 @@ def test_provisioned_identity_starts_inactive():
         )
     )
     service = EmailIdentityService(session, provisioning=provisioning)
-    service.get_effective_identity = AsyncMock(return_value=None)
+    service.create_address = AsyncMock(return_value=_address())
 
     identity = asyncio.run(service.provision(institution_id="inst-1"))
 
     assert identity.is_active is False
     assert identity.is_sendable is False
+
+
+def test_reprovision_preserves_live_state_inbound_domain_and_provider_resources():
+    institution = MagicMock(id="inst-1", name="Clinic", slug="clinic")
+    identity = _identity(
+        inbound_domain="reply.clinic.com",
+        inbound_enabled=True,
+        provider_tenant_name="existing-tenant",
+        provider_configuration_set="existing-config",
+    )
+    identity.id = "identity-1"
+    existing_address = _address()
+
+    def result(value):
+        row = MagicMock()
+        row.scalar_one_or_none.return_value = value
+        return row
+
+    session = AsyncMock()
+    session.get = AsyncMock(return_value=institution)
+    session.execute = AsyncMock(
+        side_effect=[
+            result(identity),  # sending-domain owner
+            result(None),  # no receiving-domain collision
+            result(identity),  # existing receiving subdomain belongs to this row
+            result(existing_address),
+        ]
+    )
+    provisioning = AsyncMock()
+    provisioning.provision.return_value = ProvisionedIdentity(
+        domain="brightsmile.mail.scalenexus.ai",
+        dns_records=[],
+        tenant_name="existing-tenant",
+        configuration_set="existing-config",
+        dns_published=False,
+        inbound_domain="reply.clinic.com",
+        inbound_dns_records=[],
+    )
+    service = EmailIdentityService(session, provisioning=provisioning)
+
+    returned = asyncio.run(
+        service.provision(
+            institution_id="inst-1",
+            domain="brightsmile.mail.scalenexus.ai",
+        )
+    )
+
+    assert returned is identity
+    assert identity.status == EmailIdentityStatus.VERIFIED.value
+    assert identity.is_active is True
+    assert identity.inbound_enabled is True
+    provisioning.provision.assert_awaited_once_with(
+        slug="clinic",
+        institution_id="inst-1",
+        domain="brightsmile.mail.scalenexus.ai",
+        inbound_domain="reply.clinic.com",
+        tenant_name="existing-tenant",
+        configuration_set="existing-config",
+    )
+
+
+def test_new_explicit_default_is_inserted_before_replacing_existing_default():
+    identity = _identity()
+    identity.id = "identity-1"
+    session = AsyncMock()
+    session.add = MagicMock()
+    location = MagicMock(id="loc-1", institution_id="inst-1")
+    session.get = AsyncMock(return_value=location)
+
+    duplicate_result = MagicMock()
+    duplicate_result.scalar_one_or_none.return_value = None
+    default_result = MagicMock()
+    default_result.scalar_one_or_none.return_value = "old-default"
+    update_result = MagicMock()
+    session.execute = AsyncMock(
+        side_effect=[duplicate_result, default_result, update_result]
+    )
+    inserted_default_states: list[bool] = []
+
+    async def capture_flush():
+        if session.add.call_args:
+            inserted_default_states.append(session.add.call_args.args[0].is_default)
+
+    session.flush = AsyncMock(side_effect=capture_flush)
+    service = EmailIdentityService(session, provisioning=AsyncMock())
+
+    address = asyncio.run(
+        service.create_address(
+            identity,
+            institution_id="inst-1",
+            location_id="loc-1",
+            local_part="appointments",
+            make_default=True,
+        )
+    )
+
+    assert inserted_default_states[0] is False
+    assert address.is_default is True
 
 
 def test_resolution_is_unsendable_when_nothing_is_configured():

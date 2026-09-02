@@ -420,7 +420,7 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
                                         isActive={location.pathname === "/institution-admin/email-templates"}
                                     />
                                 )}
-                                {(user?.role === "INSTITUTION_ADMIN" || user?.role === "LOCATION_ADMIN") && (
+                                {user?.role === "INSTITUTION_ADMIN" && (
                                     <NavItem
                                         item={{
                                             title: "Inbound Email",
@@ -482,7 +482,7 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
                                         isActive={location.pathname.startsWith("/institution-admin/campaign-email-templates")}
                                     />
                                 )}
-                                {user?.role === "INSTITUTION_ADMIN" && (
+                                {(user?.role === "INSTITUTION_ADMIN" || user?.role === "LOCATION_ADMIN") && (
                                     <NavItem
                                         item={{
                                             title: "Sending Address",

@@ -37,6 +37,7 @@ from src.app.models.inbound_email_message import (
 )
 from src.app.models.institution import Institution
 from src.app.models.institution_location import InstitutionLocation
+from src.app.models.email_sending_identity import EmailSendingIdentity
 from src.app.services.email.inbox_settings_service import InboxSettingsService
 from src.app.services.email.inbound_parser import ParsedEmail, classify_intent
 from src.app.services.email.reply_address import ReplyRoute, find_reply_address, parse_reply_address
@@ -139,6 +140,12 @@ class InboundEmailRouter:
             return RoutingResult(message=message)
 
         message.institution_id = str(institution.id)
+        routing_domain = self._routing_domain(parsed)
+        if not await self._domain_belongs_to_institution(institution, routing_domain):
+            message.status = InboundEmailStatus.UNROUTABLE.value
+            message.status_reason = "Reply address domain does not belong to this clinic"
+            await self.session.flush()
+            return RoutingResult(message=message)
 
         location = await self._resolve_location(institution, route) if route.is_inbox else None
         if location is not None:
@@ -161,6 +168,16 @@ class InboundEmailRouter:
             if route.is_inbox
             else None
         )
+        if (
+            route.is_inbox
+            and inbox_settings is not None
+            and (inbox_settings.inbound_domain or "").lower()
+            != (routing_domain or "").lower()
+        ):
+            message.status = InboundEmailStatus.UNROUTABLE.value
+            message.status_reason = "Inbox address was sent to the wrong clinic domain"
+            await self.session.flush()
+            return RoutingResult(message=message)
         # Direct-to-clinic aliases are an explicit opt-in. Conversation reply
         # tokens remain accepted after disabling so a patient replying to an
         # older message is not silently lost.
@@ -268,6 +285,27 @@ class InboundEmailRouter:
     def _resolve_route(self, parsed: ParsedEmail) -> ReplyRoute | None:
         address = find_reply_address(parsed.all_recipients)
         return parse_reply_address(address) if address else None
+
+    def _routing_domain(self, parsed: ParsedEmail) -> str | None:
+        address = find_reply_address(parsed.all_recipients)
+        if not address or "@" not in address:
+            return None
+        return address.rsplit("@", 1)[1].strip().lower().rstrip(".")
+
+    async def _domain_belongs_to_institution(
+        self, institution: Institution, domain: str | None
+    ) -> bool:
+        if not domain:
+            return False
+        if settings.ses_inbound_domain and domain == settings.ses_inbound_domain.lower():
+            return True
+        result = await self.session.execute(
+            select(EmailSendingIdentity.id).where(
+                EmailSendingIdentity.institution_id == institution.id,
+                func.lower(EmailSendingIdentity.inbound_domain) == domain,
+            )
+        )
+        return result.scalar_one_or_none() is not None
 
     async def _resolve_institution(self, route: ReplyRoute) -> Institution | None:
         """Match the institution by id prefix.

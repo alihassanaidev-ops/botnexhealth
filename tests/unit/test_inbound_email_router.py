@@ -75,6 +75,7 @@ def _route(router, parsed=None, **kw):
     with patch("src.app.services.email.inbound_router.settings") as s:
         s.inbound_email_max_body_bytes = 256_000
         s.inbound_email_sender_hourly_limit = 60
+        s.ses_inbound_domain = INBOUND_DOMAIN
         return asyncio.run(router.route(parsed or _parsed(), **kw))
 
 
@@ -131,6 +132,29 @@ def test_unknown_institution_is_unroutable():
     assert result.message.status == InboundEmailStatus.UNROUTABLE.value
 
 
+def test_valid_token_on_another_clinics_custom_domain_is_rejected():
+    router = _router(institution=_institution(), contact=_contact())
+    no_domain = MagicMock()
+    no_domain.scalar_one_or_none.return_value = None
+    router.session.execute.return_value = no_domain
+    parsed = _parsed(
+        to_addresses=[
+            make_reply_address(
+                "reply.other-clinic.com",
+                institution_id=INST_ID,
+                location_id="aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
+                contact_id=CONTACT_ID,
+            )
+        ]
+    )
+
+    result = _route(router, parsed)
+
+    assert result.message.status == InboundEmailStatus.UNROUTABLE.value
+    assert "domain" in result.message.status_reason.lower()
+    router._resolve_contact.assert_not_awaited()
+
+
 def test_direct_inbox_address_requires_its_exact_location():
     router = _router(institution=_institution(), contact=_contact())
     router._resolve_location = AsyncMock(return_value=None)
@@ -159,6 +183,7 @@ def test_enabled_direct_inbox_routes_known_contact_to_location():
         is_enabled=True,
         platform_ready=True,
         allow_new_contacts=False,
+        inbound_domain=INBOUND_DOMAIN,
     )
     parsed = _parsed(
         to_addresses=[

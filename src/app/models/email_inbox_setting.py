@@ -49,6 +49,11 @@ class EmailInboxSetting(Base):
         ForeignKey("institution_locations.id", ondelete="CASCADE"),
         nullable=True,
     )
+    email_identity_id: Mapped[str | None] = mapped_column(
+        UUID(as_uuid=False),
+        ForeignKey("email_sending_identities.id", ondelete="SET NULL"),
+        nullable=True,
+    )
     is_enabled: Mapped[bool] = mapped_column(
         Boolean, nullable=False, default=False, server_default=text("false")
     )
@@ -73,4 +78,3 @@ class EmailInboxSetting(Base):
     @forward_to.setter
     def forward_to(self, value: str | None) -> None:
         self.forward_to_encrypted = encrypt_value(value)
-

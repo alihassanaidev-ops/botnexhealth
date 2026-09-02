@@ -34,6 +34,8 @@ dependencies = [
   "phonenumbers>=8.13",
   # AWS S3 (call recordings)
   "boto3>=1.34",
+  # Verify clinic-owned inbound MX records before activating receipt routing
+  "dnspython>=2.7,<3",
   # MFA (WebAuthn/passkeys + TOTP)
   "webauthn>=2.7.1",
   "pyotp>=2.9.0",

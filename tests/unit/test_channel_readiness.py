@@ -105,6 +105,11 @@ def _make_session(location=None, institution=None, profile_exists=False):
     exec_result = MagicMock()
     exec_result.scalar = MagicMock(return_value="profile-1" if profile_exists else None)
     exec_result.scalar_one_or_none = MagicMock(return_value=None)
+    # Sender resolution uses ``Result.first()`` because the address and its
+    # domain are selected together.  An unconfigured clinic has no such row;
+    # make that explicit so the mock follows SQLAlchemy instead of returning a
+    # truthy child MagicMock that looks like an unverified domain.
+    exec_result.first = MagicMock(return_value=None)
     session.execute = AsyncMock(return_value=exec_result)
     return session
 

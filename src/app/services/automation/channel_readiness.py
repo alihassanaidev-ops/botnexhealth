@@ -138,8 +138,12 @@ class ChannelReadinessService:
                 )
 
         if email_nodes:
-            problem = await self._email_problem(institution, location)
             for node in email_nodes:
+                problem = await self._email_problem(
+                    institution,
+                    location,
+                    sender_address_id=node.sender_address_id,
+                )
                 if problem is None:
                     continue
                 severity, message = problem
@@ -255,6 +259,7 @@ class ChannelReadinessService:
         self,
         institution: Institution | None,
         location: InstitutionLocation | None,
+        sender_address_id: str | None = None,
     ) -> tuple[str, str] | None:
         """``(severity, message)`` for the email channel, or None when ready.
 
@@ -277,10 +282,25 @@ class ChannelReadinessService:
         try:
             from src.app.services.email.identity_service import EmailIdentityService
 
-            identity = await EmailIdentityService(self.session).get_effective_identity(
-                str(institution.id),
-                str(location.id) if location is not None else None,
-            )
+            service = EmailIdentityService(self.session)
+            if sender_address_id:
+                address, identity = await service.get_effective_sender(
+                    str(institution.id),
+                    str(location.id) if location is not None else None,
+                    sender_address_id=sender_address_id,
+                )
+                if address is None or identity is None:
+                    return (
+                        "error",
+                        "The selected email sender is missing or does not apply to this location.",
+                    )
+                if not address.is_active:
+                    return ("error", f"The selected sender {address.from_address} is disabled.")
+            else:
+                identity = await service.get_effective_identity(
+                    str(institution.id),
+                    str(location.id) if location is not None else None,
+                )
         except Exception:  # noqa: BLE001 — readiness must not fail the publish path
             logger.warning(
                 "could not load the sending identity for readiness", exc_info=True

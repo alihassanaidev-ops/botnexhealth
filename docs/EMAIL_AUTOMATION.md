@@ -10,21 +10,23 @@ on Resend until the separate SES delivery/bounce/complaint pipeline and SES
 production-access gates are complete; inbound receiving does not require us to
 switch the outbound provider.
 
-The target should use one platform inbound subdomain (for example,
-`inbound.scalenexus.ai`) with a signed address per conversation, not a separate
-SES receipt-rule stack per clinic. Each clinic can still have its own verified
-sending identity and SES tenant/configuration set. A signed Reply-To address
-routes a patient response back to the exact institution, location, contact, and
-workflow run without putting those identifiers in clear text.
+The platform uses one SES receiving pipeline, not one AWS stack per clinic, but
+it is **not** limited to one visible domain. An institution may register multiple
+clinic-owned sending domains and dedicated receiving subdomains such as
+`reply.clinic.com`. Each domain can expose multiple sender addresses; locations
+inherit an institution default or select their own. `inbound.scalenexus.ai` is a
+fallback for trials and clinics that cannot delegate DNS, not the primary model.
+A signed Reply-To routes a response to the exact institution, location, contact,
+and workflow run without exposing those identifiers.
 
 ## What exists now
 
 | Capability | Application | Staging AWS / UI | Result |
 |---|---|---|---|
 | Workflow Send Email node | Recipient resolution, templates, Jinja merge fields, consent/DNC gate, durable outbound ledger, retries, breaker, and usage metering | Patient provider is Resend | Sends are recorded and visible in the shared thread |
-| Clinic sending identities | Institution/location model, Super Admin provision/remove/activate controls, managed DNS, hourly verification, and audited mutations | Staging provisioning configuration and IAM are defined with activation locked | Identities can be safely onboarded without changing live delivery after deployment |
+| Clinic domains and senders | Multiple institution-owned domains; multiple institution/location sender addresses; explicit defaults; optional workflow pinning; Super Admin provider lifecycle | DNS records include DKIM, custom MAIL FROM SPF/MX, and optional receiving MX | Domain deletion cannot accidentally delete a sibling address; explicit workflow pins never silently change brands |
 | SES outbound | SES v2 sender, tenant name, configuration set, and message tags supported | SES account is still in sandbox (200/day, 1/second); no identities or configuration sets | Not production-ready |
-| Patient Reply-To | Signed conversation replies plus signed per-location cold-inbox addresses | Staging CDK defines `inbound.staging.scalenexus.ai` | No tenant ids are trusted from unsigned mail |
+| Patient Reply-To | Signed conversation replies plus signed per-location cold-inbox addresses on either a clinic-owned receiving subdomain or the platform fallback | Staging CDK defines `inbound.staging.scalenexus.ai`; Super Admin may register clinic domains dynamically | Custom recipient domains are checked against their owning institution before a token is routed |
 | SES inbound processing | MIME parsing, quarantine, encrypted persistence, tenant/contact/run routing, wait-resume, forwarding, sender limits, and raw cleanup | CDK defines MX/identity, receipt rule, encrypted S3, SNS/SQS, DLQ, IAM and alarms | Push-based; no mailbox polling or per-clinic receipt rule |
 | Shared inbox | Lists both sides of SMS/email threads, assignment, resolution, and recorded in-app email reply | Institution/location receiving controls have their own settings page | Institution and location admins can reply and configure the locations they own |
 | Email delivery events | Resend webhook handles bounce/complaint and unsubscribe state | No SES event destination/consumer | SES delivery, bounce, complaint, open, and click events would be lost |
@@ -42,11 +44,19 @@ One provider limitation still matters before SES **outbound** is enabled:
 
 ### Super Admin onboarding boundary
 
-Super Admin owns the provider-changing operations: provision an institution or
-location identity, remove it, and explicitly activate/deactivate live SES
-routing. Institution admins can edit only the display name/reply-to address and
-request a verification recheck. Provisioning always creates an inactive row;
-DNS becoming verified never changes the live provider by itself.
+Super Admin owns provider-changing operations: register/remove domains and
+explicitly activate/deactivate their outbound and inbound SES routing. A custom
+domain remains inactive until DKIM verifies; a receiving subdomain additionally
+must publish the exact regional SES MX record. Institution admins manage sender
+addresses, institution/location defaults, display names and external Reply-To
+overrides on verified domains. Location admins can choose receiving behavior for
+their own inbox but cannot create or reassign sender addresses. Provisioning
+never changes live routing by itself.
+
+Domains and addresses are separate records. One provider domain may safely back
+`appointments@clinic.com`, `billing@clinic.com`, and location-specific senders.
+Deleting an address does not delete provider DNS. A default address cannot be
+disabled or deleted until another default is selected.
 
 `SES_CLINIC_SENDING_ENABLED` is a deployment-controlled global interlock. Keep
 it false until the rollout gates below pass. Super Admin can still provision and
@@ -132,7 +142,8 @@ can be added later without weakening tenant attribution.
 
 CDK provisions in `ca-central-1`:
 
-- verified inbound subdomain and MX record;
+- a verified platform fallback subdomain and MX record, plus any number of
+  clinic-owned receiving subdomains registered during onboarding;
 - active SES receipt-rule set with spam/virus scanning;
 - encrypted, private S3 bucket with short lifecycle for raw MIME;
 - KMS-encrypted SNS/SQS delivery with a dead-letter queue, least-privilege bucket/queue policy,
@@ -154,9 +165,12 @@ Current behavior and remaining extensions:
 2. Known-contact replies resume an explicit wait and can stop other automation.
 3. Signed cold-inbox addresses match a Contact by email hash or create a lead
    only when `allow_new_contacts` is enabled; ambiguous routing is held.
-4. Net-new compose, a staff-replied workflow event, and an explicit resume
+4. A workflow may inherit the location/institution default sender or pin one
+   approved sender address. A missing, disabled, or unverified pin fails the
+   node rather than silently sending under another brand.
+5. Net-new compose, a staff-replied workflow event, and an explicit resume
    control remain extensions; they are not implied by the reply composer.
-5. Optional delivery/open/click/bounce workflow conditions follow after event storage is
+6. Optional delivery/open/click/bounce workflow conditions follow after event storage is
    reliable.
 
 ## Rollout gates

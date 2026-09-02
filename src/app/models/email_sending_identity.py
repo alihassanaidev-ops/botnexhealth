@@ -1,4 +1,4 @@
-"""Per-clinic email sending identity and its verification state.
+"""Institution-owned email domains and their verification state.
 
 A clinic's patients should see mail from the clinic, not from the platform. That
 needs more than a from-address field: an address only delivers if the domain it
@@ -6,10 +6,9 @@ belongs to is authenticated (DKIM/SPF/DMARC) with the sending provider. An
 unverified domain does not bounce loudly — it lands in spam — so the verification
 state has to be modelled and enforced rather than assumed.
 
-Rows are scoped either to a whole institution (``location_id IS NULL``) or to a
-single location. Resolution prefers the location row, then the institution row,
-then the platform default. That mirrors how SMS already resolves a sender, where
-each location carries its own ``twilio_from_number``.
+An institution can own many rows. Sender addresses and their institution/location
+defaults live in ``email_sender_addresses`` so several addresses can safely share
+one provider domain identity.
 """
 
 from __future__ import annotations
@@ -77,7 +76,8 @@ class EmailSendingIdentity(Base):
         ForeignKey("institutions.id", ondelete="CASCADE"),
         nullable=False,
     )
-    #: NULL means the institution-wide default.
+    #: Legacy scope retained for migration compatibility. New domains belong to
+    #: the institution; address rows carry location assignments.
     location_id: Mapped[str | None] = mapped_column(
         UUID(as_uuid=False),
         ForeignKey("institution_locations.id", ondelete="CASCADE"),
@@ -93,6 +93,15 @@ class EmailSendingIdentity(Base):
     #: the clinic's real mailbox.
     reply_to_address: Mapped[str | None] = mapped_column(String(320), nullable=True)
 
+    #: Optional clinic-owned receiving subdomain, e.g. ``reply.clinic.com``.
+    #: Its MX points to the shared SES receiver while the visible address stays
+    #: entirely clinic-branded.
+    inbound_domain: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    inbound_dns_records: Mapped[list | None] = mapped_column(JSON, nullable=True)
+    inbound_enabled: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default="false"
+    )
+
     status: Mapped[str] = mapped_column(
         String(24), nullable=False, default=EmailIdentityStatus.PENDING_DNS.value
     )
@@ -107,6 +116,9 @@ class EmailSendingIdentity(Base):
     #: dashboard can show them for a clinic-owned domain the platform cannot
     #: publish into itself.
     dns_records: Mapped[list | None] = mapped_column(JSON, nullable=True)
+    dns_managed: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default="false"
+    )
     #: Provider-side references — the SES tenant and configuration set bound to
     #: this clinic, used to scope reputation and bounce handling per tenant.
     provider_tenant_name: Mapped[str | None] = mapped_column(String(64), nullable=True)

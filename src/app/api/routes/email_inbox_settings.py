@@ -52,8 +52,11 @@ class InboxSettingsResponse(BaseModel):
     forward_to: str | None
     inherited: bool
     platform_ready: bool
+    receiving_pipeline_ready: bool
+    platform_fallback_ready: bool
     inbound_domain: str | None
     inbox_address: str | None
+    email_identity_id: str | None
 
 
 class InboxSettingsUpdate(BaseModel):
@@ -61,6 +64,7 @@ class InboxSettingsUpdate(BaseModel):
     allow_new_contacts: bool = False
     stop_automation_on_reply: bool = True
     forward_to: str | None = Field(default=None, max_length=320)
+    email_identity_id: str | None = None
 
     @field_validator("forward_to")
     @classmethod
@@ -85,8 +89,11 @@ def _response(value: EffectiveInboxSettings) -> InboxSettingsResponse:
         forward_to=value.forward_to,
         inherited=value.inherited,
         platform_ready=value.platform_ready,
-        inbound_domain=address.split("@", 1)[1] if address else None,
+        receiving_pipeline_ready=value.receiving_pipeline_ready,
+        platform_fallback_ready=value.platform_fallback_ready,
+        inbound_domain=value.inbound_domain,
         inbox_address=address,
+        email_identity_id=value.email_identity_id,
     )
 
 
@@ -137,6 +144,7 @@ async def update_email_inbox_settings(
                 allow_new_contacts=body.allow_new_contacts,
                 stop_automation_on_reply=body.stop_automation_on_reply,
                 forward_to=body.forward_to,
+                email_identity_id=body.email_identity_id,
             )
         except ValueError as exc:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc

@@ -198,6 +198,7 @@ ROUTES_BY_BOUNDARY: dict[str, tuple[str, ...]] = {
     INSTITUTION_LOCATION_OR_SUPER_ADMIN: (
         "GET /api/institution/email-inbox-settings",
         "PUT /api/institution/email-inbox-settings",
+        "GET /api/institution/email-sending-identities",
     ),
     SUPER_ADMIN: (
         "GET /api/v1/nexhealth/institutions",
@@ -507,6 +508,8 @@ ROUTES_BY_BOUNDARY: dict[str, tuple[str, ...]] = {
         "DELETE /api/institution/email-sending-identities/{identity_id}",
         "POST /api/institution/email-sending-identities/{identity_id}/activate",
         "POST /api/institution/email-sending-identities/{identity_id}/deactivate",
+        "POST /api/institution/email-sending-identities/{identity_id}/activate-inbound",
+        "POST /api/institution/email-sending-identities/{identity_id}/deactivate-inbound",
     ),
     INSTITUTION_OR_SUPER_ADMIN: (
         # Clinic-authored campaign email templates. Institution-scoped content
@@ -523,9 +526,12 @@ ROUTES_BY_BOUNDARY: dict[str, tuple[str, ...]] = {
         # Sending identities: a clinic admin reads status, edits display fields
         # and re-checks verification. Provisioning and deletion stay super-admin
         # only (above) because they create and destroy real AWS resources.
-        "GET /api/institution/email-sending-identities",
         "PUT /api/institution/email-sending-identities/{identity_id}",
         "POST /api/institution/email-sending-identities/{identity_id}/verify",
+        "POST /api/institution/email-sending-identities/{identity_id}/addresses",
+        "PUT /api/institution/email-sending-identities/addresses/{address_id}",
+        "POST /api/institution/email-sending-identities/addresses/{address_id}/default",
+        "DELETE /api/institution/email-sending-identities/addresses/{address_id}",
     ),
 }
 

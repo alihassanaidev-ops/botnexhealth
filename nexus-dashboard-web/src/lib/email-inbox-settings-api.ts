@@ -11,8 +11,11 @@ export interface EmailInboxSettings {
     forward_to: string | null
     inherited: boolean
     platform_ready: boolean
+    receiving_pipeline_ready: boolean
+    platform_fallback_ready: boolean
     inbound_domain: string | null
     inbox_address: string | null
+    email_identity_id: string | null
 }
 
 export interface EmailInboxSettingsUpdate {
@@ -20,6 +23,7 @@ export interface EmailInboxSettingsUpdate {
     allow_new_contacts: boolean
     stop_automation_on_reply: boolean
     forward_to: string | null
+    email_identity_id: string | null
 }
 
 function params(institutionId?: string, locationId?: string) {

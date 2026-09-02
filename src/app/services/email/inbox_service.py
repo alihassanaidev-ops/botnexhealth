@@ -640,10 +640,28 @@ class InboxService:
         )
         if not configured.platform_ready or not configured.is_enabled:
             raise InboxAccessError("Inbound email is not enabled for this location")
-        identity = await EmailIdentityService(self.session).resolve(
+        previous_sender_id = (
+            await self.session.execute(
+                select(OutboundEmailMessage.sender_address_id)
+                .where(
+                    OutboundEmailMessage.conversation_thread_id == thread.id,
+                    OutboundEmailMessage.sender_address_id.is_not(None),
+                )
+                .order_by(OutboundEmailMessage.created_at.desc())
+                .limit(1)
+            )
+        ).scalar_one_or_none()
+        identity_service = EmailIdentityService(self.session)
+        identity = await identity_service.resolve(
             str(thread.institution_id),
             str(thread.location_id) if thread.location_id else None,
+            sender_address_id=str(previous_sender_id) if previous_sender_id else None,
         )
+        if not identity.from_address and previous_sender_id:
+            identity = await identity_service.resolve(
+                str(thread.institution_id),
+                str(thread.location_id) if thread.location_id else None,
+            )
         if not identity.from_address:
             raise InboxAccessError("No sending address is configured")
 
@@ -657,6 +675,7 @@ class InboxService:
             source="inbox",
             idempotency_key=idempotency_key,
             from_address=identity.from_address,
+            sender_address_id=identity.address_id,
             to_email_masked=_mask(contact.email) or "***",
             status="sending",
             attempt_count=0,
@@ -665,6 +684,7 @@ class InboxService:
         ledger.attempt_count += 1
         ledger.error_code = None
         ledger.from_address = identity.from_address
+        ledger.sender_address_id = identity.address_id
         ledger.to_email = contact.email
         ledger.subject = subject
         ledger.body = body
@@ -672,7 +692,7 @@ class InboxService:
         await self.session.commit()
 
         reply_to = make_reply_address(
-            settings.ses_inbound_domain or "",
+            identity.inbound_domain or settings.ses_inbound_domain or "",
             institution_id=str(thread.institution_id),
             location_id=str(thread.location_id) if thread.location_id else None,
             contact_id=str(contact.id),

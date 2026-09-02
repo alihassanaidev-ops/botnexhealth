@@ -164,6 +164,7 @@ class EmailNodeExecutor:
         identity = await EmailIdentityService(self.session).resolve(
             str(run.institution_id),
             str(run.location_id) if run.location_id else None,
+            sender_address_id=node.sender_address_id,
         )
         if not identity.is_sendable:
             return await self._abort(
@@ -256,9 +257,10 @@ class EmailNodeExecutor:
         # are not in a patient conversation, and pointing them at the inbound
         # router would file colleagues' replies as patient messages.
         reply_to = identity.reply_to
-        if patient_directed and settings.ses_inbound_domain:
+        reply_domain = identity.inbound_domain or settings.ses_inbound_domain
+        if patient_directed and reply_domain:
             reply_to = make_reply_address(
-                settings.ses_inbound_domain,
+                reply_domain,
                 institution_id=str(run.institution_id),
                 location_id=str(run.location_id) if run.location_id else None,
                 contact_id=str(run.contact_id) if run.contact_id else None,
@@ -322,6 +324,7 @@ class EmailNodeExecutor:
                     source="workflow",
                     idempotency_key=ledger_key,
                     from_address=identity.from_address,
+                    sender_address_id=identity.address_id,
                     to_email_masked=_mask_email(recipients[0]),
                     status="sending",
                     attempt_count=1,

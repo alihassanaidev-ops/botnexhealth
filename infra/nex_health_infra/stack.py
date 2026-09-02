@@ -277,7 +277,10 @@ class NexHealthPlatformStack(Stack):
             )
             receipt_rule = receipt_rules.add_rule(
                 "StoreAndNotify",
-                recipients=[config.email.ses_inbound_domain],
+                # Catch every SES-verified receiving identity in this account:
+                # the platform fallback plus clinic-owned reply subdomains.
+                # Application routing still requires a signed token and checks
+                # custom recipient-domain ownership before tenant attribution.
                 scan_enabled=True,
                 tls_policy=ses.TlsPolicy.REQUIRE,
                 actions=[
@@ -768,6 +771,7 @@ class NexHealthPlatformStack(Stack):
                     actions=[
                         "ses:CreateEmailIdentity",
                         "ses:GetEmailIdentity",
+                        "ses:PutEmailIdentityMailFromAttributes",
                         "ses:DeleteEmailIdentity",
                         "ses:CreateConfigurationSet",
                         "ses:DeleteConfigurationSet",
