@@ -109,3 +109,6 @@ git
 /docs/adr/*
 !/docs/adr/0002-retell-chat-generation-with-platform-sms-transport.md
 /Internal/
+
+# Playwright MCP session artifacts (console logs, page snapshots)
+.playwright-mcp/
