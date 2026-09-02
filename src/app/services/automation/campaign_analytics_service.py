@@ -553,6 +553,8 @@ _SMS_BRANCH = f"""
 """
 
 
+# ``transferred`` is counted per run rather than per attempt: a callback dialed
+# three times and transferred once is one transferred callback.
 _VOICE_BRANCH = f"""
         SELECT
             r.institution_id,
@@ -576,8 +578,6 @@ _VOICE_BRANCH = f"""
                     " OR v.dial_outcome IN ('failed', 'no_answer', 'busy', 'unknown')"
                     ")::bigint"
                 ),
-                # Per run, not per attempt: a callback dialled three times and
-                # transferred once is one transferred callback.
                 "transferred": (
                     "COUNT(DISTINCT v.workflow_run_id) FILTER ("
                     " WHERE v.dial_outcome = 'transferred'"
