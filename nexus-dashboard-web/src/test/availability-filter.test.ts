@@ -36,6 +36,8 @@ function av(overrides: Partial<CachedAvailability> = {}): CachedAvailability {
         operatory_name: "Room 1",
         begin_time: "09:00",
         end_time: "17:00",
+        start_at: null,
+        end_at: null,
         days: null,
         specific_date: "2026-08-20",
         appointment_type_ids: ["t1"],
@@ -149,6 +151,23 @@ describe("isExpired", () => {
 
     it("never expires a recurring rule", () => {
         expect(isExpired(av({ specific_date: null, days: ["Monday"] }), "2026-08-20")).toBe(false)
+    })
+
+    it("uses an absolute end instant when present instead of the browser date", () => {
+        const window = av({
+            specific_date: "2026-09-02",
+            begin_time: "00:00:00",
+            end_time: "20:10:00",
+            start_at: "2026-09-02T04:00:00.000Z",
+            end_at: "2026-09-03T00:10:00.000Z",
+        })
+
+        expect(isExpired(window, "2026-09-03", new Date("2026-09-02T23:07:00.000Z"))).toBe(false)
+        expect(isExpired(window, "2026-09-03", new Date("2026-09-03T00:10:01.000Z"))).toBe(true)
+    })
+
+    it("falls back to date-only expiry when no absolute end is available", () => {
+        expect(isExpired(av({ specific_date: "2026-09-02", end_at: null }), "2026-09-03")).toBe(true)
     })
 })
 

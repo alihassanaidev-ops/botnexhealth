@@ -1037,6 +1037,8 @@ def _to_working_window(raw: dict[str, Any]) -> dict[str, Any]:
     """Normalize the Synchronizer's working-window shape for setup routes."""
     window_id = _first(raw, "working_window_id", "id")
     window_status = str(_first(raw, "status", "Status") or "open").lower()
+    wall_start = _working_window_wall_time(raw, "StartTime", "begin_time", "start_time")
+    wall_end = _working_window_wall_time(raw, "EndTime", "finish_time", "end_time")
     if window_status == "closed" and window_id is None:
         # Derived closed periods have no writable working_window_id.  Give them
         # a deterministic display ID only; the route/UI explicitly keeps them
@@ -1047,16 +1049,19 @@ def _to_working_window(raw: dict[str, Any]) -> dict[str, Any]:
                 _first(raw, "WorkDate", "work_date"),
                 _first(raw, "ProviderId", "provider_id"),
                 _first(raw, "OperatoryId", "operatory_id"),
-                _first(raw, "StartTime", "start_time"),
-                _first(raw, "EndTime", "end_time"),
+                wall_start,
+                wall_end,
             )
         )
     return {
         "id": window_id,
         "provider_id": _first(raw, "ProviderId", "provider_id"),
         "operatory_id": _first(raw, "OperatoryId", "operatory_id"),
-        "begin_time": _first(raw, "StartTime", "start_time"),
-        "end_time": _first(raw, "EndTime", "end_time"),
+        "begin_time": wall_start,
+        "end_time": wall_end,
+        "start_at": _working_window_instant(raw, "start_time", "start_at"),
+        "end_at": _working_window_instant(raw, "end_time", "end_at"),
+        "timezone": _first(raw, "timezone", "Timezone"),
         "specific_date": _first(raw, "WorkDate", "work_date"),
         "appointment_type_ids": _first(raw, "appointment_type_ids") or [],
         "active": True,
@@ -1064,3 +1069,25 @@ def _to_working_window(raw: dict[str, Any]) -> dict[str, Any]:
         "status": window_status,
         "types_overridden": bool(_first(raw, "types_overridden")),
     }
+
+
+def _working_window_wall_time(raw: dict[str, Any], *keys: str) -> str | None:
+    for key in keys:
+        value = _first(raw, key)
+        if value in (None, ""):
+            continue
+        text = str(value)
+        if "T" not in text:
+            return text
+    return None
+
+
+def _working_window_instant(raw: dict[str, Any], *keys: str) -> str | None:
+    for key in keys:
+        value = _first(raw, key)
+        if value in (None, ""):
+            continue
+        text = str(value)
+        if "T" in text:
+            return text
+    return None

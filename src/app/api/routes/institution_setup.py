@@ -220,6 +220,8 @@ class CachedAvailabilityResponse(BaseModel):
     operatory_name: str | None = None
     begin_time: str | None = None
     end_time: str | None = None
+    start_at: str | None = None
+    end_at: str | None = None
     days: list[str] | None = None
     specific_date: str | None = None
     appointment_type_ids: list[str] | None = None
@@ -288,6 +290,8 @@ def _availability_response_from_raw(
         operatory_name=item.get("operatory_name"),
         begin_time=item.get("begin_time"),
         end_time=item.get("end_time"),
+        start_at=item.get("start_at"),
+        end_at=item.get("end_at"),
         days=item.get("days"),
         specific_date=item.get("specific_date"),
         appointment_type_ids=[type_id for type_id in type_ids if type_id],
@@ -309,6 +313,7 @@ def _availability_response_from_raw(
         types_overridden=bool(item.get("types_overridden")),
         source_metadata={
             "tz_offset": item.get("tz_offset"),
+            "timezone": item.get("timezone"),
             "custom_recurrence": item.get("custom_recurrence"),
         },
     )
@@ -474,6 +479,8 @@ def _availability_response_from_slot(slot: Any, *, index: int) -> CachedAvailabi
         operatory_name=slot.operatory_name,
         begin_time=_time_from_iso(slot.start),
         end_time=_time_from_iso(slot.end),
+        start_at=slot.start,
+        end_at=slot.end,
         days=[],
         specific_date=_date_from_iso(slot.start),
         appointment_type_ids=appointment_type_ids,

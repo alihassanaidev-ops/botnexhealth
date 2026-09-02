@@ -235,6 +235,9 @@ async def test_working_windows_use_stable_ids_and_override_endpoints() -> None:
                         "OperatoryId": 3,
                         "StartTime": "09:00:00",
                         "EndTime": "17:30:00",
+                        "timezone": "America/Toronto",
+                        "start_time": "2026-08-28T13:00:00.000Z",
+                        "end_time": "2026-08-28T21:30:00.000Z",
                         "Source": "synced",
                         "appointment_type_ids": [1, 2],
                         "types_overridden": False,
@@ -268,6 +271,11 @@ async def test_working_windows_use_stable_ids_and_override_endpoints() -> None:
     cleared = await adapter.clear_availability_override("gt-519")
 
     assert windows[0]["id"] == 519
+    assert windows[0]["begin_time"] == "09:00:00"
+    assert windows[0]["end_time"] == "17:30:00"
+    assert windows[0]["start_at"] == "2026-08-28T13:00:00.000Z"
+    assert windows[0]["end_at"] == "2026-08-28T21:30:00.000Z"
+    assert windows[0]["timezone"] == "America/Toronto"
     assert windows[0]["appointment_type_ids"] == [1, 2]
     assert windows[0]["types_overridden"] is False
     assert client.calls[0] == {
@@ -308,6 +316,8 @@ async def test_closed_working_period_is_display_only_and_never_patchable() -> No
                     "OperatoryId": 3,
                     "StartTime": "00:00:00",
                     "EndTime": "09:00:00",
+                    "start_time": "2026-09-01T04:00:00.000Z",
+                    "end_time": "2026-09-01T13:00:00.000Z",
                 }
             ],
         }
@@ -326,6 +336,10 @@ async def test_closed_working_period_is_display_only_and_never_patchable() -> No
     }
     assert windows[0]["status"] == "closed"
     assert windows[0]["synced"] is False
+    assert windows[0]["begin_time"] == "00:00:00"
+    assert windows[0]["end_time"] == "09:00:00"
+    assert windows[0]["start_at"] == "2026-09-01T04:00:00.000Z"
+    assert windows[0]["end_at"] == "2026-09-01T13:00:00.000Z"
     assert windows[0]["id"] == "closed:2026-09-01:3:3:00:00:00:09:00:00"
 
     with pytest.raises(ValueError, match="cannot be updated"):

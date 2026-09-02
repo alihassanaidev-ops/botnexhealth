@@ -72,8 +72,20 @@ export function isRecurring(av: CachedAvailability): boolean {
     return !av.specific_date
 }
 
-/** A dated window whose date has already passed. Recurring rules never expire. */
-export function isExpired(av: CachedAvailability, today: string = todayISO()): boolean {
+function parseInstant(value?: string | null): Date | null {
+    if (!value) return null
+    const millis = Date.parse(value)
+    return Number.isFinite(millis) ? new Date(millis) : null
+}
+
+/** A dated window whose end instant has passed. Recurring rules never expire. */
+export function isExpired(
+    av: CachedAvailability,
+    today: string = todayISO(),
+    now: Date = new Date()
+): boolean {
+    const endAt = parseInstant(av.end_at)
+    if (endAt) return endAt.getTime() <= now.getTime()
     return !!av.specific_date && av.specific_date < today
 }
 

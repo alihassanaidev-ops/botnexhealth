@@ -246,6 +246,8 @@ export interface CachedAvailability {
     operatory_name: string | null;
     begin_time: string | null;
     end_time: string | null;
+    start_at?: string | null;
+    end_at?: string | null;
     days: string[] | null;
     specific_date: string | null;
     appointment_type_ids: string[] | null;

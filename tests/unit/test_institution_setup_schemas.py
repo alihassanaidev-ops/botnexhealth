@@ -76,12 +76,16 @@ class TestCachedAvailabilityResponse:
             provider_source_id="10",
             begin_time="09:00",
             end_time="17:00",
+            start_at="2026-08-20T13:00:00.000Z",
+            end_at="2026-08-20T21:00:00.000Z",
             days=["Monday", "Tuesday"],
             appointment_type_ids=["50", "51"],
             active=True,
             synced=True,
         )
         assert av.provider_source_id == "10"
+        assert av.start_at == "2026-08-20T13:00:00.000Z"
+        assert av.end_at == "2026-08-20T21:00:00.000Z"
         assert av.days == ["Monday", "Tuesday"]
         assert av.synced is True
 
@@ -107,6 +111,8 @@ class TestCachedAvailabilityResponse:
         assert av.specific_date == "2026-07-30"
         assert av.begin_time == "09:00"
         assert av.end_time == "09:15"
+        assert av.start_at == "2026-07-30T09:00:00+00:00"
+        assert av.end_at == "2026-07-30T09:15:00+00:00"
         assert av.appointment_type_ids == []
         assert av.synced is True
         assert av.source_metadata["kind"] == "bookable_slot"
