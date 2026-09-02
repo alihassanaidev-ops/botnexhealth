@@ -84,6 +84,11 @@ const adminNav: NavItemDef[] = [
         icon: MailCheck,
     },
     {
+        title: "Inbound Email",
+        url: "/institution-admin/email-inbox",
+        icon: InboxIcon,
+    },
+    {
         title: "Phone Numbers",
         url: "/admin/twilio",
         icon: MessageSquare,
@@ -412,6 +417,16 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
                                             icon: Mail,
                                         }}
                                         isActive={location.pathname === "/institution-admin/email-templates"}
+                                    />
+                                )}
+                                {(user?.role === "INSTITUTION_ADMIN" || user?.role === "LOCATION_ADMIN") && (
+                                    <NavItem
+                                        item={{
+                                            title: "Inbound Email",
+                                            url: "/institution-admin/email-inbox",
+                                            icon: InboxIcon,
+                                        }}
+                                        isActive={location.pathname.startsWith("/institution-admin/email-inbox")}
                                     />
                                 )}
                                 {user?.role === "INSTITUTION_ADMIN" && (

@@ -1,4 +1,4 @@
-"""Run-scoped SMS conversation thread helpers."""
+"""Run-scoped SMS and email conversation thread helpers."""
 
 from __future__ import annotations
 
@@ -68,6 +68,34 @@ class CampaignConversationService:
             workflow_id=str(run.workflow_id),
             workflow_run_id=str(run.id),
             channel="sms",
+            status="open",
+        )
+        self.session.add(thread)
+        await self.session.flush()
+        return thread
+
+    async def open_email_thread(
+        self, run: AutomationWorkflowRun
+    ) -> CampaignConversationThread:
+        """Open or reuse the email thread owned by a workflow run."""
+        existing = (
+            await self.session.execute(
+                select(CampaignConversationThread).where(
+                    CampaignConversationThread.workflow_run_id == str(run.id),
+                    CampaignConversationThread.channel == "email",
+                    CampaignConversationThread.status.in_(_ACTIVE_THREAD_STATUSES),
+                )
+            )
+        ).scalar_one_or_none()
+        if existing is not None:
+            return existing
+        thread = CampaignConversationThread(
+            institution_id=str(run.institution_id),
+            location_id=str(run.location_id),
+            contact_id=str(run.contact_id),
+            workflow_id=str(run.workflow_id),
+            workflow_run_id=str(run.id),
+            channel="email",
             status="open",
         )
         self.session.add(thread)

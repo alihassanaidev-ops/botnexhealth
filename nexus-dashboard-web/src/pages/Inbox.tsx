@@ -18,6 +18,7 @@ import {
     Mail,
     MessageSquare,
     RefreshCw,
+    Send,
     UserCheck,
 } from "lucide-react"
 import { toast } from "sonner"
@@ -28,6 +29,8 @@ import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Label } from "@/components/ui/label"
 import { Switch } from "@/components/ui/switch"
+import { Input } from "@/components/ui/input"
+import { Textarea } from "@/components/ui/textarea"
 import { CardsSkeleton } from "@/components/ui/skeletons"
 import {
     Select,
@@ -45,6 +48,7 @@ import {
     getInboxThread,
     listInboxThreads,
     resolveInboxThread,
+    replyToInboxThread,
     type InboxActivity,
     type InboxChannel,
     type InboxScopes,
@@ -195,6 +199,9 @@ export default function Inbox() {
     const [scopes, setScopes] = useState<InboxScopes | null>(null)
     const [institutionId, setInstitutionId] = useState<string>(ANY)
     const [locationId, setLocationId] = useState<string>(ANY)
+    const [replySubject, setReplySubject] = useState("")
+    const [replyBody, setReplyBody] = useState("")
+    const [replyKey, setReplyKey] = useState(() => crypto.randomUUID())
 
     // Permissions are served, not re-derived from the role, so this cannot
     // drift from what the API enforces. Until they arrive, assume the smaller
@@ -202,6 +209,7 @@ export default function Inbox() {
     // and then fails.
     const canAssign = scopes?.can_assign ?? false
     const canWrite = scopes?.can_write ?? false
+    const canReply = scopes?.can_reply ?? false
 
     useEffect(() => {
         getInboxScopes()
@@ -272,7 +280,20 @@ export default function Inbox() {
         setSelectedId(id)
         setDetailLoading(true)
         try {
-            setDetail(await getInboxThread(id))
+            const opened = await getInboxThread(id)
+            setDetail(opened)
+            const latestSubject = [...opened.messages]
+                .reverse()
+                .find((message) => message.channel === "email" && message.subject)?.subject
+            if (opened.thread.channel === "email") {
+                setReplySubject(
+                    latestSubject
+                        ? /^re:/i.test(latestSubject) ? latestSubject : `Re: ${latestSubject}`
+                        : "Re: Your message",
+                )
+                setReplyBody("")
+                setReplyKey(crypto.randomUUID())
+            }
         } catch (err) {
             toast.error(errorMessage(err, "Failed to open the conversation"))
             setDetail(null)
@@ -307,6 +328,27 @@ export default function Inbox() {
             await load()
         } catch (err) {
             toast.error(errorMessage(err, "Could not assign"))
+        } finally {
+            setBusy(false)
+        }
+    }
+
+    const sendReply = async () => {
+        if (!selectedId || !replySubject.trim() || !replyBody.trim()) return
+        setBusy(true)
+        try {
+            await replyToInboxThread(selectedId, {
+                subject: replySubject.trim(),
+                body: replyBody.trim(),
+                idempotency_key: replyKey,
+            })
+            setReplyBody("")
+            setReplyKey(crypto.randomUUID())
+            toast.success("Reply sent")
+            await openThread(selectedId)
+            await load()
+        } catch (err) {
+            toast.error(errorMessage(err, "Could not send the reply"))
         } finally {
             setBusy(false)
         }
@@ -510,12 +552,12 @@ export default function Inbox() {
                                         {detail.messages.map((message) => (
                                             <div
                                                 key={message.id}
-                                                className="rounded-md border border-border px-3 py-2"
+                                                className={`rounded-md border px-3 py-2 ${message.direction === "outbound" ? "ml-8 border-primary/30 bg-primary/5" : "mr-8 border-border"}`}
                                             >
                                                 <div className="flex items-center justify-between gap-2 text-xs text-muted-foreground">
                                                     <span className="flex items-center gap-1.5">
                                                         <ChannelIcon channel={message.channel} />
-                                                        {message.from_masked ?? "Patient"}
+                                                        {message.direction === "outbound" ? "Clinic" : message.from_masked ?? "Patient"}
                                                     </span>
                                                     {message.created_at && (
                                                         <span>
@@ -554,6 +596,32 @@ export default function Inbox() {
                                         </div>
                                     )}
 
+                                    {detail.thread.channel === "email" && canReply && (
+                                        <div className="space-y-2 border-t border-border pt-4">
+                                            <Label htmlFor="reply-subject">Reply by email</Label>
+                                            <Input
+                                                id="reply-subject"
+                                                value={replySubject}
+                                                placeholder="Subject"
+                                                onChange={(event) => setReplySubject(event.target.value)}
+                                            />
+                                            <Textarea
+                                                value={replyBody}
+                                                placeholder="Write a reply…"
+                                                rows={5}
+                                                onChange={(event) => setReplyBody(event.target.value)}
+                                            />
+                                            <Button
+                                                onClick={() => void sendReply()}
+                                                disabled={busy || !replySubject.trim() || !replyBody.trim()}
+                                            >
+                                                {busy ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Send className="mr-2 h-4 w-4" />}
+                                                Send reply
+                                            </Button>
+                                            <p className="text-xs text-muted-foreground">The reply is recorded here before delivery and uses the location's configured sending address.</p>
+                                        </div>
+                                    )}
+
                                     {!canWrite && (
                                         <p className="text-xs text-muted-foreground">
                                             You have read access to this conversation. Assigning
@@ -562,11 +630,9 @@ export default function Inbox() {
                                         </p>
                                     )}
 
-                                    <p className="text-xs text-muted-foreground">
-                                        Replying to the patient is done from your own email —
-                                        a copy of every reply was forwarded to the clinic
-                                        inbox. In-app replying is not enabled yet.
-                                    </p>
+                                    {detail.thread.channel === "sms" && (
+                                        <p className="text-xs text-muted-foreground">SMS replies continue through the configured messaging channel.</p>
+                                    )}
                                 </>
                             )}
                         </CardContent>

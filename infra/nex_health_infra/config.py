@@ -88,6 +88,9 @@ class EmailConfig:
     ses_sending_hosted_zone_name: str | None = None
     ses_clinic_sending_enabled: bool = False
     ses_configuration_set_prefix: str = "scalenexus"
+    ses_inbound_enabled: bool = False
+    ses_inbound_domain: str | None = None
+    ses_inbound_hosted_zone_name: str | None = None
     ses_inbound_prefix: str = "inbound/"
     inbound_email_max_body_bytes: int = 256_000
     inbound_email_sender_hourly_limit: int = 60
@@ -275,6 +278,9 @@ def load_config(path: str | Path) -> EnvironmentConfig:
             ses_configuration_set_prefix=email.get(
                 "sesConfigurationSetPrefix", "scalenexus"
             ),
+            ses_inbound_enabled=bool(email.get("sesInboundEnabled", False)),
+            ses_inbound_domain=email.get("sesInboundDomain") or None,
+            ses_inbound_hosted_zone_name=email.get("sesInboundHostedZoneName") or None,
             ses_inbound_prefix=email.get("sesInboundPrefix", "inbound/"),
             inbound_email_max_body_bytes=int(
                 email.get("inboundEmailMaxBodyBytes", 256_000)

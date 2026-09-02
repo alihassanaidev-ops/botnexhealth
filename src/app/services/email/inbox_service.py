@@ -24,11 +24,13 @@ from typing import Any
 from sqlalchemy import Select, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from src.app.config import settings
 from src.app.models.campaign_conversation_thread import CampaignConversationThread
 from src.app.models.campaign_response import CampaignStaffHandoff
 from src.app.models.contact import Contact
 from src.app.models.inbound_email_message import InboundEmailMessage
 from src.app.models.inbound_sms_message import InboundSmsMessage
+from src.app.models.outbound_email_message import OutboundEmailMessage
 from src.app.models.institution import Institution
 from src.app.models.institution_location import InstitutionLocation
 from src.app.models.sms_history_log import SmsHistoryLog
@@ -42,6 +44,14 @@ _UNRESOLVED_HANDOFF_STATUSES = ("open", "assigned")
 
 class InboxAccessError(PermissionError):
     """The caller may not see or act on this conversation."""
+
+
+class InboxDeliveryError(RuntimeError):
+    """A visible, scoped thread could not safely deliver a staff reply."""
+
+    def __init__(self, message: str, *, status_code: int) -> None:
+        super().__init__(message)
+        self.status_code = status_code
 
 
 @dataclass(frozen=True)
@@ -355,7 +365,10 @@ class InboxService:
 
         emails = await self.session.execute(
             select(InboundEmailMessage)
-            .where(InboundEmailMessage.conversation_thread_id == str(thread.id))
+            .where(
+                InboundEmailMessage.institution_id == str(thread.institution_id),
+                InboundEmailMessage.conversation_thread_id == str(thread.id),
+            )
             .order_by(InboundEmailMessage.created_at)
         )
         for message in emails.scalars().all():
@@ -373,9 +386,35 @@ class InboxService:
                 )
             )
 
+        outbound_emails = await self.session.execute(
+            select(OutboundEmailMessage)
+            .where(
+                OutboundEmailMessage.institution_id == str(thread.institution_id),
+                OutboundEmailMessage.conversation_thread_id == str(thread.id),
+                OutboundEmailMessage.status == "sent",
+            )
+            .order_by(OutboundEmailMessage.created_at)
+        )
+        for message in outbound_emails.scalars().all():
+            messages.append(
+                ThreadMessage(
+                    id=str(message.id),
+                    direction="outbound",
+                    channel="email",
+                    body=message.body,
+                    subject=message.subject,
+                    intent=None,
+                    created_at=message.sent_at or message.created_at,
+                    from_masked=_mask(message.from_address),
+                )
+            )
+
         sms = await self.session.execute(
             select(InboundSmsMessage)
-            .where(InboundSmsMessage.conversation_thread_id == str(thread.id))
+            .where(
+                InboundSmsMessage.institution_id == str(thread.institution_id),
+                InboundSmsMessage.conversation_thread_id == str(thread.id),
+            )
             .order_by(InboundSmsMessage.created_at)
         )
         for message in sms.scalars().all():
@@ -395,13 +434,15 @@ class InboxService:
         # Outbound SMS, so an SMS conversation reads as a conversation rather
         # than as a list of the patient's replies with our side missing.
         #
-        # There is no equivalent for email yet: outbound email is not logged
-        # per-message, so an email thread still shows only the inbound side. See
-        # the session notes — the same missing log is what blocks in-app replying
-        # and Message-ID threading fallback, so all three want fixing together.
+        # Email uses OutboundEmailMessage above; SMS keeps its existing history
+        # table. Both queries carry the tenant predicate as well as the scoped
+        # thread id so RLS is defense-in-depth rather than the only boundary.
         sent = await self.session.execute(
             select(SmsHistoryLog)
-            .where(SmsHistoryLog.conversation_thread_id == str(thread.id))
+            .where(
+                SmsHistoryLog.institution_id == str(thread.institution_id),
+                SmsHistoryLog.conversation_thread_id == str(thread.id),
+            )
             .order_by(SmsHistoryLog.timestamp)
         )
         for message in sent.scalars().all():
@@ -548,6 +589,214 @@ class InboxService:
         thread.completion_reason = outcome or "resolved_by_staff"
         await self.session.flush()
         return len(handoffs)
+
+    async def reply_email(
+        self,
+        scope: InboxScope,
+        thread_id: str,
+        *,
+        subject: str,
+        body: str,
+        idempotency_key: str,
+    ) -> OutboundEmailMessage:
+        """Send one recorded email reply without a duplicate-send crash window."""
+        if not scope.may_reply:
+            raise InboxAccessError("This role cannot reply to conversations")
+        thread = await self._load_thread(scope, thread_id)
+        if thread.channel != "email":
+            raise InboxAccessError("This conversation is not an email thread")
+
+        existing = (
+            await self.session.execute(
+                select(OutboundEmailMessage).where(
+                    OutboundEmailMessage.idempotency_key == idempotency_key
+                )
+            )
+        ).scalar_one_or_none()
+        if existing is not None:
+            if str(existing.conversation_thread_id) != str(thread.id):
+                raise InboxAccessError("Reply key belongs to another conversation")
+            if existing.status == "sent":
+                return existing
+            if existing.status in ("sending", "uncertain"):
+                raise InboxDeliveryError(
+                    "This reply may already be in flight; refresh before trying again",
+                    status_code=409,
+                )
+
+        contact = await self.session.get(Contact, thread.contact_id)
+        if contact is None or not contact.email:
+            raise InboxAccessError("This contact has no email address")
+
+        from src.app.services.automation.email_node_executor import get_patient_email_sender_for
+        from src.app.services.email.identity_service import EmailIdentityService
+        from src.app.services.email.inbox_settings_service import InboxSettingsService
+        from src.app.services.email.reply_address import make_reply_address
+        from src.app.services.email.sender import EmailMessage, EmailSendError
+
+        configured = await InboxSettingsService(self.session).get(
+            str(thread.institution_id),
+            str(thread.location_id) if thread.location_id else None,
+        )
+        if not configured.platform_ready or not configured.is_enabled:
+            raise InboxAccessError("Inbound email is not enabled for this location")
+        identity = await EmailIdentityService(self.session).resolve(
+            str(thread.institution_id),
+            str(thread.location_id) if thread.location_id else None,
+        )
+        if not identity.from_address:
+            raise InboxAccessError("No sending address is configured")
+
+        ledger = existing or OutboundEmailMessage(
+            institution_id=str(thread.institution_id),
+            location_id=str(thread.location_id) if thread.location_id else None,
+            contact_id=str(contact.id),
+            workflow_run_id=str(thread.workflow_run_id) if thread.workflow_run_id else None,
+            conversation_thread_id=str(thread.id),
+            created_by_user_id=scope.user_id,
+            source="inbox",
+            idempotency_key=idempotency_key,
+            from_address=identity.from_address,
+            to_email_masked=_mask(contact.email) or "***",
+            status="sending",
+            attempt_count=0,
+        )
+        ledger.status = "sending"
+        ledger.attempt_count += 1
+        ledger.error_code = None
+        ledger.from_address = identity.from_address
+        ledger.to_email = contact.email
+        ledger.subject = subject
+        ledger.body = body
+        self.session.add(ledger)
+        await self.session.commit()
+
+        reply_to = make_reply_address(
+            settings.ses_inbound_domain or "",
+            institution_id=str(thread.institution_id),
+            location_id=str(thread.location_id) if thread.location_id else None,
+            contact_id=str(contact.id),
+            workflow_run_id=str(thread.workflow_run_id) if thread.workflow_run_id else None,
+        )
+        try:
+            sent = await get_patient_email_sender_for(identity.provider).send(
+                EmailMessage(
+                    from_address=identity.from_address,
+                    from_name=identity.from_name,
+                    to=[contact.email],
+                    subject=subject,
+                    text=body,
+                    reply_to=reply_to,
+                    idempotency_key=idempotency_key,
+                    institution_id=str(thread.institution_id),
+                    tenant_name=identity.tenant_name,
+                    configuration_set=identity.configuration_set,
+                    tags={"source": "inbox_reply"},
+                )
+            )
+        except EmailSendError as exc:
+            ledger.status = "uncertain" if exc.outcome_uncertain else "failed"
+            ledger.error_code = type(exc).__name__
+            await self.session.commit()
+            if exc.outcome_uncertain:
+                raise InboxDeliveryError(
+                    "Reply outcome is uncertain; do not send it again yet",
+                    status_code=409,
+                ) from exc
+            raise InboxDeliveryError(
+                "The email provider did not accept the reply", status_code=502
+            ) from exc
+        except Exception as exc:
+            ledger.status = "uncertain"
+            ledger.error_code = type(exc).__name__[:80]
+            await self.session.commit()
+            raise InboxDeliveryError(
+                "Reply outcome is uncertain; do not send it again yet",
+                status_code=409,
+            ) from exc
+
+        ledger.provider = sent.provider
+        ledger.provider_message_id = sent.provider_message_id
+        ledger.status = "sent"
+        ledger.sent_at = datetime.now(timezone.utc)
+        thread.status = "open"
+        thread.completed_at = None
+        thread.completion_reason = None
+        thread.last_message_at = ledger.sent_at
+        handoffs = list(
+            (
+                await self.session.execute(
+                    select(CampaignStaffHandoff).where(
+                        CampaignStaffHandoff.conversation_thread_id
+                        == str(thread.id),
+                        CampaignStaffHandoff.status.in_(
+                            _UNRESOLVED_HANDOFF_STATUSES
+                        ),
+                    )
+                )
+            )
+            .scalars()
+            .all()
+        )
+        for handoff in handoffs:
+            handoff.status = "resolved"
+            handoff.resolved_at = ledger.sent_at
+            handoff.resolution_outcome = "replied_by_staff"
+        # The delivery result must be durable before any optional automation
+        # cleanup. A cleanup failure must never make the UI invite a duplicate
+        # reply after the provider already accepted the first one.
+        await self.session.commit()
+
+        if configured.stop_automation_on_reply:
+            try:
+                await self._stop_automation_for_staff_reply(thread, contact)
+                await self.session.commit()
+            except Exception as exc:  # noqa: BLE001 — delivery already succeeded
+                await self.session.rollback()
+                logger.error(
+                    "could not stop automation after staff email reply: "
+                    "thread=%s contact=%s error=%s",
+                    thread.id,
+                    contact.id,
+                    exc,
+                )
+        return ledger
+
+    async def _stop_automation_for_staff_reply(
+        self, thread: CampaignConversationThread, contact: Contact
+    ) -> int:
+        """Human takeover cancels every active run for this contact."""
+        from src.app.models.automation_workflow import (
+            AutomationRunStatus,
+            AutomationWorkflowRun,
+        )
+        from src.app.services.automation.enrollment_service import (
+            AutomationWorkflowEnrollmentService,
+        )
+        from src.app.services.automation.scheduler_service import (
+            AutomationWorkflowSchedulerService,
+        )
+
+        result = await self.session.execute(
+            select(AutomationWorkflowRun).where(
+                AutomationWorkflowRun.institution_id == str(thread.institution_id),
+                AutomationWorkflowRun.contact_id == str(contact.id),
+                AutomationWorkflowRun.status.in_(
+                    (
+                        AutomationRunStatus.PENDING.value,
+                        AutomationRunStatus.RUNNING.value,
+                        AutomationRunStatus.WAITING.value,
+                    )
+                ),
+            )
+        )
+        runs = list(result.scalars().all())
+        scheduler = AutomationWorkflowSchedulerService(self.session)
+        enrollment = AutomationWorkflowEnrollmentService(self.session)
+        for run in runs:
+            await scheduler.cancel_timers_for_run(str(run.id))
+            await enrollment.cancel_run(run, reason="staff_replied_by_email")
+        return len(runs)
 
     # ------------------------------------------------------------------
     # Group oversight — figures only

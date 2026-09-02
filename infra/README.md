@@ -36,6 +36,10 @@ The `email` block keeps SES onboarding separate from activation:
 - `sesSendingHostedZoneName` is the Route 53 zone where DKIM is published;
 - `sesClinicSendingEnabled` is the deployment interlock and must remain false
   until delivery events, suppression, monitoring, and production access are ready.
+- `sesInboundEnabled`, `sesInboundDomain`, and
+  `sesInboundHostedZoneName` independently provision the receiving identity,
+  MX/DKIM records, private short-lived MIME bucket, SNS/SQS queue with DLQ, and
+  worker permissions. Enabling inbound does not switch patient sending to SES.
 
 The stack injects the resolved hosted-zone ID and grants the API only the SES
 identity/configuration lifecycle plus DNS changes. The worker can check

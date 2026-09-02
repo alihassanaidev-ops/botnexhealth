@@ -5,10 +5,10 @@ and AWS account in `ca-central-1`.
 
 ## Decision
 
-Amazon SES is a good fit for patient workflow email and two-way replies, but
-changing `PATIENT_EMAIL_PROVIDER=ses` is not a complete implementation. Keep
-patient mail on Resend until the outbound event pipeline, inbound AWS resources,
-message ledger, and in-app reply path below are deployed and verified.
+Amazon SES is the receiving layer for patient replies. Patient sending remains
+on Resend until the separate SES delivery/bounce/complaint pipeline and SES
+production-access gates are complete; inbound receiving does not require us to
+switch the outbound provider.
 
 The target should use one platform inbound subdomain (for example,
 `inbound.scalenexus.ai`) with a signed address per conversation, not a separate
@@ -21,21 +21,20 @@ workflow run without putting those identifiers in clear text.
 
 | Capability | Application | Staging AWS / UI | Result |
 |---|---|---|---|
-| Workflow Send Email node | Recipient resolution, templates, Jinja merge fields, consent/DNC gate, retries, breaker, and usage metering | Patient provider is Resend | Sends work; recent staging logs confirmed provider acceptance |
+| Workflow Send Email node | Recipient resolution, templates, Jinja merge fields, consent/DNC gate, durable outbound ledger, retries, breaker, and usage metering | Patient provider is Resend | Sends are recorded and visible in the shared thread |
 | Clinic sending identities | Institution/location model, Super Admin provision/remove/activate controls, managed DNS, hourly verification, and audited mutations | Staging provisioning configuration and IAM are defined with activation locked | Identities can be safely onboarded without changing live delivery after deployment |
 | SES outbound | SES v2 sender, tenant name, configuration set, and message tags supported | SES account is still in sandbox (200/day, 1/second); no identities or configuration sets | Not production-ready |
-| Patient Reply-To | Signed address generator and parser implemented | `SES_INBOUND_DOMAIN` is absent | Workflow messages do not enter the inbound router |
-| SES inbound processing | MIME parser, spam/virus quarantine, encrypted persistence, tenant/contact/run routing, wait-resume, and staff forwarding implemented | No active receipt rules, inbound S3 bucket, SQS queue, or runtime URLs | Unreachable in staging |
-| Shared inbox | Lists SMS/email threads, messages, assignment, and resolution | Email view is inbound-only; no compose/reply | Read-only email handoff, not a CRM mailbox |
+| Patient Reply-To | Signed conversation replies plus signed per-location cold-inbox addresses | Staging CDK defines `inbound.staging.scalenexus.ai` | No tenant ids are trusted from unsigned mail |
+| SES inbound processing | MIME parsing, quarantine, encrypted persistence, tenant/contact/run routing, wait-resume, forwarding, sender limits, and raw cleanup | CDK defines MX/identity, receipt rule, encrypted S3, SNS/SQS, DLQ, IAM and alarms | Push-based; no mailbox polling or per-clinic receipt rule |
+| Shared inbox | Lists both sides of SMS/email threads, assignment, resolution, and recorded in-app email reply | Institution/location receiving controls have their own settings page | Institution and location admins can reply and configure the locations they own |
 | Email delivery events | Resend webhook handles bounce/complaint and unsubscribe state | No SES event destination/consumer | SES delivery, bounce, complaint, open, and click events would be lost |
-| Reply automation | An `email_reply` wait can resume a known run | Cold `email_reply` trigger is hidden/unimplemented; no stop-on-response or staff-replied trigger | Only the known-conversation wait model exists |
+| Reply automation | An `email_reply` wait resumes its owning run; an optional setting cancels the contact's other active runs | Cold workflow trigger and staff-replied trigger remain future primitives | Unknown senders may become Contact leads only when the clinic opts in |
 
-Two code-level limitations matter before SES is enabled:
+One provider limitation still matters before SES **outbound** is enabled:
 
-- Resend honors the workflow's stable idempotency key. SES `SendEmail` has no
-  equivalent client token, so a crash after provider acceptance but before the
-  database commit can duplicate an email unless we add an outbound message/outbox
-  ledger.
+- SES `SendEmail` has no client token. The outbound ledger records a `sending`
+  row before dispatch and leaves an unknown crash outcome for operator
+  reconciliation instead of automatically risking a duplicate patient email.
 - Supplying `TenantName` attributes a send to an SES tenant, but tenant-level
   bounce/complaint suppression must be configured explicitly. SES otherwise uses
   account-level suppression; one clinic must not silently suppress another
@@ -96,19 +95,18 @@ all inbound mail as the same event: [Inbound Email trigger](https://help.gohighl
 [Wait action](https://help.gohighlevel.com/support/solutions/articles/155000002470-workflow-action-wait),
 and [User Replied trigger](https://help.gohighlevel.com/support/solutions/articles/155000008196-workflow-trigger-user-replied).
 
-## Target architecture
+## Implemented receiving architecture
 
 ### 1. Durable outbound message model
 
-Create an email message/outbox record before dispatch with institution, location,
-contact, workflow run/node, direction, subject/body ciphertext, provider,
-provider message ID, RFC `Message-ID`, thread ID, status, attempt count, and a
-unique `(run_id, node_id)` send key. The worker claims and sends that row, then
-stores provider acceptance. Inbox replies use the same service and ledger.
+An email message/outbox record is created before dispatch with institution,
+location, contact, workflow run, subject/body ciphertext, provider, provider
+message ID, thread ID, status, attempt count, and a unique idempotency key.
+Workflow sends and inbox replies use the same ledger shape.
 
-This supplies crash-safe deduplication, both sides of the inbox, audit history,
-and `Message-ID` / `In-Reply-To` fallback when an email client drops the signed
-Reply-To address.
+This supplies crash-safe deduplication and both sides of the inbox. Signed
+Reply-To remains the routing authority; provider-specific RFC header correlation
+can be added later without weakening tenant attribution.
 
 ### 2. SES outbound and reputation
 
@@ -132,12 +130,12 @@ Reply-To address.
 
 ### 3. SES inbound
 
-Provision with CDK in `ca-central-1`:
+CDK provisions in `ca-central-1`:
 
 - verified inbound subdomain and MX record;
 - active SES receipt-rule set with spam/virus scanning;
 - encrypted, private S3 bucket with short lifecycle for raw MIME;
-- SNS/SQS delivery with a dead-letter queue, least-privilege bucket/queue policy,
+- KMS-encrypted SNS/SQS delivery with a dead-letter queue, least-privilege bucket/queue policy,
   CloudWatch alarms, and the three `SES_INBOUND_*` runtime values;
 - idempotent consumer keyed by SES/provider message ID.
 
@@ -149,16 +147,16 @@ and [receiving setup](https://docs.aws.amazon.com/ses/latest/dg/receiving-email-
 
 ### 4. Workflow and inbox product behavior
 
-Implement in this order:
+Current behavior and remaining extensions:
 
-1. Inbox email reply/compose using the durable outbound service; include subject
-   threading and human takeover state.
-2. Known-contact customer reply event and automatic stop/pause-on-response.
-3. Staff replied event and an explicit “resume automation” control.
-4. Cold inbound addresses and trigger. Unknown senders should create or match a
-   contact only under an explicitly configured clinic mailbox; ambiguous clinic
-   routing must remain unroutable, not guessed.
-5. Optional delivery/open/click/bounce workflow conditions after event storage is
+1. Inbox replies and workflow sends use the durable outbound ledger and appear
+   in the same thread.
+2. Known-contact replies resume an explicit wait and can stop other automation.
+3. Signed cold-inbox addresses match a Contact by email hash or create a lead
+   only when `allow_new_contacts` is enabled; ambiguous routing is held.
+4. Net-new compose, a staff-replied workflow event, and an explicit resume
+   control remain extensions; they are not implied by the reply composer.
+5. Optional delivery/open/click/bounce workflow conditions follow after event storage is
    reliable.
 
 ## Rollout gates
@@ -179,5 +177,6 @@ Do not switch staging or production to SES until all of these pass:
 - SES production access and quotas are approved in the same region used by the
   application.
 
-Until then, Resend remains the operational patient sender and replies continue
-to the clinic's ordinary reply-to mailbox rather than the ScaleNexus inbox.
+Until outbound SES gates pass, Resend remains the operational patient sender.
+Its messages use the ScaleNexus signed Reply-To once inbound receiving is live,
+so patient replies still enter the shared inbox.

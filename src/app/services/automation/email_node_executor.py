@@ -16,13 +16,16 @@ from __future__ import annotations
 import asyncio
 import logging
 from html import escape
+from datetime import datetime, timezone
 
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.app.config import settings
 from src.app.models.automation_workflow import AutomationWorkflowRun
 from src.app.models.contact import Contact
 from src.app.models.institution_location import InstitutionLocation
+from src.app.models.outbound_email_message import OutboundEmailMessage
 from src.app.services.automation.definition_schema import SendEmailNode
 from src.app.services.automation.runtime_service import AutomationWorkflowRuntimeService
 from src.app.services.circuit_breaker import (
@@ -55,6 +58,11 @@ def get_patient_email_sender_for(provider: str) -> EmailSender:
     which is what makes a per-clinic rollout possible.
     """
     return SesSender() if provider == "ses" else ResendSender()
+
+
+def _mask_email(address: str) -> str:
+    local, _, domain = address.partition("@")
+    return f"{local[:1]}***@{domain}" if local and domain else "***"
 
 
 # Linear backoff between send attempts. Deliberately short: the run holds a row
@@ -277,6 +285,59 @@ class EmailNodeExecutor:
         )
         sender = get_patient_email_sender_for(identity.provider)
 
+        ledger: OutboundEmailMessage | None = None
+        if patient_directed and contact is not None and run.location_id:
+            from src.app.services.automation.campaign_conversation_service import (
+                CampaignConversationService,
+            )
+
+            ledger_key = f"email:{run.id}:{node.id}"
+            ledger = (
+                await self.session.execute(
+                    select(OutboundEmailMessage).where(
+                        OutboundEmailMessage.idempotency_key == ledger_key
+                    )
+                )
+            ).scalar_one_or_none()
+            if ledger is not None and ledger.status == "sent":
+                await self.runtime.complete_step(step, result_code="sent")
+                return node.next_node_id
+            if ledger is not None and ledger.status in ("sending", "uncertain"):
+                return await self._abort(
+                    run,
+                    node,
+                    step,
+                    "send_outcome_uncertain",
+                    "send_email: previous provider outcome must be reconciled",
+                )
+
+            thread = await CampaignConversationService(self.session).open_email_thread(run)
+            if ledger is None:
+                ledger = OutboundEmailMessage(
+                    institution_id=str(run.institution_id),
+                    location_id=str(run.location_id) if run.location_id else None,
+                    contact_id=str(contact.id),
+                    workflow_run_id=str(run.id),
+                    conversation_thread_id=str(thread.id),
+                    source="workflow",
+                    idempotency_key=ledger_key,
+                    from_address=identity.from_address,
+                    to_email_masked=_mask_email(recipients[0]),
+                    status="sending",
+                    attempt_count=1,
+                )
+                ledger.to_email = recipients[0]
+                ledger.subject = subject
+                ledger.body = body
+                self.session.add(ledger)
+            else:
+                ledger.status = "sending"
+                ledger.attempt_count += 1
+                ledger.error_code = None
+            # The reservation is durable before the provider call. A crash from
+            # here leaves "sending" for reconciliation instead of resending.
+            await self.session.commit()
+
         provider_message_id: str | None = None
         last_error: Exception | None = None
         breaker_scope = str(run.location_id or run.institution_id)
@@ -312,18 +373,26 @@ class EmailNodeExecutor:
 
             except Exception as exc:  # noqa: BLE001 — reported below
                 last_error = exc
-                # Unclassified: a transport or client-library failure rather than
-                # a provider rejection. Treated as the provider's problem, since
-                # the alternative is a breaker that never opens for email.
+                # The provider may have accepted the message before the client
+                # failed. Without a provider-level idempotency guarantee, retrying
+                # an unclassified transport error can email the patient twice.
                 await self.breaker.record_failure(BreakerService.EMAIL, breaker_scope)
                 logger.warning(
-                    "send_email attempt %d/%d raised: institution=%s run=%s node=%s error=%s",
+                    "send_email attempt %d/%d has uncertain outcome: institution=%s "
+                    "run=%s node=%s error=%s",
                     attempt, attempts, run.institution_id, run.id, node.id, exc,
                 )
-                if attempt < attempts:
-                    await asyncio.sleep(_RETRY_BACKOFF_SECONDS * attempt)
+                break
 
         if last_error is not None:
+            if ledger is not None:
+                ledger.status = (
+                    "failed"
+                    if isinstance(last_error, EmailSendError)
+                    and not last_error.outcome_uncertain
+                    else "uncertain"
+                )
+                ledger.error_code = type(last_error).__name__[:80]
             logger.error(
                 "send_email failed after %d attempt(s): institution=%s run=%s node=%s error=%s",
                 attempts, run.institution_id, run.id, node.id, last_error,
@@ -337,6 +406,11 @@ class EmailNodeExecutor:
             )
 
         await self.runtime.complete_step(step, result_code="sent")
+        if ledger is not None:
+            ledger.provider = sender.provider
+            ledger.provider_message_id = provider_message_id
+            ledger.status = "sent"
+            ledger.sent_at = datetime.now(timezone.utc)
 
         # Meter the successful send (Plan 11). Best-effort: a metering hiccup
         # must never fail an email that already went out. Runs in this session

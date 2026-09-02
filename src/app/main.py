@@ -41,6 +41,7 @@ from src.app.api.routes.campaign_email_templates import (
 from src.app.api.routes.email_sending_identities import (
     router as email_sending_identities_router,
 )
+from src.app.api.routes.email_inbox_settings import router as email_inbox_settings_router
 from src.app.api.routes.email_templates import router as email_templates_router
 from src.app.api.routes.inbox import router as inbox_router
 from src.app.api.routes.sms_templates import router as sms_templates_router
@@ -307,6 +308,7 @@ def create_app() -> FastAPI:
     app.include_router(email_templates_router, prefix="/api")
     app.include_router(campaign_email_templates_router, prefix="/api")
     app.include_router(email_sending_identities_router, prefix="/api")
+    app.include_router(email_inbox_settings_router, prefix="/api")
     app.include_router(inbox_router, prefix="/api")
     app.include_router(sms_templates_router, prefix="/api")
     app.include_router(notification_preferences_router, prefix="/api")

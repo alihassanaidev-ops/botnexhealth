@@ -29,10 +29,17 @@ _RESEND_URL = "https://api.resend.com/emails"
 class EmailSendError(RuntimeError):
     """The provider refused or failed to accept the message."""
 
-    def __init__(self, message: str, *, retryable: bool = True) -> None:
+    def __init__(
+        self,
+        message: str,
+        *,
+        retryable: bool = True,
+        outcome_uncertain: bool = False,
+    ) -> None:
         super().__init__(message)
         #: Throttling and 5xx are worth retrying; a rejected address is not.
         self.retryable = retryable
+        self.outcome_uncertain = outcome_uncertain
 
 
 @dataclass(frozen=True)
@@ -210,7 +217,11 @@ class SesSender:
                 retryable=code in self._RETRYABLE_CODES,
             ) from exc
         except BotoCoreError as exc:
-            raise EmailSendError(f"SES transport error: {type(exc).__name__}") from exc
+            raise EmailSendError(
+                f"SES transport error: {type(exc).__name__}",
+                retryable=False,
+                outcome_uncertain=True,
+            ) from exc
 
         return EmailSendResult(
             provider=self.provider, provider_message_id=response.get("MessageId")

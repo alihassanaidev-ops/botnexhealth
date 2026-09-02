@@ -29,6 +29,7 @@ import re
 from src.app.services.sms_privacy import keyed_hash
 
 _TOKEN_PURPOSE = "email-reply-address-token-v1"
+_INBOX_PURPOSE = "email-inbox-address-token-v1"
 
 # Local-part budget, which RFC 5321 caps at 64 octets:
 #
@@ -50,6 +51,9 @@ _ID_LEN = 10
 _TOKEN_RE = re.compile(
     r"^r\+([0-9a-f]{1,32})\.([0-9a-f]{0,32})\.([0-9a-f]{0,32})\.([0-9a-f]{0,32})\.([0-9a-f]{%d})$"
     % _SIG_LEN
+)
+_INBOX_RE = re.compile(
+    r"^i\+([0-9a-f]{1,32})\.([0-9a-f]{0,32})\.([0-9a-f]{%d})$" % _SIG_LEN
 )
 
 #: RFC 5321 caps a local part at 64 octets.
@@ -113,6 +117,19 @@ def make_reply_address(
     return f"{token}@{domain}"
 
 
+def make_inbox_address(
+    domain: str, *, institution_id: str, location_id: str | None = None
+) -> str:
+    """Stable, signed address a clinic may publish or forward mail into."""
+    inst = _short(institution_id)
+    loc = _short(location_id)
+    signature = keyed_hash(
+        f"{inst}:{loc}", purpose=_INBOX_PURPOSE, truncate_hex=_SIG_LEN
+    )
+    token = f"i+{inst}.{loc}.{signature}"
+    return f"{token}@{domain}"
+
+
 class ReplyRoute:
     """The conversation a verified token points at.
 
@@ -120,7 +137,9 @@ class ReplyRoute:
     scoped to the institution.
     """
 
-    __slots__ = ("institution_prefix", "location_prefix", "contact_prefix", "run_prefix")
+    __slots__ = (
+        "institution_prefix", "location_prefix", "contact_prefix", "run_prefix", "is_inbox"
+    )
 
     def __init__(
         self,
@@ -128,11 +147,13 @@ class ReplyRoute:
         location_prefix: str,
         contact_prefix: str,
         run_prefix: str,
+        is_inbox: bool = False,
     ) -> None:
         self.institution_prefix = institution_prefix
         self.location_prefix = location_prefix or ""
         self.contact_prefix = contact_prefix or ""
         self.run_prefix = run_prefix or ""
+        self.is_inbox = is_inbox
 
     def __repr__(self) -> str:
         return (
@@ -146,11 +167,13 @@ class ReplyRoute:
             self.location_prefix,
             self.contact_prefix,
             self.run_prefix,
+            self.is_inbox,
         ) == (
             other.institution_prefix,
             other.location_prefix,
             other.contact_prefix,
             other.run_prefix,
+            other.is_inbox,
         )
 
 
@@ -165,6 +188,16 @@ def parse_reply_address(address: str | None) -> ReplyRoute | None:
     if not address:
         return None
     local_part = address.split("@", 1)[0].strip().lower()
+    inbox_match = _INBOX_RE.match(local_part)
+    if inbox_match:
+        inst, loc, signature = inbox_match.groups()
+        expected = keyed_hash(
+            f"{inst}:{loc}", purpose=_INBOX_PURPOSE, truncate_hex=_SIG_LEN
+        )
+        if not hmac.compare_digest(expected, signature):
+            return None
+        return ReplyRoute(inst, loc, "", "", is_inbox=True)
+
     match = _TOKEN_RE.match(local_part)
     if not match:
         return None

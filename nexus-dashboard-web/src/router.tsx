@@ -47,6 +47,7 @@ const InsurancePlans = lazy(() => import("./pages/InsurancePlans"));
 const EmailTemplates = lazy(() => import("./pages/EmailTemplates"));
 const CampaignEmailTemplates = lazy(() => import("./pages/CampaignEmailTemplates"));
 const EmailSendingIdentity = lazy(() => import("./pages/EmailSendingIdentity"));
+const EmailInboxSettings = lazy(() => import("./pages/EmailInboxSettings"));
 const Inbox = lazy(() => import("./pages/Inbox"));
 const NotificationPreferences = lazy(() => import("./pages/NotificationPreferences"));
 const SmsPreferences = lazy(() => import("./pages/SmsPreferences"));
@@ -227,6 +228,14 @@ export const router = createBrowserRouter([
                         element: (
                             <RoleGuard allowed={["INSTITUTION_ADMIN", "SUPER_ADMIN"]}>
                                 <S><EmailSendingIdentity /></S>
+                            </RoleGuard>
+                        ),
+                    },
+                    {
+                        path: "institution-admin/email-inbox",
+                        element: (
+                            <RoleGuard allowed={["INSTITUTION_ADMIN", "LOCATION_ADMIN", "SUPER_ADMIN"]}>
+                                <S><EmailInboxSettings /></S>
                             </RoleGuard>
                         ),
                     },

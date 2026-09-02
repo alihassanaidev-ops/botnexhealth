@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import pytest
 
 from tests.conftest import FakeEmailSender, make_resolved_identity
 from src.app.services.automation.definition_schema import SendEmailNode
@@ -88,6 +89,7 @@ def _make_executor(contact=None, institution=None, location=None):
     from src.app.services.automation.email_node_executor import EmailNodeExecutor
 
     session = AsyncMock()
+    session.execute.return_value.scalar_one_or_none = MagicMock(return_value=None)
     runtime = AsyncMock()
 
     async def _get(model, pk):
@@ -233,3 +235,29 @@ def test_executor_fails_on_provider_error():
     runtime.fail_step.assert_called_once()
     runtime.fail_run.assert_called_once()
     assert "send_email error" in _fail_reason(runtime)
+
+
+def test_executor_does_not_retry_an_unknown_transport_outcome():
+    """A timeout can happen after acceptance; retrying it may duplicate mail."""
+    executor, runtime = _make_executor(contact=_make_contact())
+    sender = FakeEmailSender(fail_with=TimeoutError("socket closed"), fail_times=99)
+
+    _execute(executor, node=_make_node(), sender=sender)
+
+    assert sender.attempts == 1
+    runtime.fail_run.assert_called_once()
+
+
+def test_ses_transport_error_is_explicitly_uncertain():
+    from botocore.exceptions import EndpointConnectionError
+
+    from src.app.services.email.sender import EmailSendError, SesSender
+
+    client = MagicMock()
+    client.send_email.side_effect = EndpointConnectionError(endpoint_url="https://ses")
+
+    with pytest.raises(EmailSendError) as exc:
+        SesSender(client=client)._send_sync(_msg("clinic@example.com", "Clinic"))
+
+    assert exc.value.retryable is False
+    assert exc.value.outcome_uncertain is True

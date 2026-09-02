@@ -97,6 +97,7 @@ export interface InboxScopes {
     can_read_content: boolean
     can_write: boolean
     can_assign: boolean
+    can_reply: boolean
 }
 
 export async function getInboxScopes(): Promise<InboxScopes> {
@@ -130,6 +131,14 @@ export async function resolveInboxThread(
     outcome?: string,
 ): Promise<void> {
     await api.post(`${BASE}/threads/${id}/resolve`, { outcome: outcome ?? null })
+}
+
+export async function replyToInboxThread(
+    id: string,
+    payload: { subject: string; body: string; idempotency_key: string },
+): Promise<InboxMessage> {
+    const { data } = await api.post<InboxMessage>(`${BASE}/threads/${id}/reply`, payload)
+    return data
 }
 
 /** Group oversight: counts and timings only, no patient content. */

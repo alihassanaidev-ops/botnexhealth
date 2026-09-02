@@ -28,6 +28,7 @@ SUPER_ADMIN = "get_current_admin"
 SUPER_ADMIN_STRICT = "get_current_super_admin"
 INSTITUTION_ADMIN = "get_current_institution_admin"
 INSTITUTION_OR_SUPER_ADMIN = "get_current_institution_or_super_admin"
+INSTITUTION_LOCATION_OR_SUPER_ADMIN = "get_current_institution_location_or_super_admin"
 INSTITUTION_USER = "get_current_institution_user"
 LOCATION_ADMIN = "get_current_location_admin"
 INSTITUTION_OR_LOCATION_ADMIN = "get_current_institution_or_location_admin"
@@ -115,6 +116,7 @@ ROUTES_BY_BOUNDARY: dict[str, tuple[str, ...]] = {
         "GET /api/inbox/threads/{thread_id}",
         "POST /api/inbox/threads/{thread_id}/assign",
         "POST /api/inbox/threads/{thread_id}/resolve",
+        "POST /api/inbox/threads/{thread_id}/reply",
         "GET /api/inbox/activity",
         "GET /api/v1/health",
         "GET /api/auth/users/me",
@@ -185,6 +187,10 @@ ROUTES_BY_BOUNDARY: dict[str, tuple[str, ...]] = {
         "GET /api/institution/notification-preferences",
         "PUT /api/institution/notification-preferences",
         "POST /api/institution/events/ticket",
+    ),
+    INSTITUTION_LOCATION_OR_SUPER_ADMIN: (
+        "GET /api/institution/email-inbox-settings",
+        "PUT /api/institution/email-inbox-settings",
     ),
     SUPER_ADMIN: (
         "GET /api/v1/nexhealth/institutions",
@@ -505,6 +511,7 @@ AUTH_BOUNDARIES = {
     SUPER_ADMIN_STRICT,
     INSTITUTION_ADMIN,
     INSTITUTION_OR_SUPER_ADMIN,
+    INSTITUTION_LOCATION_OR_SUPER_ADMIN,
     INSTITUTION_USER,
     LOCATION_ADMIN,
     INSTITUTION_OR_LOCATION_ADMIN,
@@ -519,6 +526,7 @@ BOUNDARY_PRECEDENCE = (
     SUPER_ADMIN_STRICT,
     INSTITUTION_ADMIN,
     INSTITUTION_OR_SUPER_ADMIN,
+    INSTITUTION_LOCATION_OR_SUPER_ADMIN,
     INSTITUTION_USER,
     LOCATION_ADMIN,
     INSTITUTION_OR_LOCATION_ADMIN,
@@ -536,6 +544,11 @@ ALLOWED_ROLES_BY_BOUNDARY: dict[str, set[UserRole]] = {
     # and must name it explicitly; resolve_target_institution refuses a tenant
     # admin who names an institution other than their own.
     INSTITUTION_OR_SUPER_ADMIN: {UserRole.INSTITUTION_ADMIN, UserRole.SUPER_ADMIN},
+    INSTITUTION_LOCATION_OR_SUPER_ADMIN: {
+        UserRole.SUPER_ADMIN,
+        UserRole.INSTITUTION_ADMIN,
+        UserRole.LOCATION_ADMIN,
+    },
     INSTITUTION_USER: {UserRole.INSTITUTION_ADMIN},
     LOCATION_ADMIN: {UserRole.LOCATION_ADMIN},
     INSTITUTION_OR_LOCATION_ADMIN: {

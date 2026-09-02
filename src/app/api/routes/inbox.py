@@ -17,14 +17,17 @@ from datetime import datetime
 from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 from src.app.api.deps import get_current_active_user
 from src.app.api.rate_limit import RATE_READ, RATE_WRITE, limiter
 from src.app.database import get_db_session
+from src.app.models.audit_log import AuditAction, AuditActor
 from src.app.models.user import User
+from src.app.services.audit_decorator import audit
 from src.app.services.email.inbox_service import (
     InboxAccessError,
+    InboxDeliveryError,
     InboxService,
     scope_for_user,
 )
@@ -104,6 +107,7 @@ class InboxScopesResponse(BaseModel):
     can_read_content: bool
     can_write: bool
     can_assign: bool
+    can_reply: bool
 
 
 class AssignRequest(BaseModel):
@@ -113,6 +117,22 @@ class AssignRequest(BaseModel):
 
 class ResolveRequest(BaseModel):
     outcome: str | None = Field(default=None, max_length=80)
+
+
+class EmailReplyRequest(BaseModel):
+    subject: str = Field(min_length=1, max_length=998)
+    body: str = Field(min_length=1, max_length=100_000)
+    idempotency_key: str = Field(
+        min_length=16, max_length=160, pattern=r"^[A-Za-z0-9:_-]+$"
+    )
+
+    @field_validator("subject", "body")
+    @classmethod
+    def non_empty_content(cls, value: str) -> str:
+        cleaned = value.strip()
+        if not cleaned:
+            raise ValueError("Email content cannot be blank")
+        return cleaned
 
 
 def _forbidden(exc: InboxAccessError) -> HTTPException:
@@ -143,6 +163,7 @@ async def inbox_scopes(
         can_read_content=scope.may_read_content,
         can_write=scope.may_write,
         can_assign=scope.may_assign,
+        can_reply=scope.may_reply,
     )
 
 
@@ -240,6 +261,43 @@ async def resolve_thread(
         except InboxAccessError as exc:
             raise _forbidden(exc) from exc
         return {"resolved_handoffs": resolved}
+
+
+@router.post("/threads/{thread_id}/reply", response_model=ThreadMessageResponse)
+@limiter.limit(RATE_WRITE)
+@audit(
+    AuditAction.EMAIL_INBOX_REPLY,
+    resource=lambda request, thread_id, **_: f"conversation_thread:{thread_id}",
+    actor=AuditActor.ADMIN,
+)
+async def reply_to_email_thread(
+    request: Request,
+    thread_id: str,
+    body: EmailReplyRequest,
+    current_user: Annotated[User, Depends(get_current_active_user)],
+) -> ThreadMessageResponse:
+    scope = scope_for_user(current_user)
+    async with get_db_session() as session:
+        try:
+            message = await InboxService(session).reply_email(
+                scope,
+                thread_id,
+                subject=body.subject,
+                body=body.body,
+                idempotency_key=body.idempotency_key,
+            )
+        except InboxDeliveryError as exc:
+            raise HTTPException(status_code=exc.status_code, detail=str(exc)) from exc
+        except InboxAccessError as exc:
+            raise _forbidden(exc) from exc
+        request.state.audit_institution_id = str(message.institution_id)
+        request.state.audit_location_id = str(message.location_id) if message.location_id else None
+        return ThreadMessageResponse(
+            id=str(message.id), direction="outbound", channel="email",
+            body=message.body, subject=message.subject, intent=None,
+            created_at=message.sent_at or message.created_at,
+            from_masked=message.from_address, sender_mismatch=False,
+        )
 
 
 @router.get("/activity")

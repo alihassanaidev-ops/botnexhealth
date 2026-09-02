@@ -13,6 +13,7 @@ from src.app.services.email.reply_address import (
     MAX_LOCAL_PART,
     ReplyRoute,
     find_reply_address,
+    make_inbox_address,
     make_reply_address,
     make_reply_token,
     parse_reply_address,
@@ -51,6 +52,26 @@ def test_address_is_built_on_the_given_domain():
     )
     assert address.endswith("@inbound.example.com")
     assert parse_reply_address(address) is not None
+
+
+def test_direct_inbox_address_round_trips_without_patient_identifiers():
+    address = make_inbox_address(
+        "inbound.example.com", institution_id=INST, location_id=LOC
+    )
+    route = parse_reply_address(address)
+    assert route is not None
+    assert route.is_inbox is True
+    assert route.contact_prefix == ""
+    assert route.run_prefix == ""
+
+
+def test_tampered_direct_inbox_address_is_rejected():
+    address = make_inbox_address(
+        "inbound.example.com", institution_id=INST, location_id=LOC
+    )
+    local, domain = address.split("@", 1)
+    forged = local[:-1] + ("0" if local[-1] != "0" else "1")
+    assert parse_reply_address(f"{forged}@{domain}") is None
 
 
 def test_optional_parts_may_be_omitted():
