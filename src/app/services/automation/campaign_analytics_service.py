@@ -553,6 +553,32 @@ _SMS_BRANCH = f"""
 """
 
 
+_VOICE_METRICS = {
+    "voice_attempted": "COUNT(*)::bigint",
+    "voice_answered": (
+        "COUNT(*) FILTER ("
+        " WHERE v.dial_outcome IN ('answered', 'transferred')"
+        ")::bigint"
+    ),
+    "voice_voicemail": (
+        "COUNT(*) FILTER (WHERE v.dial_outcome = 'voicemail')::bigint"
+    ),
+    "voice_failed": (
+        "COUNT(*) FILTER ("
+        " WHERE v.status = 'failed'"
+        " OR v.dial_outcome IN ('failed', 'no_answer', 'busy', 'unknown')"
+        ")::bigint"
+    ),
+    # Per run, not per attempt: a callback dialled three times and transferred
+    # once is one transferred callback.
+    "transferred": (
+        "COUNT(DISTINCT v.workflow_run_id) FILTER ("
+        " WHERE v.dial_outcome = 'transferred'"
+        ")::bigint"
+    ),
+}
+
+
 _VOICE_BRANCH = f"""
         SELECT
             r.institution_id,
@@ -560,30 +586,7 @@ _VOICE_BRANCH = f"""
             r.workflow_id,
             r.workflow_version_id,
             (v.created_at {_DAY} AS metric_date,
-            {_metric_select_list({
-                "voice_attempted": "COUNT(*)::bigint",
-                "voice_answered": (
-                    "COUNT(*) FILTER ("
-                    " WHERE v.dial_outcome IN ('answered', 'transferred')"
-                    ")::bigint"
-                ),
-                "voice_voicemail": (
-                    "COUNT(*) FILTER (WHERE v.dial_outcome = 'voicemail')::bigint"
-                ),
-                "voice_failed": (
-                    "COUNT(*) FILTER ("
-                    " WHERE v.status = 'failed'"
-                    " OR v.dial_outcome IN ('failed', 'no_answer', 'busy', 'unknown')"
-                    ")::bigint"
-                ),
-                # Per run, not per attempt: a callback dialled three times and
-                # transferred once is one transferred callback.
-                "transferred": (
-                    "COUNT(DISTINCT v.workflow_run_id) FILTER ("
-                    " WHERE v.dial_outcome = 'transferred'"
-                    ")::bigint"
-                ),
-            })},
+            {_metric_select_list(_VOICE_METRICS)},
             'USD'::varchar(3) AS currency
         FROM workflow_voice_attempts v
         JOIN automation_workflow_runs r ON r.id = v.workflow_run_id
