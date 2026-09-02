@@ -79,6 +79,14 @@ NODE_CAPABILITIES: dict[str, NodeCapability] = {
         ("default_next_node_id",),
         outgoing_list_fields=(("cases", "next_node_id"),),
     ),
+    # A split has no fixed fallback port: its weights are exhaustive by
+    # construction (they sum to 100), so every arm is authored and there is no
+    # "otherwise" for a contact to land in.
+    "split": NodeCapability(
+        "split",
+        (),
+        outgoing_list_fields=(("branches", "next_node_id"),),
+    ),
     "exit": NodeCapability("exit", ()),
 }
 

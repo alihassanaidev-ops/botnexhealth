@@ -27,6 +27,7 @@ from src.app.config import settings
 from src.app.models.automation_workflow import (
     AutomationWorkflowDripState,
     AutomationWorkflowRun,
+    AutomationWorkflowSplitAssignment,
     AutomationWorkflowStepExecution,
     AutomationStepStatus,
 )
@@ -38,6 +39,7 @@ from src.app.services.automation.campaign_action_links import (
     REGISTRATION_PLACEHOLDER,
     registration_link,
 )
+from src.app.services.automation.split_assignment import assign_branch
 from src.app.services.automation.filter_expression import (
     EvaluationContext,
     evaluate as evaluate_filter,
@@ -57,6 +59,7 @@ from src.app.services.automation.definition_schema import (
     SendSmsNode,
     SendVoiceNode,
     SwitchCase,
+    SplitNode,
     SwitchNode,
     TimeWaitConfig,
     BookAppointmentNode,
@@ -896,6 +899,29 @@ class WorkflowStepDispatcher:
                 )
                 current_node_id = target
 
+            elif isinstance(node, SplitNode):
+                branch, bucket = assign_branch(node, run_id=str(run.id))
+                step = await self.runtime.begin_step(
+                    run, step_id=node.id, step_type="split"
+                )
+                await self._record_split_assignment(
+                    run, node_id=node.id, branch_label=branch.label, bucket=bucket
+                )
+                await self.runtime.complete_step(
+                    step,
+                    # The arm label, matching how switch records its case, so a
+                    # trace reads the same way for both branching nodes.
+                    result_code=f"branch_{branch.label}",
+                    result_metadata={
+                        "branch": branch.label,
+                        "weight": branch.weight,
+                        "bucket": bucket,
+                        "subject": node.subject,
+                        "next_node_id": branch.next_node_id,
+                    },
+                )
+                current_node_id = branch.next_node_id
+
             elif isinstance(node, ExitNode):
                 step = await self.runtime.begin_step(
                     run, step_id=node.id, step_type="exit"
@@ -935,6 +961,40 @@ class WorkflowStepDispatcher:
             status="failed",
             steps_advanced=steps_advanced,
             patient_status_event_ids=patient_status_event_ids,
+        )
+
+    async def _record_split_assignment(
+        self,
+        run: AutomationWorkflowRun,
+        *,
+        node_id: str,
+        branch_label: str,
+        bucket: int,
+    ) -> None:
+        """Persist the arm this run took, once, for the analytics rollup.
+
+        ``DO NOTHING`` rather than an update: the assignment is derived from the
+        run id, so a second write can only be a retry re-deriving the identical
+        arm. Overwriting would be a no-op at best, and at worst would move a
+        contact between arms if the author had edited the weights in between —
+        which is exactly the rewriting of history this row exists to prevent.
+        """
+        await self.session.execute(
+            pg_insert(AutomationWorkflowSplitAssignment)
+            .values(
+                id=str(uuid4()),
+                institution_id=run.institution_id,
+                location_id=run.location_id,
+                workflow_id=run.workflow_id,
+                workflow_version_id=run.workflow_version_id,
+                workflow_run_id=run.id,
+                node_id=node_id,
+                branch_label=branch_label,
+                bucket=bucket,
+            )
+            .on_conflict_do_nothing(
+                constraint="uq_automation_split_assignment_run_node"
+            )
         )
 
     async def resume_after_timer(

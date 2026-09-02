@@ -58,6 +58,7 @@ import {
     emergencyHaltCampaign,
     getCampaign,
     getCampaignAnalytics,
+    getCampaignSplitAnalytics,
     getCampaignOverview,
     getUsageByCampaign,
     listCampaignRuns,
@@ -70,6 +71,7 @@ import type {
     AutomationWorkflow,
     AutomationWorkflowRun,
     CampaignAnalytics,
+    CampaignSplitAnalytics,
     CampaignOverview,
     CampaignRunFilters,
     CampaignRunListItem,
@@ -420,11 +422,116 @@ function money(value: number | null, currency: string): string {
  * a recall campaign reads "Recall Booked" where a sales one reads "Qualified"
  * rather than both reporting an anonymous count.
  */
+/**
+ * Per-variant results for the workflow's Split (A/B) nodes.
+ *
+ * Rendered only when the campaign actually has a split, so an ordinary campaign
+ * is not left explaining an empty experiment panel.
+ *
+ * The leader badge and the lift column stay hidden until every arm clears
+ * `min_arm_enrollments`. The rates show from the first contact — withholding
+ * them would read as a broken panel — but a lead on nine contacts is noise, and
+ * a UI that dresses it up as a winner will get a test called early.
+ */
+function SplitResultsSection({ splits }: { splits: CampaignSplitAnalytics }) {
+    if (splits.splits.length === 0) return null
+
+    return (
+        <div className="space-y-4">
+            {splits.splits.map((split) => {
+                const totalEnrolled = split.branches.reduce((sum, b) => sum + b.enrollments, 0)
+                return (
+                    <Card key={split.node_id}>
+                        <CardHeader className="pb-3">
+                            <CardTitle className="text-base font-semibold">
+                                A/B test{split.subject ? `: ${split.subject}` : ""}
+                            </CardTitle>
+                            <p className="text-xs text-muted-foreground">
+                                Compared on {split.primary_outcome_label.toLowerCase()} rate ·{" "}
+                                {number(totalEnrolled)} contact(s) in the test
+                                {!split.has_enough_volume &&
+                                    ` · needs ${number(splits.min_arm_enrollments)} per branch before a winner is called`}
+                            </p>
+                        </CardHeader>
+                        <CardContent>
+                            <div className="overflow-x-auto">
+                                <table className="w-full text-sm">
+                                    <thead>
+                                        <tr className="border-b border-border text-left text-xs text-muted-foreground">
+                                            <th className="py-2 font-medium">Branch</th>
+                                            <th className="py-2 text-right font-medium">Split</th>
+                                            <th className="py-2 text-right font-medium">Enrolled</th>
+                                            <th className="py-2 text-right font-medium">
+                                                {split.primary_outcome_label}
+                                            </th>
+                                            <th className="py-2 text-right font-medium">Rate</th>
+                                            <th className="py-2 text-right font-medium">Lift</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody>
+                                        {split.branches.map((branch) => {
+                                            const wins =
+                                                branch.outcomes.find(
+                                                    (row) => row.key === split.primary_outcome_key,
+                                                )?.count ?? 0
+                                            return (
+                                                <tr
+                                                    key={branch.label}
+                                                    className="border-b border-border/60 last:border-0"
+                                                >
+                                                    <td className="py-2">
+                                                        <span className="font-medium">{branch.label}</span>
+                                                        {branch.is_leader && (
+                                                            <Badge variant="secondary" className="ml-2 text-xs">
+                                                                Leading
+                                                            </Badge>
+                                                        )}
+                                                        {branch.weight === null && (
+                                                            <span className="ml-2 text-xs text-muted-foreground">
+                                                                no longer in the workflow
+                                                            </span>
+                                                        )}
+                                                    </td>
+                                                    <td className="py-2 text-right tabular-nums text-muted-foreground">
+                                                        {branch.weight === null ? "—" : `${branch.weight}%`}
+                                                    </td>
+                                                    <td className="py-2 text-right tabular-nums">
+                                                        {number(branch.enrollments)}
+                                                    </td>
+                                                    <td className="py-2 text-right tabular-nums">
+                                                        {number(wins)}
+                                                    </td>
+                                                    <td className="py-2 text-right tabular-nums">
+                                                        {branch.primary_rate === null
+                                                            ? "—"
+                                                            : `${(branch.primary_rate * 100).toFixed(1)}%`}
+                                                    </td>
+                                                    <td className="py-2 text-right tabular-nums text-muted-foreground">
+                                                        {branch.lift === null
+                                                            ? "—"
+                                                            : `${branch.lift >= 0 ? "+" : ""}${(branch.lift * 100).toFixed(0)}%`}
+                                                    </td>
+                                                </tr>
+                                            )
+                                        })}
+                                    </tbody>
+                                </table>
+                            </div>
+                        </CardContent>
+                    </Card>
+                )
+            })}
+        </div>
+    )
+}
+
 function OutcomesTab({
     analytics,
+    splits,
     loading,
 }: {
     analytics: CampaignAnalytics | null
+    splits: CampaignSplitAnalytics | null
     loading: boolean
 }) {
     if (loading) {
@@ -568,6 +675,8 @@ function OutcomesTab({
                     </CardContent>
                 </Card>
             </div>
+
+            {splits && <SplitResultsSection splits={splits} />}
 
             <p className="text-xs text-muted-foreground">
                 {analytics.start_date} to {analytics.end_date}
@@ -791,6 +900,7 @@ export default function CampaignDetail() {
     const [nextCursor, setNextCursor] = useState<string | null>(null)
     const [campaignUsage, setCampaignUsage] = useState<CampaignUsage | null>(null)
     const [analytics, setAnalytics] = useState<CampaignAnalytics | null>(null)
+    const [splitAnalytics, setSplitAnalytics] = useState<CampaignSplitAnalytics | null>(null)
     const [filters, setFilters] = useState<CampaignRunFilters>({ limit: 50 })
     const [loading, setLoading] = useState(true)
     const [runsLoading, setRunsLoading] = useState(true)
@@ -811,7 +921,7 @@ export default function CampaignDetail() {
         if (!id) return
         setLoading(true)
         try {
-            const [wf, ov, byCampaign, outcomes] = await Promise.all([
+            const [wf, ov, byCampaign, outcomes, splits] = await Promise.all([
                 getCampaign(id),
                 getCampaignOverview(id),
                 getUsageByCampaign(undefined, 1, { workflowId: id }),
@@ -819,11 +929,15 @@ export default function CampaignDetail() {
                 // A stale or failed rollup should cost the reporting tab its
                 // numbers, not take the whole campaign page down with it.
                 getCampaignAnalytics(id).catch(() => null),
+                // Same rollup, cut by split arm. Absent for the many campaigns
+                // that run no experiment, so its failure is equally survivable.
+                getCampaignSplitAnalytics(id).catch(() => null),
             ])
             setCampaign(wf)
             setOverview(ov)
             setCampaignUsage(byCampaign.campaigns.find((row) => row.workflow_id === id) ?? null)
             setAnalytics(outcomes)
+            setSplitAnalytics(splits)
         } catch {
             toast.error("Failed to load campaign")
         } finally {
@@ -1046,7 +1160,7 @@ export default function CampaignDetail() {
                     />
                 </TabsContent>
                 <TabsContent value="outcomes">
-                    <OutcomesTab analytics={analytics} loading={loading} />
+                    <OutcomesTab analytics={analytics} splits={splitAnalytics} loading={loading} />
                 </TabsContent>
                 <TabsContent value="executions">
                     <ExecutionsTab

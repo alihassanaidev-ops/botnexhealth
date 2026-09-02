@@ -26,6 +26,7 @@ EXPECTED_NODE_TYPES = {
     "llm",
     "condition",
     "switch",
+    "split",
     "exit",
 }
 

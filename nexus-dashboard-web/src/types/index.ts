@@ -798,6 +798,54 @@ export interface CampaignOverview {
     generated_at: string;
 }
 
+export interface CampaignOutcomeStat {
+    key: string;
+    label: string;
+    group: string;
+    count: number;
+    rate: number | null;
+    description: string;
+}
+
+/** One arm of one Split node, over the requested window. */
+export interface SplitBranchAnalytics {
+    label: string;
+    /** Weight in the workflow's current version; null if the arm was renamed or removed. */
+    weight: number | null;
+    enrollments: number;
+    summary: Record<string, number>;
+    outcomes: CampaignOutcomeStat[];
+    total_cost: number;
+    cost_per_booking: number | null;
+    /** Rate of the campaign's primary success outcome — what the arms are compared on. */
+    primary_rate: number | null;
+    /** Relative change against the best other arm; null until there is enough volume. */
+    lift: number | null;
+    is_leader: boolean;
+}
+
+export interface SplitNodeAnalytics {
+    node_id: string;
+    subject: string | null;
+    primary_outcome_key: string;
+    primary_outcome_label: string;
+    branches: SplitBranchAnalytics[];
+    /** False while any arm is under `min_arm_enrollments` — do not read a winner yet. */
+    has_enough_volume: boolean;
+}
+
+export interface CampaignSplitAnalytics {
+    workflow_id: string;
+    workflow_name: string;
+    category: string;
+    start_date: string;
+    end_date: string;
+    min_arm_enrollments: number;
+    splits: SplitNodeAnalytics[];
+    generated_at: string;
+    rollup_fresh_at: string | null;
+}
+
 export interface CampaignAnalytics {
     workflow_id: string;
     workflow_name: string;

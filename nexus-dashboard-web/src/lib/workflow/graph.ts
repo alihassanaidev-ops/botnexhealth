@@ -181,6 +181,20 @@ export function switchCaseHandle(index: number): string {
     return `case-${index}`
 }
 
+/**
+ * Split arms use the same index-based handle scheme as switch cases, and for
+ * the same reason: renaming an arm must not orphan the edge under it.
+ */
+export function splitBranchHandle(index: number): string {
+    return `branch-${index}`
+}
+
+export function splitBranchIndex(handle: string | undefined): number | null {
+    if (!handle?.startsWith("branch-")) return null
+    const index = Number.parseInt(handle.slice("branch-".length), 10)
+    return Number.isInteger(index) && index >= 0 ? index : null
+}
+
 /** The case index a switch handle refers to, or null for the default port. */
 export function switchCaseIndex(handle: string | undefined): number | null {
     if (!handle || !handle.startsWith("case-")) return null
@@ -225,6 +239,13 @@ export function outgoing(node: WorkflowNode): Outgoing[] {
                 })),
                 { targetId: node.default_next_node_id, handle: SWITCH_DEFAULT_HANDLE, label: "Otherwise" },
             ]
+        case "split":
+            return node.branches.map((branch, index) => ({
+                targetId: branch.next_node_id,
+                // Index, not label, so renaming an arm does not orphan its edge.
+                handle: splitBranchHandle(index),
+                label: `${branch.label} ${branch.weight}%`,
+            }))
         case "exit":
             return []
     }
@@ -644,6 +665,18 @@ export function genId(type: NodeType, existing: Iterable<string>): string {
 
 export function createNode(type: NodeType, id: string): WorkflowNode {
     switch (type) {
+        case "split":
+            // Two even arms: the shape of every A/B test, and already valid, so
+            // the author picks the two messages rather than the arithmetic.
+            return {
+                type,
+                id,
+                subject: "",
+                branches: [
+                    { label: "Variant A", weight: 50, next_node_id: "" },
+                    { label: "Variant B", weight: 50, next_node_id: "" },
+                ],
+            }
         case "switch":
             return {
                 type,
@@ -993,6 +1026,14 @@ export function removeNode(def: WorkflowDefinition, id: string): WorkflowDefinit
                         })),
                         default_next_node_id: repoint(n.default_next_node_id),
                     }
+                case "split":
+                    return {
+                        ...n,
+                        branches: n.branches.map((b) => ({
+                            ...b,
+                            next_node_id: repoint(b.next_node_id),
+                        })),
+                    }
                 case "wait":
                 case "drip":
                 case "send_sms":
@@ -1054,6 +1095,20 @@ export function connectNodes(
     const node = def.nodes.find((n) => n.id === sourceId)
     if (!node) return def
     switch (node.type) {
+        case "split": {
+            // Unlike a switch there is no default port to fall back to, so an
+            // unrecognised handle leaves the node untouched rather than
+            // silently rewiring an arm the user did not drag from.
+            const branchIndex = splitBranchIndex(handle)
+            if (branchIndex === null || branchIndex >= node.branches.length) return def
+            const updated: WorkflowNode = {
+                ...node,
+                branches: node.branches.map((b, index) =>
+                    index === branchIndex ? { ...b, next_node_id: targetId } : b,
+                ),
+            }
+            return { ...def, nodes: def.nodes.map((n) => (n.id === sourceId ? updated : n)) }
+        }
         case "switch": {
             const caseIndex = switchCaseIndex(handle)
             const updated: WorkflowNode =
@@ -1237,6 +1292,11 @@ export function cloneNodes(
                     cases: next.cases.map((c) => ({ ...c, next_node_id: repoint(c.next_node_id) })),
                     default_next_node_id: repoint(next.default_next_node_id),
                 }
+            case "split":
+                return {
+                    ...next,
+                    branches: next.branches.map((b) => ({ ...b, next_node_id: repoint(b.next_node_id) })),
+                }
             case "book_appointment":
                 return {
                     ...next,
@@ -1370,6 +1430,8 @@ function searchableText(node: WorkflowNode): string {
             return node.actions.join(" ")
         case "switch":
             return `${node.subject ?? ""} ${node.cases.map((c) => c.label).join(" ")}`
+        case "split":
+            return `${node.subject ?? ""} ${node.branches.map((b) => b.label).join(" ")}`
         case "exit":
             return node.outcome ?? ""
         case "llm":

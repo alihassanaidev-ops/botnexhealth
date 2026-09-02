@@ -13,6 +13,7 @@ import {
     outgoing,
     SWITCH_DEFAULT_HANDLE,
     switchCaseHandle,
+    splitBranchHandle,
     TRIGGER_NODE_ID,
     type FlowNode,
 } from "@/lib/workflow/graph"
@@ -97,6 +98,8 @@ function stepSummary(node: WfNode): string {
                 : `${(node.rules ?? []).length} rule(s) · ${node.logic ?? "AND"}`
         case "switch":
             return `${node.cases.length} case(s)${node.subject ? ` on ${node.subject}` : ""}`
+        case "split":
+            return node.branches.map((b) => `${b.label} ${b.weight}%`).join(" · ")
         case "exit":
             return node.outcome ? `Outcome: ${node.outcome}` : "End of sequence"
     }
@@ -189,7 +192,8 @@ export function TriggerNodeCard({ data }: NodeProps<FlowNode>) {
  */
 function portLeft(node: WfNode, index: number, total: number): string {
     if (node.type === "condition") return index === 0 ? "38%" : "62%"
-    if (node.type === "switch" || node.type === "book_appointment") return handleOffset(index, total)
+    if (node.type === "switch" || node.type === "split" || node.type === "book_appointment")
+        return handleOffset(index, total)
     return "50%"
 }
 
@@ -336,6 +340,22 @@ export function StepNodeCard(props: NodeProps<FlowNode>) {
                             position={Position.Bottom}
                             title={port.label}
                             style={{ left: handleOffset(index, ports.length) }}
+                            className={HANDLE}
+                        />
+                    ))}
+                </>
+            ) : node.type === "split" ? (
+                <>
+                    {/* One port per arm, evenly spread — the same treatment a
+                        switch gets, minus the fallback it does not have. */}
+                    {node.branches.map((branch, index) => (
+                        <Handle
+                            key={splitBranchHandle(index)}
+                            id={splitBranchHandle(index)}
+                            type="source"
+                            position={Position.Bottom}
+                            title={`${branch.label} · ${branch.weight}%`}
+                            style={{ left: handleOffset(index, node.branches.length) }}
                             className={HANDLE}
                         />
                     ))}

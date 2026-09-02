@@ -98,6 +98,8 @@ import type {
     FormSubmittedTrigger,
     SwitchCase,
     SwitchNode,
+    SplitBranch,
+    SplitNode,
     DripNode,
     EmailRecipient,
     JsonMapperNode,
@@ -664,6 +666,9 @@ function NodeForm({
                 {node.type === "switch" && (
                     <SwitchFields node={node} def={def} onChange={onNodeChange} readOnly={readOnly} />
                 )}
+                {node.type === "split" && (
+                    <SplitFields node={node} def={def} onChange={onNodeChange} readOnly={readOnly} />
+                )}
                 {node.type === "exit" && (
                     <Field label="Outcome" hint="Label recorded when a contact ends here.">
                         <Input
@@ -675,8 +680,15 @@ function NodeForm({
                     </Field>
                 )}
 
-                {/* Next-step selector(s) — how edges are authored. */}
-                {node.type !== "exit" && node.type !== "condition" && node.type !== "book_appointment" && (
+                {/* Next-step selector(s) — how edges are authored. Branching
+                    nodes are excluded: they author their own per-port targets,
+                    and their schemas forbid a stray `next_node_id`, so offering
+                    one here writes a definition the backend then rejects. */}
+                {node.type !== "exit" &&
+                    node.type !== "condition" &&
+                    node.type !== "switch" &&
+                    node.type !== "split" &&
+                    node.type !== "book_appointment" && (
                     <NextStepField
                         label="Next step"
                         def={def}
@@ -2685,28 +2697,50 @@ function LlmFields({
 
     const selectedModel = node.model ?? defaultModel
     const modelChoices = ensureModelChoice(models, selectedModel)
+    const outputMode = node.output_mode ?? "label"
+    const labels = node.labels ?? []
+    const contextFields = node.context_fields ?? []
+
+    /**
+     * Fills in whatever the node has not got yet, then applies the patch.
+     *
+     * This used to hard-code `output_mode: "text"` and a full-context send on
+     * every keystroke, which pinned every AI action to free text and shipped the
+     * whole patient record to the model. Defaults now apply only where the node
+     * is silent, so the controls below actually control something.
+     */
     const update = (patch: Partial<LlmNode>) => {
         onChange({
             ...node,
             source_field: node.source_field || "appointment_reason",
             output_field: node.output_field || "llm_result",
-            output_mode: "text",
+            output_mode: outputMode,
             max_output_tokens: node.max_output_tokens ?? 512,
-            include_context: true,
-            require_model: true,
-            allow_keyword_fallback: false,
-            labels: node.labels ?? [],
+            include_context: node.include_context ?? false,
+            context_fields: contextFields,
+            require_model: node.require_model ?? true,
+            allow_keyword_fallback: node.allow_keyword_fallback ?? false,
+            labels,
             label_rules: node.label_rules ?? [],
             fallback_label: node.fallback_label ?? null,
             json_schema: node.json_schema ?? null,
             ...patch,
         })
     }
+
     const insertVariable = (name: string) => {
         const token = `{{${name}}}`
         const base = node.prompt_template.trimEnd()
         update({ prompt_template: base ? `${base} ${token}` : token })
         setVariableOpen(false)
+    }
+
+    const toggleContextField = (name: string) => {
+        update({
+            context_fields: contextFields.includes(name)
+                ? contextFields.filter((field) => field !== name)
+                : [...contextFields, name],
+        })
     }
 
     return (
@@ -2728,6 +2762,79 @@ function LlmFields({
                     <p className="text-xs text-muted-foreground">Model list unavailable.</p>
                 )}
             </Field>
+
+            <Field
+                label="Output"
+                hint={
+                    outputMode === "label"
+                        ? "The model must answer with one of your labels — nothing else gets through. Branch on the result with a Switch step."
+                        : outputMode === "text"
+                            ? "Free text, written into the output field for a later message to merge."
+                            : "A JSON object. Each top-level key is also written into the run context as its own field."
+                }
+            >
+                <Select
+                    value={outputMode}
+                    disabled={readOnly}
+                    onValueChange={(value) =>
+                        update({ output_mode: value as LlmNode["output_mode"] })
+                    }
+                >
+                    <SelectTrigger><SelectValue /></SelectTrigger>
+                    <SelectContent>
+                        <SelectItem value="label">Pick one of my labels</SelectItem>
+                        <SelectItem value="text">Free text</SelectItem>
+                        <SelectItem value="json">Structured JSON</SelectItem>
+                    </SelectContent>
+                </Select>
+            </Field>
+
+            {outputMode === "label" && (
+                <Field
+                    label="Labels"
+                    hint="One per line. The model is constrained to these, so a downstream Switch can rely on the value."
+                >
+                    <Textarea
+                        rows={4}
+                        value={labels.join("\n")}
+                        disabled={readOnly}
+                        placeholder={"confirmed\nreschedule\ncancel\nunclear"}
+                        onChange={(e) =>
+                            update({
+                                labels: e.target.value
+                                    .split(/[\n,]/)
+                                    .map((label) => label.trim())
+                                    .filter(Boolean),
+                            })
+                        }
+                    />
+                </Field>
+            )}
+
+            <Field
+                label="Read from"
+                hint="The run-context field the model is asked about."
+            >
+                <Input
+                    value={node.source_field}
+                    disabled={readOnly}
+                    placeholder="appointment_reason"
+                    onChange={(e) => update({ source_field: e.target.value })}
+                />
+            </Field>
+
+            <Field
+                label="Write to"
+                hint="Where the answer is stored. Merge it into a later message as {{field}}, or branch on it with a Switch."
+            >
+                <Input
+                    value={node.output_field}
+                    disabled={readOnly}
+                    placeholder="llm_result"
+                    onChange={(e) => update({ output_field: e.target.value })}
+                />
+            </Field>
+
             <Field label="Prompt">
                 <div className="mb-2 flex justify-end">
                     <Popover open={variableOpen} onOpenChange={setVariableOpen}>
@@ -2745,7 +2852,7 @@ function LlmFields({
                         </PopoverTrigger>
                         <PopoverContent align="end" className="w-80 p-0">
                             <div className="border-b border-border px-3 py-2 text-sm font-medium">
-                                GoTracker appointment payload
+                                Available fields
                             </div>
                             <div className="max-h-72 overflow-y-auto p-1">
                                 {variables.map((field) => (
@@ -2773,6 +2880,57 @@ function LlmFields({
                     onChange={(e) => update({ prompt_template: e.target.value })}
                 />
             </Field>
+
+            {/* Patient data leaves the platform here, so what gets sent is an
+                explicit, visible choice rather than a default. */}
+            <div className="space-y-2 rounded-md border border-border p-2.5">
+                <div className="flex items-center justify-between gap-3">
+                    <div>
+                        <Label className="text-sm">Send extra patient context</Label>
+                        <p className="text-xs text-muted-foreground">
+                            Off by default. The prompt and the field above are always sent.
+                        </p>
+                    </div>
+                    <Switch
+                        checked={node.include_context ?? false}
+                        disabled={readOnly}
+                        onCheckedChange={(checked) => update({ include_context: checked })}
+                    />
+                </div>
+
+                {node.include_context && (
+                    <>
+                        <p className="text-xs text-muted-foreground">
+                            Tick only the fields this prompt needs. With none ticked the
+                            entire run context is sent, including patient identifiers.
+                        </p>
+                        <div className="max-h-48 space-y-0.5 overflow-y-auto">
+                            {variables.map((field) => (
+                                <label
+                                    key={field.name}
+                                    className="flex cursor-pointer items-center gap-2 rounded-sm px-1.5 py-1 text-sm hover:bg-accent"
+                                >
+                                    <Checkbox
+                                        className="h-3.5 w-3.5"
+                                        disabled={readOnly}
+                                        checked={contextFields.includes(field.name)}
+                                        onCheckedChange={() => toggleContextField(field.name)}
+                                    />
+                                    <span className="truncate">{field.label}</span>
+                                    <span className="ml-auto truncate font-mono text-xs text-muted-foreground">
+                                        {field.name}
+                                    </span>
+                                </label>
+                            ))}
+                        </div>
+                        {contextFields.length === 0 && (
+                            <p className="text-xs font-medium text-amber-700 dark:text-amber-400">
+                                Nothing selected — the whole context will be sent.
+                            </p>
+                        )}
+                    </>
+                )}
+            </div>
         </>
     )
 }
@@ -3156,6 +3314,163 @@ function SwitchFields({
         </>
     )
 }
+
+function SplitFields({
+    node,
+    def,
+    onChange,
+    readOnly,
+}: {
+    node: SplitNode
+    def: WorkflowDefinition
+    onChange: (n: WorkflowNode) => void
+    readOnly?: boolean
+}) {
+    const total = node.branches.reduce((sum, branch) => sum + (branch.weight || 0), 0)
+
+    const setBranch = (index: number, patch: Partial<SplitBranch>) =>
+        onChange({
+            ...node,
+            branches: node.branches.map((b, i) => (i === index ? { ...b, ...patch } : b)),
+        })
+
+    /**
+     * Adding or removing an arm re-splits the whole node evenly.
+     *
+     * The alternative — leaving the existing weights and appending a 0% arm —
+     * produces a definition that fails validation the moment it is created, and
+     * makes the author do arithmetic to get back to 100. Even is also what they
+     * almost always want: an uneven split is a deliberate choice, made after the
+     * arms exist.
+     */
+    const rebalanced = (branches: SplitBranch[]): SplitBranch[] => {
+        const share = Math.floor(100 / branches.length)
+        return branches.map((branch, i) => ({
+            ...branch,
+            // The remainder goes to the first arm so the weights still sum to
+            // exactly 100 when the count does not divide evenly (3 → 34/33/33).
+            weight: i === 0 ? 100 - share * (branches.length - 1) : share,
+        }))
+    }
+
+    const addBranch = () =>
+        onChange({
+            ...node,
+            branches: rebalanced([
+                ...node.branches,
+                {
+                    label: `Variant ${String.fromCharCode(65 + node.branches.length)}`,
+                    weight: 0,
+                    next_node_id: "",
+                },
+            ]),
+        })
+
+    const removeBranch = (index: number) =>
+        onChange({
+            ...node,
+            branches: rebalanced(node.branches.filter((_, i) => i !== index)),
+        })
+
+    return (
+        <>
+            <div className="rounded-md border border-border bg-muted/40 p-2.5 text-xs text-muted-foreground">
+                Contacts are divided at random between these branches, so a difference
+                in results reflects the message rather than the audience. Which branch a
+                contact gets is fixed for the whole run — it does not change if a step
+                retries. Results per branch appear under Analytics once the campaign is
+                live.
+            </div>
+
+            <Field
+                label="What you are testing"
+                hint="Shown on the canvas, in traces, and above the A/B results."
+            >
+                <Input
+                    value={node.subject ?? ""}
+                    placeholder="Reminder wording"
+                    disabled={readOnly}
+                    onChange={(e) => onChange({ ...node, subject: e.target.value || null })}
+                />
+            </Field>
+
+            <div className="space-y-2">
+                <div className="flex items-baseline justify-between">
+                    <Label className="text-sm">Branches</Label>
+                    <span
+                        className={
+                            total === 100
+                                ? "text-xs tabular-nums text-muted-foreground"
+                                : "text-xs font-medium tabular-nums text-destructive"
+                        }
+                    >
+                        {total}% of 100%
+                    </span>
+                </div>
+
+                {node.branches.map((branch, index) => (
+                    <div key={index} className="space-y-2 rounded-md border border-border p-2">
+                        <div className="flex items-center gap-1.5">
+                            <Input
+                                className="h-8 flex-1"
+                                aria-label={`Branch ${index + 1} label`}
+                                placeholder="Variant A"
+                                value={branch.label}
+                                disabled={readOnly}
+                                onChange={(e) => setBranch(index, { label: e.target.value })}
+                            />
+                            <div className="flex shrink-0 items-center gap-1">
+                                <Input
+                                    className="h-8 w-16 tabular-nums"
+                                    type="number"
+                                    min={1}
+                                    max={100}
+                                    aria-label={`Branch ${index + 1} percentage`}
+                                    value={branch.weight}
+                                    disabled={readOnly}
+                                    onChange={(e) =>
+                                        setBranch(index, {
+                                            weight: Number.parseInt(e.target.value, 10) || 0,
+                                        })
+                                    }
+                                />
+                                <span className="text-xs text-muted-foreground">%</span>
+                            </div>
+                            {!readOnly && (
+                                <Button
+                                    variant="ghost"
+                                    size="icon"
+                                    className="h-8 w-8 shrink-0"
+                                    aria-label={`Remove branch ${index + 1}`}
+                                    disabled={node.branches.length <= 2}
+                                    onClick={() => removeBranch(index)}
+                                >
+                                    <Trash2 className="h-3.5 w-3.5" />
+                                </Button>
+                            )}
+                        </div>
+
+                        <NextStepField
+                            label="Go to"
+                            def={def}
+                            currentId={node.id}
+                            value={branch.next_node_id}
+                            onChange={(v) => setBranch(index, { next_node_id: v })}
+                            readOnly={readOnly}
+                        />
+                    </div>
+                ))}
+
+                {!readOnly && node.branches.length < 10 && (
+                    <Button variant="outline" size="sm" className="gap-1.5" onClick={addBranch}>
+                        <Plus className="h-3.5 w-3.5" /> Add branch
+                    </Button>
+                )}
+            </div>
+        </>
+    )
+}
+
 
 // ---------------------------------------------------------------------------
 // Shared field helpers

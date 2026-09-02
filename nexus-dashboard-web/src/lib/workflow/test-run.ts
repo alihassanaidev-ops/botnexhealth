@@ -236,6 +236,23 @@ function describe(
                 next: takeTrue ? node.true_next_node_id : node.false_next_node_id,
             }
         }
+        case "split": {
+            // The real assignment is a server-side hash of the run id, which a
+            // client preview has no run to compute. Walking the first arm is
+            // honest about that; simulating a coin flip would suggest the
+            // preview tells you something about which arm a contact will get.
+            const chosen = node.branches[0]
+            const subject = node.subject ? ` on ${node.subject}` : ""
+            return {
+                step: {
+                    node_id: node.id,
+                    node_type: "split",
+                    summary: `Split${subject} → ${chosen?.label ?? "no branches"}`,
+                    detail: node.branches.map((b) => `${b.label} ${b.weight}%`).join(", "),
+                },
+                next: chosen?.next_node_id,
+            }
+        }
         case "switch": {
             // The preview walks the fallback branch: without live context there
             // is nothing to match a case against, and guessing the first case

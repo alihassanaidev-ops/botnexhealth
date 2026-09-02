@@ -513,6 +513,53 @@ export function validateDefinition(def: WorkflowDefinition): ValidationIssue[] {
                 })
                 break
             }
+            case "split": {
+                if (node.branches.length < 2) {
+                    issues.push({
+                        node_id: node.id,
+                        severity: "error",
+                        message: "A split needs at least two branches to test anything.",
+                    })
+                }
+                const seenBranches = new Set<string>()
+                let weightTotal = 0
+                node.branches.forEach((branch, i) => {
+                    const label = branch.label.trim()
+                    refError(node, branch.next_node_id, `Split branch "${label || i + 1}"`)
+                    weightTotal += branch.weight
+                    if (!label) {
+                        issues.push({
+                            node_id: node.id,
+                            severity: "error",
+                            message: `Split branch ${i + 1} has no label.`,
+                        })
+                    } else if (seenBranches.has(label.toLowerCase())) {
+                        // The label is the dimension the A/B report groups on, so
+                        // duplicates would merge two arms into one series.
+                        issues.push({
+                            node_id: node.id,
+                            severity: "error",
+                            message: `Split has two branches labelled "${label}".`,
+                        })
+                    }
+                    seenBranches.add(label.toLowerCase())
+                    if (!Number.isInteger(branch.weight) || branch.weight < 1 || branch.weight > 100) {
+                        issues.push({
+                            node_id: node.id,
+                            severity: "error",
+                            message: `Split branch "${label || i + 1}" needs a whole weight between 1 and 100.`,
+                        })
+                    }
+                })
+                if (weightTotal !== 100) {
+                    issues.push({
+                        node_id: node.id,
+                        severity: "error",
+                        message: `Split weights add up to ${weightTotal}%, not 100%.`,
+                    })
+                }
+                break
+            }
             case "switch": {
                 refError(node, node.default_next_node_id, "Switch (Otherwise branch)")
                 if (node.cases.length === 0) {

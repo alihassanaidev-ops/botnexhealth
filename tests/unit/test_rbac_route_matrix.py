@@ -397,6 +397,7 @@ ROUTES_BY_BOUNDARY: dict[str, tuple[str, ...]] = {
         "GET /api/automation/workflows/{workflow_id}/overview",
         "GET /api/automation/workflows/{workflow_id}/versions",
         "GET /api/automation/workflows/{workflow_id}/analytics",
+        "GET /api/automation/workflows/{workflow_id}/analytics/splits",
         "GET /api/automation/workflows/{workflow_id}/operations",
         "GET /api/automation/workflows/{workflow_id}/audience",
         "POST /api/automation/workflows/{workflow_id}/audience/preview",

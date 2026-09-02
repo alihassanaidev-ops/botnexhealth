@@ -25,44 +25,16 @@ from src.app.database import Base
 from src.app.models.usage_cost_rollup import NULL_LOCATION_SENTINEL
 
 
-class CampaignMetricsDaily(Base):
-    """One daily rollup row per workflow version.
+class CampaignMetricColumns:
+    """Every measured column of a campaign rollup.
 
-    ``location_id`` uses the same all-zero sentinel as usage rollups when the
-    source row has no location, keeping the primary key compact and non-null.
+    Shared by the workflow rollup and the per-variant split rollup. The two are
+    populated by one rendered-twice SQL union in
+    ``campaign_analytics_service``, so a metric added to one table and not the
+    other would report a real zero rather than a missing figure — the exact
+    failure the ``qualified`` columns had before they existed. Keeping the
+    column list in one place makes that divergence impossible.
     """
-
-    __tablename__ = "campaign_metrics_daily"
-    __table_args__ = (
-        PrimaryKeyConstraint(
-            "institution_id",
-            "location_id",
-            "workflow_id",
-            "workflow_version_id",
-            "metric_date",
-            name="pk_campaign_metrics_daily",
-        ),
-    )
-
-    institution_id: Mapped[str] = mapped_column(
-        UUID(as_uuid=False),
-        ForeignKey("institutions.id", ondelete="CASCADE"),
-        nullable=False,
-    )
-    location_id: Mapped[str] = mapped_column(
-        UUID(as_uuid=False), nullable=False, default=NULL_LOCATION_SENTINEL
-    )
-    workflow_id: Mapped[str] = mapped_column(
-        UUID(as_uuid=False),
-        ForeignKey("automation_workflows.id", ondelete="CASCADE"),
-        nullable=False,
-    )
-    workflow_version_id: Mapped[str] = mapped_column(
-        UUID(as_uuid=False),
-        ForeignKey("automation_workflow_versions.id", ondelete="CASCADE"),
-        nullable=False,
-    )
-    metric_date: Mapped[date_type] = mapped_column(Date, nullable=False)
 
     enrollments: Mapped[int] = mapped_column(BigInteger, nullable=False, default=0)
     active: Mapped[int] = mapped_column(BigInteger, nullable=False, default=0)
@@ -112,6 +84,97 @@ class CampaignMetricsDaily(Base):
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now()
     )
+
+
+class CampaignMetricsDaily(CampaignMetricColumns, Base):
+    """One daily rollup row per workflow version.
+
+    ``location_id`` uses the same all-zero sentinel as usage rollups when the
+    source row has no location, keeping the primary key compact and non-null.
+    """
+
+    __tablename__ = "campaign_metrics_daily"
+    __table_args__ = (
+        PrimaryKeyConstraint(
+            "institution_id",
+            "location_id",
+            "workflow_id",
+            "workflow_version_id",
+            "metric_date",
+            name="pk_campaign_metrics_daily",
+        ),
+    )
+
+    institution_id: Mapped[str] = mapped_column(
+        UUID(as_uuid=False),
+        ForeignKey("institutions.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    location_id: Mapped[str] = mapped_column(
+        UUID(as_uuid=False), nullable=False, default=NULL_LOCATION_SENTINEL
+    )
+    workflow_id: Mapped[str] = mapped_column(
+        UUID(as_uuid=False),
+        ForeignKey("automation_workflows.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    workflow_version_id: Mapped[str] = mapped_column(
+        UUID(as_uuid=False),
+        ForeignKey("automation_workflow_versions.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    metric_date: Mapped[date_type] = mapped_column(Date, nullable=False)
+
+
+class CampaignSplitMetricsDaily(CampaignMetricColumns, Base):
+    """The same daily rollup, cut by which arm of which Split node a run took.
+
+    This is what makes an A/B test readable: without the ``split_node_id`` /
+    ``branch_label`` dimension the campaign rollup can say a workflow booked 40
+    patients but not which message produced them, which is the only question an
+    experiment is asked.
+
+    Rows exist only for runs that actually reached a split node, so the
+    enrollments here are the experiment's population, not the campaign's.
+    """
+
+    __tablename__ = "campaign_split_metrics_daily"
+    __table_args__ = (
+        PrimaryKeyConstraint(
+            "institution_id",
+            "location_id",
+            "workflow_id",
+            "workflow_version_id",
+            "metric_date",
+            "split_node_id",
+            "branch_label",
+            name="pk_campaign_split_metrics_daily",
+        ),
+    )
+
+    institution_id: Mapped[str] = mapped_column(
+        UUID(as_uuid=False),
+        ForeignKey("institutions.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    location_id: Mapped[str] = mapped_column(
+        UUID(as_uuid=False), nullable=False, default=NULL_LOCATION_SENTINEL
+    )
+    workflow_id: Mapped[str] = mapped_column(
+        UUID(as_uuid=False),
+        ForeignKey("automation_workflows.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    workflow_version_id: Mapped[str] = mapped_column(
+        UUID(as_uuid=False),
+        ForeignKey("automation_workflow_versions.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    metric_date: Mapped[date_type] = mapped_column(Date, nullable=False)
+    #: The Split node's id inside the published definition.
+    split_node_id: Mapped[str] = mapped_column(String(120), nullable=False)
+    #: The arm's author-given label, which is also its identity in the builder.
+    branch_label: Mapped[str] = mapped_column(String(60), nullable=False)
 
 
 class CampaignOutcomeDefinition(Base):

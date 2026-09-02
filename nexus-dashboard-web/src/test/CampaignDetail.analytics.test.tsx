@@ -11,6 +11,7 @@ import {
     getCampaign,
     getCampaignAudience,
     getCampaignAnalytics,
+    getCampaignSplitAnalytics,
     getCampaignOverview,
     getUsageByCampaign,
     getUsageSummary,
@@ -24,6 +25,7 @@ vi.mock("@/lib/automation-api", () => ({
     getCampaign: vi.fn(),
     getCampaignOverview: vi.fn(),
     getCampaignAnalytics: vi.fn(),
+    getCampaignSplitAnalytics: vi.fn(),
     listCampaignRuns: vi.fn(),
     getUsageSummary: vi.fn(),
     getUsageByCampaign: vi.fn(),
@@ -45,6 +47,7 @@ vi.mock("sonner", () => ({ toast: { error: vi.fn(), success: vi.fn(), info: vi.f
 const campaign = getCampaign as ReturnType<typeof vi.fn>
 const overview = getCampaignOverview as ReturnType<typeof vi.fn>
 const analytics = getCampaignAnalytics as ReturnType<typeof vi.fn>
+const splitAnalytics = getCampaignSplitAnalytics as ReturnType<typeof vi.fn>
 const runs = listCampaignRuns as ReturnType<typeof vi.fn>
 const usageSummary = getUsageSummary as ReturnType<typeof vi.fn>
 const usageByCampaign = getUsageByCampaign as ReturnType<typeof vi.fn>
@@ -62,6 +65,7 @@ beforeEach(() => {
     campaign.mockReset()
     overview.mockReset()
     analytics.mockReset()
+    splitAnalytics.mockReset()
     runs.mockReset()
     usageSummary.mockReset()
     usageByCampaign.mockReset()
@@ -108,6 +112,19 @@ beforeEach(() => {
         channel_attempts: {},
         recent_outcomes: [],
         generated_at: "2026-07-18T00:00:00Z",
+    })
+    // No A/B test on this campaign — the common case, and the one that must
+    // not render an empty experiment panel.
+    splitAnalytics.mockResolvedValue({
+        workflow_id: "wf-1",
+        workflow_name: "Recall campaign",
+        category: "recall",
+        start_date: "2026-06-19",
+        end_date: "2026-07-18",
+        min_arm_enrollments: 100,
+        splits: [],
+        generated_at: "2026-07-18T09:00:00Z",
+        rollup_fresh_at: null,
     })
     analytics.mockResolvedValue({
         workflow_id: "wf-1",
@@ -374,6 +391,156 @@ describe("CampaignDetail outcome reporting", () => {
         )
         expect(screen.getByText("Patient booked from recall outreach.")).toBeInTheDocument()
         expect(screen.getByText("25.0%")).toBeInTheDocument()
+    })
+
+    it("compares A/B branches side by side and names the leader", async () => {
+        const user = userEvent.setup()
+        splitAnalytics.mockResolvedValue({
+            workflow_id: "wf-1",
+            workflow_name: "Recall campaign",
+            category: "recall",
+            start_date: "2026-06-19",
+            end_date: "2026-07-18",
+            min_arm_enrollments: 100,
+            splits: [
+                {
+                    node_id: "ab",
+                    subject: "Reminder wording",
+                    primary_outcome_key: "booked",
+                    primary_outcome_label: "Recall Booked",
+                    has_enough_volume: true,
+                    branches: [
+                        {
+                            label: "Variant A",
+                            weight: 50,
+                            enrollments: 1000,
+                            summary: { enrollments: 1000, booked: 100 },
+                            outcomes: [
+                                {
+                                    key: "booked",
+                                    label: "Recall Booked",
+                                    group: "success",
+                                    count: 100,
+                                    rate: 0.1,
+                                    description: "Patient booked from recall outreach.",
+                                },
+                            ],
+                            total_cost: 0,
+                            cost_per_booking: null,
+                            primary_rate: 0.1,
+                            lift: -0.1667,
+                            is_leader: false,
+                        },
+                        {
+                            label: "Variant B",
+                            weight: 50,
+                            enrollments: 1000,
+                            summary: { enrollments: 1000, booked: 120 },
+                            outcomes: [
+                                {
+                                    key: "booked",
+                                    label: "Recall Booked",
+                                    group: "success",
+                                    count: 120,
+                                    rate: 0.12,
+                                    description: "Patient booked from recall outreach.",
+                                },
+                            ],
+                            total_cost: 0,
+                            cost_per_booking: null,
+                            primary_rate: 0.12,
+                            lift: 0.2,
+                            is_leader: true,
+                        },
+                    ],
+                },
+            ],
+            generated_at: "2026-07-18T09:00:00Z",
+            rollup_fresh_at: "2026-07-18T08:00:00Z",
+        })
+        renderPage()
+
+        await screen.findByText("Recall campaign")
+        await user.click(screen.getByRole("tab", { name: "Outcomes" }))
+
+        await screen.findByText("A/B test: Reminder wording")
+        expect(screen.getByText("Variant A")).toBeInTheDocument()
+        expect(screen.getByText("Variant B")).toBeInTheDocument()
+        // The rate each arm is judged on, and the relative gap between them —
+        // the two numbers the whole feature exists to produce.
+        expect(screen.getByText("12.0%")).toBeInTheDocument()
+        expect(screen.getByText("+20%")).toBeInTheDocument()
+        expect(screen.getByText("Leading")).toBeInTheDocument()
+    })
+
+    it("withholds the winner until each branch has enough contacts to mean it", async () => {
+        const user = userEvent.setup()
+        splitAnalytics.mockResolvedValue({
+            workflow_id: "wf-1",
+            workflow_name: "Recall campaign",
+            category: "recall",
+            start_date: "2026-06-19",
+            end_date: "2026-07-18",
+            min_arm_enrollments: 100,
+            splits: [
+                {
+                    node_id: "ab",
+                    subject: null,
+                    primary_outcome_key: "booked",
+                    primary_outcome_label: "Recall Booked",
+                    has_enough_volume: false,
+                    branches: [
+                        {
+                            label: "Variant A",
+                            weight: 50,
+                            enrollments: 9,
+                            summary: { enrollments: 9, booked: 1 },
+                            outcomes: [],
+                            total_cost: 0,
+                            cost_per_booking: null,
+                            primary_rate: 0.1111,
+                            lift: null,
+                            is_leader: false,
+                        },
+                        {
+                            label: "Variant B",
+                            weight: 50,
+                            enrollments: 8,
+                            summary: { enrollments: 8, booked: 3 },
+                            outcomes: [],
+                            total_cost: 0,
+                            cost_per_booking: null,
+                            primary_rate: 0.375,
+                            lift: null,
+                            is_leader: false,
+                        },
+                    ],
+                },
+            ],
+            generated_at: "2026-07-18T09:00:00Z",
+            rollup_fresh_at: null,
+        })
+        renderPage()
+
+        await screen.findByText("Recall campaign")
+        await user.click(screen.getByRole("tab", { name: "Outcomes" }))
+
+        // Variant B is ahead on the raw rate, but on 8 contacts that is noise.
+        // The rates still show; the verdict does not.
+        await screen.findByText(/needs 100 per branch before a winner is called/)
+        expect(screen.getByText("37.5%")).toBeInTheDocument()
+        expect(screen.queryByText("Leading")).not.toBeInTheDocument()
+    })
+
+    it("shows no experiment panel on a campaign that runs no split", async () => {
+        const user = userEvent.setup()
+        renderPage()
+
+        await screen.findByText("Recall campaign")
+        await user.click(screen.getByRole("tab", { name: "Outcomes" }))
+
+        await screen.findByText("Patient booked from recall outreach.")
+        expect(screen.queryByText(/A\/B test/)).not.toBeInTheDocument()
     })
 
     it("says why revenue is missing rather than showing an unexplained number", async () => {

@@ -48,8 +48,10 @@ from src.app.services.automation.campaign_operations_service import (
     RunListFilters,
 )
 from src.app.services.automation.campaign_analytics_service import (
+    MIN_ARM_ENROLLMENTS,
     CampaignAnalytics,
     CampaignAnalyticsService,
+    CampaignSplitAnalytics,
     resolve_window,
 )
 from src.app.pms.gotracker.statuses import public_statuses
@@ -596,6 +598,85 @@ class CampaignAnalyticsResponse(BaseModel):
                 for point in analytics.trend
             ],
             cost=CostSummaryResponse(**analytics.cost.__dict__),
+            generated_at=analytics.generated_at,
+            rollup_fresh_at=analytics.rollup_fresh_at,
+        )
+
+
+class SplitBranchAnalyticsResponse(BaseModel):
+    label: str
+    weight: int | None
+    enrollments: int
+    summary: dict[str, int]
+    outcomes: list[OutcomeAnalyticsResponse]
+    total_cost: float
+    cost_per_booking: float | None
+    primary_rate: float | None
+    lift: float | None
+    is_leader: bool
+
+
+class SplitNodeAnalyticsResponse(BaseModel):
+    node_id: str
+    subject: str | None
+    primary_outcome_key: str
+    primary_outcome_label: str
+    branches: list[SplitBranchAnalyticsResponse]
+    has_enough_volume: bool
+
+
+class CampaignSplitAnalyticsResponse(BaseModel):
+    workflow_id: str
+    workflow_name: str
+    category: str
+    start_date: str
+    end_date: str
+    #: Minimum contacts per arm before a leader is named, so the builder can say
+    #: how far off a conclusive result is instead of hard-coding the same number.
+    min_arm_enrollments: int
+    splits: list[SplitNodeAnalyticsResponse]
+    generated_at: datetime
+    rollup_fresh_at: datetime | None
+
+    @classmethod
+    def from_service(
+        cls, analytics: CampaignSplitAnalytics
+    ) -> "CampaignSplitAnalyticsResponse":
+        return cls(
+            workflow_id=analytics.workflow_id,
+            workflow_name=analytics.workflow_name,
+            category=analytics.category,
+            start_date=analytics.start_date.isoformat(),
+            end_date=analytics.end_date.isoformat(),
+            min_arm_enrollments=MIN_ARM_ENROLLMENTS,
+            splits=[
+                SplitNodeAnalyticsResponse(
+                    node_id=split.node_id,
+                    subject=split.subject,
+                    primary_outcome_key=split.primary_outcome_key,
+                    primary_outcome_label=split.primary_outcome_label,
+                    has_enough_volume=split.has_enough_volume,
+                    branches=[
+                        SplitBranchAnalyticsResponse(
+                            label=branch.label,
+                            weight=branch.weight,
+                            enrollments=branch.enrollments,
+                            summary=branch.summary,
+                            outcomes=[
+                                OutcomeAnalyticsResponse(**outcome.__dict__)
+                                for outcome in branch.outcomes
+                            ],
+                            total_cost=branch.total_cost,
+                            cost_per_booking=branch.cost_per_booking,
+                            primary_rate=branch.primary_rate,
+                            lift=branch.lift,
+                            is_leader=branch.is_leader,
+                        )
+                        for branch in split.branches
+                    ],
+                )
+                for split in analytics.splits
+            ],
             generated_at=analytics.generated_at,
             rollup_fresh_at=analytics.rollup_fresh_at,
         )
@@ -1259,6 +1340,34 @@ async def get_campaign_analytics(
             end_date=end,
         )
         return CampaignAnalyticsResponse.from_service(analytics)
+
+
+@router.get(
+    "/{workflow_id}/analytics/splits",
+    response_model=CampaignSplitAnalyticsResponse,
+)
+async def get_campaign_split_analytics(
+    workflow_id: str,
+    current_user: _InstitutionOrLocationAdmin,
+    start_date: date | None = Query(None, description="Inclusive range start (YYYY-MM-DD)"),
+    end_date: date | None = Query(None, description="Inclusive range end (YYYY-MM-DD)"),
+) -> CampaignSplitAnalyticsResponse:
+    """Return per-variant results for every Split (A/B) node in the workflow."""
+    inst_id = _institution_id(current_user)
+    try:
+        start, end = resolve_window(start_date, end_date)
+    except ValueError as exc:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, str(exc)) from exc
+    async with get_db_session() as session:
+        svc = AutomationWorkflowDefinitionService(session)
+        wf = await _get_workflow_or_404(svc, workflow_id, inst_id)
+        analytics = await CampaignAnalyticsService(session).split_analytics(
+            wf,
+            institution_id=inst_id,
+            start_date=start,
+            end_date=end,
+        )
+        return CampaignSplitAnalyticsResponse.from_service(analytics)
 
 
 @router.post("/{workflow_id}/launch-checklist/preview", response_model=LaunchChecklistResponse)

@@ -7,6 +7,7 @@ deterministic.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import re
 from dataclasses import dataclass
@@ -35,10 +36,49 @@ class LlmExecutionResult:
     metadata: dict[str, object]
 
 
+def _is_transient(exc: Exception) -> bool:
+    """Whether retrying the same request could plausibly succeed.
+
+    Timeouts, connection errors, 429s and 5xxs are the provider having a bad
+    moment. A 4xx that is not a rate limit, or output that failed to parse
+    against the node's own schema, will fail identically on every attempt — and
+    retrying those turns one failed run into three times the latency before the
+    same failure.
+    """
+    if isinstance(exc, httpx.TimeoutException | httpx.TransportError):
+        return True
+    if isinstance(exc, httpx.HTTPStatusError):
+        status = exc.response.status_code
+        return status == 429 or status >= 500
+    return False
+
+
+async def _call_with_retries(
+    node: LlmNode, context: dict
+) -> tuple[object, dict[str, object]]:
+    """Call the model, retrying transient provider failures with backoff."""
+    attempts = max(1, settings.workflow_llm_max_attempts)
+    base_delay = max(0.0, settings.workflow_llm_retry_base_delay_seconds)
+    last_error: Exception | None = None
+    for attempt in range(1, attempts + 1):
+        try:
+            value, metadata = await _call_openai(node, context)
+        except Exception as exc:  # noqa: BLE001 - normalized at workflow boundary
+            last_error = exc
+            if attempt >= attempts or not _is_transient(exc):
+                raise
+            await asyncio.sleep(base_delay * (2 ** (attempt - 1)))
+            continue
+        if attempt > 1:
+            metadata["attempts"] = attempt
+        return value, metadata
+    raise last_error or WorkflowLlmError("LLM call failed")
+
+
 async def execute_llm_node(node: LlmNode, context: dict) -> LlmExecutionResult:
     """Run a workflow LLM node and write its output into ``context``."""
     try:
-        value, metadata = await _call_openai(node, context)
+        value, metadata = await _call_with_retries(node, context)
     except Exception as exc:  # noqa: BLE001 - normalized at workflow boundary
         allow_fallback = (
             node.allow_keyword_fallback
@@ -111,7 +151,9 @@ def _request_payload(node: LlmNode, context: dict, model: str) -> dict[str, Any]
     if node.labels:
         input_context["allowed_labels"] = node.labels
     if node.include_context:
-        input_context["workflow_context"] = _metadata_value(context)
+        input_context["workflow_context"] = _metadata_value(
+            _permitted_context(node, context)
+        )
 
     instructions = (
         "You are a workflow AI action. Follow the user's instruction and return "
@@ -143,6 +185,26 @@ def _request_payload(node: LlmNode, context: dict, model: str) -> dict[str, Any]
     if text_format is not None:
         payload["text"] = {"format": text_format}
     return payload
+
+
+def _permitted_context(node: LlmNode, context: dict) -> dict:
+    """The subset of the run context this node is allowed to send.
+
+    An empty ``context_fields`` means the whole context, which is what every
+    definition published before the field existed meant and what they must keep
+    meaning. Anything else is an explicit allowlist, resolved through the same
+    dotted-path lookup the rest of the node uses so ``patient.first_name`` works
+    as well as a top-level key. A named field that is absent from the context is
+    simply omitted rather than sent as null.
+    """
+    if not node.context_fields:
+        return context
+    permitted: dict = {}
+    for field_name in node.context_fields:
+        value = _context_value(context, field_name)
+        if value is not None:
+            permitted[field_name] = value
+    return permitted
 
 
 def _text_format(node: LlmNode) -> dict[str, Any] | None:

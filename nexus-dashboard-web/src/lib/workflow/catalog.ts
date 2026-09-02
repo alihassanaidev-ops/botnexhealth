@@ -12,6 +12,7 @@ import {
     Flag,
     GitBranch,
     Split,
+    Shuffle,
     Mail,
     MessageSquare,
     MessageSquareReply,
@@ -117,6 +118,13 @@ export const NODE_META: Record<NodeType, NodeMeta> = {
         icon: Braces,
         group: "advanced",
         accent: "bg-teal-100 text-teal-700 dark:bg-teal-950/50 dark:text-teal-300",
+    },
+    split: {
+        label: "Split (A/B)",
+        description: "Randomly divide contacts to test variants.",
+        icon: Shuffle,
+        group: "control",
+        accent: "bg-violet-100 text-violet-700 dark:bg-violet-950/50 dark:text-violet-300",
     },
     llm: {
         label: "AI Action",
@@ -257,7 +265,7 @@ export const PALETTE_GROUPS: Array<{ title: string; group: NodeMeta["group"]; ty
     // schema for already-published definitions, but binds a new workflow to one
     // PMS. `update_appointment` is the PMS-neutral replacement.
     { title: "Actions", group: "action", types: ["drip", "llm", "book_appointment", "booking_link", "patient_registration", "update_appointment"] },
-    { title: "Control flow", group: "control", types: ["wait", "condition", "switch", "exit"] },
+    { title: "Control flow", group: "control", types: ["wait", "condition", "switch", "split", "exit"] },
     { title: "Advanced", group: "advanced", types: ["update_patient_status", "json_mapper"] },
 ]
 

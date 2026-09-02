@@ -229,6 +229,7 @@ export type NodeType =
     | "llm"
     | "condition"
     | "switch"
+    | "split"
     | "exit"
 
 export interface TimeWaitConfig {
@@ -464,6 +465,12 @@ export interface LlmNode {
     output_mode?: "label" | "text" | "json"
     max_output_tokens?: number
     include_context?: boolean
+    /**
+     * Context keys the node may send to the model when `include_context` is on.
+     * Empty means the whole context — what definitions published before this
+     * field existed meant, and the reason it cannot become the new default.
+     */
+    context_fields?: string[]
     require_model?: boolean
     allow_keyword_fallback?: boolean | null
     json_schema?: Record<string, unknown> | null
@@ -506,6 +513,31 @@ export interface SwitchNode {
     cases: SwitchCase[]
     default_next_node_id: string
 }
+/** One weighted arm of a {@link SplitNode}. */
+export interface SplitBranch {
+    /** Port identity in the builder, in traces, and in the A/B report. */
+    label: string
+    /** Whole percent of contacts routed here. Weights across a node sum to 100. */
+    weight: number
+    next_node_id: string
+}
+
+/**
+ * Weighted random branch — an A/B test over the rest of the workflow.
+ *
+ * A switch routes on what a contact *is*; a split routes on nothing, which is
+ * what makes a difference in outcome attributable to the message rather than to
+ * the audience. Assignment is derived server-side from the run id, so a
+ * contact stays on one arm across retries and resumes.
+ */
+export interface SplitNode {
+    type: "split"
+    id: string
+    /** Author-facing note on what is being tested. Descriptive only. */
+    subject?: string | null
+    branches: SplitBranch[]
+}
+
 export interface ExitNode {
     type: "exit"
     id: string
@@ -529,6 +561,7 @@ export type WorkflowNode =
     | LlmNode
     | ConditionNode
     | SwitchNode
+    | SplitNode
     | ExitNode
 
 // ---------------------------------------------------------------------------

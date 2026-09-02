@@ -7,7 +7,7 @@ Definitions are immutable once published. Schema version "1.0" supports:
   Nodes:    wait, drip, send_sms, retell_sms_conversation, send_voice, send_email,
             update_patient_status, update_appointment, book_appointment,
             update_gotracker_appointment, booking_link, patient_registration,
-            json_mapper, llm, condition, exit
+            json_mapper, llm, condition, switch, split, exit
 
 ``update_appointment`` is the PMS-neutral appointment write-back and should be
 preferred; ``update_gotracker_appointment`` only runs on GoTracker locations and
@@ -1176,6 +1176,16 @@ class LlmNode(BaseModel):
     output_mode: Literal["label", "text", "json"] = "label"
     max_output_tokens: int = Field(default=256, ge=1, le=4096)
     include_context: bool = False
+    # Which context keys may leave the platform when ``include_context`` is on.
+    #
+    # Empty means "the whole context", which is what every definition published
+    # before this field existed meant, so the default has to stay that way. It is
+    # also the wrong default for patient data: the workflow context carries name,
+    # date of birth and appointment detail, and an AI action that only needs the
+    # visit reason has no business shipping the rest to a third party. The
+    # builder therefore writes an explicit list for new nodes — see
+    # ``LlmFields`` — and leaves published ones alone.
+    context_fields: list[str] = Field(default_factory=list)
     require_model: bool = True
     allow_keyword_fallback: bool | None = None
     json_schema: dict[str, Any] | None = None
@@ -1188,6 +1198,18 @@ class LlmNode(BaseModel):
     @classmethod
     def validate_labels(cls, values: list[str]) -> list[str]:
         return [label.strip() for label in values if label.strip()]
+
+    @field_validator("context_fields")
+    @classmethod
+    def validate_context_fields(cls, values: list[str]) -> list[str]:
+        seen: set[str] = set()
+        fields: list[str] = []
+        for value in values:
+            normalized = value.strip()
+            if normalized and normalized not in seen:
+                seen.add(normalized)
+                fields.append(normalized)
+        return fields
 
     @field_validator("fallback_label")
     @classmethod
@@ -1285,6 +1307,70 @@ class SwitchNode(BaseModel):
         return self
 
 
+class SplitBranch(BaseModel):
+    """One weighted arm of a :class:`SplitNode`."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    # Same contract as a switch case label: it is the port identity in the
+    # builder, in execution traces, and — unlike a switch — in the analytics
+    # rollup, where it is the dimension the two arms are compared on. Renaming
+    # a live arm therefore starts a new series rather than continuing the old.
+    label: str = Field(min_length=1, max_length=60)
+    #: Whole percent of contacts routed here. Weights across a node sum to 100.
+    weight: int = Field(ge=1, le=100)
+    next_node_id: str = Field(min_length=1)
+
+    @field_validator("label")
+    @classmethod
+    def normalize_label(cls, value: str) -> str:
+        normalized = value.strip()
+        if not normalized:
+            raise ValueError("branch label must not be blank")
+        return normalized
+
+
+class SplitNode(BaseModel):
+    """Weighted random branch: an A/B test over the rest of the workflow.
+
+    A :class:`SwitchNode` routes on what a contact *is*; a split routes on
+    nothing at all, which is the point — it is the only way to attribute a
+    difference in outcome to the message rather than to the audience.
+
+    Assignment is derived from the run id and the node id rather than drawn from
+    a random source, so it is stable. A run that is retried after a transient
+    failure, or resumed from a timer days later, re-derives the same arm instead
+    of silently switching variants half way through and corrupting its own
+    result. See ``split_assignment.assign_branch``.
+
+    Weights are whole percents summing to 100. Normalizing arbitrary weights
+    would have been more forgiving, but the author is reading these numbers as
+    percentages either way and a 30/30 split that silently ran 50/50 is the kind
+    of thing nobody notices until the experiment is over.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    id: str = Field(min_length=1)
+    type: Literal["split"] = "split"
+    #: Author-facing note on what is being tested. Descriptive only.
+    subject: str | None = Field(default=None, max_length=200)
+    branches: list[SplitBranch] = Field(min_length=2, max_length=10)
+
+    @model_validator(mode="after")
+    def validate_branches(self) -> "SplitNode":
+        seen: set[str] = set()
+        for branch in self.branches:
+            key = branch.label.casefold()
+            if key in seen:
+                raise ValueError(f"duplicate split branch label '{branch.label}'")
+            seen.add(key)
+        total = sum(branch.weight for branch in self.branches)
+        if total != 100:
+            raise ValueError(f"split branch weights must sum to 100 (got {total})")
+        return self
+
+
 class ExitNode(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -1312,6 +1398,7 @@ WorkflowNode = Annotated[
         LlmNode,
         ConditionNode,
         SwitchNode,
+        SplitNode,
         ExitNode,
     ],
     Field(discriminator="type"),

@@ -21,6 +21,7 @@ from src.app.services.automation.definition_schema import (
     SendEmailNode,
     SendSmsNode,
     SendVoiceNode,
+    SplitNode,
     SwitchNode,
     TimeWaitConfig,
     UpdateAppointmentNode,
@@ -289,6 +290,28 @@ def simulate_run(
                 )
             )
             current = chosen.next_node_id if chosen else node.default_next_node_id
+        elif isinstance(node, SplitNode):
+            # A dry run has no run id, so there is no bucket to hash and nothing
+            # honest to "simulate". `case_choices` names the arm to walk (same
+            # key the switch preview uses); unset previews the first arm, which
+            # is the one the author just wrote.
+            wanted = case_choices.get(node.id)
+            chosen = next(
+                (branch for branch in node.branches if branch.label == wanted),
+                node.branches[0],
+            )
+            subject = f" on {node.subject}" if node.subject else ""
+            result.steps.append(
+                DryRunStep(
+                    node.id,
+                    "split",
+                    f"Split{subject} → {chosen.label} ({chosen.weight}%)",
+                    detail=", ".join(
+                        f"{branch.label} {branch.weight}%" for branch in node.branches
+                    ),
+                )
+            )
+            current = chosen.next_node_id
         elif isinstance(node, ExitNode):
             result.steps.append(
                 DryRunStep(node.id, "exit", f"Exit — {node.outcome or 'done'}")

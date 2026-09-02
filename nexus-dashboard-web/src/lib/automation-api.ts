@@ -2,6 +2,7 @@ import api from "@/lib/api"
 import type {
     AutomationWorkflow,
     CampaignAnalytics,
+    CampaignSplitAnalytics,
     AutomationWorkflowRun,
     CampaignAudienceDefinition,
     CampaignAudienceEnrollResult,
@@ -92,6 +93,16 @@ export async function getCampaignAnalytics(
 ): Promise<CampaignAnalytics> {
     const { data } = await api.get<CampaignAnalytics>(
         `/automation/workflows/${workflowId}/analytics${rangeQuery(range)}`,
+    )
+    return data
+}
+
+export async function getCampaignSplitAnalytics(
+    workflowId: string,
+    range?: { startDate?: string; endDate?: string },
+): Promise<CampaignSplitAnalytics> {
+    const { data } = await api.get<CampaignSplitAnalytics>(
+        `/automation/workflows/${workflowId}/analytics/splits${rangeQuery(range)}`,
     )
     return data
 }

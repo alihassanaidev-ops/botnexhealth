@@ -108,6 +108,11 @@ class Settings(BaseSettings):
     workflow_llm_default_model: str = "gpt-5.6-luna"
     workflow_llm_timeout_seconds: float = 20.0
     workflow_llm_allow_keyword_fallback: bool = False
+    # Total attempts per AI action, including the first. Only transient failures
+    # are retried — a bad prompt or a schema mismatch fails the same way three
+    # times and just burns the run's latency budget.
+    workflow_llm_max_attempts: int = 3
+    workflow_llm_retry_base_delay_seconds: float = 0.5
 
     # NexHealth post-visit completion sweep. NexHealth has no checkout event, so
     # a visit is treated as finished once start_time + the appointment type's

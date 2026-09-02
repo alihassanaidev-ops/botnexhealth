@@ -422,7 +422,7 @@ Current schema version `1.0` supports triggers such as `appointment_offset`,
 `send_sms`, `send_voice`, `send_email`, `retell_sms_conversation`,
 `update_patient_status`, `update_appointment`, `book_appointment`,
 `update_gotracker_appointment`, `booking_link`, `patient_registration`,
-`json_mapper`, `llm`, `condition`, `switch`, and `exit`.
+`json_mapper`, `llm`, `condition`, `switch`, `split`, and `exit`.
 
 GoTracker recall scanning is deliberately stricter than NexHealth recall
 scanning. NexHealth supplies native recall and treatment-plan reads. GoTracker
@@ -544,6 +544,60 @@ filter matches, falling back to a required `default_next_node_id`. Its ports are
 variable-count, which `node_registry.py` now models through `outgoing_list_fields`
 — graph validation reports a mis-wired branch as `cases[2].next_node_id` rather
 than blaming the node as a whole.
+
+### A/B testing (the `split` node)
+
+The `split` node divides contacts at random between two and ten weighted arms,
+whole percents summing to 100. Where a `switch` routes on what a contact *is*, a
+split routes on nothing — which is the only way to attribute a difference in
+outcome to the message rather than to the audience.
+
+Assignment is **derived, not drawn**: `services/automation/split_assignment.py`
+hashes `(run_id, node_id)` into one of a hundred buckets. The engine retries
+steps and resumes runs from timers, so a random draw would re-roll on every
+resume and drift a contact between variants mid-run — breaking both the
+patient's experience and the experiment's own numbers. Because the node id is in
+the digest, two splits in one workflow assign independently. Every assignment is
+also written to `automation_workflow_split_assignments`, which the rollup joins
+through and which pins what a contact was actually sent, so editing a split's
+weights later cannot rewrite the results of contacts who already went through
+the old ones.
+
+Results are reported per arm from `campaign_split_metrics_daily`. That table
+carries the same metric columns as `campaign_metrics_daily` plus
+`split_node_id` and `branch_label`, and both are written by *one* SQL union
+rendered twice — see `_render_rollup(split=...)` in
+`campaign_analytics_service.py` — in the same transaction and window. Maintaining
+two copies of seven metric branches would have drifted the first time a metric
+was added to one and not the other, and an arm's numbers have to reconcile
+against the campaign total they came from. The join is inner: a run that never
+reached a split has no arm, and counting it would put contacts who were never in
+the experiment into its denominator.
+
+`GET /automation/workflows/{id}/analytics/splits` serves per-arm rates, lift
+against the best other arm, and a leader flag. The leader and the lift are
+withheld until every arm clears `MIN_ARM_ENROLLMENTS` (100). The rates show from
+the first contact — hiding them would read as a broken panel — but a lead on
+nine contacts is noise, and a UI that dresses it up as a winner gets tests
+called early.
+
+### AI actions and patient data
+
+The `llm` node ("AI Action") calls the OpenAI Responses API. `output_mode`
+`label` constrains the model to an author-supplied enum through a strict JSON
+schema, which is what makes a downstream `switch` on the result safe; `text` and
+`json` cover free text and multi-field extraction.
+
+Two properties matter operationally. Transient provider failures (timeouts,
+429s, 5xx) are retried with backoff up to `workflow_llm_max_attempts`; a 4xx or
+an output that fails the node's own schema is *not* retried, because it fails
+identically every time and only spends the run's latency budget. And
+`context_fields` is an allowlist over what leaves the platform: with
+`include_context` on and the list empty the whole run context is sent — what
+every definition published before the field existed meant — so the builder
+writes an explicit list for new nodes and leaves published ones alone. The run
+context carries patient name, date of birth and appointment detail, so an action
+that only needs the visit reason should say so.
 
 ### Trigger eligibility filters
 

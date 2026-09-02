@@ -455,6 +455,82 @@ class AutomationWorkflowDripState(Base):
     )
 
 
+class AutomationWorkflowSplitAssignment(Base):
+    """Which arm of which Split node one run was routed down.
+
+    The assignment is already derivable from ``(run_id, node_id)`` without any
+    storage — see ``split_assignment.assign_branch``. This table exists for the
+    analytics rollup, which needs to join runs to arms in SQL, and for the
+    audit trail, which needs the arm a contact *was* sent down to survive the
+    author editing the split's weights afterwards.
+
+    One row per (run, node): a retried step re-derives the same arm, so the
+    write is an idempotent upsert rather than an append.
+    """
+
+    __tablename__ = "automation_workflow_split_assignments"
+    __table_args__ = (
+        UniqueConstraint(
+            "workflow_run_id",
+            "node_id",
+            name="uq_automation_split_assignment_run_node",
+        ),
+        CheckConstraint(
+            "bucket >= 0 AND bucket < 100",
+            name="ck_automation_split_assignments_bucket",
+        ),
+        Index(
+            "ix_automation_split_assignments_version_node",
+            "workflow_version_id",
+            "node_id",
+            "branch_label",
+        ),
+        Index("ix_automation_split_assignments_institution", "institution_id"),
+    )
+
+    id: Mapped[str] = mapped_column(
+        UUID(as_uuid=False),
+        primary_key=True,
+        default=lambda: str(uuid4()),
+    )
+    institution_id: Mapped[str] = mapped_column(
+        UUID(as_uuid=False),
+        ForeignKey("institutions.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    location_id: Mapped[str | None] = mapped_column(
+        UUID(as_uuid=False),
+        ForeignKey("institution_locations.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
+    workflow_id: Mapped[str] = mapped_column(
+        UUID(as_uuid=False),
+        ForeignKey("automation_workflows.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    workflow_version_id: Mapped[str] = mapped_column(
+        UUID(as_uuid=False),
+        ForeignKey("automation_workflow_versions.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    workflow_run_id: Mapped[str] = mapped_column(
+        UUID(as_uuid=False),
+        ForeignKey("automation_workflow_runs.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+
+    node_id: Mapped[str] = mapped_column(String(120), nullable=False)
+    branch_label: Mapped[str] = mapped_column(String(60), nullable=False)
+    #: The 0-99 bucket the run hashed into. Kept so an assignment can be
+    #: explained and re-checked against the weights that were live at the time.
+    bucket: Mapped[int] = mapped_column(Integer, nullable=False)
+    assigned_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False,
+    )
+
+
 class AutomationWorkflowTimer(Base):
     """Durable scheduler row for delayed workflow execution."""
 
