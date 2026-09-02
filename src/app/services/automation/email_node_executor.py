@@ -265,10 +265,10 @@ class EmailNodeExecutor:
             text=body,
             html=html,
             reply_to=reply_to,
-            # Crash-window idempotency (XC-1b): a stable per-(run, node) key so a
-            # retry after a crash between send and commit is deduped by the
-            # provider rather than emailing the patient twice. Deliberately
-            # stable across the attempt loop below, for the same reason.
+            # Crash-window idempotency (XC-1b): Resend honors this stable
+            # per-(run, node) key across the attempt loop. SES SendEmail has no
+            # equivalent client token; moving patient mail to SES therefore also
+            # requires the durable outbound ledger described in EMAIL_AUTOMATION.md.
             idempotency_key=f"email:{run.id}:{node.id}",
             # Scopes bounce/complaint suppression back to this institution.
             institution_id=str(run.institution_id),

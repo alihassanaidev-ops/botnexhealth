@@ -886,6 +886,56 @@ def test_enroll_idempotent_returns_existing_run():
     assert result.status == "completed"
 
 
+def test_enroll_blocks_legacy_booking_workflow_without_location():
+    """Old active versions get the same guard even if they predate publish validation."""
+    user = _make_user(location_id=None)
+    wf = _make_workflow(status="active", version_id="ver-1")
+    created_run = _make_run(status="pending")
+    version = MagicMock()
+    version.definition = {
+        "trigger": {"type": "manual"},
+        "entry_node_id": "booking-1",
+        "nodes": [
+            {
+                "type": "booking_link",
+                "id": "booking-1",
+                "next_node_id": "exit-1",
+                "actions": ["book"],
+            },
+            {"type": "exit", "id": "exit-1", "outcome": "configured"},
+        ],
+    }
+
+    def_svc = AsyncMock()
+    def_svc.get_workflow = AsyncMock(return_value=wf)
+    enroll_svc = AsyncMock()
+    enroll_svc.enroll = AsyncMock(return_value=(created_run, True))
+    session = _make_session(version=version)
+
+    with (
+        patch("src.app.api.routes.automation_workflows.get_db_session", return_value=session),
+        patch(
+            "src.app.api.routes.automation_workflows.AutomationWorkflowDefinitionService",
+            return_value=def_svc,
+        ),
+        patch(
+            "src.app.api.routes.automation_workflows.AutomationWorkflowEnrollmentService",
+            return_value=enroll_svc,
+        ),
+    ):
+        with pytest.raises(HTTPException) as exc_info:
+            asyncio.run(
+                enroll_in_workflow(
+                    "wf-1",
+                    EnrollRequest(idempotency_key="legacy-booking"),
+                    user,
+                )
+            )
+
+    assert exc_info.value.status_code == 422
+    assert "Booking Link requires a clinic location" in exc_info.value.detail
+
+
 def test_manual_enroll_rejects_patient_with_active_all_channel_dnc():
     user = _make_user()
     wf = _make_workflow(status="active", version_id="ver-1")
@@ -1088,6 +1138,40 @@ def test_validate_links_field_error_to_node_id():
     result = asyncio.run(validate_definition(ValidateDefinitionRequest(definition=definition), user))
     assert result.valid is False
     assert any(issue.node_id == "s1" for issue in result.issues)
+
+
+def test_validate_reports_location_required_for_booking_link():
+    user = _make_user()
+    definition = {
+        "trigger": {"type": "manual"},
+        "entry_node_id": "booking-1",
+        "nodes": [
+            {
+                "type": "booking_link",
+                "id": "booking-1",
+                "next_node_id": "exit-1",
+                "actions": ["book"],
+            },
+            {"type": "exit", "id": "exit-1", "outcome": "configured"},
+        ],
+    }
+
+    missing = asyncio.run(
+        validate_definition(ValidateDefinitionRequest(definition=definition), user)
+    )
+    scoped = asyncio.run(
+        validate_definition(
+            ValidateDefinitionRequest(definition=definition, location_id="loc-1"),
+            user,
+        )
+    )
+
+    assert missing.valid is False
+    assert any(
+        issue.code == "location_required" and issue.node_id == "booking-1"
+        for issue in missing.issues
+    )
+    assert not any(issue.code == "location_required" for issue in scoped.issues)
 
 
 # ---------------------------------------------------------------------------

@@ -5,12 +5,14 @@ so the frontend and the engine share one source of truth. Layers:
 
   1. Structural — Pydantic graph validation (entry/refs/exit), surfaced node-linked.
   2. Reachability — unreachable nodes (the Pydantic model only checks ref existence).
-  3. Consent / content-class — the structural "no send step without a consent path"
+  3. Runtime scope — nodes that call a location's PMS/Retell configuration require
+     a concrete workflow location, rather than failing after a patient is enrolled.
+  4. Consent / content-class — the structural "no send step without a consent path"
      guardrail (scope §9.1) and content-class classification.
-  4. Plan-12 semantic validators (promotional-language, PHI-in-body, blast-radius) —
+  5. Plan-12 semantic validators (promotional-language, PHI-in-body, blast-radius) —
      invoked through a seam; a no-op default ships here so the engine stays safe until
      Plan 12 provides the real validator.
-  5. Channel readiness — invoked through a seam (a no-op default); Plan 10 provides the
+  6. Channel readiness — invoked through a seam (a no-op default); Plan 10 provides the
      real readiness check. It is advisory: it emits warnings at publish (surfaced in the
      builder) but does NOT block publishing a workflow whose channels aren't set up.
 
@@ -53,6 +55,15 @@ logger = logging.getLogger(__name__)
 
 _SEND_NODE_TYPES = (SendSmsNode, SendVoiceNode, SendEmailNode)
 _MARKETING_CLASSES = {"sales", "marketing"}
+_LOCATION_REQUIRED_NODE_LABELS = {
+    "booking_link": "Booking Link",
+    "patient_registration": "Register Patient",
+    "book_appointment": "Book Appointment",
+    "update_appointment": "Update Appointment",
+    "update_gotracker_appointment": "Update GoTracker Appointment",
+    "retell_sms_conversation": "Retell SMS Conversation",
+    "send_voice": "Voice",
+}
 _TOKEN_RE = re.compile(r"\{\{\s*([a-zA-Z0-9_]+)\s*\}\}")
 _CATALOG_BY_NAME: dict[str, MergeFieldSpec] = {
     field.name: field for field in MERGE_FIELD_CATALOG
@@ -159,6 +170,7 @@ class WorkflowValidationService:
 
         issues = list(graph_issues)
         issues += self._graph_semantic_issues(definition)
+        issues += self.location_scope_issues(definition, location_id=location_id)
         # Compliance classification/content checks are managed by Retell for now.
         # Keep the schema fields for backwards compatibility, but do not enforce
         # them in this workflow builder validation path.
@@ -183,6 +195,46 @@ class WorkflowValidationService:
     @staticmethod
     def is_publishable(issues: list[ValidationIssue]) -> bool:
         return not any(i.severity == "error" for i in issues)
+
+    @staticmethod
+    def location_scope_issues(
+        definition: WorkflowDefinition,
+        *,
+        location_id: str | None,
+    ) -> list[ValidationIssue]:
+        """Block steps whose runtime cannot operate without one clinic location.
+
+        A null location is meaningful for institution-wide triggers, so it is not
+        rejected globally.  It becomes invalid when a step needs a location's PMS,
+        provider/profile, sender number, or booking catalog.  Previously the PMS
+        capability and channel-readiness checks simply skipped null locations; that
+        allowed a workflow to publish and send a booking link which could only 503.
+        """
+        if location_id:
+            return []
+
+        issues: list[ValidationIssue] = []
+        for node in definition.nodes:
+            node_kind = getattr(node, "type", None)
+            label = _LOCATION_REQUIRED_NODE_LABELS.get(node_kind)
+            if label is None:
+                continue
+            issues.append(
+                ValidationIssue(
+                    severity="error",
+                    code="location_required",
+                    node_id=getattr(node, "id", None),
+                    message=(
+                        f"{label} requires a clinic location, but this workflow "
+                        "is institution-wide."
+                    ),
+                    fix=(
+                        "Select a clinic location for the workflow before publishing "
+                        "or enrolling contacts."
+                    ),
+                )
+            )
+        return issues
 
     async def _email_template_issues(
         self, definition: WorkflowDefinition, *, institution_id: str

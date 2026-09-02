@@ -215,10 +215,11 @@ export async function listVersions(workflowId: string): Promise<WorkflowVersion[
  */
 export async function validateDefinition(
     definition: WorkflowDefinition,
+    locationId?: string | null,
 ): Promise<ValidateDefinitionResponse> {
     const { data } = await api.post<ValidateDefinitionResponse>(
         "/automation/workflows/validate",
-        { definition },
+        { definition, location_id: locationId ?? null },
     )
     return data
 }

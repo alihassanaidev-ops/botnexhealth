@@ -399,7 +399,7 @@ export default function WorkflowBuilder() {
         const requestId = ++validationRequest.current
         const timer = window.setTimeout(() => {
             setBackendValidating(true)
-            void validateWorkflowDefinition(serializeDefinition(def))
+            void validateWorkflowDefinition(serializeDefinition(def), locationId)
                 .then((result) => {
                     if (requestId === validationRequest.current) setBackendIssues(result.issues)
                 })
@@ -419,7 +419,7 @@ export default function WorkflowBuilder() {
                 })
         }, 350)
         return () => window.clearTimeout(timer)
-    }, [def])
+    }, [def, locationId])
 
     const flow = useMemo(() => {
         if (!def) return { nodes: [] as FlowNode[], edges: [] }
@@ -614,7 +614,7 @@ export default function WorkflowBuilder() {
         const payload = serializeDefinition(def)
         setBusy(true)
         try {
-            const validation = await validateWorkflowDefinition(payload)
+            const validation = await validateWorkflowDefinition(payload, locationId)
             setBackendIssues(validation.issues)
             if (!validation.valid) {
                 const validationErrors = validation.issues.filter((issue) => issue.severity === "error")

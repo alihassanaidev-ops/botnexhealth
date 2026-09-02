@@ -9,9 +9,15 @@ import asyncio
 from src.app.services.automation.validation_service import WorkflowValidationService
 
 
-def _validate(definition: dict):
+def _validate(definition: dict, *, location_id: str | None = None):
     svc = WorkflowValidationService(session=None)  # no-op seams need no session
-    return asyncio.run(svc.validate(definition, institution_id="inst-1"))
+    return asyncio.run(
+        svc.validate(
+            definition,
+            institution_id="inst-1",
+            location_id=location_id,
+        )
+    )
 
 
 _SEND_NO_CLASS = {
@@ -196,9 +202,54 @@ def test_update_appointment_participates_in_reachability() -> None:
         ],
     }
 
-    issues = _validate(definition)
+    issues = _validate(definition, location_id="loc-1")
 
     assert not any(item.code == "unreachable" for item in issues)
+    assert WorkflowValidationService.is_publishable(issues) is True
+
+
+def test_booking_link_requires_workflow_location() -> None:
+    definition = {
+        "trigger": {"type": "manual"},
+        "entry_node_id": "booking-1",
+        "nodes": [
+            {
+                "type": "booking_link",
+                "id": "booking-1",
+                "next_node_id": "exit-1",
+                "actions": ["book"],
+            },
+            {"type": "exit", "id": "exit-1", "outcome": "configured"},
+        ],
+    }
+
+    issues = _validate(definition)
+
+    issue = next(item for item in issues if item.code == "location_required")
+    assert issue.node_id == "booking-1"
+    assert issue.severity == "error"
+    assert "Booking Link requires a clinic location" in issue.message
+    assert WorkflowValidationService.is_publishable(issues) is False
+
+
+def test_booking_link_with_workflow_location_is_publishable() -> None:
+    definition = {
+        "trigger": {"type": "manual"},
+        "entry_node_id": "booking-1",
+        "nodes": [
+            {
+                "type": "booking_link",
+                "id": "booking-1",
+                "next_node_id": "exit-1",
+                "actions": ["book"],
+            },
+            {"type": "exit", "id": "exit-1", "outcome": "configured"},
+        ],
+    }
+
+    issues = _validate(definition, location_id="loc-1")
+
+    assert not any(item.code == "location_required" for item in issues)
     assert WorkflowValidationService.is_publishable(issues) is True
 
 

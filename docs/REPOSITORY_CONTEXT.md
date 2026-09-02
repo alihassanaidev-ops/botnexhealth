@@ -406,6 +406,14 @@ cannot terminate; unreachable orphan steps remain a warning. Validation issues
 include stable codes, node/field attribution, and a recommended fix where one is
 available.
 
+Workflows may be institution-wide only while every executable step can operate at
+that scope. PMS, booking, Retell, and voice steps require a concrete clinic
+location. The validator blocks publish with a node-linked `location_required`
+error, and enrollment repeats that check as a compatibility guard for versions
+published before the rule existed. This prevents patient links from being sent
+when the linked booking/registration route can only fail for lack of location
+context.
+
 Current schema version `1.0` supports triggers such as `appointment_offset`,
 `appointment_state_changed`, `recall_scan`, `manual`, `bulk_import`,
 `enquiry_received`, `callback_requested`, `patient_status_changed`,
@@ -967,25 +975,42 @@ injected via Docker secret files using the `*_FILE` variants.
 | **GoTracker Synchronizer** (PMS) | PMS adapter + webhooks for GoTracker-backed institutions | `GOTRACKER_BASE_URL`, `GOTRACKER_WEBHOOK_SECRET`; per-location product key/base URL fields |
 | **Retell AI** (voice) | Inbound and workflow-driven voice agent calls | `RETELL_API_SECRET` (signature verify + read-only agents API) |
 | **Twilio** (SMS) | Outbound/inbound SMS, delivery callbacks | `PUBLIC_API_URL`; `TWILLIO_SID`, `TWILLIO_API_SECRET`; optional `TWILIO_SMS_STATUS_CALLBACK_URL` override *(note spelling)* |
-| **Resend** (email) | Transactional email — **verified, see below** | `RESEND_API_KEY`, `RESEND_FROM_EMAIL`, `RESEND_REPLY_TO`, `RESEND_ALERT_RECIPIENTS` |
+| **Resend / Amazon SES** (email) | Resend carries auth, staff alerts, and currently patient workflow mail; SES patient send/receive support exists in application code but is not provisioned in staging | `RESEND_*`; `PATIENT_EMAIL_PROVIDER`, `SES_*`, `SES_INBOUND_*` |
 | **AWS S3** | Call-recording storage | `AWS_S3_BUCKET_NAME`, `AWS_REGION` (`ca-central-1`) |
 | **JWT / Auth** | Access/refresh token signing | `JWT_SECRET` (required), `JWT_ALGORITHM` (HS256), `JWT_ISSUER`, `JWT_AUDIENCE` |
 | **Encryption (PHI)** | AES-256-GCM for PHI columns | `ENCRYPTION_KEY` (must differ from `JWT_SECRET` in prod) |
 | **WebAuthn / MFA** | Passkeys + TOTP | `WEBAUTHN_RP_ID`, `WEBAUTHN_RP_NAME`, `WEBAUTHN_ALLOWED_ORIGINS` |
 
-### 7.1 Email provider — **verified: Resend (raw HTTP, not SDK)**
+### 7.1 Email providers and reply handling
 
-Email is sent through **Resend** over its REST API (`POST https://api.resend.com/emails`)
-using `httpx` with a bearer token — **no SMTP, no `resend` SDK package**. Two senders:
+Auth and staff notification email is sent through **Resend** over its REST API
+(`POST https://api.resend.com/emails`) using `httpx` with a bearer token — no
+SMTP and no `resend` SDK package. Patient-facing workflow mail has a
+provider-neutral sender and can select Resend or Amazon SES per sending identity;
+staging remains configured for Resend.
 
 - `auth_email_service.py` — invites + password resets (never logs the response
   body, because the action URL carries a `?token=` credential).
 - `email_notification_service.py` — call-alert/summary emails, using DB-backed
   templates and an `Idempotency-Key` header.
+- `automation/email_node_executor.py` — contact/staff/static recipient resolution,
+  Jinja rendering, consent/DNC gates, clinic sending identity resolution, retries,
+  and signed patient Reply-To addresses when SES inbound is configured.
 
 Templates are stored in Postgres (`email_templates` table, `EmailTemplate` model),
 rendered with **Jinja2**, managed via `EmailTemplateService` and the
 `/api/.../email-templates` routes, with in-code defaults as fallback.
+
+Inbound SES application code stores raw MIME briefly in S3, consumes an SQS
+notification, validates the signed reply address, parses and encrypts the useful
+content, attaches it to the shared conversation inbox, and resumes an
+`email_reply` wait. The AWS resources and `SES_INBOUND_*` runtime settings are not
+currently provisioned in staging. The inbox also has no in-app email compose/reply
+action and no outbound email message ledger, so it shows inbound email only.
+Cold inbound email cannot start a workflow: the schema's `email_reply` trigger has
+no trigger service and the router requires a signed conversation Reply-To address.
+See [EMAIL_AUTOMATION.md](EMAIL_AUTOMATION.md) for the verified capability matrix
+and rollout design.
 
 ### 7.2 Dependency note
 
@@ -1006,6 +1031,7 @@ NexHealth, GoTracker, and Resend are plain `httpx` HTTP calls. S3 uses `boto3`.
 | `recordings.py` | Download Retell recordings → upload to S3 |
 | `webhooks.py` | Async processing of inbound webhook payloads (post-call pipeline) |
 | `automation_workflow.py` | Workflow timers, appointment-triggered enrollment, channel dispatch, GoTracker writeback follow-up |
+| `inbound_email.py` | Poll SES inbound SQS, parse/quarantine MIME, route signed replies, resume email waits, and forward staff copies |
 
 Recurring jobs (dashboard rollup, audit-partition pre-creation, idempotency/
 dead-letter pruning) run as **EventBridge-triggered ECS tasks**, not Celery beat —

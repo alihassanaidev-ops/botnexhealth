@@ -49,7 +49,9 @@ class EmailMessage:
     idempotency_key: str | None = None
     #: Scopes bounce/complaint handling back to the owning clinic.
     institution_id: str | None = None
-    #: SES only — the tenant and configuration set bound to this clinic.
+    #: SES only — the tenant and configuration set bound to this clinic. Tenant
+    #: attribution does not by itself enable tenant-level suppression; that is
+    #: an explicit SES tenant policy configured outside the send request.
     tenant_name: str | None = None
     configuration_set: str | None = None
     tags: dict[str, str] = field(default_factory=dict)
@@ -184,8 +186,9 @@ class SesSender:
         if message.configuration_set:
             request["ConfigurationSetName"] = message.configuration_set
         if message.tenant_name:
-            # Scopes reputation and suppression to this clinic, so one clinic's
-            # bounce rate cannot pause everyone else's sending.
+            # Attribute reputation to this clinic. Suppression is isolated only
+            # when the SES tenant has an explicit tenant-level suppression policy;
+            # the default remains account-level.
             request["TenantName"] = message.tenant_name
 
         tags = dict(message.tags)

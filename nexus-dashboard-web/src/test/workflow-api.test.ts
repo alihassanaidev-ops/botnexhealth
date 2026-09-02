@@ -137,8 +137,11 @@ describe("workflow-api", () => {
 
     it("validateDefinition POSTs the definition to the validate endpoint", async () => {
         post.mockResolvedValue({ data: { valid: true, issues: [] } })
-        const res = await validateDefinition(DEF)
-        expect(post).toHaveBeenCalledWith("/automation/workflows/validate", { definition: DEF })
+        const res = await validateDefinition(DEF, "loc-1")
+        expect(post).toHaveBeenCalledWith("/automation/workflows/validate", {
+            definition: DEF,
+            location_id: "loc-1",
+        })
         expect(res).toEqual({ valid: true, issues: [] })
     })
 

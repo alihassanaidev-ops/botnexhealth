@@ -235,6 +235,7 @@ class WorkflowVersionResponse(BaseModel):
 
 class ValidateDefinitionRequest(BaseModel):
     definition: dict[str, Any]
+    location_id: str | None = None
 
 
 class ValidationIssueResponse(BaseModel):
@@ -773,16 +774,18 @@ async def validate_definition(
     block/annotate before the user commits to publishing.
     """
     inst_id = _institution_id(current_user)
-    # Pure validation — no persistence, so no location context is supplied. The
-    # Plan-10 readiness checker short-circuits on a null location (readiness is a
-    # per-location property surfaced by GET /channel-readiness), so it adds no
-    # issues here. The Plan-12 content validator (promotional-in-exempt / PHI) is
-    # pure text analysis of the definition and needs no session, so it runs here
-    # too — the builder sees the same content issues publish will enforce.
+    # Pure validation — no persistence. The builder supplies its workflow location
+    # so null-location runtime failures are node-linked before publish. Readiness
+    # still needs a DB-backed publish/checklist call; this endpoint uses the location
+    # only for validation rules that do not query tenant configuration.
     issues = await WorkflowValidationService(
         session=None,
         readiness_checker=ChannelReadinessService(None),
-    ).validate(data.definition, institution_id=inst_id)
+    ).validate(
+        data.definition,
+        institution_id=inst_id,
+        location_id=data.location_id,
+    )
     responses = [
         ValidationIssueResponse(
             severity=i.severity,
@@ -1696,8 +1699,32 @@ async def enroll_in_workflow(
             # Start run and advance inline. The first advance typically ends
             # at a WaitNode (one DB write for the timer). Move to a Celery
             # task if response latency becomes a concern at higher volume.
-            version = await session.get(AutomationWorkflowVersion, str(wf.current_version_id))
+            version = await session.get(
+                AutomationWorkflowVersion, str(wf.current_version_id)
+            )
+            if version is None:
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail="Workflow's published version is unavailable",
+                )
             definition = WorkflowDefinition.model_validate(version.definition)
+            location_issues = WorkflowValidationService.location_scope_issues(
+                definition,
+                location_id=location_id,
+            )
+            if location_issues:
+                # The transaction rolls the just-created run back. This is a
+                # compatibility backstop for versions published before the
+                # location-required validator existed; new versions cannot pass
+                # publish validation in this state.
+                raise HTTPException(
+                    status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                    detail=(
+                        "Cannot enroll: "
+                        + "; ".join(issue.message for issue in location_issues)
+                        + " Select a clinic location and try again."
+                    ),
+                )
             # Single wiring path: injects the real ComplianceGateService and
             # resolves the location timezone (never NoOp / never hardcoded UTC).
             # The live PMS revalidator guards appointment-triggered sends against
