@@ -1367,7 +1367,7 @@ shows a blocker before activation when history completion cannot be proven.
 ### Remaining work
 
 - Cloud Service / Connector must expose explicit appointment-history completion on the GoTracker
-  sync-status response consumed at `/api/admin/sync_status`.
+  consumer history-status response consumed at `/api/appointments/history-status`.
 - GoTracker derived recall rows must include `recall_type_name`, a due date, and either
   `has_active_treatment_plan`/`active_treatment_plan_count`/`treatment_plan_statuses` or embedded
   `treatment_plans`; without those fields the Platform refuses the patient-level enrollment.

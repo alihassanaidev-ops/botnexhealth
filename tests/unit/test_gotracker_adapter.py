@@ -98,7 +98,7 @@ async def test_patient_search_pushes_identity_filters_to_synchronizer() -> None:
 
 
 @pytest.mark.asyncio
-async def test_recall_history_sync_status_reads_admin_sync_status() -> None:
+async def test_recall_history_sync_status_reads_consumer_history_status() -> None:
     client = FakeGoTrackerClient()
     client.responses.append(
         {
@@ -118,7 +118,7 @@ async def test_recall_history_sync_status_reads_admin_sync_status() -> None:
     assert client.calls == [
         {
             "method": "GET",
-            "path": "/api/admin/sync_status",
+            "path": "/api/appointments/history-status",
             "params": {},
             "json": None,
         }

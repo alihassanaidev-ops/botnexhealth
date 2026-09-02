@@ -639,7 +639,7 @@ class GoTrackerAdapter(
         native PMS recall table. The scanner must therefore see a completed
         history-sync signal before it trusts any overdue-recall candidates.
         """
-        raw = await self._client.request("GET", "/api/admin/sync_status")
+        raw = await self._client.request("GET", "/api/appointments/history-status")
         return _data_object(raw)
 
     # ── Booking ──────────────────────────────────────────────────────────

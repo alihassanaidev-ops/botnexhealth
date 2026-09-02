@@ -428,7 +428,7 @@ GoTracker recall scanning is deliberately stricter than NexHealth recall
 scanning. NexHealth supplies native recall and treatment-plan reads. GoTracker
 recall is derived from synchronised appointment history, so
 `scan_recall_workflows` first calls the GoTracker adapter's
-`get_recall_history_sync_status()` (`GET /api/admin/sync_status`) and refuses
+`get_recall_history_sync_status()` (`GET /api/appointments/history-status`) and refuses
 the location unless appointment-history completion is explicit. When allowed,
 the scanner consumes GoTracker recall rows from `/api/patients/recalls`, uses
 inline recall type/due/treatment-plan fields for workflow filters, suppresses
