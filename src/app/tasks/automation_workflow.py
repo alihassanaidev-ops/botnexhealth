@@ -60,6 +60,7 @@ from src.app.services.automation.nexhealth_backfill_service import (
 )
 from src.app.services.automation.nexhealth_subscription_service import (
     NexHealthSubscriptionLifecycleService,
+    nexhealth_live_callback_url,
 )
 from src.app.services.automation.nexhealth_shadow_webhook_service import (
     NexHealthWebhookShadowSubscriptionService,
@@ -1693,7 +1694,10 @@ async def _ensure_nexhealth_webhook_subscriptions_async() -> dict:
     ) as session:
         svc = NexHealthSubscriptionLifecycleService(session)
         ensure_summary = await svc.ensure_for_configured_locations(
-            callback_url=settings.nexhealth_webhook_callback_url,
+            callback_url=nexhealth_live_callback_url(
+                public_api_url=settings.public_api_url,
+                explicit_callback_url=settings.nexhealth_webhook_callback_url,
+            ),
         )
         health = await svc.health_check()
         await session.commit()

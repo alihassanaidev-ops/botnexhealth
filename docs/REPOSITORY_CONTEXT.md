@@ -825,6 +825,11 @@ reads on every dispatch:
 - `NexHealthProjectionService` maintains that projection from signed
   `/api/v1/nexhealth/webhooks/*` deliveries and event-ledger claims, then
   enqueues matching active workflows.
+- Super Admin's NexHealth credential panel owns live webhook setup and health.
+  One signed provider endpoint is reused per API credential; event subscriptions
+  are scoped by NexHealth subdomain and provider `location_id` fields route
+  deliveries locally.
+  Provider ids and signing secrets are never editable or returned to the browser.
 - `gotracker_webhooks.py` receives signed GoTracker Synchronizer appointment and
   patient events for `pms_type="gotracker"` locations, updates the same working
   set, cancels runs for non-attending/cancelled states, and records writeback

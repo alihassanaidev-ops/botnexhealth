@@ -12,11 +12,21 @@ from datetime import datetime
 from enum import Enum
 from uuid import uuid4
 
-from sqlalchemy import DateTime, ForeignKey, Index, String, UniqueConstraint, func, text
+from sqlalchemy import (
+    DateTime,
+    ForeignKey,
+    Index,
+    String,
+    Text,
+    UniqueConstraint,
+    func,
+    text,
+)
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
 from src.app.database import Base
+from src.app.models.institution import decrypt_value, encrypt_value
 
 
 class NexHealthWebhookSubscriptionStatus(str, Enum):
@@ -64,7 +74,18 @@ class NexHealthWebhookSubscription(Base):
     event_types: Mapped[list[str]] = mapped_column(
         JSONB, nullable=False, server_default=text("'[]'::jsonb")
     )
-    provider_subscription_id: Mapped[str | None] = mapped_column(String(160), nullable=True)
+    provider_subscription_id: Mapped[str | None] = mapped_column(
+        String(160), nullable=True
+    )
+    # Despite the legacy name above, this is the provider webhook *endpoint* id.
+    # One endpoint and its event subscriptions are shared by every local location
+    # carrying the same institution/subdomain.  The list records the individual
+    # NexHealth subscription ids so repair/verification is deterministic.
+    provider_subscription_ids: Mapped[list[str]] = mapped_column(
+        JSONB, nullable=False, server_default=text("'[]'::jsonb")
+    )
+    callback_url: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    secret_key_encrypted: Mapped[str | None] = mapped_column(Text, nullable=True)
     credential_mode: Mapped[str | None] = mapped_column(String(32), nullable=True)
     api_key_hash: Mapped[str | None] = mapped_column(String(64), nullable=True)
     status: Mapped[str] = mapped_column(
@@ -100,3 +121,11 @@ class NexHealthWebhookSubscription(Base):
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now()
     )
+
+    @property
+    def secret_key(self) -> str | None:
+        return decrypt_value(self.secret_key_encrypted)
+
+    @secret_key.setter
+    def secret_key(self, value: str | None) -> None:
+        self.secret_key_encrypted = encrypt_value(value) if value is not None else None
