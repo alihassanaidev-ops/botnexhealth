@@ -72,7 +72,7 @@ describe("Split node editor", () => {
 
         await user.click(screen.getByRole("button", { name: /add branch/i }))
 
-        const updated = onNodeChange.mock.calls.at(-1)![0] as SplitNode
+        const updated = onNodeChange.mock.calls[onNodeChange.mock.calls.length - 1]![0] as SplitNode
         expect(updated.branches).toHaveLength(3)
         // 34/33/33 — the remainder goes to the first arm so the total is exactly 100.
         expect(updated.branches.map((b) => b.weight)).toEqual([34, 33, 33])
@@ -87,7 +87,7 @@ describe("Split node editor", () => {
         await user.click(screen.getByRole("button", { name: /add branch/i }))
         await user.click(screen.getByRole("button", { name: /remove branch 3/i }))
 
-        const updated = onNodeChange.mock.calls.at(-1)![0] as SplitNode
+        const updated = onNodeChange.mock.calls[onNodeChange.mock.calls.length - 1]![0] as SplitNode
         expect(updated.branches.map((b) => b.weight)).toEqual([50, 50])
     })
 
