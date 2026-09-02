@@ -71,10 +71,10 @@ ALLOWLIST: set[tuple[str, int, str]] = {
     # with DATABASE_ADMIN_URL and intentionally scans expired records across
     # tenants. It only clears PHI whose retention deadline has passed and
     # skips rows under legal hold.
-    ("src/app/services/retention_policy.py", 348, "Call"),    # expired recordings
-    ("src/app/services/retention_policy.py", 397, "Call"),    # purged-call CFV cleanup
-    ("src/app/services/retention_policy.py", 422, "Call"),    # retained-call EXISTS
-    ("src/app/services/retention_policy.py", 390, "Contact"), # anonymized-contact CFV
+    ("src/app/services/retention_policy.py", 361, "Call"),    # expired recordings
+    ("src/app/services/retention_policy.py", 410, "Call"),    # purged-call CFV cleanup
+    ("src/app/services/retention_policy.py", 435, "Call"),    # retained-call EXISTS
+    ("src/app/services/retention_policy.py", 403, "Contact"), # anonymized-contact CFV
 
     # Contact-detail (Patients page) loads a primary contact's aliases and the
     # union of their calls AFTER the primary has been institution-scoped by

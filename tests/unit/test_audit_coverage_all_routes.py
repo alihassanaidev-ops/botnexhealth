@@ -91,6 +91,10 @@ NOT_A_STATE_CHANGE: dict[str, str] = {
         "tests credentials, stores nothing"
     ),
     "sse:create_event_ticket": "short-lived stream ticket, not a domain change",
+    "form_integrations:start_oauth": (
+        "mints a signed redirect state; the connection is written at the callback, "
+        "which is audited"
+    ),
 }
 
 
@@ -107,6 +111,11 @@ ACCEPTED_GAP: dict[str, str] = {
     "nexhealth_webhooks:nexhealth_shadow_patient_webhook": "shadow webhook; no writes",
     "nexhealth_webhooks:nexhealth_shadow_sync_status_webhook": "shadow webhook; no writes",
     "gotracker_webhooks:gotracker_webhook": "webhook; durable event row",
+    # Provider-signed lead-form deliveries. Each writes a form_submissions row
+    # carrying the provider's own submission id, which is the record of what
+    # arrived and whether it was processed.
+    "form_webhooks:meta_webhook": "webhook; durable form_submissions row",
+    "form_webhooks:typeform_webhook": "webhook; durable form_submissions row",
     "twilio_webhooks:sms_status": "delivery receipt; recorded on the message row",
     "email_compliance:resend_webhook": "provider bounce/complaint; suppression is recorded",
     # Configuration deciding what patients are told. The same class of action

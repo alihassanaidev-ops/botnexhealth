@@ -27,6 +27,8 @@ from src.app.api.routes.campaign_identity_routes import router as campaign_ident
 from src.app.api.routes.enquiry_intake import router as enquiry_intake_router
 from src.app.api.routes.enquiries import router as enquiries_router
 from src.app.api.routes.enquiry_intake_admin import router as enquiry_intake_admin_router
+from src.app.api.routes.form_integrations import router as form_integrations_router
+from src.app.api.routes.form_webhooks import router as form_webhooks_router
 from src.app.api.routes.campaign_registration import router as campaign_registration_router
 from src.app.api.routes.campaign_links import router as campaign_links_router
 from src.app.api.routes.email_compliance import router as email_compliance_router
@@ -274,6 +276,8 @@ def create_app() -> FastAPI:
     app.include_router(twilio_webhooks_router, prefix="/api/v1")
     app.include_router(nexhealth_webhooks_router, prefix="/api/v1")
     app.include_router(gotracker_webhooks_router, prefix="/api/v1")
+    # Provider-signed lead-form deliveries (Meta leadgen, Typeform responses).
+    app.include_router(form_webhooks_router, prefix="/api/v1")
 
     # Admin routes
     app.include_router(auth_router, prefix="/api")
@@ -298,6 +302,7 @@ def create_app() -> FastAPI:
     app.include_router(campaign_identity_router, prefix="/api")
     app.include_router(enquiry_intake_router, prefix="/api")
     app.include_router(enquiry_intake_admin_router, prefix="/api")
+    app.include_router(form_integrations_router, prefix="/api")
     app.include_router(enquiries_router, prefix="/api")
     app.include_router(group_router, prefix="/api")
     app.include_router(custom_fields_router, prefix="/api")

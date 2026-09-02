@@ -103,6 +103,13 @@ ROUTES_BY_BOUNDARY: dict[str, tuple[str, ...]] = {
         "POST /api/v1/nexhealth/webhooks/shadow/sync-status",
         "POST /api/v1/gotracker/webhooks/{location_id}",
         "POST /api/email/webhooks/resend",
+        # Lead-form deliveries. Meta signs with the platform app secret, and
+        # Typeform with the per-form secret we registered.
+        # Meta's subscription handshake. Answers only when the query echoes the
+        # configured verify token, and it is a GET that changes nothing.
+        "GET /api/v1/forms/webhooks/meta",
+        "POST /api/v1/forms/webhooks/meta",
+        "POST /api/v1/forms/webhooks/typeform/{form_id}",
     ),
     TICKET_AUTH: ("GET /api/institution/events",),
     ACTIVE_USER: (
@@ -278,6 +285,15 @@ ROUTES_BY_BOUNDARY: dict[str, tuple[str, ...]] = {
         "POST /api/institution/enquiry-sources",
         "PATCH /api/institution/enquiry-sources/{source_id}",
         "POST /api/institution/enquiry-sources/{source_id}/rotate",
+        # Connecting a form provider stores an access token and decides where a
+        # stranger's contact details land, so writing is admin-only. Reading is
+        # wider — see INSTITUTION_OR_LOCATION_USER below.
+        "POST /api/institution/form-integrations/oauth/start",
+        "POST /api/institution/form-integrations/oauth/callback",
+        "POST /api/institution/form-integrations/connections/{connection_id}/sync",
+        "DELETE /api/institution/form-integrations/connections/{connection_id}",
+        "PATCH /api/institution/form-integrations/forms/{form_id}",
+        "PUT /api/institution/form-integrations/forms/{form_id}/mappings",
         "POST /api/institution/users/invite-institution-admin",
         "GET /api/institution/users",
         "POST /api/institution/users/invite",
@@ -422,6 +438,14 @@ ROUTES_BY_BOUNDARY: dict[str, tuple[str, ...]] = {
         "GET /api/automation/templates/{template_id}",
     ),
     INSTITUTION_OR_LOCATION_USER: (
+        # A form's name and its answer keys are what the workflow builder's
+        # trigger picker shows, and a location admin edits workflows. Reading
+        # them is therefore wider than the admin-only writes above.
+        "GET /api/institution/form-integrations/providers",
+        "GET /api/institution/form-integrations/connections",
+        "GET /api/institution/form-integrations/forms",
+        "GET /api/institution/form-integrations/forms/{form_id}",
+        "GET /api/institution/form-integrations/forms/{form_id}/submissions",
         "GET /api/outbound-voice/profiles",
         "GET /api/outbound-voice/profiles/{profile_id}",
         "GET /api/outbound-voice/attempts",

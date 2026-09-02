@@ -29,6 +29,7 @@ def _build_celery_app() -> Celery:
             "src.app.tasks.retell_sms",
             "src.app.tasks.email_identity_verification",
             "src.app.tasks.inbound_email",
+            "src.app.tasks.form_integrations",
         ],
     )
 
@@ -81,6 +82,20 @@ def _build_celery_app() -> Celery:
                 # a long poll interval. No-ops immediately when the queue is
                 # empty or inbound is not configured.
                 "schedule": 60.0,
+            },
+            "sweep-form-connections": {
+                "task": "src.app.tasks.form_integrations.sweep_form_connections",
+                # Daily. A form authorisation dies on a scale of weeks, and the
+                # warning window is a week — checking more often would only
+                # repeat the same warning.
+                "schedule": 86400.0,
+            },
+            "reconcile-form-submissions": {
+                "task": "src.app.tasks.form_integrations.reconcile_form_submissions",
+                # Hourly. Webhooks are the normal path; this only catches what
+                # a provider gave up redelivering, so an hour of lag on a
+                # recovered lead is acceptable and the API cost stays low.
+                "schedule": 3600.0,
             },
             "sweep-email-identities": {
                 "task": "src.app.tasks.email_identity_verification.sweep_email_identities",

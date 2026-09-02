@@ -64,6 +64,7 @@ import {
 import { SmsPreview, EmailPreview } from "./MessagePreview"
 import FilterEditor from "./FilterEditor"
 import { useMergeFields } from "@/lib/workflow/merge-fields"
+import { listForms, type FormSummary } from "@/lib/form-integrations-api"
 import {
     addVoiceOutcomeBranch,
     createTrigger,
@@ -92,6 +93,7 @@ import type {
     FilterExpression,
     FilterOp,
     FilterRule,
+    FormSubmittedTrigger,
     SwitchCase,
     SwitchNode,
     DripNode,
@@ -407,6 +409,13 @@ function TriggerForm({
                     <p className="text-sm text-muted-foreground">
                         Enrolls when a permitted enquiry intake source lands a lead.
                     </p>
+                )}
+                {trigger.type === "form_submitted" && (
+                    <FormSubmittedTriggerFields
+                        trigger={trigger}
+                        onChange={onChange}
+                        readOnly={readOnly}
+                    />
                 )}
                 {trigger.type === "callback_requested" && (
                     <p className="text-sm text-muted-foreground">
@@ -3247,6 +3256,162 @@ function NextStepField({
  * An empty selection means "any status", matching the backend's treatment of an
  * empty list.
  */
+/**
+ * Which connected forms start this workflow.
+ *
+ * Two choices, in the order the practice thinks in: the provider, then the
+ * form. Both are optional — no provider and no form means every enabled form,
+ * which is the right default for a practice running one and the thing a
+ * practice running several immediately narrows.
+ *
+ * Forms are read live rather than typed in. A form id is a UUID, and asking
+ * somebody to paste one is asking them to bind a live workflow to a typo.
+ */
+function FormSubmittedTriggerFields({
+    trigger,
+    onChange,
+    readOnly,
+}: {
+    trigger: FormSubmittedTrigger
+    onChange: (t: WorkflowTrigger) => void
+    readOnly?: boolean
+}) {
+    const [forms, setForms] = useState<FormSummary[]>([])
+    const [loading, setLoading] = useState(true)
+    const [failed, setFailed] = useState(false)
+
+    useEffect(() => {
+        let cancelled = false
+        listForms({ enabledOnly: true })
+            .then((rows) => {
+                if (!cancelled) setForms(rows)
+            })
+            .catch(() => {
+                if (!cancelled) setFailed(true)
+            })
+            .finally(() => {
+                if (!cancelled) setLoading(false)
+            })
+        return () => {
+            cancelled = true
+        }
+    }, [])
+
+    const provider = trigger.provider ?? null
+    const selected = new Set(trigger.form_ids ?? [])
+    const visible = provider
+        ? forms.filter((form) => form.provider === provider)
+        : forms
+
+    // Every answer key the chosen forms expose, so the filter below can say
+    // what is actually available rather than leaving the author guessing.
+    const answerKeys = Array.from(
+        new Set(
+            visible
+                .filter((form) => selected.size === 0 || selected.has(form.id))
+                .flatMap((form) => form.context_keys),
+        ),
+    ).sort()
+
+    const toggle = (formId: string) => {
+        const next = new Set(selected)
+        if (next.has(formId)) next.delete(formId)
+        else next.add(formId)
+        // Catalog order rather than click order, so two workflows with the same
+        // selection serialize identically.
+        onChange({
+            ...trigger,
+            form_ids: visible.filter((f) => next.has(f.id)).map((f) => f.id),
+        })
+    }
+
+    return (
+        <>
+            <Field label="Form type" hint="Leave on Any to accept either provider.">
+                <Select
+                    value={provider ?? "__any__"}
+                    disabled={readOnly}
+                    onValueChange={(value) =>
+                        onChange({
+                            ...trigger,
+                            provider: value === "__any__" ? null : (value as "meta" | "typeform"),
+                            // Selected forms belong to the old provider and would
+                            // silently never match, so the selection is cleared
+                            // with the provider rather than left to look chosen.
+                            form_ids: [],
+                        })
+                    }
+                >
+                    <SelectTrigger><SelectValue /></SelectTrigger>
+                    <SelectContent>
+                        <SelectItem value="__any__">Any provider</SelectItem>
+                        <SelectItem value="meta">Meta Lead Ads</SelectItem>
+                        <SelectItem value="typeform">Typeform</SelectItem>
+                    </SelectContent>
+                </Select>
+            </Field>
+
+            <Field
+                label="Forms"
+                hint="Select none to enroll from every switched-on form."
+            >
+                {loading && (
+                    <div className="h-16 animate-pulse rounded-md bg-muted" />
+                )}
+                {failed && (
+                    <p className="text-sm text-destructive">
+                        Couldn't load your connected forms.
+                    </p>
+                )}
+                {!loading && !failed && visible.length === 0 && (
+                    <p className="text-sm text-muted-foreground">
+                        No switched-on forms yet. Connect an account under Lead Forms,
+                        map its questions, and switch the form on.
+                    </p>
+                )}
+                {visible.length > 0 && (
+                    <div
+                        role="group"
+                        aria-label="Forms"
+                        className="grid grid-cols-1 gap-1.5 rounded-md border border-border p-2"
+                    >
+                        {visible.map((form) => (
+                            <label
+                                key={form.id}
+                                className={cn(
+                                    "flex items-center gap-2 text-sm",
+                                    readOnly ? "cursor-not-allowed opacity-60" : "cursor-pointer",
+                                )}
+                            >
+                                <Checkbox
+                                    checked={selected.has(form.id)}
+                                    disabled={readOnly}
+                                    aria-label={form.name}
+                                    onCheckedChange={() => toggle(form.id)}
+                                />
+                                <span className="truncate">
+                                    <span className="text-muted-foreground">{form.provider}</span>{" "}
+                                    {form.name}
+                                </span>
+                            </label>
+                        ))}
+                    </div>
+                )}
+            </Field>
+
+            {answerKeys.length > 0 && (
+                <p className="rounded-md border border-border bg-muted/40 p-3 text-xs text-muted-foreground">
+                    Answers you can branch on:{" "}
+                    {answerKeys.map((key) => `form_answers.${key}`).join(", ")}. Names,
+                    emails and phone numbers stay on the contact record and are read
+                    through merge fields instead.
+                </p>
+            )}
+        </>
+    )
+}
+
+
 function StatusIdMultiSelect({
     selected,
     disabled,

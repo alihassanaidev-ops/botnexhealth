@@ -778,6 +778,10 @@ export function createTrigger(type: TriggerType): WorkflowTrigger {
             return { type }
         case "enquiry_received":
             return { type }
+        case "form_submitted":
+            // No provider and no form ids: every enabled form. A practice
+            // running one form is done; one running several narrows it here.
+            return { type, provider: null, form_ids: [] }
         case "callback_requested":
             return { type }
         case "patient_status_changed":

@@ -15,8 +15,19 @@ export const APPOINTMENT_CONTEXT_TRIGGERS: TriggerType[] = [
 ]
 const SMS_REPLY_CONTEXT_TRIGGERS: TriggerType[] = ["sms_reply"]
 const RECALL_CONTEXT_TRIGGERS: TriggerType[] = ["recall_scan"]
+const FORM_CONTEXT_TRIGGERS: TriggerType[] = ["form_submitted"]
 
 export const WORKFLOW_CONTEXT_FIELDS: WorkflowContextField[] = [
+    // The fixed part of a form submission's context. The answers themselves are
+    // per-form, so they are offered from the trigger panel (which knows which
+    // forms are selected) rather than listed here; the editor's "Custom field…"
+    // entry accepts `form_answers.<key>` directly.
+    field("form_provider", "Form provider", "typeform", "payload", FORM_CONTEXT_TRIGGERS),
+    field("form_name", "Form name", "New Patient Enquiry", "payload", FORM_CONTEXT_TRIGGERS),
+    field("form_id", "Form ID", "0b0c2f5e-1f2a-4c3d-9a1b-2c3d4e5f6a7b", "payload", FORM_CONTEXT_TRIGGERS),
+    field("form_external_id", "Provider form ID", "AbC123", "payload", FORM_CONTEXT_TRIGGERS),
+    field("form_created_contact", "Created a new contact", true, "payload", FORM_CONTEXT_TRIGGERS),
+    field("matched_existing_contact", "Matched an existing patient", false, "payload", FORM_CONTEXT_TRIGGERS),
     field("sms_reply_body", "SMS reply body", "I need to reschedule", "payload", SMS_REPLY_CONTEXT_TRIGGERS),
     field("sms_reply_intent", "SMS reply intent", "free_text", "payload", SMS_REPLY_CONTEXT_TRIGGERS),
     field("sms_reply_message_sid", "SMS message SID", "SM123", "payload", SMS_REPLY_CONTEXT_TRIGGERS),
@@ -126,6 +137,13 @@ export const GOTRACKER_APPOINTMENT_WEBHOOK_SAMPLE = {
 }
 
 export const SAMPLE_WORKFLOW_CONTEXT: Record<string, unknown> = {
+    form_provider: "typeform",
+    form_name: "New Patient Enquiry",
+    form_id: "0b0c2f5e-1f2a-4c3d-9a1b-2c3d4e5f6a7b",
+    form_external_id: "AbC123",
+    form_created_contact: true,
+    matched_existing_contact: false,
+    form_answers: { problem: "Toothache", visited_before: false },
     event: "appointment.created",
     source: "gotracker",
     inbound_sms_message_id: "inbound-1",

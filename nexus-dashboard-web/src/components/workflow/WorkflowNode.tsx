@@ -127,6 +127,11 @@ function triggerSummary(t: WorkflowTrigger): string {
             return "Bulk import"
         case "enquiry_received":
             return "Sales enquiry"
+        case "form_submitted": {
+            const count = t.form_ids?.length ?? 0
+            const scope = count === 0 ? "any form" : `${count} form(s)`
+            return t.provider ? `${t.provider} · ${scope}` : `Form submitted · ${scope}`
+        }
         case "callback_requested":
             return "Callback request"
         case "patient_status_changed":

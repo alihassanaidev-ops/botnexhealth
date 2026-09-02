@@ -154,6 +154,18 @@ from src.app.models.retell_sms import (  # noqa: F401 — model registration
     RetellSmsTurnStatus,
 )
 
+from src.app.models.form_integration import (  # noqa: F401 — model registration
+    FormConnectionStatus,
+    FormDefinition,
+    FormFieldMapping,
+    FormFieldTarget,
+    FormProvider,
+    FormProviderConnection,
+    FormSubmission,
+    FormSubmissionStatus,
+    FormWebhookStatus,
+)
+
 __all__ = [
     "LeadStatus",
     "Institution",
@@ -268,4 +280,13 @@ __all__ = [
     "OutboundVoiceProfile",
     "WorkflowVoiceAttempt",
     "VoiceAttemptStatus",
+    "FormProvider",
+    "FormProviderConnection",
+    "FormConnectionStatus",
+    "FormDefinition",
+    "FormWebhookStatus",
+    "FormFieldMapping",
+    "FormFieldTarget",
+    "FormSubmission",
+    "FormSubmissionStatus",
 ]

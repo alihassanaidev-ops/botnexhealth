@@ -16,6 +16,8 @@ import Login from "./pages/Login";
 import BookingLink from "./pages/BookingLink";
 import CancelLink from "./pages/CancelLink";
 import EnquirySources from "./pages/EnquirySources";
+import FormIntegrations from "./pages/FormIntegrations";
+import FormIntegrationsCallback from "./pages/FormIntegrationsCallback";
 import IdentifyPatient from "./pages/IdentifyPatient";
 import RegisterPatient from "./pages/RegisterPatient";
 import SetPassword from "./pages/SetPassword";
@@ -200,6 +202,26 @@ export const router = createBrowserRouter([
                         element: (
                             <RoleGuard allowed={["INSTITUTION_ADMIN"]}>
                                 <S><EnquirySources /></S>
+                            </RoleGuard>
+                        ),
+                    },
+                    {
+                        path: "institution-admin/lead-forms",
+                        element: (
+                            <RoleGuard allowed={["INSTITUTION_ADMIN"]}>
+                                <S><FormIntegrations /></S>
+                            </RoleGuard>
+                        ),
+                    },
+                    {
+                        // Both providers redirect here after authorisation. One
+                        // route for both: the provider is named inside the
+                        // signed state, so only a single redirect URI has to be
+                        // registered in each provider's app settings.
+                        path: "institution-admin/form-integrations/callback",
+                        element: (
+                            <RoleGuard allowed={["INSTITUTION_ADMIN"]}>
+                                <S><FormIntegrationsCallback /></S>
                             </RoleGuard>
                         ),
                     },

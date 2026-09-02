@@ -18,6 +18,7 @@
 | HIPAA/PHIPA/PIPEDA readiness (scope, vendors, gaps, policies) | [compliance/](compliance/README.md) |
 | Deploy runbook + infra compliance | [DEPLOYMENT_AND_HIPAA_GUIDE.md](DEPLOYMENT_AND_HIPAA_GUIDE.md) |
 | Recurring jobs catalog + local debug harness | [SCHEDULED_JOBS.md](SCHEDULED_JOBS.md) |
+| Meta/Typeform lead forms: OAuth, form sync, field mapping, the `form_submitted` trigger | [LEAD_FORMS.md](LEAD_FORMS.md) |
 | Outbound automation/campaign roadmap and current implementation plan | [ROADMAP_OUTBOUND_ENGAGEMENT.md](ROADMAP_OUTBOUND_ENGAGEMENT.md), [OUTBOUND_ENGAGEMENT_IMPLEMENTATION_PLAN.md](OUTBOUND_ENGAGEMENT_IMPLEMENTATION_PLAN.md) |
 | NexHealth v3 migration risks and webhook cutover notes | [nexhealth-v3-inbound-compatibility.md](nexhealth-v3-inbound-compatibility.md), [nexhealth-api-version-research.md](nexhealth-api-version-research.md) |
 | CDK infra (ECS Fargate, RDS, etc.) | [../infra/README.md](../infra/README.md) |
@@ -416,8 +417,8 @@ context.
 
 Current schema version `1.0` supports triggers such as `appointment_offset`,
 `appointment_state_changed`, `recall_scan`, `manual`, `bulk_import`,
-`enquiry_received`, `callback_requested`, `patient_status_changed`,
-`sms_reply`, and `email_reply`; node types include `wait`, `drip`,
+`enquiry_received`, `form_submitted`, `callback_requested`,
+`patient_status_changed`, `sms_reply`, and `email_reply`; node types include `wait`, `drip`,
 `send_sms`, `send_voice`, `send_email`, `retell_sms_conversation`,
 `update_patient_status`, `update_appointment`, `book_appointment`,
 `update_gotracker_appointment`, `booking_link`, `patient_registration`,
@@ -460,6 +461,18 @@ contact write commits, matching active `enquiry_received` workflows are enqueued
 through `enquiry_trigger_service.py` with PHI-light trigger metadata. The Sales
 Qualification launch template uses that trigger, a Retell SMS conversation,
 patient registration, and a restricted booking link.
+
+`form_submitted` is the connected-provider counterpart, and is deliberately
+narrower. `enquiry_received` fires for anything landing through intake, including
+a staff member typing in a phone enquiry; `form_submitted` fires only for a Meta
+Lead Ads or Typeform form the practice connected, synced, mapped and switched on.
+That is what makes "when *this* form is submitted, and Problem is X" expressible:
+the trigger names a provider and specific forms, and the submission's mapped
+answers arrive in the run context as `form_answers.<key>` for the trigger filter
+and condition nodes to read. Only answers mapped to non-PHI targets travel there
+— names, emails and phone numbers stay on the Contact and are read back through
+merge fields. See **[LEAD_FORMS.md](LEAD_FORMS.md)** for the OAuth flow, the sync
+diff, the field-mapping rules, and the two webhook shapes.
 
 The public form token cannot be institution-scoped until its source has been
 resolved. Its first database read therefore uses `enquiry_intake_lookup`, a
@@ -988,6 +1001,8 @@ injected via Docker secret files using the `*_FILE` variants.
 | **NexHealth** (PMS) | Universal PMS integration layer for NexHealth-backed institutions | `NEXHEALTH_API_KEY`, `NEXHEALTH_BASE_URL` (`https://nexhealth.info`), `NEXHEALTH_API_VERSION`, `NEXHEALTH_WEBHOOK_SECRET`, connection-pool vars |
 | **GoTracker Synchronizer** (PMS) | PMS adapter + webhooks for GoTracker-backed institutions | `GOTRACKER_BASE_URL`, `GOTRACKER_WEBHOOK_SECRET`; per-location product key/base URL fields |
 | **Retell AI** (voice) | Inbound and workflow-driven voice agent calls | `RETELL_API_SECRET` (signature verify + read-only agents API) |
+| **Meta Lead Ads** (forms) | Clinic-authorised Facebook Pages; lead forms and their submissions | `META_APP_ID`, `META_APP_SECRET`, `META_GRAPH_VERSION`, `META_WEBHOOK_VERIFY_TOKEN` |
+| **Typeform** (forms) | Clinic-authorised Typeform accounts; forms and their responses | `TYPEFORM_CLIENT_ID`, `TYPEFORM_CLIENT_SECRET`, `TYPEFORM_API_BASE_URL` |
 | **Twilio** (SMS) | Outbound/inbound SMS, delivery callbacks | `PUBLIC_API_URL`; `TWILLIO_SID`, `TWILLIO_API_SECRET`; optional `TWILIO_SMS_STATUS_CALLBACK_URL` override *(note spelling)* |
 | **Resend / Amazon SES** (email) | Resend carries auth, staff alerts, and currently patient workflow mail; SES patient send/receive support exists in application code but is not provisioned in staging | `RESEND_*`; `PATIENT_EMAIL_PROVIDER`, `SES_*`, `SES_INBOUND_*` |
 | **AWS S3** | Call-recording storage | `AWS_S3_BUCKET_NAME`, `AWS_REGION` (`ca-central-1`) |
@@ -1029,7 +1044,7 @@ and rollout design.
 ### 7.2 Dependency note
 
 Only **Retell** (`retell-sdk`) and **Twilio** (`twilio`) use a vendor SDK.
-NexHealth, GoTracker, and Resend are plain `httpx` HTTP calls. S3 uses `boto3`.
+NexHealth, GoTracker, Resend, Meta and Typeform are plain `httpx` HTTP calls. S3 uses `boto3`.
 
 ---
 
@@ -1046,6 +1061,8 @@ NexHealth, GoTracker, and Resend are plain `httpx` HTTP calls. S3 uses `boto3`.
 | `webhooks.py` | Async processing of inbound webhook payloads (post-call pipeline) |
 | `automation_workflow.py` | Workflow timers, appointment-triggered enrollment, channel dispatch, GoTracker writeback follow-up |
 | `inbound_email.py` | Poll SES inbound SQS, parse/quarantine MIME, route signed replies, resume email waits, and forward staff copies |
+| `email_identity_verification.py` | Poll newly provisioned sending domains and re-check verified ones so removed DNS is caught as an alert |
+| `form_integrations.py` | Warn before a Meta/Typeform authorisation expires, and reconcile lead submissions the webhook never delivered |
 
 Recurring jobs (dashboard rollup, audit-partition pre-creation, idempotency/
 dead-letter pruning) run as **EventBridge-triggered ECS tasks**, not Celery beat —
