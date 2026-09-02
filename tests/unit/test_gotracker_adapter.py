@@ -51,6 +51,20 @@ def test_gotracker_adapter_supports_working_window_overrides() -> None:
     assert isinstance(_adapter(), SupportsWorkingWindowOverrides)
 
 
+def test_upcoming_appointment_prefers_unambiguous_start_time() -> None:
+    mapped = mappers.to_upcoming_appointment(
+        {
+            "AppointmentId": 1468,
+            "AppointmentDate": "2026-09-02",
+            "AppointmentTime": "15:20:00",
+            "start_time": "2026-09-02T19:20:00.000Z",
+            "ProviderId": 2,
+        }
+    )
+
+    assert mapped["start_time"] == "2026-09-02T19:20:00.000Z"
+
+
 @pytest.mark.asyncio
 async def test_patient_search_pushes_identity_filters_to_synchronizer() -> None:
     """Patient lookup must search Tracker, not just Nexus's first contacts page."""

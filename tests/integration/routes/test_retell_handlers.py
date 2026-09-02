@@ -14,7 +14,7 @@ from src.app.retell.handlers import (
 
 class ConfirmingAdapter(SupportsAppointmentConfirmation):
     def __init__(self, result: BookingResult | None = None) -> None:
-        self.confirm_appointment = AsyncMock(
+        self.confirm_appointment_mock = AsyncMock(
             return_value=result
             or BookingResult(
                 success=True,
@@ -23,6 +23,9 @@ class ConfirmingAdapter(SupportsAppointmentConfirmation):
                 message="Appointment confirmed successfully.",
             )
         )
+
+    async def confirm_appointment(self, appointment_id: str) -> BookingResult:
+        return await self.confirm_appointment_mock(appointment_id)
 
 @pytest.mark.asyncio
 async def test_create_patient_success():
@@ -84,7 +87,7 @@ async def test_confirm_appointment_success():
 
     assert result["success"] is True
     assert result["status"] == "confirmed"
-    mock_adapter.confirm_appointment.assert_awaited_once_with("nh-appt-123")
+    mock_adapter.confirm_appointment_mock.assert_awaited_once_with("nh-appt-123")
 
 
 @pytest.mark.asyncio

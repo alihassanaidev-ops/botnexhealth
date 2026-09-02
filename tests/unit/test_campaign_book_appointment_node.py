@@ -88,15 +88,15 @@ def _definition() -> WorkflowDefinition:
 
 
 class _FakeBookingAdapter:
-    source = "nexhealth"
-
     def __init__(
         self,
         *,
         slots: list[UniversalSlot],
         result: BookingResult | None = None,
         appointments: list[dict] | None = None,
+        source: str = "nexhealth",
     ):
+        self.source = source
         self.find_available_slots = AsyncMock(
             return_value=SlotSearchResult(slots=slots)
         )
@@ -121,6 +121,16 @@ def _slot() -> UniversalSlot:
         provider_id="nh-provider-1",
         provider_name="Dr Smith",
         appointment_type_id="nh-type-1",
+    )
+
+
+def _gt_slot() -> UniversalSlot:
+    return UniversalSlot(
+        start="2026-11-01T09:30:00-05:00",
+        end="2026-11-01T10:00:00-05:00",
+        provider_id="gt-provider-1",
+        provider_name="Dr Smith",
+        appointment_type_id="gt-type-1",
     )
 
 
@@ -277,8 +287,8 @@ def test_book_appointment_routes_gotracker_pending_to_pending_branch() -> None:
             write_status=BookingWriteStatus.PENDING.value,
             id="gt-pending-1",
         ),
+        source="gotracker",
     )
-    adapter.source = "gotracker"
     runtime = _runtime()
     run = _run()
     dispatcher = WorkflowStepDispatcher(_session(), runtime, AsyncMock())
@@ -309,6 +319,65 @@ def test_book_appointment_routes_gotracker_pending_to_pending_branch() -> None:
     call = _complete_step_call(runtime, "pending")
     assert call.kwargs["result_metadata"]["write_status"] == "pending"
     assert call.kwargs["result_metadata"]["next_node_id"] == "pending"
+
+
+def test_gotracker_booking_slot_check_omits_tz_offset() -> None:
+    adapter = _FakeBookingAdapter(
+        slots=[_gt_slot()],
+        source="gotracker",
+    )
+    runtime = _runtime()
+
+    result = _advance(
+        _session(),
+        runtime,
+        adapter,
+        context={
+            "appointment_type_id": "gt-type-1",
+            "provider_id": "gt-provider-1",
+            "booking_start_time": "2026-11-01T09:30:00-05:00",
+        },
+    )
+
+    assert result.status == "completed"
+    assert result.outcome == "booked"
+    adapter.find_available_slots.assert_awaited_once()
+    assert "tz_offset" not in adapter.find_available_slots.await_args.kwargs
+
+
+def test_gotracker_booking_conflict_recheck_omits_tz_offset() -> None:
+    adapter = _FakeBookingAdapter(
+        slots=[_gt_slot()],
+        result=BookingResult(
+            success=False,
+            source="gotracker",
+            status="error",
+            error="slot no longer available",
+        ),
+        source="gotracker",
+    )
+    adapter.find_available_slots.side_effect = [
+        SlotSearchResult(slots=[_gt_slot()]),
+        SlotSearchResult(slots=[]),
+    ]
+    runtime = _runtime()
+
+    result = _advance(
+        _session(),
+        runtime,
+        adapter,
+        context={
+            "appointment_type_id": "gt-type-1",
+            "provider_id": "gt-provider-1",
+            "booking_start_time": "2026-11-01T09:30:00-05:00",
+        },
+    )
+
+    assert result.status == "completed"
+    assert result.outcome == "could_not_book"
+    assert adapter.find_available_slots.await_count == 2
+    for call in adapter.find_available_slots.await_args_list:
+        assert "tz_offset" not in call.kwargs
 
 
 def test_completed_booking_step_replays_branch_without_second_write() -> None:

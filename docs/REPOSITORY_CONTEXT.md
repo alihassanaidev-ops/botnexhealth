@@ -874,6 +874,14 @@ window ID and clear it to restore the provider/operatory standing rules. It must
 not create or alter the underlying window: Tracker remains the source of truth
 for its date, time, provider, and operatory.
 
+GoTracker appointment and slot payloads can carry both Tracker's wall-clock
+fields and unambiguous instant fields. Nexus consumers must prefer
+`start_time`/`end_time` for automation and booking comparisons, while preserving
+wall-clock fields for writeback to Tracker. Internal GoTracker slot searches do
+not send `tz_offset`; the Synchronizer resolves per-day offsets from the
+location's IANA timezone so daylight-saving transitions do not force a stale
+fixed offset across the requested range.
+
 GoTracker can also return derived closed periods when Nexus requests them. They
 are the gaps between open Tracker windows (including a positively stated
 00:00–24:00 fully closed day), have no writable working-window ID, and are

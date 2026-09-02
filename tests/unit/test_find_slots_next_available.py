@@ -139,7 +139,7 @@ async def test_no_group_for_provider_gets_clear_empty_range_message(monkeypatch)
 
 
 @pytest.mark.asyncio
-async def test_gotracker_slots_use_clinic_tz_offset(monkeypatch):
+async def test_gotracker_slots_let_synchronizer_resolve_timezone(monkeypatch):
     adapter = MagicMock()
     adapter.source = "gotracker"
     adapter.find_available_slots = AsyncMock(
@@ -185,7 +185,7 @@ async def test_gotracker_slots_use_clinic_tz_offset(monkeypatch):
     )
 
     adapter.find_available_slots.assert_awaited_once()
-    assert adapter.find_available_slots.await_args.kwargs["tz_offset"] == "-04:00"
+    assert "tz_offset" not in adapter.find_available_slots.await_args.kwargs
 
 
 @pytest.mark.asyncio

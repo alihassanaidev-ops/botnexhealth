@@ -1522,10 +1522,6 @@ class WorkflowStepDispatcher:
                 provider_id=provider_id,
                 appointment_type_id=appointment_type_id,
                 operatory_ids=[operatory_id] if operatory_id else None,
-                tz_offset=_clinic_tz_offset(
-                    start_date,
-                    getattr(location, "timezone", None) or location_timezone,
-                ),
             )
             slots = list(getattr(slot_result, "slots", []) or [])
             chosen = _matching_booking_slot(
@@ -1781,7 +1777,6 @@ class WorkflowStepDispatcher:
                 provider_id=provider_id,
                 appointment_type_id=appointment_type_id,
                 operatory_ids=[operatory_id] if operatory_id else None,
-                tz_offset=_clinic_tz_offset(start_date, location_timezone),
             )
         except Exception:
             return _booking_error_looks_like_slot_conflict(error)
@@ -2690,31 +2685,6 @@ def _duration_minutes(start: str, end: str | None) -> int | None:
         finished = finished.replace(tzinfo=None)
     minutes = int((finished - started).total_seconds() // 60)
     return minutes if minutes > 0 else None
-
-
-def _clinic_tz_offset(start_date: str, timezone_name: str | None) -> str | None:
-    """Return the UTC offset for a clinic-local date as +/-HH:MM."""
-    if not timezone_name:
-        return None
-    try:
-        local_date = date.fromisoformat(str(start_date))
-        tz = ZoneInfo(timezone_name)
-        local_midnight = datetime(
-            local_date.year,
-            local_date.month,
-            local_date.day,
-            tzinfo=tz,
-        )
-    except (TypeError, ValueError, ZoneInfoNotFoundError):
-        return None
-    offset = local_midnight.utcoffset()
-    if offset is None:
-        return None
-    total_minutes = int(offset.total_seconds() // 60)
-    sign = "+" if total_minutes >= 0 else "-"
-    total_minutes = abs(total_minutes)
-    hours, minutes = divmod(total_minutes, 60)
-    return f"{sign}{hours:02d}:{minutes:02d}"
 
 
 def _booking_result_metadata(

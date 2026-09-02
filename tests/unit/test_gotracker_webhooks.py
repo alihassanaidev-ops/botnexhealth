@@ -509,6 +509,87 @@ async def test_appointment_created_accepts_tracker_date_and_time_fields():
 
 
 @pytest.mark.asyncio
+async def test_appointment_created_uses_unambiguous_start_time_when_present():
+    payload = {
+        "id": "webhook-created-1468",
+        "event": "appointment.created",
+        "foreign_id_type": "tracker-1",
+        "data": {
+            "appointment": {
+                "AppointmentId": 1468,
+                "ContactId": 607,
+                "FirstName": "Kane",
+                "LastName": "Smith",
+                "AppointmentDate": "2026-09-02",
+                "AppointmentTime": "15:20:00",
+                "timezone": "America/Toronto",
+                "start_time": "2026-09-02T19:20:00.000Z",
+                "start_time_local": "2026-09-02T15:20:00-04:00",
+                "ProviderId": 2,
+                "StatusId": 1,
+                "Reason": "bridge prep",
+            }
+        },
+    }
+    request = _make_request(payload)
+    projection, projection_patch = _patch_projection(change="new")
+    lifecycle, lifecycle_patch = _patch_subscription_lifecycle()
+
+    with (
+        patch("src.app.api.routes.gotracker_webhooks.settings") as mock_settings,
+        patch(
+            "src.app.api.routes.gotracker_webhooks.get_system_db_session",
+            side_effect=[
+                _session_with_scalar(_location()),
+                _session_with_scalar(SimpleNamespace(id="contact-1")),
+                _processing_session(),
+            ],
+        ),
+        patch(
+            "src.app.api.routes.gotracker_webhooks._claim_event",
+            new=AsyncMock(return_value=True),
+        ),
+        patch("src.app.api.routes.gotracker_webhooks._complete_event", new=AsyncMock()),
+        projection_patch,
+        lifecycle_patch,
+        patch(
+            "src.app.tasks.automation_workflow.trigger_appointment_workflows"
+        ) as trigger_task,
+        patch(
+            "src.app.tasks.automation_workflow.trigger_appointment_state_workflows"
+        ) as state_task,
+        patch(
+            "src.app.tasks.automation_workflow.resume_reactivation_booking"
+        ) as reactivation_task,
+    ):
+        mock_settings.gotracker_webhook_secret = ""
+        mock_settings.is_production = False
+        trigger_task.delay = MagicMock()
+        state_task.delay = MagicMock()
+        reactivation_task.delay = MagicMock()
+        result = await gotracker_webhook("loc-1", request)
+
+    assert result["status"] == "queued"
+    projection.upsert_appointment.assert_awaited_once()
+    assert (
+        projection.upsert_appointment.await_args.kwargs["start_time"]
+        == "2026-09-02T19:20:00.000Z"
+    )
+    trigger_task.delay.assert_called_once()
+    assert (
+        trigger_task.delay.call_args.kwargs["appointment_at_iso"]
+        == "2026-09-02T19:20:00.000Z"
+    )
+    metadata = trigger_task.delay.call_args.kwargs["trigger_metadata"]
+    assert metadata["appointment_datetime"] == "2026-09-02T19:20:00.000Z"
+    assert metadata["appointment_time"] == "15:20:00"
+    assert (
+        metadata["gotracker_payload"]["appointment"]["datetime"]
+        == "2026-09-02T19:20:00.000Z"
+    )
+
+
+@pytest.mark.asyncio
 async def test_status_only_appointment_updated_is_accepted_as_partial_projection():
     payload = {
         "id": "webhook-confirmed-1414",
