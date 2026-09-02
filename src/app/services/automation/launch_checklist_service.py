@@ -39,6 +39,9 @@ from src.app.services.automation.definition_schema import (
     SendVoiceNode,
     WorkflowDefinition,
 )
+from src.app.services.automation.gotracker_recall_readiness import (
+    assess_gotracker_recall_history,
+)
 from src.app.services.automation.nexhealth_sync_status_service import assess_sync_status
 from src.app.services.automation.pms_capability_service import PmsCapabilityService
 from src.app.services.automation.retell_sms_policy import RETELL_SMS_POLICY
@@ -630,6 +633,7 @@ class CampaignLaunchChecklistService:
         location = await self.session.get(InstitutionLocation, location_id)
         if location and _is_gotracker_location(location):
             return await self._gotracker_items(
+                definition,
                 institution_id=institution_id,
                 location_id=location_id,
                 location=location,
@@ -718,6 +722,7 @@ class CampaignLaunchChecklistService:
 
     async def _gotracker_items(
         self,
+        definition: WorkflowDefinition,
         *,
         institution_id: str,
         location_id: str,
@@ -735,6 +740,12 @@ class CampaignLaunchChecklistService:
                 )
             ]
 
+        history_items = await self._gotracker_recall_history_items(
+            definition,
+            institution_id=institution_id,
+            location=location,
+        )
+
         subscription = await self._gotracker_subscription(institution_id, location_id)
         if subscription is None:
             return [
@@ -746,7 +757,7 @@ class CampaignLaunchChecklistService:
                     message="No local GoTracker webhook subscription row exists for this location.",
                     fix_href="/institution-admin/settings",
                 )
-            ]
+            ] + history_items
         if subscription.status != GoTrackerWebhookSubscriptionStatus.ACTIVE.value:
             return [
                 CampaignLaunchChecklistItem(
@@ -758,7 +769,7 @@ class CampaignLaunchChecklistService:
                     fix_href="/institution-admin/settings",
                     metadata={"subscription_id": str(subscription.id)},
                 )
-            ]
+            ] + history_items
 
         newest = await self._newest_projection_sync(institution_id, location_id)
         last_event = (
@@ -781,7 +792,7 @@ class CampaignLaunchChecklistService:
                         "event_types": subscription.event_types,
                     },
                 )
-            ]
+            ] + history_items
         newest = _as_utc(newest)
         age = datetime.now(timezone.utc) - newest
         return [
@@ -804,6 +815,69 @@ class CampaignLaunchChecklistService:
                     "freshness_window_hours": int(
                         _FRESHNESS_WINDOW.total_seconds() / 3600
                     ),
+                },
+            )
+        ] + history_items
+
+    async def _gotracker_recall_history_items(
+        self,
+        definition: WorkflowDefinition,
+        *,
+        institution_id: str,
+        location: InstitutionLocation,
+    ) -> list[CampaignLaunchChecklistItem]:
+        if definition.trigger.type != "recall_scan":
+            return []
+
+        institution = await self.session.get(Institution, institution_id)
+        if institution is None:
+            return [
+                CampaignLaunchChecklistItem(
+                    id="gotracker_recall_history",
+                    section="data",
+                    label="GoTracker recall history sync",
+                    status="blocked",
+                    message="Institution could not be found for GoTracker recall history checks.",
+                    fix_href="/institution-admin/settings",
+                )
+            ]
+
+        adapter = None
+        try:
+            from src.app.pms.factory import get_adapter_for_institution_location
+
+            adapter = await get_adapter_for_institution_location(institution, location)
+            assessment = await assess_gotracker_recall_history(adapter)
+        except Exception as exc:  # noqa: BLE001 - fail closed for launch readiness.
+            return [
+                CampaignLaunchChecklistItem(
+                    id="gotracker_recall_history",
+                    section="data",
+                    label="GoTracker recall history sync",
+                    status="blocked",
+                    message=(
+                        "GoTracker appointment-history sync status could not be "
+                        "read; recall should not run for this location."
+                    ),
+                    fix_href="/institution-admin/settings",
+                    metadata={"error_type": type(exc).__name__},
+                )
+            ]
+        finally:
+            if adapter is not None:
+                await adapter.close()
+
+        return [
+            CampaignLaunchChecklistItem(
+                id="gotracker_recall_history",
+                section="data",
+                label="GoTracker recall history sync",
+                status="pass" if assessment.complete else "blocked",
+                message=assessment.message,
+                fix_href="/institution-admin/settings",
+                metadata={
+                    "reason": assessment.reason,
+                    **assessment.metadata,
                 },
             )
         ]

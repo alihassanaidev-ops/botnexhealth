@@ -47,6 +47,7 @@ part of this backlog; the section *What doesn't compress* is where the schedule 
 | **24** · Sales Qualification campaign | The four campaigns | `ecd1861` `db98a99` `a6e8932` `09e1986` `2f39b99` + `157b6e94` | Intake, patient conversion and the lead workspace were already in. `157b6e94` adds the missing `enquiry_received` trigger, enrollment from signed intake and manual staff entry, the Sales Qualification launch template, Retell SMS setup, registration and provider-locked booking links, lead status side effects, merge fields and sales analytics coverage |
 | **22** · Appointment Reminder and Overdue Recall campaigns | The four campaigns | `8aec6932` + this change | `appointment-reminder-24h` is launchable with attending-status eligibility, confirm/reschedule link policy, two SMS reply waits, deterministic reply routing, YES confirmation through PMS-neutral `update_appointment`, staff-follow-up outcomes, and pre-send appointment revalidation. `recall-sms-6month` is now launchable with recall type/due-date targeting, active treatment-plan exclusion, future-appointment suppression, a 90-day re-enrolment cooldown, booking-link setup, reply handling and staff handoff outcomes |
 | **25** · Patient Communication API family | NexHealth data families | `5f8fa187` | Adds the supported patient-communication surface: clinical-note metadata, document types, patient-document metadata, patient recall records, recall types and treatment-plan metadata. Workflows can now declare recall and treatment-plan fields including `recall_type_name`, `recall_due_date` and `has_active_treatment_plan`; patient alerts stay out by Decision G |
+| **23** · GoTracker Overdue Recall platform path | The four campaigns | this change | Platform now enables the GoTracker recall template requirements through derived recall-row context, scans GoTracker locations by product key, blocks recall unless `/api/admin/sync_status` explicitly proves appointment-history completion, suppresses future appointments and recent non-cancelled visits, records skip counters, and surfaces a `gotracker_recall_history` launch-checklist blocker. Cloud Service / Connector still need to provide the explicit history-complete signal and recall rows with type/due/treatment-plan context |
 | **5** · Recover in-flight writes after Connector restart | GoTracker booking safety | `305ed2d` | Item 3's read-back applied to patient creation too. No local state, so **Decision I fell away instead of being answered** — the decision log's recommendation was to avoid a durable local record, and that is what shipped |
 | **8** · Mapping review before live bookings | GoTracker operations & health | `a9fda29` | Writes that reach a patient are refused until a named person has reviewed the mapping. Reads and agent sync are deliberately not gated — a half-onboarded clinic can still be looked at and talked to, it just cannot have appointments written into it |
 | **6** · Alert when a connection is unhealthy | GoTracker operations & health | `e178162` + `c1ed593` + `07afeb2` + `94d46e7` | Nine conditions evaluated every five minutes, collapsed into three CloudWatch alarms. Suppressed when the clinic is genuinely closed, so a practice with its lights off overnight does not page anyone |
@@ -187,18 +188,18 @@ Where the silent failures live. Everything here is in this repo.
 # WS4 · The four campaigns
 **3 items · ≈ 10 days · Platform + campaign design · TIER 2**
 
-**Delivered since the last scope pass:** Item 24 is complete, and both halves of Item 22 are now
-launchable.
+**Delivered since the last scope pass:** Item 24 is complete, both halves of Item 22 are now
+launchable, and the Platform side of Item 23 is wired with a hard GoTracker history-sync guard.
 
-The remaining campaign work is the GoTracker-specific Overdue Recall rollout in Item 23. Sales
-Qualification, Appointment Reminder and Overdue Recall now exist as launch templates but still need
-clinic-specific setup before activation.
+The remaining campaign work is the cross-repo GoTracker-specific Overdue Recall rollout: the Platform
+path is present, while the Cloud Service / Connector must expose the completion signal and recall-row
+context the guard consumes.
 
 | # | Item | Size | Notes |
 |---|---|---|---|
 | **22** ✅ | Build out Appointment Reminder and Overdue Recall — **done, `8aec6932` + this change** | 5d | Appointment Reminder re-checks live appointment state before every patient-directed send, configures confirm/reschedule links, waits for SMS replies, confirms through `update_appointment`, and routes reschedule/cancel/staff asks to staff-follow-up outcomes. Overdue Recall now uses Item 25 recall/treatment-plan data, excludes active treatment-plan patients from generic recall, suppresses patients with future appointments, applies the 90-day re-enrolment cooldown, configures booking links, and routes booked/reschedule/staff/no-response outcomes |
 | **24** ✅ | Build the Sales Qualification campaign — **done, `ecd1861` `db98a99` `a6e8932` `09e1986` `2f39b99` + `157b6e94`** | 4d | Intake, patient conversion and the lead workspace were already in. The last gap is now closed: `enquiry_received` workflows enroll from signed intake and manual staff entry, the launch template runs Retell SMS qualification, qualified leads receive registration and provider-locked booking links, and outcomes update lead status / DNC / analytics. Decision C is answered: signed webhook plus staff manual entry through the same intake path |
-| **23** | Run Overdue Recall for GoTracker clinics | 1d | Must refuse to run on a clinic whose history sync is incomplete — otherwise it tells last month's patients they haven't been seen in two years |
+| **23** | Run Overdue Recall for GoTracker clinics | 1d | Platform path is wired and refuses to run on incomplete history; Cloud Service / Connector must provide explicit history-complete status plus recall type/due/treatment context |
 
 ---
 

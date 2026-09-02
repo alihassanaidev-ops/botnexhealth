@@ -423,6 +423,20 @@ Current schema version `1.0` supports triggers such as `appointment_offset`,
 `update_gotracker_appointment`, `booking_link`, `patient_registration`,
 `json_mapper`, `llm`, `condition`, `switch`, and `exit`.
 
+GoTracker recall scanning is deliberately stricter than NexHealth recall
+scanning. NexHealth supplies native recall and treatment-plan reads. GoTracker
+recall is derived from synchronised appointment history, so
+`scan_recall_workflows` first calls the GoTracker adapter's
+`get_recall_history_sync_status()` (`GET /api/admin/sync_status`) and refuses
+the location unless appointment-history completion is explicit. When allowed,
+the scanner consumes GoTracker recall rows from `/api/patients/recalls`, uses
+inline recall type/due/treatment-plan fields for workflow filters, suppresses
+future appointments and recent non-cancelled historical visits from the local
+appointment working set, and records refusal counters in the task result.
+Cloud Service / Connector remains responsible for reporting history completion
+and returning recall rows with `recall_type_name`, a due date, and active
+treatment-plan context.
+
 `book_appointment` is the campaign-controlled booking action: it resolves the
 patient from the run contact, renders provider/type/time from context, re-checks
 live PMS availability immediately before writing, books through the shared PMS

@@ -47,6 +47,20 @@ _CAPABILITY_API_LABELS: dict[str, tuple[str, ...]] = {
         "View webhook subscriptions",
     ),
 }
+_GOTRACKER_NATIVE_CAPABILITIES = frozenset(
+    {
+        "appointments",
+        "patients",
+        "patient_recalls",
+        "appointment_booking",
+    }
+)
+_GOTRACKER_RECALL_DERIVED_CAPABILITIES = frozenset(
+    {
+        "recall_types",
+        "treatment_plans",
+    }
+)
 
 
 @dataclass(frozen=True)
@@ -132,6 +146,8 @@ class PmsCapabilityService:
                 pms_name=None,
                 message="This institution is not connected to a PMS.",
             )
+        if institution.pms_type == "gotracker":
+            return _gotracker_evaluation(normalized_requirements)
 
         pms_name = await self._resolve_pms_name(
             institution_id=str(institution.id), location_id=str(location.id)
@@ -273,6 +289,55 @@ def _unknown_evaluation(
         unknown=requirements,
         details=details,
         message=message,
+    )
+
+
+def _gotracker_evaluation(requirements: list[str]) -> PmsCapabilityEvaluation:
+    details: dict[str, CapabilityDetail] = {}
+    missing: list[str] = []
+    recall_context = "patient_recalls" in requirements
+    for requirement in requirements:
+        supported = requirement in _GOTRACKER_NATIVE_CAPABILITIES
+        derived = (
+            recall_context
+            and requirement in _GOTRACKER_RECALL_DERIVED_CAPABILITIES
+        )
+        supported = supported or derived
+        if not supported:
+            missing.append(requirement)
+        details[requirement] = CapabilityDetail(
+            capability=requirement,
+            status="supported" if supported else "unsupported",
+            label=_capability_label(requirement),
+            matched_api=(
+                "GoTracker derived recall row"
+                if derived
+                else "GoTracker native adapter"
+                if supported
+                else None
+            ),
+            raw_value="supported" if supported else None,
+        )
+
+    supported = not missing
+    return PmsCapabilityEvaluation(
+        requirements=requirements,
+        supported=supported,
+        status="supported" if supported else "unsupported",
+        pms_name="GoTracker",
+        missing=missing,
+        partial=[],
+        unknown=[],
+        details=details,
+        message=(
+            "GoTracker supports the required PMS capabilities."
+            if supported
+            else (
+                f"GoTracker does not support: {', '.join(missing)}. "
+                "Generic treatment-plan reads are only supported for GoTracker "
+                "when derived recall rows supply the recall context."
+            )
+        ),
     )
 
 

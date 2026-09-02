@@ -211,14 +211,23 @@ def patient_recall_from_raw(
 ) -> UniversalPatientRecall:
     patient_id = (
         raw.get("patient_id")
+        or raw.get("patientId")
+        or raw.get("PatientId")
+        or raw.get("contact_id")
+        or raw.get("contactId")
+        or raw.get("ContactId")
         or _nested(raw, "patient", "id")
         or raw.get("pid")
         or raw.get("patient")
     )
-    recall = raw.get("recall_type") or raw.get("recall")
+    recall = raw.get("recall_type") or raw.get("recallType") or raw.get("recall")
     recall_type_id = (
         raw.get("recall_type_id")
+        or raw.get("recallTypeId")
+        or raw.get("RecallTypeId")
         or raw.get("recall_id")
+        or raw.get("recallId")
+        or raw.get("RecallId")
         or (recall.get("id") if isinstance(recall, dict) else None)
     )
     recall_type_name = None
@@ -237,21 +246,42 @@ def patient_recall_from_raw(
         patient_id=_prefix(source, patient_id) or "",
         recall_type_id=_prefix(source, recall_type_id),
         recall_type_name=_string(
-            raw.get("recall_type_name") or raw.get("type") or recall_type_name
+            raw.get("recall_type_name")
+            or raw.get("recallTypeName")
+            or raw.get("RecallTypeName")
+            or raw.get("type")
+            or raw.get("Type")
+            or recall_type_name
         ),
         due_date=_string(
-            raw.get("date_due")
+            raw.get("recall_due_date")
+            or raw.get("recallDueDate")
+            or raw.get("RecallDueDate")
+            or raw.get("date_due")
+            or raw.get("dateDue")
+            or raw.get("DateDue")
             or raw.get("due_date")
+            or raw.get("dueDate")
+            or raw.get("DueDate")
             or raw.get("due")
+            or raw.get("Due")
             or raw.get("next_visit_date")
+            or raw.get("nextVisitDate")
+            or raw.get("NextVisitDate")
         ),
         last_visit_date=_string(
             raw.get("last_visit_date")
+            or raw.get("lastVisitDate")
+            or raw.get("LastVisitDate")
             or raw.get("last_visit_at")
+            or raw.get("lastVisitAt")
+            or raw.get("LastVisitAt")
             or raw.get("last_visited_at")
+            or raw.get("lastVisitedAt")
+            or raw.get("LastVisitedAt")
         ),
-        created_at=_string(raw.get("created_at")),
-        updated_at=_string(raw.get("updated_at")),
+        created_at=_string(raw.get("created_at") or raw.get("createdAt")),
+        updated_at=_string(raw.get("updated_at") or raw.get("updatedAt")),
     )
 
 
@@ -263,15 +293,17 @@ def recall_type_from_raw(
     return UniversalRecallType(
         id=_prefix(source, raw.get("id")) or "",
         source=source,
-        name=_string(raw.get("name") or raw.get("type")) or "",
+        name=_string(raw.get("name") or raw.get("Name") or raw.get("type")) or "",
         interval_months=_int_or_none(
             raw.get("interval_months")
+            or raw.get("intervalMonths")
             or raw.get("months")
             or raw.get("default_interval_months")
+            or raw.get("defaultIntervalMonths")
         ),
         active=raw.get("active") if isinstance(raw.get("active"), bool) else None,
-        created_at=_string(raw.get("created_at")),
-        updated_at=_string(raw.get("updated_at")),
+        created_at=_string(raw.get("created_at") or raw.get("createdAt")),
+        updated_at=_string(raw.get("updated_at") or raw.get("updatedAt")),
     )
 
 
@@ -282,6 +314,11 @@ def treatment_plan_from_raw(
 ) -> UniversalTreatmentPlan:
     patient_id = (
         raw.get("patient_id")
+        or raw.get("patientId")
+        or raw.get("PatientId")
+        or raw.get("contact_id")
+        or raw.get("contactId")
+        or raw.get("ContactId")
         or _nested(raw, "patient", "id")
         or raw.get("pid")
         or raw.get("patient")
@@ -290,15 +327,25 @@ def treatment_plan_from_raw(
         id=_prefix(source, raw.get("id")) or "",
         source=source,
         patient_id=_prefix(source, patient_id) or "",
-        status=_string(raw.get("status") or raw.get("state")),
-        name=_string(raw.get("name") or raw.get("title")),
+        status=_string(raw.get("status") or raw.get("Status") or raw.get("state")),
+        name=_string(raw.get("name") or raw.get("Name") or raw.get("title")),
         provider_id=_prefix(
-            source, raw.get("provider_id") or _nested(raw, "provider", "id")
+            source,
+            raw.get("provider_id")
+            or raw.get("providerId")
+            or raw.get("ProviderId")
+            or _nested(raw, "provider", "id"),
         ),
-        created_at=_string(raw.get("created_at")),
-        updated_at=_string(raw.get("updated_at")),
-        accepted_at=_string(raw.get("accepted_at") or raw.get("accepted_on")),
-        completed_at=_string(raw.get("completed_at") or raw.get("completed_on")),
+        created_at=_string(raw.get("created_at") or raw.get("createdAt")),
+        updated_at=_string(raw.get("updated_at") or raw.get("updatedAt")),
+        accepted_at=_string(
+            raw.get("accepted_at") or raw.get("acceptedAt") or raw.get("accepted_on")
+        ),
+        completed_at=_string(
+            raw.get("completed_at")
+            or raw.get("completedAt")
+            or raw.get("completed_on")
+        ),
     )
 
 

@@ -101,3 +101,68 @@ def test_no_pms_institution_blocks_gated_capability() -> None:
     assert evaluation.status == "unsupported"
     assert evaluation.missing == ["patient_recalls"]
     session.execute.assert_not_called()
+
+
+def test_gotracker_native_capabilities_do_not_require_nexhealth_sync_status() -> None:
+    session = AsyncMock()
+
+    evaluation = asyncio.run(
+        PmsCapabilityService(session).evaluate_location(
+            institution=_institution(pms_type="gotracker"),
+            location=_location(),
+            requirements=["patient_recalls", "appointment_booking"],
+        )
+    )
+
+    assert evaluation.supported is True
+    assert evaluation.status == "supported"
+    assert evaluation.pms_name == "GoTracker"
+    session.execute.assert_not_called()
+
+
+def test_gotracker_supports_derived_recall_template_context() -> None:
+    session = AsyncMock()
+
+    evaluation = asyncio.run(
+        PmsCapabilityService(session).evaluate_location(
+            institution=_institution(pms_type="gotracker"),
+            location=_location(),
+            requirements=[
+                "patient_recalls",
+                "recall_types",
+                "treatment_plans",
+                "appointment_booking",
+            ],
+        )
+    )
+
+    assert evaluation.supported is True
+    assert evaluation.status == "supported"
+    assert evaluation.pms_name == "GoTracker"
+    assert evaluation.missing == []
+    assert (
+        evaluation.details["treatment_plans"].matched_api
+        == "GoTracker derived recall row"
+    )
+    assert (
+        evaluation.details["recall_types"].matched_api
+        == "GoTracker derived recall row"
+    )
+    session.execute.assert_not_called()
+
+
+def test_gotracker_still_blocks_generic_treatment_plan_reads() -> None:
+    session = AsyncMock()
+
+    evaluation = asyncio.run(
+        PmsCapabilityService(session).evaluate_location(
+            institution=_institution(pms_type="gotracker"),
+            location=_location(),
+            requirements=["treatment_plans"],
+        )
+    )
+
+    assert evaluation.supported is False
+    assert evaluation.status == "unsupported"
+    assert evaluation.missing == ["treatment_plans"]
+    session.execute.assert_not_called()

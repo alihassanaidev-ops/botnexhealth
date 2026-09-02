@@ -98,6 +98,34 @@ async def test_patient_search_pushes_identity_filters_to_synchronizer() -> None:
 
 
 @pytest.mark.asyncio
+async def test_recall_history_sync_status_reads_admin_sync_status() -> None:
+    client = FakeGoTrackerClient()
+    client.responses.append(
+        {
+            "code": True,
+            "data": {
+                "appointment_history": {
+                    "complete": True,
+                    "completed_at": "2026-08-31T15:00:00Z",
+                }
+            },
+        }
+    )
+
+    status = await _adapter(client).get_recall_history_sync_status()
+
+    assert status["appointment_history"]["complete"] is True
+    assert client.calls == [
+        {
+            "method": "GET",
+            "path": "/api/admin/sync_status",
+            "params": {},
+            "json": None,
+        }
+    ]
+
+
+@pytest.mark.asyncio
 async def test_patient_browse_fetches_one_provider_page_only() -> None:
     client = FakeGoTrackerClient()
     client.responses.append(

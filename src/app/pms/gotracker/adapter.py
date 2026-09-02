@@ -632,6 +632,16 @@ class GoTrackerAdapter(
             max_items=max_items,
         )
 
+    async def get_recall_history_sync_status(self) -> dict[str, Any]:
+        """Read the synchronizer progress signal required before recall scans.
+
+        GoTracker recall is derived from appointment history rather than a
+        native PMS recall table. The scanner must therefore see a completed
+        history-sync signal before it trusts any overdue-recall candidates.
+        """
+        raw = await self._client.request("GET", "/api/admin/sync_status")
+        return _data_object(raw)
+
     # ── Booking ──────────────────────────────────────────────────────────
 
     async def book_appointment(self, req: BookingRequest) -> BookingResult:

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 from datetime import datetime, timedelta, timezone
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -259,6 +260,9 @@ def test_recall_is_due():
     now = datetime(2026, 7, 10, tzinfo=timezone.utc)
     assert _recall_is_due({"due_date": "2026-06-01"}, now=now) is True  # overdue
     assert _recall_is_due({"due_date": "2026-09-01"}, now=now) is False  # future
+    assert (
+        _recall_is_due({"recall_due_date": "2026-09-01"}, now=now) is False
+    )  # synchronizer contract name
     assert _recall_is_due({}, now=now) is True  # no due date → treated as due
 
 
@@ -667,6 +671,298 @@ async def test_scan_recall_skips_when_declared_treatment_context_cannot_be_read(
     adapter.list_treatment_plans.assert_awaited_once_with(
         patient_id="p1", max_items=100
     )
+
+
+@pytest.mark.asyncio
+async def test_scan_recall_enrolls_gotracker_with_completed_history_and_inline_context():
+    wf = _make_workflow(
+        trigger_type="recall_scan",
+        version_id="ver-1",
+        trigger_filter={
+            "kind": "group",
+            "op": "and",
+            "children": [
+                {
+                    "kind": "rule",
+                    "field": "recall_type_name",
+                    "op": "eq",
+                    "value": "Hygiene",
+                },
+                {
+                    "kind": "rule",
+                    "field": "has_active_treatment_plan",
+                    "op": "eq",
+                    "value": False,
+                },
+            ],
+        },
+        pms_context_fields=[
+            "recall_type_name",
+            "has_active_treatment_plan",
+            "treatment_plan_statuses",
+        ],
+    )
+    scan_session = _make_session(workflows=[wf])
+
+    institution = SimpleNamespace(id="inst-1", pms_type="gotracker")
+    inst_session = AsyncMock()
+    inst_session.get = AsyncMock(return_value=institution)
+    location = MagicMock()
+    location.id = "loc-1"
+    location.timezone = "America/New_York"
+    location.gotracker_product_key_encrypted = "encrypted-key"
+    loc_result = MagicMock()
+    loc_result.scalars.return_value.all.return_value = [location]
+    inst_session.execute = AsyncMock(
+        side_effect=[
+            loc_result,
+            _scalar_result(None),  # contact lookup for p1
+            _scalar_result(None),  # no future appointment for p1
+            _scalar_result(None),  # no recent visit for p1
+            _scalar_result(None),  # no cooldown for p1
+            _scalar_result(None),  # contact lookup for p2
+            _scalar_result(None),  # no future appointment for p2
+            _scalar_result(None),  # no recent visit for p2
+        ]
+    )
+
+    adapter = SimpleNamespace(
+        source="gotracker",
+        get_recall_history_sync_status=AsyncMock(
+            return_value={"appointment_history": {"complete": True}}
+        ),
+        list_patient_recalls=AsyncMock(
+            return_value=[
+                {
+                    "patient_id": "p1",
+                    "recall_type_name": "Hygiene",
+                    "due_date": "2020-01-01",
+                    "has_active_treatment_plan": False,
+                },
+                {
+                    "patient_id": "p2",
+                    "recall_type_name": "Hygiene",
+                    "due_date": "2020-01-01",
+                    "has_active_treatment_plan": True,
+                },
+            ]
+        ),
+        list_recall_types=AsyncMock(return_value=[]),
+        close=AsyncMock(),
+    )
+
+    with (
+        patch(
+            "src.app.tasks.automation_workflow.get_system_db_session",
+            side_effect=[_cm(scan_session), _cm(inst_session)],
+        ),
+        patch(
+            "src.app.tasks.automation_workflow._create_recall_adapter",
+            AsyncMock(return_value=adapter),
+        ),
+        patch(
+            "src.app.tasks.automation_workflow.enroll_and_start_workflow_run"
+        ) as mock_task,
+    ):
+        mock_task.apply_async = MagicMock()
+        result = await _scan_recall_async()
+
+    assert result["enrolled"] == 1
+    assert result["locations_skipped_history_incomplete"] == 0
+    assert result["patients_skipped_recent_visit"] == 0
+    kwargs = mock_task.apply_async.call_args.kwargs["kwargs"]
+    period = datetime.now(tz=timezone.utc).strftime("%Y-%m")
+    assert kwargs["trigger_ref_id"] == "gt-p1"
+    assert kwargs["trigger_metadata"] == {
+        "nexhealth_patient_id": "gt-p1",
+        "recall_due_date": "2020-01-01",
+        "recall_period": period,
+        "recall_type_name": "Hygiene",
+        "treatment_plan_statuses": [],
+        "has_active_treatment_plan": False,
+        "recall_reenrollment_cooldown_days": 90,
+    }
+    assert not hasattr(adapter, "list_treatment_plans")
+
+
+@pytest.mark.asyncio
+async def test_scan_recall_refuses_gotracker_when_history_sync_is_incomplete():
+    wf = _make_workflow(trigger_type="recall_scan", version_id="ver-1")
+    scan_session = _make_session(workflows=[wf])
+
+    institution = SimpleNamespace(id="inst-1", pms_type="gotracker")
+    inst_session = AsyncMock()
+    inst_session.get = AsyncMock(return_value=institution)
+    location = MagicMock()
+    location.id = "loc-1"
+    location.gotracker_product_key_encrypted = "encrypted-key"
+    loc_result = MagicMock()
+    loc_result.scalars.return_value.all.return_value = [location]
+    inst_session.execute = AsyncMock(side_effect=[loc_result])
+
+    adapter = SimpleNamespace(
+        source="gotracker",
+        get_recall_history_sync_status=AsyncMock(
+            return_value={
+                "appointment_history": {"status": "running", "progress_percent": 42}
+            }
+        ),
+        list_patient_recalls=AsyncMock(return_value=[]),
+        close=AsyncMock(),
+    )
+
+    with (
+        patch(
+            "src.app.tasks.automation_workflow.get_system_db_session",
+            side_effect=[_cm(scan_session), _cm(inst_session)],
+        ),
+        patch(
+            "src.app.tasks.automation_workflow._create_recall_adapter",
+            AsyncMock(return_value=adapter),
+        ),
+        patch(
+            "src.app.tasks.automation_workflow.enroll_and_start_workflow_run"
+        ) as mock_task,
+    ):
+        mock_task.apply_async = MagicMock()
+        result = await _scan_recall_async()
+
+    assert result["enrolled"] == 0
+    assert result["locations_skipped_history_incomplete"] == 1
+    adapter.list_patient_recalls.assert_not_awaited()
+    mock_task.apply_async.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_scan_recall_skips_gotracker_patient_with_recent_visit():
+    wf = _make_workflow(trigger_type="recall_scan", version_id="ver-1")
+    scan_session = _make_session(workflows=[wf])
+
+    institution = SimpleNamespace(id="inst-1", pms_type="gotracker")
+    inst_session = AsyncMock()
+    inst_session.get = AsyncMock(return_value=institution)
+    location = MagicMock()
+    location.id = "loc-1"
+    location.gotracker_product_key_encrypted = "encrypted-key"
+    loc_result = MagicMock()
+    loc_result.scalars.return_value.all.return_value = [location]
+    inst_session.execute = AsyncMock(
+        side_effect=[
+            loc_result,
+            _scalar_result(None),
+            _scalar_result(None),
+            _scalar_result("recent-visit-1"),
+        ]
+    )
+
+    adapter = SimpleNamespace(
+        source="gotracker",
+        get_recall_history_sync_status=AsyncMock(
+            return_value={"appointment_history": {"complete": True}}
+        ),
+        list_patient_recalls=AsyncMock(
+            return_value=[
+                {
+                    "patient_id": "p1",
+                    "recall_type_name": "Hygiene",
+                    "due_date": "2020-01-01",
+                }
+            ]
+        ),
+        list_recall_types=AsyncMock(return_value=[]),
+        close=AsyncMock(),
+    )
+
+    with (
+        patch(
+            "src.app.tasks.automation_workflow.get_system_db_session",
+            side_effect=[_cm(scan_session), _cm(inst_session)],
+        ),
+        patch(
+            "src.app.tasks.automation_workflow._create_recall_adapter",
+            AsyncMock(return_value=adapter),
+        ),
+        patch(
+            "src.app.tasks.automation_workflow.enroll_and_start_workflow_run"
+        ) as mock_task,
+    ):
+        mock_task.apply_async = MagicMock()
+        result = await _scan_recall_async()
+
+    assert result["enrolled"] == 0
+    assert result["patients_skipped_recent_visit"] == 1
+    mock_task.apply_async.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_scan_recall_skips_gotracker_when_treatment_context_is_missing():
+    wf = _make_workflow(
+        trigger_type="recall_scan",
+        version_id="ver-1",
+        trigger_filter={
+            "kind": "rule",
+            "field": "has_active_treatment_plan",
+            "op": "eq",
+            "value": False,
+        },
+        pms_context_fields=["has_active_treatment_plan"],
+    )
+    scan_session = _make_session(workflows=[wf])
+
+    institution = SimpleNamespace(id="inst-1", pms_type="gotracker")
+    inst_session = AsyncMock()
+    inst_session.get = AsyncMock(return_value=institution)
+    location = MagicMock()
+    location.id = "loc-1"
+    location.gotracker_product_key_encrypted = "encrypted-key"
+    loc_result = MagicMock()
+    loc_result.scalars.return_value.all.return_value = [location]
+    inst_session.execute = AsyncMock(
+        side_effect=[
+            loc_result,
+            _scalar_result(None),
+            _scalar_result(None),
+            _scalar_result(None),
+        ]
+    )
+
+    adapter = SimpleNamespace(
+        source="gotracker",
+        get_recall_history_sync_status=AsyncMock(
+            return_value={"appointment_history": {"complete": True}}
+        ),
+        list_patient_recalls=AsyncMock(
+            return_value=[
+                {
+                    "patient_id": "p1",
+                    "recall_type_name": "Hygiene",
+                    "due_date": "2020-01-01",
+                }
+            ]
+        ),
+        list_recall_types=AsyncMock(return_value=[]),
+        close=AsyncMock(),
+    )
+
+    with (
+        patch(
+            "src.app.tasks.automation_workflow.get_system_db_session",
+            side_effect=[_cm(scan_session), _cm(inst_session)],
+        ),
+        patch(
+            "src.app.tasks.automation_workflow._create_recall_adapter",
+            AsyncMock(return_value=adapter),
+        ),
+        patch(
+            "src.app.tasks.automation_workflow.enroll_and_start_workflow_run"
+        ) as mock_task,
+    ):
+        mock_task.apply_async = MagicMock()
+        result = await _scan_recall_async()
+
+    assert result["enrolled"] == 0
+    assert result["patients_skipped_missing_treatment_context"] == 1
+    mock_task.apply_async.assert_not_called()
 
 
 @pytest.mark.asyncio

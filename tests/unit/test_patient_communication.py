@@ -22,6 +22,7 @@ from src.app.services.patient_communication import (
     PATIENT_ALERTS_POLICY_REASON,
     fetch_patient_communication,
     patient_communication_workflow_context,
+    patient_recall_from_raw,
     pms_context_requirements,
 )
 
@@ -210,6 +211,21 @@ def test_pms_context_requirements_are_derived_from_allowed_fields() -> None:
     assert pms_context_requirements(
         ["recall_type_name", "has_active_treatment_plan"]
     ) == ["patient_recalls", "recall_types", "treatment_plans"]
+
+
+def test_gotracker_recall_parser_accepts_launch_template_due_date_name() -> None:
+    recall = patient_recall_from_raw(
+        {
+            "ContactId": "415",
+            "RecallTypeName": "6-Month Hygiene",
+            "recall_due_date": "2026-08-15",
+        },
+        source="gotracker",
+    )
+
+    assert recall.patient_id == "gt-415"
+    assert recall.recall_type_name == "6-Month Hygiene"
+    assert recall.due_date == "2026-08-15"
 
 
 @pytest.mark.asyncio

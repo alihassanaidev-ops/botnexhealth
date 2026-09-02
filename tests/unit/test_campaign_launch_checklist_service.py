@@ -8,6 +8,7 @@ import asyncio
 from datetime import datetime, timezone
 from unittest.mock import AsyncMock, MagicMock, patch
 
+from src.app.models.institution import Institution
 from src.app.models.institution_location import InstitutionLocation
 from src.app.models.gotracker_webhook_subscription import (
     GoTrackerWebhookSubscription,
@@ -167,6 +168,65 @@ def test_appointment_campaign_passes_fresh_gotracker_check() -> None:
 
     assert _item(checklist, "gotracker_readiness").status == "pass"
     assert all(item.id != "nexhealth_readiness" for item in checklist.items)
+
+
+def test_recall_campaign_blocks_gotracker_when_history_sync_is_incomplete() -> None:
+    definition = {
+        "trigger": {"type": "recall_scan", "recall_interval_months": 6},
+        "entry_node_id": "x1",
+        "nodes": [{"type": "exit", "id": "x1", "outcome": "done"}],
+        "pms_context_fields": [
+            "recall_type_name",
+            "has_active_treatment_plan",
+        ],
+    }
+    institution = MagicMock(spec=Institution)
+    institution.id = "inst-1"
+    institution.slug = "clinic"
+    institution.pms_type = "gotracker"
+    location = MagicMock(spec=InstitutionLocation)
+    location.id = "loc-1"
+    location.slug = "downtown"
+    location.nexhealth_subdomain = None
+    location.nexhealth_location_id = None
+    location.gotracker_product_key_encrypted = "encrypted-key"
+    location.gotracker_base_url = "https://gotracker.example"
+    subscription = MagicMock(spec=GoTrackerWebhookSubscription)
+    subscription.id = "gt-sub-1"
+    subscription.status = GoTrackerWebhookSubscriptionStatus.ACTIVE.value
+    subscription.last_event_at = _NOW
+    subscription.event_types = ["appointment.created", "appointment.updated"]
+    adapter = MagicMock()
+    adapter.source = "gotracker"
+    adapter.get_recall_history_sync_status = AsyncMock(
+        return_value={
+            "appointment_history": {"status": "running", "progress_percent": 40}
+        }
+    )
+    adapter.close = AsyncMock()
+
+    def get_model(model, _id):
+        if model is Institution:
+            return institution
+        return location
+
+    session = AsyncMock()
+    session.get = AsyncMock(side_effect=get_model)
+    session.execute = AsyncMock(side_effect=[_result(subscription), _result(_NOW)])
+
+    with patch(
+        "src.app.pms.factory.get_adapter_for_institution_location",
+        new=AsyncMock(return_value=adapter),
+    ):
+        checklist = _run(
+            CampaignLaunchChecklistService(session),
+            _workflow(definition, location_id="loc-1"),
+        )
+
+    item = _item(checklist, "gotracker_recall_history")
+    assert item.status == "blocked"
+    assert item.metadata["reason"] == "history_sync_incomplete"
+    assert checklist.overall_status == "blocked"
 
 
 def test_appointment_campaign_blocks_when_pms_read_sync_is_unhealthy() -> None:

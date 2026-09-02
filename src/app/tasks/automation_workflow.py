@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import calendar
 import logging
 import random
 import time
@@ -71,7 +72,14 @@ from src.app.services.automation.patient_status_trigger_service import (
     patient_status_idempotency_key,
 )
 from src.app.pms.gotracker.statuses import is_non_attending_status
-from src.app.pms.models import PatientCommunicationSnapshot, UniversalRecallType
+from src.app.pms.models import (
+    PatientCommunicationSnapshot,
+    UniversalRecallType,
+    UniversalTreatmentPlan,
+)
+from src.app.services.automation.gotracker_recall_readiness import (
+    assess_gotracker_recall_history,
+)
 from src.app.services.automation.revalidation import PmsLiveRevalidationService
 from src.app.services.automation.scheduler_service import (
     AutomationWorkflowSchedulerService,
@@ -87,6 +95,7 @@ from src.app.services.patient_communication import (
     patient_communication_workflow_context,
     patient_recall_from_raw,
     pms_context_requirements,
+    treatment_plan_from_raw,
 )
 from src.app.worker import celery_app
 
@@ -3251,16 +3260,48 @@ _RECALL_PACING_MIN_SECONDS = 0.5
 _RECALL_PACING_MAX_SECONDS = 2.0
 _RECALL_DEFAULT_COOLDOWN_DAYS = 90
 _FUTURE_APPOINTMENT_STATUSES = ("scheduled", "booked", "booked_waiting", "pending")
+_RECALL_SCAN_COUNT_KEYS = (
+    "enrolled",
+    "locations_skipped_history_incomplete",
+    "patients_skipped_recent_visit",
+    "patients_skipped_missing_treatment_context",
+)
 
 
 def _recall_patient_id(recall: dict) -> str | None:
     """Extract the NexHealth patient id from a recall record."""
-    pid = recall.get("patient_id")
+    pid = (
+        recall.get("patient_id")
+        or recall.get("patientId")
+        or recall.get("PatientId")
+        or recall.get("contact_id")
+        or recall.get("contactId")
+        or recall.get("ContactId")
+    )
     if pid is None:
         patient = recall.get("patient")
         if isinstance(patient, dict):
             pid = patient.get("id")
     return str(pid) if pid not in (None, "") else None
+
+
+def _recall_due_date_value(recall: dict) -> Any:
+    return (
+        recall.get("recall_due_date")
+        or recall.get("recallDueDate")
+        or recall.get("RecallDueDate")
+        or recall.get("date_due")
+        or recall.get("dateDue")
+        or recall.get("DateDue")
+        or recall.get("due_date")
+        or recall.get("dueDate")
+        or recall.get("DueDate")
+        or recall.get("due")
+        or recall.get("Due")
+        or recall.get("next_visit_date")
+        or recall.get("nextVisitDate")
+        or recall.get("NextVisitDate")
+    )
 
 
 def _recall_is_due(recall: dict, *, now: datetime) -> bool:
@@ -3273,12 +3314,7 @@ def _recall_is_due(recall: dict, *, now: datetime) -> bool:
     # spec and a live response. None of the other spellings exist, so before
     # this every record fell through to the missing-date branch below and was
     # treated as due: 8,862 recalls at one clinic, all "overdue".
-    raw = (
-        recall.get("date_due")
-        or recall.get("due_date")
-        or recall.get("due")
-        or recall.get("next_visit_date")
-    )
+    raw = _recall_due_date_value(recall)
     if not raw:
         return True
     try:
@@ -3369,6 +3405,212 @@ async def _patient_has_future_appointment(
     return result.scalar_one_or_none() is not None
 
 
+def _recall_scan_counts() -> dict[str, int]:
+    return {key: 0 for key in _RECALL_SCAN_COUNT_KEYS}
+
+
+def _merge_recall_scan_counts(target: dict[str, int], source: dict[str, int]) -> None:
+    for key in _RECALL_SCAN_COUNT_KEYS:
+        target[key] = target.get(key, 0) + int(source.get(key, 0) or 0)
+
+
+def _institution_pms_type(institution: Any) -> str:
+    value = getattr(institution, "pms_type", None)
+    if isinstance(value, str) and value.strip():
+        return value.strip().casefold()
+    return "nexhealth"
+
+
+async def _create_recall_adapter(institution: Any, location: Any) -> Any:
+    pms_type = _institution_pms_type(institution)
+    if pms_type == "gotracker":
+        from src.app.pms.gotracker.adapter import GoTrackerAdapter
+
+        return await GoTrackerAdapter.create(institution, location)
+
+    from src.app.pms.nexhealth.adapter import NexHealthAdapter
+
+    return await NexHealthAdapter.create(institution, location)
+
+
+def _recall_patient_key(patient_id: str, source: str) -> str:
+    if source == "gotracker" and not patient_id.startswith("gt-"):
+        return f"gt-{patient_id}"
+    return patient_id
+
+
+def _workflow_recall_interval_months(candidate: dict) -> int:
+    workflow = candidate.get("workflow")
+    if workflow is None or not getattr(workflow, "definition", None):
+        return 6
+    try:
+        definition = WorkflowDefinition.model_validate(workflow.definition)
+    except Exception:
+        return 6
+    if definition.trigger.type != "recall_scan":
+        return 6
+    return max(1, int(definition.trigger.recall_interval_months or 6))
+
+
+def _months_before(value: datetime, months: int) -> datetime:
+    month = value.month - max(1, months)
+    year = value.year
+    while month <= 0:
+        month += 12
+        year -= 1
+    day = min(value.day, calendar.monthrange(year, month)[1])
+    return value.replace(year=year, month=month, day=day)
+
+
+async def _gotracker_patient_has_recent_visit(
+    session: Any,
+    *,
+    institution_id: str,
+    location_id: str,
+    patient_id: str,
+    now: datetime,
+    interval_months: int,
+) -> bool:
+    from sqlalchemy import select as sa_select
+
+    from src.app.models.appointment_working_set import AppointmentWorkingSet
+
+    cutoff = _months_before(now, interval_months)
+    result = await session.execute(
+        sa_select(AppointmentWorkingSet.id)
+        .where(
+            AppointmentWorkingSet.institution_id == institution_id,
+            AppointmentWorkingSet.location_id == location_id,
+            AppointmentWorkingSet.nexhealth_patient_id == patient_id,
+            AppointmentWorkingSet.status != "cancelled",
+            AppointmentWorkingSet.start_time.is_not(None),
+            AppointmentWorkingSet.start_time >= cutoff,
+            AppointmentWorkingSet.start_time < now,
+        )
+        .limit(1)
+    )
+    return result.scalar_one_or_none() is not None
+
+
+def _inline_treatment_plans_from_recall(
+    recall: dict,
+    *,
+    source: str,
+    patient_id: str,
+) -> list[UniversalTreatmentPlan] | None:
+    raw_plans = _recall_first(recall, "treatment_plans", "treatmentPlans")
+    if isinstance(raw_plans, list):
+        plans: list[UniversalTreatmentPlan] = []
+        for idx, item in enumerate(raw_plans):
+            if isinstance(item, UniversalTreatmentPlan):
+                plans.append(item)
+            elif isinstance(item, dict):
+                raw = {**item}
+                raw.setdefault("patient_id", patient_id)
+                raw.setdefault("id", f"{patient_id}:inline-treatment-plan:{idx}")
+                plans.append(treatment_plan_from_raw(raw, source=source))
+        return plans
+
+    statuses = _recall_string_list(
+        recall,
+        "treatment_plan_statuses",
+        "treatmentPlanStatuses",
+        "active_treatment_plan_statuses",
+        "activeTreatmentPlanStatuses",
+    )
+    active_count = _recall_int(
+        recall,
+        "active_treatment_plan_count",
+        "activeTreatmentPlanCount",
+        "treatment_plan_active_count",
+        "treatmentPlanActiveCount",
+    )
+    active = _recall_bool(
+        recall,
+        "has_active_treatment_plan",
+        "hasActiveTreatmentPlan",
+        "active_treatment_plan",
+        "activeTreatmentPlan",
+    )
+    if statuses is None and active_count is None and active is None:
+        return None
+
+    if statuses:
+        return [
+            UniversalTreatmentPlan(
+                id=f"{patient_id}:inline-treatment-plan-status:{idx}",
+                source=source,
+                patient_id=patient_id,
+                status=status,
+            )
+            for idx, status in enumerate(statuses)
+        ]
+    if active_count and active_count > 0:
+        return [
+            UniversalTreatmentPlan(
+                id=f"{patient_id}:inline-active-treatment-plan:{idx}",
+                source=source,
+                patient_id=patient_id,
+                status="active",
+            )
+            for idx in range(active_count)
+        ]
+    if active:
+        return [
+            UniversalTreatmentPlan(
+                id=f"{patient_id}:inline-active-treatment-plan",
+                source=source,
+                patient_id=patient_id,
+                status="active",
+            )
+        ]
+    return []
+
+
+def _recall_first(recall: dict, *keys: str) -> Any:
+    for key in keys:
+        value = recall.get(key)
+        if value is not None:
+            return value
+    return None
+
+
+def _recall_bool(recall: dict, *keys: str) -> bool | None:
+    value = _recall_first(recall, *keys)
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, int) and value in (0, 1):
+        return bool(value)
+    if isinstance(value, str):
+        normalized = value.strip().casefold()
+        if normalized in {"true", "1", "yes", "active"}:
+            return True
+        if normalized in {"false", "0", "no", "none"}:
+            return False
+    return None
+
+
+def _recall_int(recall: dict, *keys: str) -> int | None:
+    value = _recall_first(recall, *keys)
+    if isinstance(value, bool):
+        return None
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError):
+        return None
+    return parsed if parsed >= 0 else None
+
+
+def _recall_string_list(recall: dict, *keys: str) -> list[str] | None:
+    value = _recall_first(recall, *keys)
+    if isinstance(value, str):
+        return [value.strip()] if value.strip() else []
+    if isinstance(value, list):
+        statuses = [str(item).strip() for item in value if str(item).strip()]
+        return statuses
+    return None
+
+
 async def _scan_recall_async() -> dict:
     from sqlalchemy import select as sa_select
 
@@ -3404,7 +3646,7 @@ async def _scan_recall_async() -> dict:
             )
 
     active_workflows = sum(len(w) for w in by_institution.values())
-    total_enrolled = 0
+    totals = _recall_scan_counts()
     for idx, (institution_id, workflows) in enumerate(by_institution.items()):
         if idx > 0:
             # Jittered pacing between institutions to spread load on the shared key.
@@ -3412,44 +3654,50 @@ async def _scan_recall_async() -> dict:
                 random.uniform(_RECALL_PACING_MIN_SECONDS, _RECALL_PACING_MAX_SECONDS)
             )
         try:
-            total_enrolled += await _enroll_recalls_for_institution(
+            institution_counts = await _enroll_recalls_for_institution(
                 institution_id, workflows
             )
+            _merge_recall_scan_counts(totals, institution_counts)
         except Exception as exc:  # noqa: BLE001 — one institution must not abort the sweep
             logger.exception(
                 "scan_recall_workflows: institution=%s failed: %s", institution_id, exc
             )
 
     logger.info(
-        "scan_recall_workflows: institutions=%d workflows=%d enrolled=%d",
+        (
+            "scan_recall_workflows: institutions=%d workflows=%d enrolled=%d "
+            "history_skips=%d recent_visit_skips=%d treatment_context_skips=%d"
+        ),
         len(by_institution),
         active_workflows,
-        total_enrolled,
+        totals["enrolled"],
+        totals["locations_skipped_history_incomplete"],
+        totals["patients_skipped_recent_visit"],
+        totals["patients_skipped_missing_treatment_context"],
     )
     return {
         "active_recall_workflows": active_workflows,
         "institutions": len(by_institution),
-        "enrolled": total_enrolled,
+        **totals,
     }
 
 
 async def _enroll_recalls_for_institution(
     institution_id: str, workflows: list[dict]
-) -> int:
-    """Pull NexHealth recalls for an institution's locations and enqueue enrollments.
+) -> dict[str, int]:
+    """Pull PMS recall candidates and enqueue workflow enrollments.
 
-    Returns the number of enrollment tasks enqueued.
+    Returns scanner counters, including GoTracker runtime refusal reasons.
     """
     from sqlalchemy import select as sa_select
 
     from src.app.models.contact import Contact
     from src.app.models.institution import Institution
     from src.app.models.institution_location import InstitutionLocation
-    from src.app.pms.nexhealth.adapter import NexHealthAdapter
 
     now = datetime.now(tz=timezone.utc)
     period = now.strftime("%Y-%m")
-    enrolled = 0
+    counts = _recall_scan_counts()
 
     async with get_system_db_session(
         "celery",
@@ -3458,14 +3706,29 @@ async def _enroll_recalls_for_institution(
     ) as session:
         institution = await session.get(Institution, institution_id)
         if institution is None:
-            return 0
+            return counts
+
+        pms_type = _institution_pms_type(institution)
+        location_filters = [
+            InstitutionLocation.institution_id == institution_id,
+            InstitutionLocation.is_active.is_(True),
+        ]
+        if pms_type == "gotracker":
+            location_filters.append(
+                InstitutionLocation.gotracker_product_key_encrypted.is_not(None)
+            )
+        elif pms_type == "none":
+            return counts
+        else:
+            location_filters.extend(
+                [
+                    InstitutionLocation.nexhealth_subdomain.is_not(None),
+                    InstitutionLocation.nexhealth_location_id.is_not(None),
+                ]
+            )
 
         loc_result = await session.execute(
-            sa_select(InstitutionLocation).where(
-                InstitutionLocation.institution_id == institution_id,
-                InstitutionLocation.nexhealth_subdomain.is_not(None),
-                InstitutionLocation.nexhealth_location_id.is_not(None),
-            )
+            sa_select(InstitutionLocation).where(*location_filters)
         )
         locations = list(loc_result.scalars().all())
 
@@ -3479,7 +3742,7 @@ async def _enroll_recalls_for_institution(
                 continue
 
             try:
-                adapter = await NexHealthAdapter.create(institution, location)
+                adapter = await _create_recall_adapter(institution, location)
             except Exception as exc:  # noqa: BLE001
                 logger.warning(
                     "recall_scan: adapter build failed inst=%s loc=%s: %s",
@@ -3489,6 +3752,23 @@ async def _enroll_recalls_for_institution(
                 )
                 continue
             try:
+                adapter_source = _adapter_source(adapter)
+                if adapter_source == "gotracker":
+                    assessment = await assess_gotracker_recall_history(adapter)
+                    if not assessment.complete:
+                        counts["locations_skipped_history_incomplete"] += 1
+                        logger.warning(
+                            (
+                                "recall_scan: GoTracker history incomplete "
+                                "inst=%s loc=%s reason=%s metadata=%s"
+                            ),
+                            institution_id,
+                            location.id,
+                            assessment.reason,
+                            assessment.metadata,
+                        )
+                        continue
+
                 recalls = await adapter.list_patient_recalls()
                 recall_types = await _list_recall_types_safe(adapter)
             except Exception as exc:  # noqa: BLE001
@@ -3505,18 +3785,17 @@ async def _enroll_recalls_for_institution(
                 location_timezone = _location_timezone(location)
 
                 for recall in recalls:
-                    patient_id = _recall_patient_id(recall)
-                    if not patient_id or not _recall_is_due(recall, now=now):
+                    raw_patient_id = _recall_patient_id(recall)
+                    if not raw_patient_id or not _recall_is_due(recall, now=now):
                         continue
 
-                    adapter_source = _adapter_source(adapter)
                     recall_model = patient_recall_from_raw(
                         recall, source=adapter_source
                     )
+                    patient_id = _recall_patient_key(raw_patient_id, adapter_source)
                     base_metadata = {
                         "nexhealth_patient_id": patient_id,
-                        "recall_due_date": recall.get("date_due")
-                        or recall.get("due_date"),
+                        "recall_due_date": _recall_due_date_value(recall),
                         "recall_period": period,
                     }
 
@@ -3541,19 +3820,46 @@ async def _enroll_recalls_for_institution(
 
                     matched_workflows: list[tuple[dict, dict[str, Any]]] = []
                     for wf in location_workflows:
+                        if (
+                            adapter_source == "gotracker"
+                            and await _gotracker_patient_has_recent_visit(
+                                session,
+                                institution_id=institution_id,
+                                location_id=str(location.id),
+                                patient_id=patient_id,
+                                now=now,
+                                interval_months=_workflow_recall_interval_months(wf),
+                            )
+                        ):
+                            counts["patients_skipped_recent_visit"] += 1
+                            continue
+
                         allowed_fields = _workflow_pms_context_fields(wf)
                         treatment_plans: list[Any] = []
                         if _needs_treatment_context(allowed_fields):
-                            if patient_id not in treatment_plan_cache:
+                            inline_treatment_plans = (
+                                _inline_treatment_plans_from_recall(
+                                    recall,
+                                    source=adapter_source,
+                                    patient_id=patient_id,
+                                )
+                            )
+                            if inline_treatment_plans is not None:
+                                treatment_plans = inline_treatment_plans
+                            elif patient_id not in treatment_plan_cache:
                                 treatment_plan_cache[
                                     patient_id
                                 ] = await _list_treatment_plans_safe(
                                     adapter,
                                     patient_id,
                                 )
-                            if treatment_plan_cache[patient_id] is None:
-                                continue
-                            treatment_plans = treatment_plan_cache[patient_id]
+                            if inline_treatment_plans is None:
+                                if treatment_plan_cache[patient_id] is None:
+                                    counts[
+                                        "patients_skipped_missing_treatment_context"
+                                    ] += 1
+                                    continue
+                                treatment_plans = treatment_plan_cache[patient_id]
 
                         snapshot = PatientCommunicationSnapshot(
                             source=adapter_source,
@@ -3619,11 +3925,11 @@ async def _enroll_recalls_for_institution(
                             },
                             queue="workflow",
                         )
-                        enrolled += 1
+                        counts["enrolled"] += 1
             finally:
                 await adapter.close()
 
-    return enrolled
+    return counts
 
 
 async def _list_recall_types_safe(adapter: Any) -> list[UniversalRecallType]:

@@ -1347,14 +1347,32 @@ refuses to run for any clinic whose history synchronisation has not completed.
 
 ### Current implementation status
 
-**Not implemented.** The recall enrolment path has no handling for GoTracker clinics, and no guard
-against running on incompletely synchronised data.
+**Platform side implemented.** The recall scanner now discovers GoTracker locations by product key,
+builds a GoTracker adapter, and refuses to scan unless the Synchronizer explicitly reports completed
+appointment-history sync. The refusal is recorded in the scanner result as
+`locations_skipped_history_incomplete` and in structured warning logs. When history is complete, the
+scanner reads GoTracker recall candidates, normalises GoTracker patient ids, suppresses patients with
+future appointments, suppresses patients with a recent non-cancelled visit in the synchronised
+appointment working set, and applies the same 90-day recall re-enrolment cooldown as NexHealth.
+
+GoTracker recall context is intentionally fail-closed: the Platform can use recall-row fields such as
+`recall_type_name`, `recall_due_date`, `has_active_treatment_plan`,
+`active_treatment_plan_count`, `treatment_plan_statuses` or embedded `treatment_plans`. If a
+workflow requires active-treatment-plan context and the Synchronizer does not supply it, the scanner
+skips the patient and records `patients_skipped_missing_treatment_context`.
+
+The launch checklist also exposes a `gotracker_recall_history` item so a GoTracker recall campaign
+shows a blocker before activation when history completion cannot be proven.
 
 ### Remaining work
 
-- Extend recall enrolment to work from synchronised appointment history for GoTracker clinics.
-- Add a completeness check using the sync progress the Connector already reports, and refuse to run
-  recall for a clinic that has not finished its history sync, recording why.
+- Cloud Service / Connector must expose explicit appointment-history completion on the GoTracker
+  sync-status response consumed at `/api/admin/sync_status`.
+- GoTracker derived recall rows must include `recall_type_name`, a due date, and either
+  `has_active_treatment_plan`/`active_treatment_plan_count`/`treatment_plan_statuses` or embedded
+  `treatment_plans`; without those fields the Platform refuses the patient-level enrollment.
+- The Connector/webhook path must keep the appointment working set complete enough for the Platform's
+  recent-visit guard to see non-cancelled historical visits.
 
 ### Acceptance criteria
 
