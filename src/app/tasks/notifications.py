@@ -220,9 +220,31 @@ async def _send_patient_appointment_email(
     value transcribed by the voice agent during the call, so PHI is never sent
     to an unverified, possibly mistranscribed address.
     """
+    if location is None:
+        return
+
+    institution = (
+        await session.execute(
+            select(Institution).where(Institution.id == institution_id)
+        )
+    ).scalar_one_or_none()
+    if not institution:
+        return
+
+    from src.app.services.patient_communication import (
+        patient_communication_requires_campaign,
+    )
+
+    if patient_communication_requires_campaign(institution.pms_type):
+        logger.info(
+            "Post-call patient email skipped; GoTracker patient communication is campaign-only: institution_hash=%s",
+            hash_for_logging(institution_id),
+        )
+        return
+
     contact = call.contact
     pms_patient_id = contact.nexhealth_patient_id if contact else None
-    if not pms_patient_id or location is None:
+    if not pms_patient_id:
         return
 
     patient_template_type = EmailTemplateType.PATIENT_APPOINTMENT_CONFIRMATION.value
@@ -238,14 +260,6 @@ async def _send_patient_appointment_email(
             "Patient confirmation template inactive; skipping patient email: institution_hash=%s",
             hash_for_logging(institution_id),
         )
-        return
-
-    institution = (
-        await session.execute(
-            select(Institution).where(Institution.id == institution_id)
-        )
-    ).scalar_one_or_none()
-    if not institution:
         return
 
     from src.app.pms.nexhealth.adapter import NexHealthAdapter

@@ -32,6 +32,24 @@ PATIENT_ALERTS_POLICY_REASON = (
     "safe automation inputs."
 )
 
+# GoTracker writes may remain queued after the cloud API accepts them. Patient
+# messaging for these clinics therefore belongs to the workflow engine, where a
+# campaign can branch explicitly on pending / written / failed outcomes. The
+# older Retell post-call hooks must not send a parallel confirmation outside the
+# campaign graph.
+CAMPAIGN_ONLY_PATIENT_COMMUNICATION_PMS_TYPES = frozenset({"gotracker"})
+
+
+def patient_communication_requires_campaign(pms_type: str | None) -> bool:
+    """Whether patient-facing SMS/email must originate from a campaign.
+
+    This does not affect staff alerts or authentication email. It only blocks
+    legacy patient notifications dispatched directly by post-call processing.
+    """
+    return (pms_type or "").strip().lower() in (
+        CAMPAIGN_ONLY_PATIENT_COMMUNICATION_PMS_TYPES
+    )
+
 RECALL_CONTEXT_FIELDS = frozenset(
     {
         "recall_due_date",

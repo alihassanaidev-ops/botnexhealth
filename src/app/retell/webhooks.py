@@ -474,6 +474,9 @@ async def _finish_webhook_processing(
 async def process_retell_call_ended_event(payload: dict[str, Any]) -> dict[str, Any]:
     """Send the patient the appointment-confirmation SMS at call end.
 
+    GoTracker patient messaging is campaign-owned and bypasses this legacy
+    hook. NexHealth and no-PMS behavior remains as described below.
+
     Approach B: the body is rendered from the institution's editable
     ``appointment_booked`` SMS template, populated with the authoritative PMS
     booking (real provider name + slot time) resolved from the ``book_appointment``
@@ -512,6 +515,21 @@ async def process_retell_call_ended_event(payload: dict[str, Any]) -> dict[str, 
     if not location or not institution:
         await _finish("COMPLETED")
         return {"status": "ignored", "reason": "no_agent_mapping"}
+
+    from src.app.services.patient_communication import (
+        patient_communication_requires_campaign,
+    )
+
+    if patient_communication_requires_campaign(institution.pms_type):
+        # GoTracker acceptance can mean only that the Connector write is queued.
+        # A campaign owns the pending/written/failed copy and timing; this legacy
+        # hook must not send a second or prematurely confirmed patient message.
+        await _finish("COMPLETED", institution_id=str(institution.id))
+        logger.info(
+            "call_ended patient SMS skipped: call_hash=%s reason=gotracker_campaign_only",
+            hash_for_logging(call_id),
+        )
+        return {"status": "skipped", "reason": "gotracker_campaign_only"}
 
     from src.app.database import get_system_db_session
     from src.app.models.sms_template import SmsTemplateType

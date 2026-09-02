@@ -19,6 +19,13 @@ fallback for trials and clinics that cannot delegate DNS, not the primary model.
 A signed Reply-To routes a response to the exact institution, location, contact,
 and workflow run without exposing those identifiers.
 
+GoTracker patient communication is authored and dispatched only through
+published campaigns. Legacy Retell post-call hooks do not send patient SMS or
+patient appointment email for GoTracker clinics; this prevents a queued PMS
+write from producing a premature confirmation and prevents parallel messages
+outside the workflow's pending/written/failed branches. Staff/admin call alerts
+are unaffected and continue through Resend.
+
 ## What exists now
 
 | Capability | Application | Staging AWS / UI | Result |

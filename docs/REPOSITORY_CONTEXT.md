@@ -949,10 +949,13 @@ row (encrypted body, masked/hashed number), calls Twilio (offloaded via
 `POST /admin/twilio/send-sms` (audited) and the async `send_sms_message` Celery
 task (`tasks/sms.py`, 5 retries, exp backoff, dead-letters on exhaustion).
 Call-triggered patient auto-SMS is enqueued from the post-call pipeline only if
-a body + patient phone + `twilio_from_number` are all present. No-PMS
+a body + patient phone + `twilio_from_number` are all present. GoTracker is
+excluded from that legacy path: its patient messaging is campaign-only so an
+accepted-but-pending Connector write cannot produce a premature confirmation.
+No-PMS
 appointment-request staff SMS alerts use their own configured destination list
-(`external_sms_notification_recipients`) and never affect NexHealth/GoTracker
-confirmation SMS behavior.
+(`external_sms_notification_recipients`) and never affect NexHealth patient
+confirmation SMS behavior or campaign-owned patient messaging.
 Outbound bodies preserve the rendered template text without automatically
 prepending the location name. Send SMS nodes default to appending `Reply STOP to
 opt out.` when equivalent case-insensitive copy is not already present; workflow
@@ -1075,6 +1078,11 @@ Auth and staff notification email is sent through **Resend** over its REST API
 SMTP and no `resend` SDK package. Patient-facing workflow mail has a
 provider-neutral sender and can select Resend or Amazon SES per sending identity;
 staging remains configured for Resend.
+
+GoTracker patient-facing email is campaign-only. The legacy post-call patient
+appointment-email helper is bypassed for GoTracker institutions; workflow
+`send_email` nodes remain available, and staff/admin call notifications continue
+through Resend.
 
 - `auth_email_service.py` — invites + password resets (never logs the response
   body, because the action URL carries a `?token=` credential).
