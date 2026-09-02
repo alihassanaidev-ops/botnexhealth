@@ -15,6 +15,7 @@ from aws_cdk import (
     aws_cloudfront_origins as origins,
     aws_cloudwatch as cloudwatch,
     aws_cloudwatch_actions as cw_actions,
+    custom_resources as cr,
     aws_ec2 as ec2,
     aws_ecr_assets as ecr_assets,
     aws_ecs as ecs,
@@ -302,6 +303,49 @@ class NexHealthPlatformStack(Stack):
             receipt_rule.node.default_child.add_dependency(
                 topic_policy.node.default_child
             )
+            # CloudFormation creates SES receipt rule sets but does not make
+            # them active. Without this call SES accepts no inbound mail even
+            # though the identity, MX record, and rules all exist. Keep the
+            # activation in CDK so a fresh environment is functional without
+            # a manual console/CLI step. Disable receipt processing before the
+            # rule set is deleted so stack teardown can remove it cleanly.
+            activate_receipt_rules = cr.AwsCustomResource(
+                self,
+                "ActivateInboundEmailReceiptRules",
+                on_create=cr.AwsSdkCall(
+                    service="SES",
+                    action="setActiveReceiptRuleSet",
+                    parameters={
+                        "RuleSetName": receipt_rules.receipt_rule_set_name,
+                    },
+                    physical_resource_id=cr.PhysicalResourceId.of(
+                        f"{config.app_name}-{config.environment_name}-inbound-active"
+                    ),
+                ),
+                on_update=cr.AwsSdkCall(
+                    service="SES",
+                    action="setActiveReceiptRuleSet",
+                    parameters={
+                        "RuleSetName": receipt_rules.receipt_rule_set_name,
+                    },
+                    physical_resource_id=cr.PhysicalResourceId.of(
+                        f"{config.app_name}-{config.environment_name}-inbound-active"
+                    ),
+                ),
+                on_delete=cr.AwsSdkCall(
+                    service="SES",
+                    action="setActiveReceiptRuleSet",
+                    parameters={},
+                    physical_resource_id=cr.PhysicalResourceId.of(
+                        f"{config.app_name}-{config.environment_name}-inbound-inactive"
+                    ),
+                ),
+                policy=cr.AwsCustomResourcePolicy.from_sdk_calls(
+                    resources=cr.AwsCustomResourcePolicy.ANY_RESOURCE
+                ),
+                install_latest_aws_sdk=False,
+            )
+            activate_receipt_rules.node.add_dependency(receipt_rule)
 
         jwt_secret = secretsmanager.Secret(
             self,

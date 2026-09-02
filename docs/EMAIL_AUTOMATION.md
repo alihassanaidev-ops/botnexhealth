@@ -144,7 +144,8 @@ CDK provisions in `ca-central-1`:
 
 - a verified platform fallback subdomain and MX record, plus any number of
   clinic-owned receiving subdomains registered during onboarding;
-- active SES receipt-rule set with spam/virus scanning;
+- an SES receipt-rule set with spam/virus scanning that CDK explicitly activates
+  (CloudFormation creation alone does not make a rule set active);
 - encrypted, private S3 bucket with short lifecycle for raw MIME;
 - KMS-encrypted SNS/SQS delivery with a dead-letter queue, least-privilege bucket/queue policy,
   CloudWatch alarms, and the three `SES_INBOUND_*` runtime values;
