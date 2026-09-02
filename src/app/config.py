@@ -117,6 +117,29 @@ class Settings(BaseSettings):
     nexhealth_post_visit_lookback_hours: int = 72
     nexhealth_post_visit_default_duration_minutes: int = 60
 
+    # ── Lead-form providers (Meta Lead Ads / Typeform) ───────────────────
+    # Platform-level OAuth apps, one per provider, shared by every clinic. A
+    # clinic authorises *its* account through them; the per-clinic token lands
+    # in form_provider_connections, never here.
+    #
+    # Unset means the provider is simply not offered: the settings screen says
+    # so rather than presenting a Connect button that fails at the redirect.
+    meta_app_id: str | None = None
+    meta_app_secret: str | None = None
+    meta_app_secret_file: str | None = None
+    meta_graph_version: str = "v21.0"
+    # Echoed back to Meta on the webhook subscription handshake. Meta will not
+    # deliver leads until that GET succeeds, so this is required to receive any.
+    meta_webhook_verify_token: str | None = None
+    typeform_client_id: str | None = None
+    typeform_client_secret: str | None = None
+    typeform_client_secret_file: str | None = None
+    typeform_api_base_url: str = "https://api.typeform.com"
+    # How long a form submission's raw provider payload is kept. It is the only
+    # way to diagnose a mis-mapped question, and it holds whatever the person
+    # typed — so it is encrypted and it expires.
+    form_submission_raw_retention_days: int = 30
+
     # Resend (transactional email)
     resend_api_key: str | None = None
     resend_from_email: str | None = None
@@ -267,6 +290,8 @@ class Settings(BaseSettings):
     # Docker secret file paths (set via *_FILE env vars)
     nexhealth_api_key_file: str | None = None
     retell_api_secret_file: str | None = None
+    # Lead-form provider app secrets
+    # (meta_app_secret_file / typeform_client_secret_file declared above)
     # Auth / JWT (REQUIRED — no defaults, must be set in .env or secrets manager)
     jwt_secret: str
     jwt_algorithm: str = "HS256"
@@ -292,6 +317,12 @@ class Settings(BaseSettings):
         # OpenAI API key
         if secret := read_secret_file(self.openai_api_key_file):
             object.__setattr__(self, "openai_api_key", secret)
+
+        # Lead-form provider app secrets
+        if secret := read_secret_file(self.meta_app_secret_file):
+            object.__setattr__(self, "meta_app_secret", secret)
+        if secret := read_secret_file(self.typeform_client_secret_file):
+            object.__setattr__(self, "typeform_client_secret", secret)
 
         # JWT Secret
         if secret := read_secret_file(self.jwt_secret_file):

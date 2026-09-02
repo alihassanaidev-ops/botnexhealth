@@ -169,6 +169,34 @@ class EnquiryReceivedTrigger(BaseModel):
     filter: FilterExpression | None = None
 
 
+class FormSubmittedTrigger(BaseModel):
+    """Enroll when a connected Meta or Typeform form is submitted.
+
+    The distinction from ``enquiry_received`` is which forms it answers to.
+    ``enquiry_received`` fires for anything that lands through intake — a token
+    endpoint, a staff member typing a phone enquiry in. This fires only for a
+    form the clinic connected, synced and mapped, which is what makes "when the
+    ABC form is submitted, and Problem is X" a thing an author can express.
+
+    ``provider`` unset means either provider. ``form_ids`` empty means every
+    enabled form (of that provider, when one is named) — the sensible default
+    for a clinic running one form, and the thing a clinic running several will
+    immediately narrow.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    type: Literal["form_submitted"] = "form_submitted"
+    provider: Literal["meta", "typeform"] | None = None
+    #: Our own form ids, not the provider's. A provider id is not unique across
+    #: tenants and would let one clinic's definition name another's form.
+    form_ids: list[str] = Field(default_factory=list)
+    # Optional eligibility filter, evaluated against the submission's mapped
+    # answers before a run is created. This is where "Problem == 'toothache'"
+    # lives when the author wants ineligible submissions to cost nothing.
+    filter: FilterExpression | None = None
+
+
 class CallbackRequestedTrigger(BaseModel):
     """Enroll when an inbound call is classified 'needs_callback' (Plan 07).
 
@@ -291,6 +319,7 @@ WorkflowTrigger = Annotated[
         ManualTrigger,
         BulkImportTrigger,
         EnquiryReceivedTrigger,
+        FormSubmittedTrigger,
         CallbackRequestedTrigger,
         PatientStatusChangedTrigger,
         SmsReplyTrigger,

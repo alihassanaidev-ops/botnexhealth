@@ -133,3 +133,62 @@ def test_resolve_window_rejects_too_large_range() -> None:
             date(2026, 7, 1),
             today=date(2026, 7, 1),
         )
+
+
+def test_every_outcome_key_is_a_real_rollup_column() -> None:
+    """An outcome nobody rolls up reads as a real zero, not as a missing figure.
+
+    The sales vocabulary named ``qualified`` long before any branch produced it,
+    so every sales campaign reported "0 qualified" with nothing to say otherwise.
+    """
+    metric_columns = set(analytics.ROLLUP_METRIC_COLUMNS)
+    for category, definitions in analytics._OUTCOME_DEFINITIONS.items():
+        for definition in definitions:
+            assert definition.key in metric_columns, (
+                f"outcome {definition.key!r} in category {category!r} has no rollup "
+                "column, so it can only ever report zero"
+            )
+
+
+def test_qualified_counts_the_outcome_the_sales_template_exits_with() -> None:
+    sql = str(analytics._INSERT_ROLLUP_SQL.text)
+
+    assert "'qualified', 'qualified_booking_link_sent'" in sql
+    assert analytics._TERMINAL_OUTCOMES["qualified"] == (
+        "qualified",
+        "qualified_booking_link_sent",
+    )
+
+
+def test_response_events_do_not_recount_a_run_its_outcome_already_claimed() -> None:
+    """A link booking writes a response event *and* exits the run ``booked``."""
+    sql = str(analytics._INSERT_ROLLUP_SQL.text)
+
+    booked = analytics._response_filter("booked")
+    assert booked in sql
+    assert "COUNT(DISTINCT r.id)" in booked
+    assert (
+        "r.outcome IS NULL OR r.outcome NOT IN "
+        "('booked', 'appointment_booked', 'callback_booked')" in booked
+    )
+
+
+def test_terminal_outcomes_are_dated_by_completion_not_enrolment() -> None:
+    """Both halves of a deduped outcome must land in the same recompute window."""
+    sql = str(analytics._INSERT_ROLLUP_SQL.text)
+
+    assert "COALESCE(r.completed_at, r.created_at)" in sql
+
+
+def test_metric_select_list_fills_missing_columns_by_name() -> None:
+    rendered = analytics._metric_select_list({"booked": "COUNT(*)::bigint"})
+
+    assert "COUNT(*)::bigint AS booked" in rendered
+    assert "0::bigint AS qualified" in rendered
+    assert "0::numeric(16, 5) AS total_cost" in rendered
+    assert rendered.count(" AS ") == len(analytics.ROLLUP_METRIC_COLUMNS)
+
+
+def test_metric_select_list_rejects_a_column_that_is_not_rolled_up() -> None:
+    with pytest.raises(ValueError, match="revenue_attributed"):
+        analytics._metric_select_list({"revenue_attributed": "COUNT(*)::bigint"})

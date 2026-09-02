@@ -228,6 +228,19 @@ def default_gotracker_webhook_raw_retain_until(created_at: datetime) -> datetime
     return retention_deadline(created_at, 14)
 
 
+def default_form_submission_raw_retain_until(
+    created_at: datetime,
+    *,
+    config: Settings = settings,
+) -> datetime:
+    """How long a form submission's raw provider payload is kept.
+
+    It is the only way to diagnose a question that mapped to the wrong place,
+    and it holds whatever the person typed — so it is encrypted and it expires.
+    """
+    return retention_deadline(created_at, config.form_submission_raw_retention_days)
+
+
 def s3_bucket_key_from_recording_url(
     recording_url: str | None,
     *,

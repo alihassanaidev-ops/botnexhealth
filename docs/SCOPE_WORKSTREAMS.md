@@ -22,8 +22,8 @@ part of this backlog; the section *What doesn't compress* is where the schedule 
 | Split across both | **12 items** |
 | Blocked on a product decision | **1 item partially** — Item 37 revenue on deferred Decision A |
 | Gated on something other than code | Remaining gates are product decisions, practice-DB proof, pentest, cross-codebase rollout/proof, and watched activation windows — see *What doesn't compress* |
-| **Delivered so far** | **30 of 47 complete**, plus partial delivery on Item 15 — see *Delivered so far* |
-| **Workstreams complete** | **WS2, WS6**; WS3 owes half of Item 15; WS4 owes Item 23; WS7 owes Item 40; WS8 owes Item 37 |
+| **Delivered so far** | **30 of 47 complete**, plus partial delivery on Items 15 and 37 — see *Delivered so far* |
+| **Workstreams complete** | **WS2, WS6**; WS3 owes half of Item 15; WS4 owes Item 23; WS7 owes Item 40; WS8 owes only Item 37's revenue figure, which is Decision A rather than build work |
 
 ---
 
@@ -269,12 +269,12 @@ the report lands rather than after — has not been done either.
 # WS8 · Dashboard UI & reporting
 **2 primary items · ≈ 2.5 days · `nexus-dashboard-web` · TIER 3**
 
-Only Item 37 remains as primary UI/reporting scope. Item 36 is now delivered; other workstreams
-still carry their own dashboard slices.
+Item 36 is delivered and Item 37 is delivered bar its revenue figure, which is a product decision
+rather than build work. Other workstreams still carry their own dashboard slices.
 
 | # | Item | Size | Notes |
 |---|---|---|---|
-| **37** | Outcome reporting — recalls booked, enquiries qualified, revenue | 1.5d | Enquiries-qualified can now be built from Item 24's status side effects and analytics path. Recalls-booked can now use Item 22's recall outcomes; revenue attribution remains blocked by deferred Decision A |
+| **37** ◐ | Outcome reporting — recalls booked, enquiries qualified, revenue — **done bar revenue** | 1.5d | Recalls-booked and enquiries-qualified now report per campaign per clinic in the daily rollup and on a new **Outcomes** tab of the campaign screen. Three fixes were needed underneath: the sales and callback vocabularies named `qualified`, `not_qualified`, `unreachable` and `transferred` but no rollup column produced them, so they read as a real zero; a link booking was double-counted, once as the run's terminal outcome and once as the response event that caused it; and terminal outcomes were dated by enrolment rather than completion, which is what let the two halves diverge. **Remaining: the revenue figure**, still on deferred Decision A — the screen says why it is absent rather than showing an unexplained number |
 | **36** ✅ | A screen for messages that could not be delivered — **done, `2c740dea` + `fc8289aa`** | 1d | Platform and tenant operators share `/undeliverables`; tenant access is RLS-scoped, replay requires `write:replay`, dismissals require a bounded reason, and both replay/dismiss paths are audited and covered against double-submit behavior |
 
 **UI slices living inside other items:** campaign builder changes (11, 19, 22), publish-failure
@@ -361,8 +361,8 @@ GoTracker recall rollout; the NexHealth data families are still the largest visi
 client-facing work.
 
 **Tier 3 · Operator tooling and resilience.** Items **7, 8, 36, 33, 34, 17, 18, 20, 19, 9, 37**.
-All but Item 37 are now delivered; the remaining reporting work makes the product measurable rather
-than merely functional.
+All delivered, Item 37 bar its revenue figure. The product is now measurable rather than merely
+functional; what is left of 37 waits on Decision A, not on code.
 
 **Tier 4 · Proof, operations and documentation.** Items **41, 42, 45, 46, 10, 47, 38, 39, 40, 43,
 44**. Note that 41 and 42 are the *only* evidence Tier 0 actually works — they are last in sequence,
@@ -400,7 +400,11 @@ Everything below is Platform-side, in this repo, and in dependency order.
 
 1. **Item 23 — Run Overdue Recall for GoTracker clinics.** Do this now that Item 22 is complete,
    with a hard refusal when history sync is incomplete.
-2. **Item 37 — outcome reporting.** Ship enquiries-qualified first from the Item 24 path; add
-   recalls-booked after Recall, and leave revenue out until Decision A is answered.
+2. ~~**Item 37 — outcome reporting.**~~ Done bar revenue. Both figures land in the daily rollup and
+   on the campaign screen's Outcomes tab; revenue stays out until Decision A is answered. **A
+   backfill is outstanding**: the new columns hold a default zero for every historical day, and the
+   de-duplicated `booked` figure only corrects itself on recompute, so run
+   `python -m src.app.scripts.recompute_campaign_analytics --start <first-campaign-day>` once after
+   the migration.
 3. **Item 15 — delivery-failure branching.** The receipt ingestion is done; the remaining work is
    run-state support for branching after a hard delivery failure.

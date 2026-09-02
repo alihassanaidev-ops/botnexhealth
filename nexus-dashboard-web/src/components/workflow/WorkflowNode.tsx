@@ -127,6 +127,11 @@ function triggerSummary(t: WorkflowTrigger): string {
             return "Bulk import"
         case "enquiry_received":
             return "Sales enquiry"
+        case "form_submitted": {
+            const count = t.form_ids?.length ?? 0
+            const scope = count === 0 ? "any form" : `${count} form(s)`
+            return t.provider ? `${t.provider} · ${scope}` : `Form submitted · ${scope}`
+        }
         case "callback_requested":
             return "Callback request"
         case "patient_status_changed":
@@ -223,8 +228,57 @@ function AddStepPort({
     )
 }
 
-export function StepNodeCard({ data, selected }: NodeProps<FlowNode>) {
+/**
+ * Terminal chip for an `exit`. An exit carries one fact — the outcome — and has
+ * no ports and no configuration, so rendering it at full card size costs canvas
+ * room for nothing. Workflows commonly end in a dozen of these; at chip size
+ * they read as endpoints rather than competing with the steps that do the work.
+ */
+function ExitNodeChip({ data, selected }: NodeProps<FlowNode>) {
+    if (data.kind !== "step" || data.node.type !== "exit") return null
+    const node = data.node
+    const execution = data.executionStatus ? EXECUTION_STYLE[data.executionStatus] : null
+    const ExecutionIcon = execution?.icon
+    const Icon = NODE_META.exit.icon
+    return (
+        <div
+            className={cn(
+                "relative flex w-[150px] items-center gap-2 rounded-full border border-border bg-card px-3 py-1.5 shadow-sm transition-shadow hover:shadow-md",
+                selected && "ring-2 ring-primary",
+                issueRing(data.issueLevel),
+                execution?.className,
+            )}
+            title={node.outcome ? `Outcome: ${node.outcome}` : "End of sequence"}
+        >
+            <Handle type="target" position={Position.Top} className={HANDLE} />
+            <div
+                className={cn(
+                    "grid size-5 shrink-0 place-items-center rounded-full",
+                    NODE_META.exit.accent,
+                )}
+            >
+                {execution && ExecutionIcon ? (
+                    <ExecutionIcon
+                        className={cn(
+                            "h-3 w-3",
+                            data.executionStatus === "running" && "animate-spin",
+                        )}
+                    />
+                ) : (
+                    <Icon className="h-3 w-3" />
+                )}
+            </div>
+            <span className="truncate text-[11px] font-medium text-muted-foreground">
+                {node.outcome || "End"}
+            </span>
+        </div>
+    )
+}
+
+export function StepNodeCard(props: NodeProps<FlowNode>) {
+    const { data, selected } = props
     if (data.kind !== "step") return null
+    if (data.node.type === "exit") return <ExitNodeChip {...props} />
     const node = data.node
     const meta = NODE_META[node.type]
     const Icon = meta.icon
@@ -310,9 +364,9 @@ export function StepNodeCard({ data, selected }: NodeProps<FlowNode>) {
                         className={HANDLE}
                     />
                 </>
-            ) : node.type !== "exit" ? (
+            ) : (
                 <Handle type="source" position={Position.Bottom} className={HANDLE} />
-            ) : null}
+            )}
 
             {data.onAddFromPort &&
                 outgoing(node).map((port, index, ports) =>

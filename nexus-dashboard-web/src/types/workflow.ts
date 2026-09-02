@@ -20,6 +20,7 @@ export type TriggerType =
     | "manual"
     | "bulk_import"
     | "enquiry_received"
+    | "form_submitted"
     | "callback_requested"
     | "patient_status_changed"
     | "sms_reply"
@@ -70,6 +71,23 @@ export interface EnquiryReceivedTrigger {
     /** Optional eligibility filter, evaluated before a run is created. */
     filter?: FilterExpression | null
 }
+/**
+ * A connected Meta or Typeform form was submitted.
+ *
+ * Narrower than `enquiry_received`, which fires for anything landing through
+ * intake — a token endpoint, a staff member typing in a phone enquiry. This
+ * fires only for forms the practice connected, synced and mapped, which is what
+ * makes "when the ABC form is submitted" expressible at all.
+ */
+export interface FormSubmittedTrigger {
+    type: "form_submitted"
+    /** Optional eligibility filter, evaluated before a run is created. */
+    filter?: FilterExpression | null
+    /** Null means either provider. */
+    provider?: "meta" | "typeform" | null
+    /** Our own form ids. Empty means every enabled form of that provider. */
+    form_ids?: string[]
+}
 export interface CallbackRequestedTrigger {
     type: "callback_requested"
     /** Optional eligibility filter, evaluated before a run is created. */
@@ -110,6 +128,7 @@ export type WorkflowTrigger =
     | ManualTrigger
     | BulkImportTrigger
     | EnquiryReceivedTrigger
+    | FormSubmittedTrigger
     | CallbackRequestedTrigger
     | PatientStatusChangedTrigger
     | SmsReplyTrigger

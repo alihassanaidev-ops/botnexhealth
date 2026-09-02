@@ -30,6 +30,7 @@ import {
     Mail,
     MailCheck,
     Inbox as InboxIcon,
+    FormInput as FormInputIcon,
     Settings,
     ClipboardList,
     Layers,
@@ -437,6 +438,18 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
                                             icon: InboxIcon,
                                         }}
                                         isActive={location.pathname === "/institution-admin/enquiry-forms"}
+                                    />
+                                )}
+                                {user?.role === "INSTITUTION_ADMIN" && (
+                                    <NavItem
+                                        item={{
+                                            title: "Lead Forms",
+                                            url: "/institution-admin/lead-forms",
+                                            icon: FormInputIcon,
+                                        }}
+                                        isActive={location.pathname.startsWith(
+                                            "/institution-admin/lead-forms",
+                                        )}
                                     />
                                 )}
                                 {user?.role === "INSTITUTION_ADMIN" && !hasPms && (

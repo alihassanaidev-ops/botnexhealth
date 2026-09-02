@@ -44,6 +44,10 @@ ROLLUP_METRIC_COLUMNS = (
     "callback_requested",
     "staff_handoff",
     "opt_out",
+    "qualified",
+    "not_qualified",
+    "unreachable",
+    "transferred",
     "total_cost",
 )
 
@@ -355,200 +359,344 @@ _DELETE_ROLLUP_SQL = text(
 )
 
 
-_INSERT_ROLLUP_SQL = text(
+# Run outcomes that count toward a metric column, keyed by that column. These are
+# the terminal ``outcome`` values campaign templates exit with; the response
+# vocabularies below are what a patient action records while a run is still live.
+_TERMINAL_OUTCOMES: dict[str, tuple[str, ...]] = {
+    "confirmed": ("confirmed", "confirmed_by_reply"),
+    "booked": ("booked", "appointment_booked", "callback_booked"),
+    "reschedule_requested": ("reschedule_requested", "skipped_rescheduled"),
+    "callback_requested": ("callback_requested", "patient_asks_for_staff"),
+    "opt_out": (
+        "opt_out",
+        "unsubscribed",
+        "sms_opt_out",
+        "do_not_contact",
+        "do_not_call",
+    ),
+    "qualified": ("qualified", "qualified_booking_link_sent"),
+    "not_qualified": ("not_qualified", "not_a_fit", "declined"),
+    "unreachable": ("unreachable", "unreachable_after_max_attempts"),
+}
+
+# What a response event has to look like to count toward the same metric. A run
+# reaching its terminal outcome and the patient action that caused it are two
+# records of one event, so these only count for runs whose own outcome has not
+# already claimed the metric.
+_RESPONSE_PREDICATES: dict[str, str] = {
+    "confirmed": (
+        "e.normalized_outcome IN ('confirmed', 'confirmed_by_reply')"
+        " OR e.normalized_intent = 'confirm'"
+    ),
+    "booked": (
+        "e.normalized_outcome IN ('booked', 'appointment_booked', 'callback_booked')"
+        " OR e.normalized_intent = 'booked'"
+    ),
+    "reschedule_requested": (
+        "e.normalized_intent = 'reschedule_requested'"
+        " OR e.normalized_outcome = 'reschedule_requested'"
+    ),
+    "callback_requested": (
+        "e.normalized_intent IN ('callback_requested', 'staff_requested')"
+        " OR e.normalized_outcome IN ('callback_requested', 'patient_asks_for_staff')"
+    ),
+    "opt_out": (
+        "e.normalized_intent IN ('opt_out', 'stop', 'unsubscribe')"
+        " OR e.normalized_outcome IN ('opt_out', 'unsubscribed')"
+    ),
+}
+
+
+def _sql_string_list(values: tuple[str, ...]) -> str:
+    return ", ".join(f"'{value}'" for value in values)
+
+
+def _terminal_filter(column: str) -> str:
+    """Count each run once, on the day it reached the outcome."""
+    outcomes = _sql_string_list(_TERMINAL_OUTCOMES[column])
+    return f"COUNT(*) FILTER (WHERE r.outcome IN ({outcomes}))::bigint"
+
+
+def _response_filter(column: str) -> str:
+    """Count a responding run only where its own outcome has not already."""
+    outcomes = _sql_string_list(_TERMINAL_OUTCOMES[column])
+    return (
+        "COUNT(DISTINCT r.id) FILTER ("
+        f" WHERE ({_RESPONSE_PREDICATES[column]})"
+        f" AND (r.outcome IS NULL OR r.outcome NOT IN ({outcomes}))"
+        ")::bigint"
+    )
+
+
+def _metric_select_list(expressions: dict[str, str]) -> str:
+    """Render every metric column for one branch of the rollup union.
+
+    A branch supplies only the metrics it measures and this fills the rest with
+    zeros *by name*. The union used to be written positionally, which is how
+    ``qualified`` came to be named in the sales outcome vocabulary while no branch
+    ever produced it — it read as a real zero on every sales campaign rather than
+    as a missing figure.
     """
-    WITH metric_events AS (
+    unknown = sorted(set(expressions) - set(ROLLUP_METRIC_COLUMNS))
+    if unknown:
+        raise ValueError(f"unknown rollup metric columns: {unknown}")
+    rendered = []
+    for column in ROLLUP_METRIC_COLUMNS:
+        zero = "0::numeric(16, 5)" if column == "total_cost" else "0::bigint"
+        rendered.append(f"{expressions.get(column, zero)} AS {column}")
+    return ",\n            ".join(rendered)
+
+
+_ROLLED_SUMS = ",\n            ".join(
+    f"SUM({column})::numeric(16, 5) AS {column}"
+    if column == "total_cost"
+    else f"SUM({column})::bigint AS {column}"
+    for column in ROLLUP_METRIC_COLUMNS
+)
+
+_METRIC_COLUMN_LIST = ", ".join(ROLLUP_METRIC_COLUMNS)
+
+_LOC = "CAST(:null_location_sentinel AS uuid)"
+_DAY = "AT TIME ZONE 'UTC')::date"
+
+
+_RUN_ENROLLMENT_BRANCH = f"""
         SELECT
             r.institution_id,
-            COALESCE(r.location_id, CAST(:null_location_sentinel AS uuid)) AS location_id,
+            COALESCE(r.location_id, {_LOC}) AS location_id,
             r.workflow_id,
             r.workflow_version_id,
-            (r.created_at AT TIME ZONE 'UTC')::date AS metric_date,
-            COUNT(*)::bigint AS enrollments,
-            COUNT(*) FILTER (WHERE r.status IN ('pending', 'running', 'waiting'))::bigint AS active,
-            COUNT(*) FILTER (WHERE r.status = 'completed')::bigint AS completed,
-            COUNT(*) FILTER (WHERE r.status IN ('failed', 'blocked'))::bigint AS failed,
-            COUNT(*) FILTER (WHERE r.status = 'cancelled')::bigint AS cancelled,
-            COUNT(*) FILTER (
-                WHERE r.outcome IN ('suppressed', 'skipped_suppressed', 'compliance_hold')
-                   OR r.blocked_reason ILIKE '%suppression%'
-                   OR r.blocked_reason ILIKE '%consent%'
-                   OR r.blocked_reason ILIKE '%do not contact%'
-            )::bigint AS suppressed,
-            0::bigint AS sms_sent,
-            0::bigint AS sms_delivered,
-            0::bigint AS sms_failed,
-            0::bigint AS sms_replied,
-            0::bigint AS voice_attempted,
-            0::bigint AS voice_answered,
-            0::bigint AS voice_voicemail,
-            0::bigint AS voice_failed,
-            0::bigint AS email_sent,
-            0::bigint AS email_delivered,
-            0::bigint AS email_opened,
-            0::bigint AS email_clicked,
-            0::bigint AS email_bounced,
-            COUNT(*) FILTER (WHERE r.outcome IN ('confirmed', 'confirmed_by_reply'))::bigint AS confirmed,
-            COUNT(*) FILTER (WHERE r.outcome IN ('booked', 'appointment_booked', 'callback_booked'))::bigint AS booked,
-            COUNT(*) FILTER (WHERE r.outcome IN ('reschedule_requested', 'skipped_rescheduled'))::bigint AS reschedule_requested,
-            COUNT(*) FILTER (WHERE r.outcome IN ('callback_requested', 'patient_asks_for_staff'))::bigint AS callback_requested,
-            0::bigint AS staff_handoff,
-            COUNT(*) FILTER (WHERE r.outcome IN ('opt_out', 'unsubscribed'))::bigint AS opt_out,
-            0::numeric(16, 5) AS total_cost,
+            (r.created_at {_DAY} AS metric_date,
+            {_metric_select_list({
+                "enrollments": "COUNT(*)::bigint",
+                "active": (
+                    "COUNT(*) FILTER ("
+                    " WHERE r.status IN ('pending', 'running', 'waiting')"
+                    ")::bigint"
+                ),
+                "completed": "COUNT(*) FILTER (WHERE r.status = 'completed')::bigint",
+                "failed": (
+                    "COUNT(*) FILTER (WHERE r.status IN ('failed', 'blocked'))::bigint"
+                ),
+                "cancelled": "COUNT(*) FILTER (WHERE r.status = 'cancelled')::bigint",
+                "suppressed": (
+                    "COUNT(*) FILTER ("
+                    " WHERE r.outcome IN"
+                    " ('suppressed', 'skipped_suppressed', 'compliance_hold')"
+                    " OR r.blocked_reason ILIKE '%suppression%'"
+                    " OR r.blocked_reason ILIKE '%consent%'"
+                    " OR r.blocked_reason ILIKE '%do not contact%'"
+                    ")::bigint"
+                ),
+            })},
             'USD'::varchar(3) AS currency
         FROM automation_workflow_runs r
-        WHERE (r.created_at AT TIME ZONE 'UTC')::date >= :start_date
-          AND (r.created_at AT TIME ZONE 'UTC')::date <= :end_date
+        WHERE (r.created_at {_DAY} >= :start_date
+          AND (r.created_at {_DAY} <= :end_date
         GROUP BY 1, 2, 3, 4, 5
+"""
 
-        UNION ALL
 
+# Terminal outcomes are attributed to the day the run reached them, not the day it
+# enrolled. Without that split the response branch below could not tell an
+# already-counted run from one still in flight without losing the count whenever
+# the two dates fell in different recompute windows.
+_RUN_OUTCOME_BRANCH = f"""
         SELECT
             r.institution_id,
-            COALESCE(s.location_id, r.location_id, CAST(:null_location_sentinel AS uuid)) AS location_id,
+            COALESCE(r.location_id, {_LOC}) AS location_id,
             r.workflow_id,
             r.workflow_version_id,
-            (s.timestamp AT TIME ZONE 'UTC')::date AS metric_date,
-            0, 0, 0, 0, 0, 0,
-            COUNT(*) FILTER (WHERE s.status NOT IN ('suppressed'))::bigint AS sms_sent,
-            COUNT(*) FILTER (WHERE s.status = 'delivered' OR s.provider_status = 'delivered')::bigint AS sms_delivered,
-            COUNT(*) FILTER (WHERE s.status = 'failed' OR s.provider_status IN ('failed', 'undelivered'))::bigint AS sms_failed,
-            0,
-            0, 0, 0, 0,
-            0, 0, 0, 0, 0,
-            0, 0, 0, 0, 0, 0,
-            0::numeric(16, 5),
-            'USD'::varchar(3)
+            (COALESCE(r.completed_at, r.created_at) {_DAY} AS metric_date,
+            {_metric_select_list({
+                column: _terminal_filter(column) for column in _TERMINAL_OUTCOMES
+            })},
+            'USD'::varchar(3) AS currency
+        FROM automation_workflow_runs r
+        WHERE r.outcome IS NOT NULL
+          AND (COALESCE(r.completed_at, r.created_at) {_DAY} >= :start_date
+          AND (COALESCE(r.completed_at, r.created_at) {_DAY} <= :end_date
+        GROUP BY 1, 2, 3, 4, 5
+"""
+
+
+_SMS_BRANCH = f"""
+        SELECT
+            r.institution_id,
+            COALESCE(s.location_id, r.location_id, {_LOC}) AS location_id,
+            r.workflow_id,
+            r.workflow_version_id,
+            (s.timestamp {_DAY} AS metric_date,
+            {_metric_select_list({
+                "sms_sent": (
+                    "COUNT(*) FILTER (WHERE s.status NOT IN ('suppressed'))::bigint"
+                ),
+                "sms_delivered": (
+                    "COUNT(*) FILTER ("
+                    " WHERE s.status = 'delivered' OR s.provider_status = 'delivered'"
+                    ")::bigint"
+                ),
+                "sms_failed": (
+                    "COUNT(*) FILTER ("
+                    " WHERE s.status = 'failed'"
+                    " OR s.provider_status IN ('failed', 'undelivered')"
+                    ")::bigint"
+                ),
+            })},
+            'USD'::varchar(3) AS currency
         FROM sms_history_logs s
         JOIN automation_workflow_runs r ON r.id = s.workflow_run_id
         WHERE s.workflow_run_id IS NOT NULL
-          AND (s.timestamp AT TIME ZONE 'UTC')::date >= :start_date
-          AND (s.timestamp AT TIME ZONE 'UTC')::date <= :end_date
+          AND (s.timestamp {_DAY} >= :start_date
+          AND (s.timestamp {_DAY} <= :end_date
         GROUP BY 1, 2, 3, 4, 5
+"""
 
-        UNION ALL
 
+_VOICE_BRANCH = f"""
         SELECT
             r.institution_id,
-            COALESCE(v.location_id, r.location_id, CAST(:null_location_sentinel AS uuid)) AS location_id,
+            COALESCE(v.location_id, r.location_id, {_LOC}) AS location_id,
             r.workflow_id,
             r.workflow_version_id,
-            (v.created_at AT TIME ZONE 'UTC')::date AS metric_date,
-            0, 0, 0, 0, 0, 0,
-            0, 0, 0, 0,
-            COUNT(*)::bigint AS voice_attempted,
-            COUNT(*) FILTER (WHERE v.dial_outcome IN ('answered', 'transferred'))::bigint AS voice_answered,
-            COUNT(*) FILTER (WHERE v.dial_outcome = 'voicemail')::bigint AS voice_voicemail,
-            COUNT(*) FILTER (
-                WHERE v.status = 'failed'
-                   OR v.dial_outcome IN ('failed', 'no_answer', 'busy', 'unknown')
-            )::bigint AS voice_failed,
-            0, 0, 0, 0, 0,
-            0, 0, 0, 0, 0, 0,
-            0::numeric(16, 5),
-            'USD'::varchar(3)
+            (v.created_at {_DAY} AS metric_date,
+            {_metric_select_list({
+                "voice_attempted": "COUNT(*)::bigint",
+                "voice_answered": (
+                    "COUNT(*) FILTER ("
+                    " WHERE v.dial_outcome IN ('answered', 'transferred')"
+                    ")::bigint"
+                ),
+                "voice_voicemail": (
+                    "COUNT(*) FILTER (WHERE v.dial_outcome = 'voicemail')::bigint"
+                ),
+                "voice_failed": (
+                    "COUNT(*) FILTER ("
+                    " WHERE v.status = 'failed'"
+                    " OR v.dial_outcome IN ('failed', 'no_answer', 'busy', 'unknown')"
+                    ")::bigint"
+                ),
+                # Per run, not per attempt: a callback dialled three times and
+                # transferred once is one transferred callback.
+                "transferred": (
+                    "COUNT(DISTINCT v.workflow_run_id) FILTER ("
+                    " WHERE v.dial_outcome = 'transferred'"
+                    ")::bigint"
+                ),
+            })},
+            'USD'::varchar(3) AS currency
         FROM workflow_voice_attempts v
         JOIN automation_workflow_runs r ON r.id = v.workflow_run_id
-        WHERE (v.created_at AT TIME ZONE 'UTC')::date >= :start_date
-          AND (v.created_at AT TIME ZONE 'UTC')::date <= :end_date
+        WHERE (v.created_at {_DAY} >= :start_date
+          AND (v.created_at {_DAY} <= :end_date
         GROUP BY 1, 2, 3, 4, 5
+"""
 
-        UNION ALL
 
+_USAGE_BRANCH = f"""
         SELECT
             r.institution_id,
-            COALESCE(u.location_id, r.location_id, CAST(:null_location_sentinel AS uuid)) AS location_id,
+            COALESCE(u.location_id, r.location_id, {_LOC}) AS location_id,
             r.workflow_id,
             r.workflow_version_id,
-            (u.occurred_at AT TIME ZONE 'UTC')::date AS metric_date,
-            0, 0, 0, 0, 0, 0,
-            0, 0, 0, 0,
-            0, 0, 0, 0,
-            COALESCE(SUM(u.emails), COUNT(*) FILTER (WHERE u.channel = 'email'))::bigint AS email_sent,
-            COUNT(*) FILTER (WHERE u.channel = 'email' AND u.direction = 'outbound')::bigint AS email_delivered,
-            0::bigint AS email_opened,
-            0::bigint AS email_clicked,
-            0::bigint AS email_bounced,
-            0, 0, 0, 0, 0, 0,
-            COALESCE(SUM(u.cost_amount), 0)::numeric(16, 5) AS total_cost,
+            (u.occurred_at {_DAY} AS metric_date,
+            {_metric_select_list({
+                "email_sent": (
+                    "COALESCE("
+                    " SUM(u.emails), COUNT(*) FILTER (WHERE u.channel = 'email')"
+                    ")::bigint"
+                ),
+                "email_delivered": (
+                    "COUNT(*) FILTER ("
+                    " WHERE u.channel = 'email' AND u.direction = 'outbound'"
+                    ")::bigint"
+                ),
+                "total_cost": "COALESCE(SUM(u.cost_amount), 0)::numeric(16, 5)",
+            })},
             COALESCE(MAX(u.currency), 'USD')::varchar(3) AS currency
         FROM usage_events u
         JOIN automation_workflow_runs r ON r.id = u.workflow_run_id
         WHERE u.workflow_run_id IS NOT NULL
-          AND (u.occurred_at AT TIME ZONE 'UTC')::date >= :start_date
-          AND (u.occurred_at AT TIME ZONE 'UTC')::date <= :end_date
+          AND (u.occurred_at {_DAY} >= :start_date
+          AND (u.occurred_at {_DAY} <= :end_date
         GROUP BY 1, 2, 3, 4, 5
+"""
 
-        UNION ALL
 
+_RESPONSE_BRANCH = f"""
         SELECT
             r.institution_id,
-            COALESCE(e.location_id, r.location_id, CAST(:null_location_sentinel AS uuid)) AS location_id,
+            COALESCE(e.location_id, r.location_id, {_LOC}) AS location_id,
             r.workflow_id,
             r.workflow_version_id,
-            (e.occurred_at AT TIME ZONE 'UTC')::date AS metric_date,
-            0, 0, 0, 0, 0, 0,
-            0, 0, 0,
-            COUNT(*) FILTER (WHERE e.channel = 'sms')::bigint AS sms_replied,
-            0, 0, 0, 0,
-            0, 0,
-            COUNT(*) FILTER (WHERE e.channel = 'email' AND e.normalized_intent = 'opened')::bigint AS email_opened,
-            COUNT(*) FILTER (WHERE e.channel = 'email' AND e.normalized_intent = 'clicked')::bigint AS email_clicked,
-            COUNT(*) FILTER (WHERE e.channel = 'email' AND e.normalized_intent IN ('bounced', 'failed'))::bigint AS email_bounced,
-            COUNT(*) FILTER (
-                WHERE e.normalized_outcome IN ('confirmed', 'confirmed_by_reply')
-                   OR e.normalized_intent = 'confirm'
-            )::bigint AS confirmed,
-            COUNT(*) FILTER (
-                WHERE e.normalized_outcome IN ('booked', 'appointment_booked', 'callback_booked')
-                   OR e.normalized_intent = 'booked'
-            )::bigint AS booked,
-            COUNT(*) FILTER (
-                WHERE e.normalized_intent = 'reschedule_requested'
-                   OR e.normalized_outcome = 'reschedule_requested'
-            )::bigint AS reschedule_requested,
-            COUNT(*) FILTER (
-                WHERE e.normalized_intent IN ('callback_requested', 'staff_requested')
-                   OR e.normalized_outcome IN ('callback_requested', 'patient_asks_for_staff')
-            )::bigint AS callback_requested,
-            0::bigint AS staff_handoff,
-            COUNT(*) FILTER (
-                WHERE e.normalized_intent IN ('opt_out', 'stop', 'unsubscribe')
-                   OR e.normalized_outcome IN ('opt_out', 'unsubscribed')
-            )::bigint AS opt_out,
-            0::numeric(16, 5),
-            'USD'::varchar(3)
+            (e.occurred_at {_DAY} AS metric_date,
+            {_metric_select_list({
+                "sms_replied": "COUNT(*) FILTER (WHERE e.channel = 'sms')::bigint",
+                "email_opened": (
+                    "COUNT(*) FILTER ("
+                    " WHERE e.channel = 'email' AND e.normalized_intent = 'opened'"
+                    ")::bigint"
+                ),
+                "email_clicked": (
+                    "COUNT(*) FILTER ("
+                    " WHERE e.channel = 'email' AND e.normalized_intent = 'clicked'"
+                    ")::bigint"
+                ),
+                "email_bounced": (
+                    "COUNT(*) FILTER ("
+                    " WHERE e.channel = 'email'"
+                    " AND e.normalized_intent IN ('bounced', 'failed')"
+                    ")::bigint"
+                ),
+                **{
+                    column: _response_filter(column)
+                    for column in _RESPONSE_PREDICATES
+                },
+            })},
+            'USD'::varchar(3) AS currency
         FROM campaign_response_events e
         JOIN automation_workflow_runs r ON r.id = e.workflow_run_id
         WHERE e.workflow_run_id IS NOT NULL
-          AND (e.occurred_at AT TIME ZONE 'UTC')::date >= :start_date
-          AND (e.occurred_at AT TIME ZONE 'UTC')::date <= :end_date
+          AND (e.occurred_at {_DAY} >= :start_date
+          AND (e.occurred_at {_DAY} <= :end_date
         GROUP BY 1, 2, 3, 4, 5
+"""
 
-        UNION ALL
 
+_HANDOFF_BRANCH = f"""
         SELECT
             r.institution_id,
-            COALESCE(h.location_id, r.location_id, CAST(:null_location_sentinel AS uuid)) AS location_id,
+            COALESCE(h.location_id, r.location_id, {_LOC}) AS location_id,
             r.workflow_id,
             r.workflow_version_id,
-            (h.created_at AT TIME ZONE 'UTC')::date AS metric_date,
-            0, 0, 0, 0, 0, 0,
-            0, 0, 0, 0,
-            0, 0, 0, 0,
-            0, 0, 0, 0, 0,
-            0, 0, 0, 0,
-            COUNT(*)::bigint AS staff_handoff,
-            0,
-            0::numeric(16, 5),
-            'USD'::varchar(3)
+            (h.created_at {_DAY} AS metric_date,
+            {_metric_select_list({"staff_handoff": "COUNT(*)::bigint"})},
+            'USD'::varchar(3) AS currency
         FROM campaign_staff_handoffs h
         JOIN automation_workflow_runs r ON r.id = h.workflow_run_id
         WHERE h.workflow_run_id IS NOT NULL
-          AND (h.created_at AT TIME ZONE 'UTC')::date >= :start_date
-          AND (h.created_at AT TIME ZONE 'UTC')::date <= :end_date
+          AND (h.created_at {_DAY} >= :start_date
+          AND (h.created_at {_DAY} <= :end_date
         GROUP BY 1, 2, 3, 4, 5
-    ),
+"""
+
+
+_ROLLUP_BRANCHES = (
+    _RUN_ENROLLMENT_BRANCH,
+    _RUN_OUTCOME_BRANCH,
+    _SMS_BRANCH,
+    _VOICE_BRANCH,
+    _USAGE_BRANCH,
+    _RESPONSE_BRANCH,
+    _HANDOFF_BRANCH,
+)
+
+_UNIONED_BRANCHES = "        UNION ALL\n".join(_ROLLUP_BRANCHES)
+
+
+_INSERT_ROLLUP_SQL = text(
+    f"""
+    WITH metric_events AS ({_UNIONED_BRANCHES}    ),
     rolled AS (
         SELECT
             institution_id,
@@ -556,53 +704,19 @@ _INSERT_ROLLUP_SQL = text(
             workflow_id,
             workflow_version_id,
             metric_date,
-            SUM(enrollments)::bigint AS enrollments,
-            SUM(active)::bigint AS active,
-            SUM(completed)::bigint AS completed,
-            SUM(failed)::bigint AS failed,
-            SUM(cancelled)::bigint AS cancelled,
-            SUM(suppressed)::bigint AS suppressed,
-            SUM(sms_sent)::bigint AS sms_sent,
-            SUM(sms_delivered)::bigint AS sms_delivered,
-            SUM(sms_failed)::bigint AS sms_failed,
-            SUM(sms_replied)::bigint AS sms_replied,
-            SUM(voice_attempted)::bigint AS voice_attempted,
-            SUM(voice_answered)::bigint AS voice_answered,
-            SUM(voice_voicemail)::bigint AS voice_voicemail,
-            SUM(voice_failed)::bigint AS voice_failed,
-            SUM(email_sent)::bigint AS email_sent,
-            SUM(email_delivered)::bigint AS email_delivered,
-            SUM(email_opened)::bigint AS email_opened,
-            SUM(email_clicked)::bigint AS email_clicked,
-            SUM(email_bounced)::bigint AS email_bounced,
-            SUM(confirmed)::bigint AS confirmed,
-            SUM(booked)::bigint AS booked,
-            SUM(reschedule_requested)::bigint AS reschedule_requested,
-            SUM(callback_requested)::bigint AS callback_requested,
-            SUM(staff_handoff)::bigint AS staff_handoff,
-            SUM(opt_out)::bigint AS opt_out,
-            SUM(total_cost)::numeric(16, 5) AS total_cost,
+            {_ROLLED_SUMS},
             COALESCE(MAX(currency), 'USD')::varchar(3) AS currency
         FROM metric_events
         GROUP BY 1, 2, 3, 4, 5
     )
     INSERT INTO campaign_metrics_daily (
         institution_id, location_id, workflow_id, workflow_version_id, metric_date,
-        enrollments, active, completed, failed, cancelled, suppressed,
-        sms_sent, sms_delivered, sms_failed, sms_replied,
-        voice_attempted, voice_answered, voice_voicemail, voice_failed,
-        email_sent, email_delivered, email_opened, email_clicked, email_bounced,
-        confirmed, booked, reschedule_requested, callback_requested, staff_handoff, opt_out,
-        total_cost, cost_per_booking, cost_per_confirmation, currency, updated_at
+        {_METRIC_COLUMN_LIST},
+        cost_per_booking, cost_per_confirmation, currency, updated_at
     )
     SELECT
         institution_id, location_id, workflow_id, workflow_version_id, metric_date,
-        enrollments, active, completed, failed, cancelled, suppressed,
-        sms_sent, sms_delivered, sms_failed, sms_replied,
-        voice_attempted, voice_answered, voice_voicemail, voice_failed,
-        email_sent, email_delivered, email_opened, email_clicked, email_bounced,
-        confirmed, booked, reschedule_requested, callback_requested, staff_handoff, opt_out,
-        total_cost,
+        {_METRIC_COLUMN_LIST},
         CASE WHEN booked > 0 THEN total_cost / booked ELSE NULL END AS cost_per_booking,
         CASE WHEN confirmed > 0 THEN total_cost / confirmed ELSE NULL END AS cost_per_confirmation,
         currency,

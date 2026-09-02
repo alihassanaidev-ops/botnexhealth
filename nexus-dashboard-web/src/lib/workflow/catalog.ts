@@ -22,6 +22,7 @@ import {
     PhoneIncoming,
     Inbox,
     ClipboardList,
+    FormInput,
     Stethoscope,
     UserPlus,
     Braces,
@@ -197,6 +198,11 @@ export const TRIGGER_META: Record<TriggerType, TriggerMeta> = {
         label: "Enquiry received",
         description: "Enroll when a sales enquiry lands.",
         icon: Inbox,
+    },
+    form_submitted: {
+        label: "Form submitted",
+        description: "Enroll when a connected Meta or Typeform form is submitted.",
+        icon: FormInput,
     },
     callback_requested: {
         label: "Callback requested",
