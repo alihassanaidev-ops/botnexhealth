@@ -93,6 +93,15 @@ class Settings(BaseSettings):
     )
     gotracker_webhook_callback_base_url: str | None = None
 
+    # Test Suite — a keyed, non-production surface for calling agent functions
+    # directly. Unset means the router is never mounted, so the default posture
+    # is "does not exist" rather than "exists but is locked".
+    test_suite_api_key: str | None = None
+    test_suite_api_key_file: str | None = None
+    #: Allow the six functions that write into a live practice. Off by default:
+    #: a debugging tool must not be one typo away from booking a real patient.
+    test_suite_allow_writes: bool = False
+
     # Retell AI settings
     retell_api_secret: str | None = None
     # V-2 spoken opt-out: the key in a call's post-call `custom_analysis_data` that
@@ -295,6 +304,7 @@ class Settings(BaseSettings):
     # Docker secret file paths (set via *_FILE env vars)
     nexhealth_api_key_file: str | None = None
     retell_api_secret_file: str | None = None
+    # (test_suite_api_key_file declared with the other Test Suite settings)
     # Lead-form provider app secrets
     # (meta_app_secret_file / typeform_client_secret_file declared above)
     # Auth / JWT (REQUIRED — no defaults, must be set in .env or secrets manager)
@@ -316,6 +326,8 @@ class Settings(BaseSettings):
             object.__setattr__(self, "nexhealth_api_key", secret)
 
         # Retell API Secret
+        if secret := read_secret_file(self.test_suite_api_key_file):
+            self.test_suite_api_key = secret
         if secret := read_secret_file(self.retell_api_secret_file):
             object.__setattr__(self, "retell_api_secret", secret)
 
@@ -565,6 +577,17 @@ class Settings(BaseSettings):
     @property
     def is_production(self) -> bool:
         return self.app_env.lower() in {"production", "prod"}
+
+    @property
+    def test_suite_enabled(self) -> bool:
+        """Whether the Test Suite router should be mounted at all.
+
+        Two independent conditions, both required. Production is excluded by
+        environment regardless of configuration, so setting the key in prod by
+        accident still mounts nothing — the gate is not one boolean somebody can
+        flip.
+        """
+        return bool(self.test_suite_api_key) and not self.is_production
 
     @property
     def allow_super_admin_totp(self) -> bool:

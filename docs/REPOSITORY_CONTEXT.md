@@ -17,6 +17,7 @@
 | Auth, MFA, tenant isolation, PHI encryption, SMS consent, retention | [SECURITY.md](SECURITY.md) |
 | HIPAA/PHIPA/PIPEDA readiness (scope, vendors, gaps, policies) | [compliance/](compliance/README.md) |
 | Deploy runbook + infra compliance | [DEPLOYMENT_AND_HIPAA_GUIDE.md](DEPLOYMENT_AND_HIPAA_GUIDE.md) |
+| Calling agent functions without Retell | [TEST_SUITE.md](TEST_SUITE.md) |
 | Recurring jobs catalog + local debug harness | [SCHEDULED_JOBS.md](SCHEDULED_JOBS.md) |
 | Meta/Typeform lead forms: OAuth, form sync, field mapping, the `form_submitted` trigger | [LEAD_FORMS.md](LEAD_FORMS.md) |
 | Outbound automation/campaign roadmap and current implementation plan | [ROADMAP_OUTBOUND_ENGAGEMENT.md](ROADMAP_OUTBOUND_ENGAGEMENT.md), [OUTBOUND_ENGAGEMENT_IMPLEMENTATION_PLAN.md](OUTBOUND_ENGAGEMENT_IMPLEMENTATION_PLAN.md) |

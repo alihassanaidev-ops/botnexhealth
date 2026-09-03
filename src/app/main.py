@@ -280,6 +280,20 @@ def create_app() -> FastAPI:
     # Provider-signed lead-form deliveries (Meta leadgen, Typeform responses).
     app.include_router(form_webhooks_router, prefix="/api/v1")
 
+    # Test Suite — call agent functions directly, without Retell. Mounted only
+    # when a key is configured AND the environment is not production, so in
+    # production the routes do not exist rather than existing behind a check.
+    if settings.test_suite_enabled:
+        from src.app.api.routes.test_suite import router as test_suite_router
+
+        app.include_router(test_suite_router, prefix="/api/v1")
+        logger.warning(
+            "Test Suite mounted at /api/v1/test-suite (env=%s, writes=%s). "
+            "Non-production only.",
+            settings.app_env,
+            settings.test_suite_allow_writes,
+        )
+
     # Admin routes
     app.include_router(auth_router, prefix="/api")
     app.include_router(institutions_router, prefix="/api")
