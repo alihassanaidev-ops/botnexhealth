@@ -41,6 +41,10 @@ def _session(*, completed_step=None) -> AsyncMock:
     session.flush = AsyncMock()
     result = MagicMock()
     result.scalars.return_value.first.return_value = completed_step
+    # No operating-hours or break rows: an unconfigured location is not clipped.
+    # Left unset, ``.all()`` returns a truthy MagicMock and the booking node
+    # reads it as "hours exist but no day is open", dropping every slot.
+    result.scalars.return_value.all.return_value = []
     session.execute = AsyncMock(return_value=result)
     session.get = AsyncMock(
         side_effect=[
@@ -417,3 +421,121 @@ def test_completed_booking_step_replays_branch_without_second_write() -> None:
     adapter.book_appointment.assert_not_awaited()
     assert run.trigger_ref_id == "nh-appt-existing"
     assert runtime.begin_step.await_args_list[0].kwargs["step_id"] == "booked"
+
+
+def _session_with_hours(rows) -> AsyncMock:
+    """A session whose location has *rows* as its operating hours.
+
+    Dispatches on the statement rather than on call order — the node runs a
+    completed-step lookup before the hours query, so positional stubbing hands
+    the wrong result to the wrong caller.
+    """
+    session = _session()
+
+    def _result(scalars_all=(), first=None):
+        r = MagicMock()
+        r.scalars.return_value.all.return_value = list(scalars_all)
+        r.scalars.return_value.first.return_value = first
+        r.one_or_none.return_value = None
+        return r
+
+    async def _execute(statement, *args, **kwargs):
+        sql = str(statement).lower()
+        if "location_operating_hours" in sql:
+            return _result(rows)
+        if "location_breaks" in sql:
+            return _result([])
+        return _result()
+
+    session.execute = AsyncMock(side_effect=_execute)
+    return session
+
+
+def _weekday_hours(day: int, open_at, close_at) -> list:
+    """Seven rows; *day* open between the given times, every other day closed."""
+    from src.app.models.location_operating_hours import LocationOperatingHours
+
+    return [
+        LocationOperatingHours(
+            location_id="loc-1",
+            day_of_week=d,
+            is_open=d == day,
+            open_time=open_at if d == day else None,
+            close_time=close_at if d == day else None,
+        )
+        for d in range(7)
+    ]
+
+
+def _book_at(session, start: str):
+    adapter = _FakeBookingAdapter(
+        slots=[
+            UniversalSlot(
+                start=start,
+                end="2026-09-02T15:00:00-04:00",
+                provider_id="nh-provider-1",
+                provider_name="Dr Smith",
+                appointment_type_id="nh-type-1",
+            )
+        ]
+    )
+    runtime = _runtime()
+    dispatcher = WorkflowStepDispatcher(session, runtime, AsyncMock())
+    with (
+        patch(
+            "src.app.pms.factory.get_adapter_for_institution_location",
+            new=AsyncMock(return_value=adapter),
+        ),
+        patch("src.app.services.audit.log_audit", new=AsyncMock()),
+    ):
+        result = asyncio.run(
+            dispatcher.advance(
+                _run(),
+                _definition(),
+                context={
+                    "appointment_type_id": "nh-type-1",
+                    "provider_id": "nh-provider-1",
+                    "booking_start_time": start,
+                },
+            )
+        )
+    return result, adapter
+
+
+def test_the_node_will_not_book_outside_the_clinics_opening_hours() -> None:
+    """A campaign writes into a real diary, so the clinic's hours bind it.
+
+    The practice software offering a slot is not consent to use it: a clinic
+    that configured itself shut at 14:30 must not have a workflow book a
+    patient in then.
+    """
+    from datetime import time
+
+    # 2026-09-02 is a Wednesday (weekday 2). Open 09:00-12:00 only.
+    session = _session_with_hours(_weekday_hours(2, time(9, 0), time(12, 0)))
+
+    result, adapter = _book_at(session, "2026-09-02T14:30:00-04:00")
+
+    assert result.outcome == "could_not_book"
+    adapter.book_appointment.assert_not_awaited()
+
+
+def test_the_node_still_books_a_slot_inside_opening_hours() -> None:
+    from datetime import time
+
+    session = _session_with_hours(_weekday_hours(2, time(9, 0), time(17, 0)))
+
+    result, adapter = _book_at(session, "2026-09-02T14:30:00-04:00")
+
+    assert result.outcome == "booked"
+    adapter.book_appointment.assert_awaited_once()
+
+
+def test_a_location_with_no_configured_hours_is_not_blocked() -> None:
+    """Adding the check must not stop clinics that never set hours up."""
+    session = _session_with_hours([])
+
+    result, adapter = _book_at(session, "2026-09-02T14:30:00-04:00")
+
+    assert result.outcome == "booked"
+    adapter.book_appointment.assert_awaited_once()

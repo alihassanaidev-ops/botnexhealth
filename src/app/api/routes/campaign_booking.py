@@ -44,6 +44,10 @@ from src.app.models.institution_appointment_type import InstitutionAppointmentTy
 from src.app.models.institution_location import InstitutionLocation
 from src.app.pms.factory import get_adapter_for_institution_location
 from src.app.pms.models import BookingRequest, BookingWriteStatus
+from src.app.services.slot_policy import (
+    filter_slots_for_location,
+    provider_buffer_minutes,
+)
 from src.app.services.write_provenance import WriteProvenance
 from src.app.security import get_client_ip
 from src.app.services.audit import log_audit_background
@@ -311,6 +315,7 @@ async def _provider_names(adapter) -> dict[str, str]:
 
 
 async def _search_slots(
+    session,
     institution,
     location,
     run,
@@ -332,13 +337,30 @@ async def _search_slots(
     # Names cost an extra call to the practice software and are only worth it
     # where they are shown. The pre-booking re-check displays nothing.
     names = await _provider_names(adapter) if with_provider_names else {}
+    provider_id = _configured_provider_id(run)
     result = await adapter.find_available_slots(
         start_date=start_date or date.today().isoformat(),
         days=days or DEFAULT_DAYS,
-        provider_id=_configured_provider_id(run),
+        provider_id=provider_id,
         appointment_type_id=appointment_type_id or metadata.get("appointment_type_id"),
     )
     slots = list(getattr(result, "slots", []) or [])
+
+    # The practice software says when the provider *could* be seen; the clinic's
+    # own opening hours, breaks and lead time say when it may actually be
+    # offered. The voice agent and the dashboard have always applied both. This
+    # page — the one a patient opens from a campaign message — applied neither,
+    # so it could offer a 6am slot during lunch two minutes from now.
+    buffer_minutes = await provider_buffer_minutes(
+        session,
+        location_id=str(location.id),
+        provider_id=provider_id,
+        pms_source=getattr(adapter, "source", None),
+    )
+    slots = await filter_slots_for_location(
+        session, location, slots, buffer_minutes=buffer_minutes
+    )
+
     for slot in slots:
         if not getattr(slot, "provider_name", ""):
             slot.provider_name = names.get(slot.provider_id, "")
@@ -691,6 +713,7 @@ async def list_slots(
 
         try:
             slots = await _search_slots(
+                session,
                 institution,
                 location,
                 run,
@@ -875,6 +898,7 @@ async def book_slot(
         # not in this list any more.
         try:
             slots = await _search_slots(
+                session,
                 institution,
                 location,
                 run,
@@ -957,6 +981,7 @@ async def book_slot(
             # the patient is looking at it.
             try:
                 fresh = await _search_slots(
+                    session,
                     institution,
                     location,
                     run,

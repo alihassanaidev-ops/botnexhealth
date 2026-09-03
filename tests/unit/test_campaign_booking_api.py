@@ -102,6 +102,14 @@ def _ctx(
     session.commit = AsyncMock()
     session.contact = contact
 
+    # No operating-hours rows and no provider row by default. An unconfigured
+    # location is deliberately not clipped, which is the behaviour every test
+    # below was written against. Clipping is covered in its own test module.
+    _no_rows = MagicMock()
+    _no_rows.scalars.return_value.all.return_value = []
+    _no_rows.one_or_none.return_value = None
+    session.execute = AsyncMock(return_value=_no_rows)
+
     class _Ctx:
         async def __aenter__(self):
             return session
@@ -894,3 +902,86 @@ class TestConfiguredAppointmentTypes:
             adapter.find_available_slots.await_args.kwargs["provider_id"]
             == "prov-locked"
         )
+
+
+class TestOperatingHoursAreRespected:
+    """The page a patient opens from a campaign message honours clinic hours.
+
+    It never did. The voice agent and the dashboard both loaded operating hours
+    and breaks before offering anything; this surface went straight from the
+    practice software to the patient, so a clinic that had configured itself
+    closed at 6am still had 6am offered on its own booking link.
+    """
+
+    @staticmethod
+    def _hours_ctx(slots):
+        """A ctx whose location opens 09:00-17:00 on Wednesdays only."""
+        from datetime import time as _time
+
+        from src.app.models.location_operating_hours import LocationOperatingHours
+
+        ctx = _ctx(slots=slots)
+        session = ctx[0]
+        rows = [
+            LocationOperatingHours(
+                location_id="loc-1",
+                day_of_week=day,
+                is_open=day == 2,  # 2026-09-02 is a Wednesday
+                open_time=_time(9, 0) if day == 2 else None,
+                close_time=_time(17, 0) if day == 2 else None,
+            )
+            for day in range(7)
+        ]
+
+        def _result(rows_for_scalars=(), one=None):
+            r = MagicMock()
+            r.scalars.return_value.all.return_value = list(rows_for_scalars)
+            r.scalars.return_value.first.return_value = None
+            r.one_or_none.return_value = one
+            return r
+
+        # Dispatch on the statement rather than call order: the route runs
+        # other queries around the slot search, and a positional stub would
+        # silently hand the hours result to the wrong one.
+        async def _execute(statement, *args, **kwargs):
+            sql = str(statement).lower()
+            if "location_operating_hours" in sql:
+                return _result(rows)
+            if "location_breaks" in sql:
+                return _result([])
+            if "institution_providers" in sql:
+                return _result(one=None)
+            return _result()
+
+        session.execute = AsyncMock(side_effect=_execute)
+        return ctx
+
+    def test_a_slot_before_opening_is_not_offered(self):
+        before_open = _slot(start="2026-09-02T10:00:00Z")  # 06:00 Toronto
+        inside = _slot(start="2026-09-02T13:00:00Z")  # 09:00 Toronto
+        ctx = self._hours_ctx([before_open, inside])
+
+        r = _call(
+            client_(),
+            "GET",
+            f"/api/campaigns/link/book/slots?token={make_action_token('run-1', 'book')}",
+            ctx,
+        )
+
+        assert r.status_code == 200
+        offered = [s["start"] for s in r.json()["slots"]]
+        assert offered == ["2026-09-02T13:00:00Z"]
+
+    def test_a_closed_day_offers_nothing(self):
+        # 2026-09-03 is a Thursday, and only Wednesday is open.
+        ctx = self._hours_ctx([_slot(start="2026-09-03T13:00:00Z")])
+
+        r = _call(
+            client_(),
+            "GET",
+            f"/api/campaigns/link/book/slots?token={make_action_token('run-1', 'book')}",
+            ctx,
+        )
+
+        assert r.status_code == 200
+        assert r.json()["slots"] == []
