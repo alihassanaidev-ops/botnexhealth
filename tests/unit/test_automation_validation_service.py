@@ -100,7 +100,13 @@ def test_merge_field_unavailable_for_trigger_warns() -> None:
     )
 
 
-def test_removed_enriched_appointment_field_warns_as_unknown() -> None:
+def test_appointment_type_is_a_known_merge_field() -> None:
+    """It was removed once, and campaign templates broke.
+
+    ``appointment_type`` was dropped from the catalog and later restored when
+    the booking templates needed it. This asserts the restoration, so removing
+    it again fails here rather than in a patient-facing message.
+    """
     definition = {
         **_SEND_NO_CLASS,
         "trigger": {"type": "appointment_offset", "offset_hours": -24},
@@ -115,7 +121,7 @@ def test_removed_enriched_appointment_field_warns_as_unknown() -> None:
         ],
     }
     issues = _validate(definition)
-    assert any(
+    assert not any(
         i.code == "merge_field_unknown" and i.node_id == "s1"
         for i in issues
     )
