@@ -14,7 +14,7 @@ from typing import Annotated, Any
 from zoneinfo import ZoneInfo
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -1623,6 +1623,40 @@ class OperatingHoursEntry(BaseModel):
     is_open: bool = True
     open_time: str | None = None
     close_time: str | None = None
+
+    @model_validator(mode="after")
+    def open_days_need_a_window(self) -> "OperatingHoursEntry":
+        """An open day must say when.
+
+        Without this the row is meaningless and the slot filter has to guess:
+        it used to read "open, no window" as open all day, which silently
+        disabled operating hours for that day rather than restricting anything.
+        The UI can produce the shape by accident — toggling a day off nulls its
+        times, toggling it back on does not restore them — so it is rejected
+        here rather than interpreted downstream.
+        """
+        if not self.is_open:
+            return self
+        missing = [
+            name
+            for name, value in (
+                ("open_time", self.open_time),
+                ("close_time", self.close_time),
+            )
+            if not value
+        ]
+        if missing:
+            raise ValueError(
+                f"day_of_week {self.day_of_week} is marked open but is missing "
+                f"{' and '.join(missing)}. An open day needs both an opening and "
+                "a closing time."
+            )
+        if self.close_time <= self.open_time:
+            raise ValueError(
+                f"day_of_week {self.day_of_week}: close_time must be after "
+                f"open_time (got {self.open_time}-{self.close_time})."
+            )
+        return self
 
 
 class OperatingHoursResponse(BaseModel):

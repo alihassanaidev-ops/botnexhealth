@@ -50,6 +50,7 @@ import {
 } from "@/lib/institution-portal-api"
 import { SUPPORTED_TIMEZONES } from "@/lib/timezones"
 import type { BreakResponse, OperatingHoursEntry } from "@/types"
+import { DEFAULT_CLOSE_TIME, DEFAULT_OPEN_TIME, withOpenWindow } from "@/lib/operating-hours"
 
 const DAYS = [
     { value: 0, label: "Monday" },
@@ -65,8 +66,8 @@ function defaultHours(): OperatingHoursEntry[] {
     return DAYS.map((day) => ({
         day_of_week: day.value,
         is_open: day.value >= 0 && day.value <= 4,
-        open_time: day.value >= 0 && day.value <= 4 ? "09:00" : null,
-        close_time: day.value >= 0 && day.value <= 4 ? "17:00" : null,
+        open_time: day.value >= 0 && day.value <= 4 ? DEFAULT_OPEN_TIME : null,
+        close_time: day.value >= 0 && day.value <= 4 ? DEFAULT_CLOSE_TIME : null,
     }))
 }
 
@@ -164,7 +165,12 @@ function HoursDialog({ location, onClose }: HoursDialogProps) {
     }, [location])
 
     function setHour(day: number, patch: Partial<OperatingHoursEntry>) {
-        setHours((prev) => prev.map((h) => (h.day_of_week === day ? { ...h, ...patch } : h)))
+        setHours((prev) =>
+            prev.map((h) => {
+                if (h.day_of_week !== day) return h
+                return withOpenWindow({ ...h, ...patch })
+            }),
+        )
     }
 
     async function saveHours() {

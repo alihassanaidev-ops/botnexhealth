@@ -193,7 +193,9 @@ def filter_slots(
     Filter slots against clinic operating hours, break schedules,
     and minimum booking lead-time buffer.
 
-    If no operating_hours rows exist, only the buffer filter is applied.
+    If no operating_hours rows exist, only the buffer filter is applied — an
+    unconfigured location is not clipped. A day that *is* configured is clipped:
+    not open, or open with no window, means no slots that day.
     """
     # 1. Apply buffer (minimum lead-time)
     if buffer_minutes > 0:
@@ -216,11 +218,21 @@ def filter_slots(
 
     tz = ZoneInfo(timezone)
     filtered: list[UniversalSlot] = []
+    #: Days marked open with no window. Collected so the warning is logged once
+    #: per call rather than once per slot.
+    open_without_window: set[int] = set()
 
     for slot in slots:
         try:
             slot_start_dt = _parse_iso(slot.start)
-            slot_end_dt = _parse_iso(slot.end) if slot.end else slot_start_dt
+            # An unparseable end must not cost us the start-based checks: the
+            # except below passes a slot through unfiltered, so letting a bad
+            # `end` reach it would silently disable operating hours for that
+            # slot. Fall back to the start, which is what a missing end does.
+            try:
+                slot_end_dt = _parse_iso(slot.end) if slot.end else slot_start_dt
+            except (ValueError, TypeError):
+                slot_end_dt = slot_start_dt
 
             # Convert to clinic's local timezone
             local_start = slot_start_dt.astimezone(tz)
@@ -237,20 +249,28 @@ def filter_slots(
             if not day_hours.is_open:
                 continue
 
-            # 3. Check slot is within operating hours
-            if day_hours.open_time and day_hours.close_time:
-                slot_start_time = local_start.time()
-                slot_end_time = local_end.time()
+            # 3. Check slot is within operating hours.
+            #
+            # A day flagged open with no window is an incomplete record, not a
+            # 24-hour clinic: toggling a day off nulls its times, and toggling
+            # it back on used to leave them null. Treating that as "open all
+            # day" silently disables the whole control, so treat it as closed —
+            # the same posture quiet hours already take for a clinic with no
+            # permitted window. ``set_operating_hours`` now rejects the shape at
+            # the API, so this only catches rows written before that landed.
+            if not day_hours.open_time or not day_hours.close_time:
+                open_without_window.add(day)
+                continue
 
-                if slot_start_time < day_hours.open_time:
-                    continue
-                if slot_end_time > day_hours.close_time:
-                    continue
-
-            # 4. Check slot doesn't overlap any break
             slot_start_time = local_start.time()
             slot_end_time = local_end.time()
 
+            if slot_start_time < day_hours.open_time:
+                continue
+            if slot_end_time > day_hours.close_time:
+                continue
+
+            # 4. Check slot doesn't overlap any break
             # Get breaks for this specific day + global breaks (day_of_week=None)
             applicable_breaks = breaks_by_day.get(day, []) + breaks_by_day.get(None, [])
 
@@ -269,6 +289,14 @@ def filter_slots(
             logger.warning(f"Failed to parse slot time, passing through: {e}")
             # If we can't parse, let it through rather than silently dropping
             filtered.append(slot)
+
+    if open_without_window:
+        logger.warning(
+            "Operating hours incomplete: weekday(s) %s are marked open with no "
+            "open/close time, so every slot on them was treated as closed. "
+            "Set the hours for those days on the location.",
+            sorted(open_without_window),
+        )
 
     logger.info(
         f"Slot filter: {len(slots)} input → {len(filtered)} output "
