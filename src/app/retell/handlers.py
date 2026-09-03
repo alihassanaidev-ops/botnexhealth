@@ -918,7 +918,9 @@ async def find_appointment_slots(args: dict[str, Any]) -> dict[str, Any]:
 
         # Apply provider-level filters (buffer + time restriction)
         try:
-            buffer_minutes = max(0, int(args.get("buffer_minutes", 0)))
+            # Voice booking must never offer a slot that is already in the
+            # past. Callers can request a larger lead time explicitly.
+            buffer_minutes = max(0, int(args.get("buffer_minutes", 10)))
         except (TypeError, ValueError):
             return {"error": "buffer_minutes must be an integer >= 0."}
 

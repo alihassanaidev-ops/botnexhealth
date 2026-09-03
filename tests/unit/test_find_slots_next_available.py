@@ -189,6 +189,55 @@ async def test_gotracker_slots_let_synchronizer_resolve_timezone(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_retell_slots_default_to_ten_minute_future_buffer(monkeypatch):
+    slot = UniversalSlot(
+        start="2026-09-03T09:00:00-04:00",
+        end="2026-09-03T09:30:00-04:00",
+        provider_id="gt-3",
+    )
+    ctx = _ctx(SlotSearchResult(slots=[slot], next_available_date=None))
+    ctx.location = SimpleNamespace(
+        id="22222222-2222-2222-2222-222222222222",
+        timezone="America/Toronto",
+    )
+
+    class _FakeSession:
+        async def execute(self, *_args, **_kwargs):
+            return SimpleNamespace(
+                scalars=lambda: SimpleNamespace(all=lambda: []),
+                one_or_none=lambda: None,
+            )
+
+    class _FakeSessionContext:
+        async def __aenter__(self):
+            return _FakeSession()
+
+        async def __aexit__(self, *_exc):
+            return None
+
+    captured = {}
+
+    def _capture_filter(**kwargs):
+        captured.update(kwargs)
+        return kwargs["slots"]
+
+    async def _fake_resolve():
+        return ctx
+
+    monkeypatch.setattr(handlers, "_resolve_context", _fake_resolve)
+    monkeypatch.setattr(
+        handlers, "get_system_db_session", lambda *a, **k: _FakeSessionContext()
+    )
+    monkeypatch.setattr(handlers, "_missing_provider_source_ids", lambda *_args: set())
+    monkeypatch.setattr(handlers, "filter_slots", _capture_filter)
+
+    result = await _find_slots({"start_date": "2026-09-03"})
+
+    assert result["slots_count"] == 1
+    assert captured["buffer_minutes"] == 10
+
+
+@pytest.mark.asyncio
 async def test_nexhealth_slots_get_provider_name_from_scalenexus_cache(monkeypatch):
     slot = UniversalSlot(
         start="2026-07-20T09:00:00-04:00",
@@ -259,7 +308,11 @@ async def test_nexhealth_slots_get_provider_name_from_scalenexus_cache(monkeypat
     )
 
     result = await _find_slots(
-        {"start_date": "2026-07-20", "appointment_type_id": "nh-50"}
+        {
+            "start_date": "2026-07-20",
+            "appointment_type_id": "nh-50",
+            "buffer_minutes": 0,
+        }
     )
 
     assert result["slots_count"] == 1
@@ -289,7 +342,11 @@ async def test_hint_suppressed_when_slots_exist(monkeypatch):
     monkeypatch.setattr(handlers, "_resolve_context", _fake_resolve)
 
     result = await _find_slots(
-        {"start_date": "2026-07-20", "appointment_type_id": "nh-50"}
+        {
+            "start_date": "2026-07-20",
+            "appointment_type_id": "nh-50",
+            "buffer_minutes": 0,
+        }
     )
 
     assert result["slots_count"] == 1
