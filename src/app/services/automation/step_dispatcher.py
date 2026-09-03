@@ -74,6 +74,7 @@ from src.app.services.automation.definition_schema import (
     sms_reply_wait_spec,
 )
 from src.app.services.automation.action_registry import get_action_executor
+from src.app.services.slot_policy import filter_slots_for_location
 from src.app.services.write_provenance import WriteProvenance
 from src.app.services.circuit_breaker import (
     NoOpCircuitBreaker,
@@ -1567,6 +1568,14 @@ class WorkflowStepDispatcher:
                 operatory_ids=[operatory_id] if operatory_id else None,
             )
             slots = list(getattr(slot_result, "slots", []) or [])
+            # A campaign booking writes into a real diary, so it is held to the
+            # clinic's own opening hours and breaks — not just to whatever the
+            # practice software is willing to return. Without this a workflow
+            # could book a patient in at 6am or through lunch on a location that
+            # explicitly configured itself closed then.
+            slots = await filter_slots_for_location(
+                self.session, location, slots
+            )
             chosen = _matching_booking_slot(
                 slots,
                 requested_start=requested_start,
@@ -1673,6 +1682,7 @@ class WorkflowStepDispatcher:
                     )
                 if await self._booking_slot_no_longer_available(
                     adapter,
+                    location=location,
                     start_date=start_date,
                     requested_start=requested_start,
                     provider_id=provider_id,
@@ -1804,6 +1814,7 @@ class WorkflowStepDispatcher:
         self,
         adapter,
         *,
+        location,
         start_date: str,
         requested_start: str,
         provider_id: str,
@@ -1825,6 +1836,11 @@ class WorkflowStepDispatcher:
             return _booking_error_looks_like_slot_conflict(error)
 
         slots = list(getattr(slot_result, "slots", []) or [])
+        # Same view the booking attempt used. If this asked the unfiltered PMS
+        # list while the attempt asked the clipped one, the two would disagree
+        # about whether the slot was ever on offer, and a refusal outside
+        # opening hours would be reported as an ordinary failure.
+        slots = await filter_slots_for_location(self.session, location, slots)
         return (
             _matching_booking_slot(
                 slots,
