@@ -1068,6 +1068,14 @@ def _step_label(step_type: str) -> str:
 
 def _step_summary(step: AutomationWorkflowStepExecution) -> str | None:
     if step.result_code:
+        # A failure explanation recorded at execution time (e.g. the compliance
+        # gate's block reason) is the part the reader actually needs — lead the
+        # summary with it rather than the bare code.
+        if step.error_message:
+            return f"Result: {step.result_code} — {step.error_message}"
+        blocked_reason = (step.result_metadata or {}).get("blocked_reason")
+        if blocked_reason:
+            return f"Result: {step.result_code} — {blocked_reason}"
         return f"Result: {step.result_code}"
     if step.status == AutomationStepStatus.FAILED.value:
         return "Step failed"

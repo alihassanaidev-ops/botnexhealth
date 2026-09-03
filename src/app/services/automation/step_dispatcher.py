@@ -128,6 +128,42 @@ def _is_patient_directed(node: object) -> bool:
     return True
 
 
+#: Human explanations for compliance-gate block reasons, keyed by the exact
+#: reason string the gate returns. Channel-templated reasons ("no_voice_consent",
+#: "sms_consent_revoked", …) are resolved by suffix below.
+_GATE_BLOCK_MESSAGES = {
+    "emergency_halt": "All outbound messaging is halted for this institution (emergency stop is active).",
+    "patient_responded": "The patient already responded during this run, so further outreach was stopped.",
+    "no_permitted_window": "No permitted send window exists in the next 7 days — check the location's operating hours.",
+    "no_contact": "No patient is linked to this run, so there is no one to contact. This usually means the appointment synced without a matching patient record.",
+    "contact_not_found": "The patient linked to this run no longer exists.",
+    "do_not_contact": "The patient is on the do-not-contact list.",
+    "no_phone": "The patient has no phone number on file.",
+    "no_email": "The patient has no email address on file.",
+}
+
+
+def _gate_block_message(reason: str | None) -> str:
+    """One readable sentence for a compliance-gate block, shown in execution logs."""
+    if not reason:
+        return "Blocked by the compliance gate."
+    if reason in _GATE_BLOCK_MESSAGES:
+        return _GATE_BLOCK_MESSAGES[reason]
+    if reason.startswith("no_") and reason.endswith("_consent"):
+        channel = reason[len("no_") : -len("_consent")]
+        return f"The patient has not consented to {channel} contact for this kind of message."
+    if reason.endswith("_consent_revoked"):
+        channel = reason[: -len("_consent_revoked")]
+        return f"The patient revoked their {channel} consent."
+    if reason.endswith("_consent_basis_insufficient"):
+        channel = reason[: -len("_consent_basis_insufficient")]
+        return (
+            f"The patient's {channel} consent is not strong enough for this "
+            "content class (marketing/recall requires express consent)."
+        )
+    return f"Blocked by the compliance gate: {reason}."
+
+
 class WorkflowGoTrackerWritebackError(RuntimeError):
     """Raised when an explicit GoTracker appointment writeback node fails."""
 
@@ -497,7 +533,14 @@ class WorkflowStepDispatcher:
                     step = await self.runtime.begin_step(
                         run, step_id=node.id, step_type=node.type
                     )
-                    await self.runtime.fail_step(step, result_code="compliance_blocked")
+                    await self.runtime.fail_step(
+                        step,
+                        result_code="compliance_blocked",
+                        error_message=_gate_block_message(gate_result.reason),
+                        result_metadata={
+                            "blocked_reason": gate_result.reason or "compliance_blocked",
+                        },
+                    )
                     await self.runtime.fail_run(
                         run, reason=gate_result.reason or "compliance_blocked"
                     )

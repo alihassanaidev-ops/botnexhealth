@@ -380,8 +380,11 @@ use the same location-level Twilio number.
 
 Every step attempt records a PHI-safe input snapshot when execution starts and an
 output snapshot when it completes, fails, waits, or resumes. These snapshots are
-stored on `automation_workflow_step_executions`; unknown context keys are redacted
-before persistence. The run timeline also returns the immutable workflow version
+stored on `automation_workflow_step_executions`; direct patient identifiers
+(names, phone numbers, emails, birth dates, addresses, raw payload blobs) are
+redacted before persistence, while operational context (event names, flags,
+external ids, timestamps) is kept readable. Compliance-gate blocks record the
+specific reason and a human-readable explanation on the failed step. The run timeline also returns the immutable workflow version
 used by that run. The builder's **Executions** view uses that version and the
 attempt ledger to render the traversed path, per-node status, retries, duration,
 result, error, and recorded input/output. Its node inspector defaults to a

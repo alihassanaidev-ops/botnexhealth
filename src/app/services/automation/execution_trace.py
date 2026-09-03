@@ -1,4 +1,10 @@
-"""PHI-safe snapshots for workflow step execution traces."""
+"""PHI-safe snapshots for workflow step execution traces.
+
+Snapshots pass context through readably and redact only direct patient
+identifiers (names, phone numbers, emails, birth dates, addresses, raw
+payload blobs). Operational keys — event names, flags, external ids,
+timestamps — are kept so an execution trace explains itself.
+"""
 
 from __future__ import annotations
 
@@ -6,86 +12,58 @@ from datetime import datetime
 from decimal import Decimal
 from typing import Any
 
-
-SAFE_TRACE_KEYS = {
-    "appointment_at",
-    "appointment_date",
-    "appointment_datetime",
-    "appointment_id",
-    "appointment_location",
-    "appointment_start_time",
-    "appointment_status",
-    "appointment_time",
-    "appointment_type",
-    "appointment_type_id",
-    "appointment_type_name",
-    "attempt_number",
-    "batch_number",
-    "batch_position",
-    "batch_size",
-    "booking_link",
-    "branch",
-    "branch_taken",
-    "call_outcome",
-    "campaign_goal",
-    "completed_at",
-    "confirmation_link",
-    "currency",
-    "direction",
-    "disconnection_reason",
-    "due_at",
-    "due_local_at",
-    "duration_ms",
-    "external_ref",
-    "fired_at",
-    "interval_seconds",
-    "location_id",
-    "location_name",
-    "max_attempts",
-    "next_node_id",
-    "operatory_id",
-    "operatory_name",
-    "outcome",
-    "patient_status",
-    "patient_workflow_status",
-    "provider",
-    "provider_id",
-    "provider_message_id",
-    "provider_name",
-    "qa_reason",
-    "recall_due_date",
-    "recall_type",
-    "reschedule_link",
-    "result_code",
-    "retell_agent_configured",
-    "retell_agent_source",
-    "retell_call_id",
-    "retell_from_number_masked",
-    "retell_from_number_normalized",
-    "retell_from_number_source",
-    "scheduled_at",
-    "scheduled_local_at",
-    "scheduled_timezone",
-    "source",
-    "source_patient_status_event_id",
-    "source_workflow_id",
-    "source_workflow_run_id",
-    "source_workflow_step_id",
-    "status",
-    "status_written",
-    "timezone",
-    "to_number_masked",
-    "to_number_normalized",
-    "trigger_ref_id",
-    "trigger_ref_type",
-    "trigger_type",
-    "voice_profile_id",
-    "voice_profile_name",
+#: Keys whose values are direct patient identifiers and never belong in a
+#: step execution trace. Matched on the normalized (lowercase, underscored)
+#: key. Masked variants ("to_number_masked") are intentionally not listed —
+#: they exist to be shown.
+PII_TRACE_KEYS = {
+    "address",
+    "address1",
+    "address2",
+    "birth_date",
+    "birthdate",
+    "body",
+    "cell_phone",
+    "contact_name",
+    "date_of_birth",
+    "dob",
+    "email",
+    "email_address",
+    "first_name",
+    "from_number",
+    "full_name",
+    "home_phone",
+    "insurance_id",
+    "insurance_member_id",
+    "last_name",
+    "message_body",
+    "mobile",
+    "mobile_phone",
+    "name",
+    "nickname",
+    "patient_email",
+    "patient_first_name",
+    "patient_last_name",
+    "patient_name",
+    "patient_phone",
+    "phone",
+    "phone_number",
+    "postal_code",
+    "raw_payload",
+    "ssn",
+    "street",
+    "street_address",
+    "subscriber_id",
+    "to_number",
+    "user_number",
+    "work_phone",
+    "zip",
+    "zip_code",
 }
 
 
 def trace_safe_mapping(mapping: dict[str, Any]) -> dict[str, Any]:
-    """Return a JSON-compatible mapping with unknown/PHI fields redacted."""
+    """Return a JSON-compatible mapping with direct-PII fields redacted."""
     return {
         str(key): trace_safe_value(str(key), value)
         for key, value in mapping.items()
@@ -95,7 +73,7 @@ def trace_safe_mapping(mapping: dict[str, Any]) -> dict[str, Any]:
 
 def trace_safe_value(key: str, value: Any) -> Any:
     normalized = key.lower().replace("-", "_")
-    if normalized not in SAFE_TRACE_KEYS:
+    if normalized in PII_TRACE_KEYS:
         return "[redacted]"
     if isinstance(value, (str, int, float, bool)) or value is None:
         return value

@@ -36,6 +36,35 @@ def test_branch_from_result_code_returns_condition_branch() -> None:
 
 
 def test_execution_trace_values_are_json_compatible() -> None:
-    projected = trace_safe_mapping({"appointment_id": "appt-1", "unknown": object()})
+    projected = trace_safe_mapping(
+        {
+            "appointment_id": "appt-1",
+            "event": "appointment.created",
+            "is_recall": False,
+            "unknown": object(),
+        }
+    )
 
-    assert projected == {"appointment_id": "appt-1", "unknown": "[redacted]"}
+    # Operational keys pass through readably; non-JSON values are stringified.
+    assert projected["appointment_id"] == "appt-1"
+    assert projected["event"] == "appointment.created"
+    assert projected["is_recall"] is False
+    assert isinstance(projected["unknown"], str)
+
+
+def test_execution_trace_redacts_nested_pii_but_keeps_structure() -> None:
+    projected = trace_safe_mapping(
+        {
+            "appointment": {
+                "id": "gt-1476",
+                "comments": "AI booked — cleaning",
+                "phone_number": "+15555550123",
+                "date_of_birth": "1988-12-19",
+            },
+        }
+    )
+
+    assert projected["appointment"]["id"] == "gt-1476"
+    assert projected["appointment"]["comments"] == "AI booked — cleaning"
+    assert projected["appointment"]["phone_number"] == "[redacted]"
+    assert projected["appointment"]["date_of_birth"] == "[redacted]"

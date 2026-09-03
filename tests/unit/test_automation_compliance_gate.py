@@ -173,6 +173,22 @@ def test_dispatcher_block_gate_result_code():
 
     call_kwargs = rt.fail_step.call_args
     assert call_kwargs.kwargs.get("result_code") == "compliance_blocked"
+    # The gate's reason and a readable explanation reach the step record so the
+    # executions UI can say why, not just that, the send was blocked.
+    assert call_kwargs.kwargs.get("result_metadata") == {"blocked_reason": "opt_out"}
+    assert call_kwargs.kwargs.get("error_message")
+
+
+def test_gate_block_messages_are_readable():
+    from src.app.services.automation.step_dispatcher import _gate_block_message
+
+    assert "No patient is linked" in _gate_block_message("no_contact")
+    assert "operating hours" in _gate_block_message("no_permitted_window")
+    assert "consented to voice contact" in _gate_block_message("no_voice_consent")
+    assert "revoked their sms consent" in _gate_block_message("sms_consent_revoked")
+    assert "not strong enough" in _gate_block_message("voice_consent_basis_insufficient")
+    assert _gate_block_message(None) == "Blocked by the compliance gate."
+    assert "unmapped_reason" in _gate_block_message("unmapped_reason")
 
 
 # ---------------------------------------------------------------------------
