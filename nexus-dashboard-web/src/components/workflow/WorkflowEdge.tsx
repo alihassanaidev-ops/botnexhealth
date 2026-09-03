@@ -19,15 +19,12 @@ import {
     type EdgeProps,
 } from "@xyflow/react"
 import { Plus } from "lucide-react"
-import { cn } from "@/lib/utils"
 
 export type InsertableEdgeData = {
     /** Branch label ("Yes", "Otherwise", a switch case name). */
     branchLabel?: string
     /** Open the step picker for an insert between this edge's two nodes. */
     onInsert?: () => void
-    /** Hover focus: this edge is not attached to the hovered node. */
-    dimmed?: boolean
 }
 
 export function InsertableEdge({
@@ -55,9 +52,7 @@ export function InsertableEdge({
         borderRadius: pathOptions?.borderRadius ?? 12,
     })
 
-    const dimmed = data?.dimmed
-    const canInsert = Boolean(data?.onInsert)
-    const showButton = canInsert && hovered && !dimmed
+    const showButton = Boolean(data?.onInsert) && hovered
 
     return (
         <>
@@ -65,7 +60,7 @@ export function InsertableEdge({
                 id={id}
                 path={edgePath}
                 markerEnd={markerEnd}
-                style={{ ...style, opacity: dimmed ? 0.12 : (style?.opacity ?? 1) }}
+                style={style}
             />
             {/* Invisible fat stroke so the pointer does not have to land on the
                 2px visible line to reveal the button. */}
@@ -74,16 +69,13 @@ export function InsertableEdge({
                 fill="none"
                 stroke="transparent"
                 strokeWidth={22}
-                style={{ pointerEvents: dimmed ? "none" : "stroke" }}
+                style={{ pointerEvents: "stroke" }}
                 onMouseEnter={() => setHovered(true)}
                 onMouseLeave={() => setHovered(false)}
             />
             <EdgeLabelRenderer>
                 <div
-                    className={cn(
-                        "nodrag nopan absolute -translate-x-1/2 -translate-y-1/2",
-                        dimmed && "opacity-10",
-                    )}
+                    className="nodrag nopan absolute -translate-x-1/2 -translate-y-1/2"
                     style={{ transform: `translate(-50%, -50%) translate(${labelX}px, ${labelY}px)` }}
                     onMouseEnter={() => setHovered(true)}
                     onMouseLeave={() => setHovered(false)}

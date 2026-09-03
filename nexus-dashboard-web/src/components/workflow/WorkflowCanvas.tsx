@@ -8,7 +8,7 @@
  * Auto layout action persists a computed presentational layout. Read-only previews
  * (default) keep nodes fixed & non-connectable.
  */
-import { useCallback, useEffect, useMemo, useState } from "react"
+import { useCallback, useEffect, useMemo } from "react"
 import {
     Background,
     BackgroundVariant,
@@ -39,9 +39,6 @@ const workflowNodeTypes = {
 const workflowEdgeTypes = {
     insertable: InsertableEdge,
 }
-
-/** How far a node not attached to the hovered one fades. */
-const DIMMED_OPACITY = 0.18
 
 export interface WorkflowCanvasProps {
     nodes: FlowNode[]
@@ -99,10 +96,6 @@ function InnerCanvas({
     onInsertOnEdge,
 }: WorkflowCanvasProps) {
     const { screenToFlowPosition } = useReactFlow()
-    // Hover focus. A campaign of this size has edges spanning the whole canvas;
-    // fading everything not attached to the hovered node is what makes a single
-    // path followable without changing the layout.
-    const [hoveredId, setHoveredId] = useState<string | null>(null)
     // Local node state so React Flow can drive drag interactions smoothly; we re-sync
     // from the derived prop whenever the definition/selection changes. (Prop remains the
     // single source of truth — drag results are bubbled up via onNodeDragStop.)
@@ -119,29 +112,6 @@ function InnerCanvas({
         )
     }, [nodes, selectedId, selectedIds, onAddFromPort, setRfNodes])
 
-    /** The hovered node, its direct neighbours, and the edges between them. */
-    const focus = useMemo(() => {
-        if (!hoveredId) return null
-        const nodeIds = new Set<string>([hoveredId])
-        const edgeIds = new Set<string>()
-        for (const edge of edges) {
-            if (edge.source !== hoveredId && edge.target !== hoveredId) continue
-            edgeIds.add(edge.id)
-            nodeIds.add(edge.source)
-            nodeIds.add(edge.target)
-        }
-        return { nodeIds, edgeIds }
-    }, [hoveredId, edges])
-
-    const displayNodes = useMemo(() => {
-        if (!focus) return rfNodes
-        return rfNodes.map((node) =>
-            focus.nodeIds.has(node.id)
-                ? node
-                : { ...node, style: { ...node.style, opacity: DIMMED_OPACITY } },
-        )
-    }, [rfNodes, focus])
-
     const displayEdges = useMemo(
         () =>
             edges.map((edge) => ({
@@ -149,7 +119,6 @@ function InnerCanvas({
                 type: "insertable",
                 data: {
                     branchLabel: typeof edge.label === "string" ? edge.label : undefined,
-                    dimmed: focus ? !focus.edgeIds.has(edge.id) : false,
                     onInsert:
                         editable && onInsertOnEdge
                             ? () =>
@@ -161,7 +130,7 @@ function InnerCanvas({
                             : undefined,
                 },
             })),
-        [edges, focus, editable, onInsertOnEdge],
+        [edges, editable, onInsertOnEdge],
     )
 
     const handleNodeClick: NodeMouseHandler = (event, node) => {
@@ -229,14 +198,12 @@ function InnerCanvas({
 
     return (
         <ReactFlow
-            nodes={displayNodes}
+            nodes={rfNodes}
             edges={displayEdges}
             nodeTypes={workflowNodeTypes}
             edgeTypes={workflowEdgeTypes}
             onNodesChange={onNodesChange}
             onNodeClick={handleNodeClick}
-            onNodeMouseEnter={(_event, node) => setHoveredId(node.id)}
-            onNodeMouseLeave={() => setHoveredId(null)}
             onPaneClick={() => {
                 onSelect?.(null)
                 onSelectionChange?.([])
