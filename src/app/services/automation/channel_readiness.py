@@ -92,6 +92,12 @@ class ChannelReadinessService:
         if location_id is None:
             return []
 
+        # Without a session the tenant's sender number and credentials can't be
+        # loaded, so every channel would look unprovisioned. Readiness can only
+        # be assessed DB-backed — emit nothing rather than false errors.
+        if self.session is None:
+            return []
+
         sms_nodes = [
             n
             for n in definition.nodes

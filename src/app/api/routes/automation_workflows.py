@@ -857,16 +857,17 @@ async def validate_definition(
     inst_id = _institution_id(current_user)
     # Pure validation — no persistence. The builder supplies its workflow location
     # so null-location runtime failures are node-linked before publish. Readiness
-    # still needs a DB-backed publish/checklist call; this endpoint uses the location
-    # only for validation rules that do not query tenant configuration.
-    issues = await WorkflowValidationService(
-        session=None,
-        readiness_checker=ChannelReadinessService(None),
-    ).validate(
-        data.definition,
-        institution_id=inst_id,
-        location_id=data.location_id,
-    )
+    # needs a DB session to see the location's sender number and tenant creds —
+    # without one it would report every SMS/voice channel as unprovisioned.
+    async with get_db_session() as session:
+        issues = await WorkflowValidationService(
+            session=session,
+            readiness_checker=ChannelReadinessService(session),
+        ).validate(
+            data.definition,
+            institution_id=inst_id,
+            location_id=data.location_id,
+        )
     responses = [
         ValidationIssueResponse(
             severity=i.severity,
