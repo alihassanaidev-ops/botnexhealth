@@ -56,7 +56,9 @@ describe("EnquirySources", () => {
 
     it("says when a form last received an enquiry", async () => {
         render(<EnquirySources />)
-        expect(await screen.findByText(/Last enquiry: never/)).toBeInTheDocument()
+        // Wording follows the contacts/patients consolidation: an enquiry lands
+        // as a contact, so the card says "contact received", not "enquiry".
+        expect(await screen.findByText(/Last contact received: never/)).toBeInTheDocument()
     })
 
     it("will not create a form without a name", async () => {

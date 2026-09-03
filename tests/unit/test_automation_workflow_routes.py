@@ -1091,9 +1091,31 @@ _VALID_DEF = {
 }
 
 
+def _run_validate(definition, user, location_id=None):
+    """Call the validate route with a stubbed session.
+
+    The route reads channel readiness from the database so it does not report
+    every provisioned SMS channel as unprovisioned; without a session stub it
+    raises "Database not initialized" before validating anything.
+    """
+    session = _make_session()
+    with patch(
+        "src.app.api.routes.automation_workflows.get_db_session",
+        return_value=session,
+    ):
+        return asyncio.run(
+            validate_definition(
+                ValidateDefinitionRequest(
+                    definition=definition, location_id=location_id
+                ),
+                user,
+            )
+        )
+
+
 def test_validate_accepts_valid_definition():
     user = _make_user()
-    result = asyncio.run(validate_definition(ValidateDefinitionRequest(definition=_VALID_DEF), user))
+    result = _run_validate(_VALID_DEF, user)
     assert result.valid is True
     # A structurally-valid sending workflow with no content class is publishable
     # but surfaces a (non-blocking) content-class warning, never an error.
@@ -1119,7 +1141,7 @@ def test_validate_reports_missing_exit_node():
             {"type": "send_sms", "id": "s1", "body_template": "hi", "next_node_id": "s1"},
         ],
     }
-    result = asyncio.run(validate_definition(ValidateDefinitionRequest(definition=definition), user))
+    result = _run_validate(definition, user)
     assert result.valid is False
     assert any("exit node" in issue.message for issue in result.issues)
 
@@ -1135,7 +1157,7 @@ def test_validate_links_field_error_to_node_id():
             {"type": "exit", "id": "x1"},
         ],
     }
-    result = asyncio.run(validate_definition(ValidateDefinitionRequest(definition=definition), user))
+    result = _run_validate(definition, user)
     assert result.valid is False
     assert any(issue.node_id == "s1" for issue in result.issues)
 
@@ -1156,15 +1178,8 @@ def test_validate_reports_location_required_for_booking_link():
         ],
     }
 
-    missing = asyncio.run(
-        validate_definition(ValidateDefinitionRequest(definition=definition), user)
-    )
-    scoped = asyncio.run(
-        validate_definition(
-            ValidateDefinitionRequest(definition=definition, location_id="loc-1"),
-            user,
-        )
-    )
+    missing = _run_validate(definition, user)
+    scoped = _run_validate(definition, user, location_id="loc-1")
 
     assert missing.valid is False
     assert any(
