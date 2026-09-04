@@ -221,14 +221,21 @@
     height: 100%;
   }
 
-  /* Inactive rows sit slightly back so the active one still leads. */
-  [data-sidebar="menu-button"] .nav-art > svg {
-    opacity: 0.85;
-    transition: opacity 140ms ease;
+  /* Inactive rows drain to grey, so the only colour in the rail belongs to
+     the page you are on and the eye goes straight to it. Hover restores the
+     colour, which doubles as the hover affordance — no separate treatment
+     needed. Greyscale rather than re-pointing the art variables: draining
+     each fill separately flattens the drawing into a silhouette, where a
+     filter keeps its internal light and shade. */
+  [data-sidebar="menu-button"] .nav-art {
+    filter: grayscale(1);
+    opacity: 0.65;
+    transition: filter 160ms ease, opacity 160ms ease;
   }
 
-  [data-sidebar="menu-button"][data-active="true"] .nav-art > svg,
-  [data-sidebar="menu-button"]:hover .nav-art > svg {
+  [data-sidebar="menu-button"][data-active="true"] .nav-art,
+  [data-sidebar="menu-button"]:hover .nav-art {
+    filter: none;
     opacity: 1;
   }
 }

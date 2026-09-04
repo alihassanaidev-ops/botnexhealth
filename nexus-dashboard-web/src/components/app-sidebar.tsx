@@ -267,6 +267,9 @@ function NavItem({ item, isActive }: { item: NavItemDef; isActive: boolean }) {
         <SidebarMenuItem>
             <SidebarMenuButton
                 asChild
+                // Also drives data-active on the rendered element, which is what
+                // the nav artwork keys off to stay in colour on the current page.
+                isActive={isActive}
                 tooltip={item.title}
                 className={`
                     relative transition-all duration-150 rounded-md
