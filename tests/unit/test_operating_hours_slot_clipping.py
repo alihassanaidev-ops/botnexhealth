@@ -88,12 +88,15 @@ def test_a_closed_day_offers_nothing():
 # ── Open with no window is closed, not 24 hours ───────────────────────
 
 
-def test_open_day_with_no_window_offers_nothing():
-    """The staging defect. Previously every slot passed, including 05:55.
+def test_an_open_day_with_no_window_applies_no_time_limit():
+    """"Hours unknown" is not "closed", and must not be read as it.
 
-    Toggling a day off nulls its times; toggling it back on used to leave them
-    null, and the filter read the row as open all day — silently disabling the
-    only control the admin thought they had set.
+    ``is_open=True`` is the one thing the admin actually stated; the blank is
+    *when*, not *whether*. Blocking would override the explicit signal on the
+    strength of the missing one — and unlike quiet hours, which can fail closed
+    cheaply because blocked work is held and sent later, a slot dropped here is
+    simply never offered. It is warned about instead, and the API now refuses to
+    store the shape at all.
     """
     hours = _hours(open_time=None, close_time=None)
     slots = [
@@ -101,15 +104,39 @@ def test_open_day_with_no_window_offers_nothing():
         _slot("2026-09-03T12:00:00-04:00", "2026-09-03T12:30:00-04:00"),
         _slot("2026-09-03T23:30:00-04:00", "2026-09-03T23:59:00-04:00"),
     ]
-    assert _kept(slots, hours) == []
+    assert len(_kept(slots, hours)) == 3
+
+
+def test_an_unknown_window_behaves_like_an_unconfigured_location():
+    """The two are the same statement, so they must not diverge."""
+    slot = [_slot("2026-09-03T05:55:00-04:00", "2026-09-03T06:00:00-04:00")]
+    no_rows = filter_slots(slots=list(slot), operating_hours=[], breaks=[], timezone=TZ)
+    no_window = _kept(slot, _hours(open_time=None, close_time=None))
+    assert len(no_rows) == len(no_window) == 1
+
+
+def test_a_day_with_no_window_is_warned_about(caplog):
+    """The original bug was not the pass-through — it was the silence."""
+    import logging
+
+    with caplog.at_level(logging.WARNING):
+        _kept(
+            [_slot("2026-09-03T05:55:00-04:00", "2026-09-03T06:00:00-04:00")],
+            _hours(open_time=None, close_time=None),
+        )
+    assert "Operating hours incomplete" in caplog.text
+    assert str(THURSDAY) in caplog.text
 
 
 @pytest.mark.parametrize("missing", ["open_time", "close_time"])
-def test_half_a_window_is_still_no_window(missing):
-    assert _kept(
-        [_slot("2026-09-03T12:00:00-04:00", "2026-09-03T12:30:00-04:00")],
-        _hours(**{missing: None}),
-    ) == []
+def test_half_a_window_is_treated_as_no_window(missing):
+    """Half a window cannot be applied, so it restricts nothing — and warns."""
+    assert len(
+        _kept(
+            [_slot("2026-09-03T12:00:00-04:00", "2026-09-03T12:30:00-04:00")],
+            _hours(**{missing: None}),
+        )
+    ) == 1
 
 
 def test_an_unconfigured_location_is_not_clipped():

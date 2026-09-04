@@ -419,3 +419,50 @@ class TestAmbiguousSlugs:
             )
         assert r.status_code == 409
         assert "no Retell agent bound" in r.json()["detail"]
+
+
+class TestItCanActuallySeeTheTenants:
+    """The suite reads across tenants, so its RLS context has to permit that.
+
+    Caught on staging, not here: every test above mocks the session, so a
+    context that matches no RLS policy still "works" against a mock. The real
+    endpoint returned 200 with zero locations and a 404 for a slug that plainly
+    exists — a permissions failure wearing a data-problem costume.
+    """
+
+    def test_the_session_context_is_one_rls_actually_recognises(self):
+        captured = {}
+
+        def _fake_session(context_type, **kwargs):
+            captured["context_type"] = context_type
+            captured.update(kwargs)
+
+            class _Ctx:
+                async def __aenter__(self_inner):
+                    raise AssertionError("stop here — we only need the context")
+
+                async def __aexit__(self_inner, *a):
+                    return False
+
+            return _Ctx()
+
+        with patch.object(ts, "get_system_db_session", _fake_session):
+            try:
+                ts._admin_session().__aenter__()
+            except Exception:
+                pass
+
+        # app_rls_is_super_admin() is `context_type = 'user' AND role = 'SUPER_ADMIN'`.
+        # Anything else silently sees nothing.
+        assert captured["context_type"] == "user"
+        assert captured["role"] == "SUPER_ADMIN"
+
+    def test_no_route_uses_a_context_rls_will_reject(self):
+        """A bare context_type like "test_suite" matches no policy at all."""
+        import inspect
+
+        source = inspect.getsource(ts)
+        assert 'get_system_db_session("test_suite")' not in source, (
+            'context_type "test_suite" matches no RLS policy — every query '
+            "returns zero rows. Use _admin_session()."
+        )

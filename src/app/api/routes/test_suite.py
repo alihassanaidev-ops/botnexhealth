@@ -118,6 +118,21 @@ async def require_test_suite_key(request: Request) -> str:
 _Auth = Depends(require_test_suite_key)
 
 
+def _admin_session():
+    """A session that can see every tenant.
+
+    The point of this tool is to inspect any clinic, so it reads across tenants
+    deliberately. A bare ``context_type="test_suite"`` matches no RLS policy and
+    silently returns zero rows — the endpoint answers 200 with an empty list and
+    looks like a data problem rather than a permissions one. ``app_rls_is_super_admin``
+    requires context_type "user" *and* role SUPER_ADMIN, so both are set.
+
+    Safe here only because the router is key-gated and never mounts in
+    production; do not copy this into a tenant-facing route.
+    """
+    return get_system_db_session("user", role="SUPER_ADMIN")
+
+
 # ── Schemas ───────────────────────────────────────────────────────────
 
 
@@ -191,7 +206,7 @@ async def _resolve_target(body: CallRequest) -> TargetResponse:
             "Supply either 'location' (slug) or 'agent_id' so the call can be routed to a clinic.",
         )
 
-    async with get_system_db_session("test_suite") as session:
+    async with _admin_session() as session:
         if body.location:
             # Slugs are unique per institution, not globally: two practices can
             # each have a "main". Picking the first match would silently test
@@ -319,7 +334,7 @@ async def list_functions(request: Request, _: str = _Auth) -> FunctionListRespon
 @limiter.limit(RATE)
 async def list_targets(request: Request, _: str = _Auth) -> dict[str, Any]:
     """The clinics available to call against, so nobody has to guess a slug."""
-    async with get_system_db_session("test_suite") as session:
+    async with _admin_session() as session:
         locations = (
             (await session.execute(select(InstitutionLocation)))
             .scalars()

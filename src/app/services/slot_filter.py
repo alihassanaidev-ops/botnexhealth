@@ -194,8 +194,10 @@ def filter_slots(
     and minimum booking lead-time buffer.
 
     If no operating_hours rows exist, only the buffer filter is applied — an
-    unconfigured location is not clipped. A day that *is* configured is clipped:
-    not open, or open with no window, means no slots that day.
+    unconfigured location is not clipped. A day marked closed offers nothing. A
+    day marked open is clipped to its window when it has one; when it does not,
+    no time-of-day limit is applied and a warning names the day, because
+    "hours unknown" is not the same statement as "closed".
     """
     # 1. Apply buffer (minimum lead-time)
     if buffer_minutes > 0:
@@ -249,26 +251,33 @@ def filter_slots(
             if not day_hours.is_open:
                 continue
 
-            # 3. Check slot is within operating hours.
+            # 3. Check slot is within operating hours — when we know them.
             #
-            # A day flagged open with no window is an incomplete record, not a
-            # 24-hour clinic: toggling a day off nulls its times, and toggling
-            # it back on used to leave them null. Treating that as "open all
-            # day" silently disables the whole control, so treat it as closed —
-            # the same posture quiet hours already take for a clinic with no
-            # permitted window. ``set_operating_hours`` now rejects the shape at
-            # the API, so this only catches rows written before that landed.
+            # A day flagged open with no window is an incomplete record. The
+            # missing information is *when*, not *whether*: ``is_open`` is the
+            # one thing the admin did state, so inferring "closed" from a blank
+            # time overrides the only explicit signal there is.
+            #
+            # This is a filter, not a compliance gate. Quiet hours can fail
+            # closed cheaply because blocked work is *held and sent later*; a
+            # slot removed here is simply never offered and the booking does not
+            # happen. So an unknown window means no time restriction, exactly as
+            # a location with no hours rows at all is not clipped — the two are
+            # the same statement and must not behave in opposite directions.
+            #
+            # What was wrong before was not the pass-through, it was that the
+            # pass-through was silent. It is warned about below, and
+            # ``set_operating_hours`` now refuses to store the shape at all.
             if not day_hours.open_time or not day_hours.close_time:
                 open_without_window.add(day)
-                continue
+            else:
+                slot_start_time = local_start.time()
+                slot_end_time = local_end.time()
 
-            slot_start_time = local_start.time()
-            slot_end_time = local_end.time()
-
-            if slot_start_time < day_hours.open_time:
-                continue
-            if slot_end_time > day_hours.close_time:
-                continue
+                if slot_start_time < day_hours.open_time:
+                    continue
+                if slot_end_time > day_hours.close_time:
+                    continue
 
             # 4. Check slot doesn't overlap any break
             # Get breaks for this specific day + global breaks (day_of_week=None)
@@ -293,8 +302,9 @@ def filter_slots(
     if open_without_window:
         logger.warning(
             "Operating hours incomplete: weekday(s) %s are marked open with no "
-            "open/close time, so every slot on them was treated as closed. "
-            "Set the hours for those days on the location.",
+            "open/close time, so no time-of-day limit was applied on them and "
+            "slots outside normal hours may have been offered. Set the hours "
+            "for those days on the location.",
             sorted(open_without_window),
         )
 
