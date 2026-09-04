@@ -1,9 +1,8 @@
 """Pydantic schema for workflow definition JSON stored in AutomationWorkflowVersion.definition.
 
 Definitions are immutable once published. Schema version "1.0" supports:
-  Triggers: appointment_offset, appointment_state_changed, recall_scan, manual,
-            bulk_import, callback_requested, patient_status_changed, sms_reply,
-            email_reply, enquiry_received
+  Triggers: event, manual, form_submitted, internal_status, schedule,
+            inbound_message
   Nodes:    wait, drip, send_sms, retell_sms_conversation, send_voice, send_email,
             update_patient_status, update_appointment, book_appointment,
             update_gotracker_appointment, booking_link, patient_registration,
@@ -12,6 +11,11 @@ Definitions are immutable once published. Schema version "1.0" supports:
 ``update_appointment`` is the PMS-neutral appointment write-back and should be
 preferred; ``update_gotracker_appointment`` only runs on GoTracker locations and
 is retained for already-published definitions.
+
+The eleven pre-rearchitecture trigger types were retired in favour of the six
+above. ``upconvert_legacy_trigger`` rewrites their stored JSON on load so
+already-published definitions keep executing until the one-off script rewrites
+them at rest; it is a migration aid and is deleted once that has run.
 """
 
 from __future__ import annotations
@@ -22,7 +26,11 @@ from typing import Annotated, Any, Literal, Union
 import phonenumbers
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
-from src.app.pms.gotracker.statuses import MAX_STATUS_ID, MIN_STATUS_ID
+from src.app.pms.gotracker.statuses import (
+    MAX_STATUS_ID,
+    MIN_STATUS_ID,
+    status_for_id,
+)
 from src.app.services.automation.filter_expression import FilterExpression
 from src.app.services.automation.node_registry import outgoing_references
 
@@ -33,76 +41,175 @@ PHONE_COUNTRY_REGIONS = frozenset(phonenumbers.SUPPORTED_REGIONS)
 # ---------------------------------------------------------------------------
 
 
-class AppointmentOffsetTrigger(BaseModel):
+class EventTrigger(BaseModel):
+    """Enroll when one of the subscribed canonical events happens.
+
+    Replaces the per-PMS appointment triggers. Authors pick keys from
+    :mod:`event_catalog` — ``appointment.cancelled``, never
+    ``gotracker_status_id == 3`` — so one campaign definition runs unchanged on
+    either practice-management system. The catalog declares which PMS can raise
+    each event, so the builder hides what a location cannot deliver instead of
+    letting someone publish a campaign that silently never enrolls anyone.
+
+    Timing that used to live in ``appointment_offset`` moves into the graph: an
+    ``appointment.booked`` event followed by a wait node with an
+    ``appointment_relative`` delay expresses "24 hours before the appointment"
+    directly, and reschedules already recompute those timers.
+    """
+
     model_config = ConfigDict(extra="forbid")
 
-    type: Literal["appointment_offset"] = "appointment_offset"
+    type: Literal["event"] = "event"
+    event_keys: list[str] = Field(min_length=1, max_length=20)
     # Optional eligibility filter, evaluated against the trigger event's
     # context BEFORE a run is created. Filtering here rather than in an
     # opening condition node is what keeps ineligible subjects from writing
     # a run, a step execution and analytics rows only to exit at node one.
     filter: FilterExpression | None = None
-    offset_hours: int
-    # Legacy authoring field. Kept for backward compatibility with published
-    # definitions, but appointment-type filtering no longer happens at trigger
-    # selection time.
-    appointment_type_ids: list[str] | None = None
-
-
-class AppointmentStateChangedTrigger(BaseModel):
-    """Enroll when cached GoTracker appointment state matches configured values."""
-
-    model_config = ConfigDict(extra="forbid")
-
-    type: Literal["appointment_state_changed"] = "appointment_state_changed"
-    # Optional eligibility filter, evaluated against the trigger event's
-    # context BEFORE a run is created. Filtering here rather than in an
-    # opening condition node is what keeps ineligible subjects from writing
-    # a run, a step execution and analytics rows only to exit at node one.
-    filter: FilterExpression | None = None
-    status_ids: list[int] = Field(default_factory=list)
-    confirmed: bool | None = None
-    preconfirmed: bool | None = None
-    flow_states: list[str] = Field(default_factory=list)
-    # A campaign-specific deadline measured from FlowChange. It is used by the
-    # post-op template when a voice cooldown defers the call.
+    #: Canonical context path whose value dedupes enrollment. Absent, the engine
+    #: falls back to the per-event key it already computes.
+    dedupe_field: str | None = Field(default=None, max_length=200)
+    #: Hours relative to the appointment start for ``appointment.reminder_due``
+    #: (negative is before). Only meaningful for that key: it is the interval
+    #: that decides *when* the event fires, which no other event needs.
+    reminder_offset_hours: int | None = None
+    #: How long after the event this campaign is still worth running. Used when
+    #: a send is deferred — a voice cooldown, say — to decide between waiting
+    #: and giving up. The post-op campaign depends on it: a follow-up call three
+    #: days after the visit is worse than no call.
     max_followup_delay_hours: int | None = Field(default=None, ge=0, le=168)
     campaign_goal: str | None = None
 
-    @field_validator("status_ids")
-    @classmethod
-    def validate_status_ids(cls, values: list[int]) -> list[int]:
-        unique: list[int] = []
-        for value in values:
-            if value < MIN_STATUS_ID or value > MAX_STATUS_ID:
-                raise ValueError(
-                    f"status_ids must be between {MIN_STATUS_ID} and {MAX_STATUS_ID}"
-                )
-            if value not in unique:
-                unique.append(value)
-        return unique
+    @model_validator(mode="after")
+    def validate_reminder_offset(self) -> "EventTrigger":
+        if (
+            self.reminder_offset_hours is not None
+            and "appointment.reminder_due" not in self.event_keys
+        ):
+            raise ValueError(
+                "reminder_offset_hours only applies to appointment.reminder_due"
+            )
+        if (
+            "appointment.reminder_due" in self.event_keys
+            and self.reminder_offset_hours is None
+        ):
+            raise ValueError(
+                "appointment.reminder_due needs reminder_offset_hours to know when to fire"
+            )
+        return self
 
-    @field_validator("flow_states")
+    @field_validator("event_keys")
     @classmethod
-    def validate_flow_states(cls, values: list[str]) -> list[str]:
+    def validate_event_keys(cls, values: list[str]) -> list[str]:
+        # Imported here rather than at module scope: the catalog is a leaf, but
+        # importing it eagerly makes this module's import order load-bearing.
+        from src.app.services.automation.event_catalog import ALL_EVENT_KEYS
+
         normalized: list[str] = []
         for value in values:
-            cleaned = value.strip()
-            if cleaned and cleaned.casefold() not in {
-                item.casefold() for item in normalized
-            }:
-                normalized.append(cleaned)
+            key = value.strip()
+            if not key:
+                continue
+            if key not in ALL_EVENT_KEYS:
+                raise ValueError(
+                    f"unknown event key '{key}'; expected one of "
+                    f"{', '.join(sorted(ALL_EVENT_KEYS))}"
+                )
+            if key not in normalized:
+                normalized.append(key)
+        if not normalized:
+            raise ValueError("event trigger needs at least one event key")
         return normalized
 
+    @field_validator("campaign_goal")
+    @classmethod
+    def normalize_campaign_goal(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        return value.strip() or None
+
+
+class PmsRecallSource(BaseModel):
+    """Pull the due-recall list from the location's practice-management system.
+
+    The sourcing logic is deliberately server-side rather than expressible as an
+    audience filter. It carries alias-tolerant due-date parsing, a fail-closed
+    treatment-plan check, GoTracker history-sync gating, and interval-scoped
+    recent-visit suppression — none of which a contact-table query can express,
+    and all of which exist because of specific production incidents.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    kind: Literal["pms_recall"] = "pms_recall"
+    recall_interval_months: int = Field(ge=1)
+    #: How long after any recall enrollment before the same patient can enter
+    #: this workflow again.
+    reenrollment_cooldown_days: int = Field(default=90, ge=1, le=730)
+
+
+class AudienceSegmentSource(BaseModel):
+    """Enroll the workflow's saved audience segment on each tick."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    kind: Literal["audience_segment"] = "audience_segment"
+
+
+ScheduleSource = Annotated[
+    Union[PmsRecallSource, AudienceSegmentSource],
+    Field(discriminator="kind"),
+]
+
+
+class ScheduleTrigger(BaseModel):
+    """Enroll on a recurring schedule, from a declared source.
+
+    Replaces ``recall_scan``. The schedule and the sourcing are separated so a
+    new source (an external endpoint, a different segment) is a new ``kind``
+    rather than a new trigger type.
+
+    Cron is evaluated in the location's timezone by default, because "every
+    weekday at 9am" means the clinic's 9am. Enrollment runs through the bounded
+    audience path, which applies consent, do-not-contact and frequency caps that
+    the old recall scanner skipped entirely.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    type: Literal["schedule"] = "schedule"
+    #: Standard five-field cron expression. The builder's presets write this.
+    cron: str = Field(min_length=1, max_length=120)
+    timezone_mode: Literal["location", "fixed"] = "location"
+    fixed_timezone: str | None = Field(default=None, max_length=64)
+    source: ScheduleSource
+    max_enrollments_per_run: int = Field(default=500, ge=1, le=500)
+    filter: FilterExpression | None = None
+    campaign_goal: str | None = None
+
+    @field_validator("cron")
+    @classmethod
+    def validate_cron(cls, value: str) -> str:
+        from croniter import croniter
+
+        expression = " ".join(value.split())
+        if not croniter.is_valid(expression):
+            raise ValueError(f"invalid cron expression: {value!r}")
+        return expression
+
     @model_validator(mode="after")
-    def require_matcher(self) -> "AppointmentStateChangedTrigger":
-        if (
-            not self.status_ids
-            and self.confirmed is None
-            and self.preconfirmed is None
-            and not self.flow_states
-        ):
-            raise ValueError("appointment_state_changed needs at least one matcher")
+    def require_fixed_timezone(self) -> "ScheduleTrigger":
+        if self.timezone_mode == "fixed":
+            from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
+
+            if not self.fixed_timezone:
+                raise ValueError("fixed_timezone is required when timezone_mode='fixed'")
+            try:
+                ZoneInfo(self.fixed_timezone)
+            except (ZoneInfoNotFoundError, ValueError) as exc:
+                raise ValueError(
+                    f"unknown timezone: {self.fixed_timezone!r}"
+                ) from exc
         return self
 
     @field_validator("campaign_goal")
@@ -110,24 +217,7 @@ class AppointmentStateChangedTrigger(BaseModel):
     def normalize_campaign_goal(cls, value: str | None) -> str | None:
         if value is None:
             return None
-        normalized = value.strip()
-        return normalized or None
-
-
-class RecallScanTrigger(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    type: Literal["recall_scan"] = "recall_scan"
-    # Optional eligibility filter, evaluated against the trigger event's
-    # context BEFORE a run is created. Filtering here rather than in an
-    # opening condition node is what keeps ineligible subjects from writing
-    # a run, a step execution and analytics rows only to exit at node one.
-    filter: FilterExpression | None = None
-    recall_interval_months: int = Field(ge=1)
-    # How long after any recall enrollment before the same patient can enter
-    # this workflow again. Defaulted here so old recall_scan definitions pick
-    # up Decision D without a migration.
-    recall_reenrollment_cooldown_days: int = Field(default=90, ge=1, le=730)
+        return value.strip() or None
 
 
 class ManualTrigger(BaseModel):
@@ -138,34 +228,6 @@ class ManualTrigger(BaseModel):
     # context BEFORE a run is created. Filtering here rather than in an
     # opening condition node is what keeps ineligible subjects from writing
     # a run, a step execution and analytics rows only to exit at node one.
-    filter: FilterExpression | None = None
-
-
-class BulkImportTrigger(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    type: Literal["bulk_import"] = "bulk_import"
-    # Optional eligibility filter, evaluated against the trigger event's
-    # context BEFORE a run is created. Filtering here rather than in an
-    # opening condition node is what keeps ineligible subjects from writing
-    # a run, a step execution and analytics rows only to exit at node one.
-    filter: FilterExpression | None = None
-
-
-class EnquiryReceivedTrigger(BaseModel):
-    """Enroll when a sales enquiry lands through the intake pipeline.
-
-    The intake source and Contact record carry the tenant/location identity; the
-    trigger's optional filter can narrow by PHI-light fields such as source,
-    whether this submission created a new contact, or whether it matched an
-    existing PMS patient.
-    """
-
-    model_config = ConfigDict(extra="forbid")
-
-    type: Literal["enquiry_received"] = "enquiry_received"
-    # Optional eligibility filter, evaluated against the intake event before a
-    # run is created.
     filter: FilterExpression | None = None
 
 
@@ -197,67 +259,116 @@ class FormSubmittedTrigger(BaseModel):
     filter: FilterExpression | None = None
 
 
-class CallbackRequestedTrigger(BaseModel):
-    """Enroll when an inbound call is classified 'needs_callback' (Plan 07).
+#: Status fields the platform owns and can fire a trigger on.
+#:
+#: Only fields with real transitions are listed. ``calls.call_status`` (the AI
+#: classification) and ``calls.patient_status`` are written once when the call
+#: record is created and never updated, so "changed" has no meaning for them —
+#: a campaign that wants to react to an AI disposition subscribes to the
+#: ``call.inbound.completed`` event and filters on ``call.outcome`` instead.
+INTERNAL_STATUS_FIELDS: tuple[str, ...] = (
+    "call_workflow_status",
+    "contact_lead_status",
+    "handoff_status",
+    # Written by this engine's own `update_patient_status` node. Kept so a
+    # campaign can still chain off another campaign's recorded outcome.
+    "patient_workflow_status",
+)
 
-    A clinic opts into AI-handled callbacks by activating a workflow with this
-    trigger; with none active, callbacks stay in the manual queue (default).
+
+class InternalStatusTrigger(BaseModel):
+    """Enroll when a status field the platform owns moves to a new value.
+
+    Generalises the old ``patient_status_changed``, which could only see
+    statuses written by this engine's own ``update_patient_status`` node — so it
+    was really campaign-to-campaign chaining rather than a reaction to clinic
+    state. This one also watches the tenant-defined workflow status staff assign
+    to calls, the contact's lead status, and the staff handoff queue.
+
+    ``from_statuses`` empty means "moved to one of ``to_statuses`` from
+    anything", which is what most campaigns want.
     """
 
     model_config = ConfigDict(extra="forbid")
 
-    type: Literal["callback_requested"] = "callback_requested"
+    type: Literal["internal_status"] = "internal_status"
+    field: Literal[
+        "call_workflow_status",
+        "contact_lead_status",
+        "handoff_status",
+        "patient_workflow_status",
+    ]
+    to_statuses: list[str] = Field(min_length=1)
+    from_statuses: list[str] = Field(default_factory=list)
     # Optional eligibility filter, evaluated against the trigger event's
     # context BEFORE a run is created. Filtering here rather than in an
     # opening condition node is what keeps ineligible subjects from writing
     # a run, a step execution and analytics rows only to exit at node one.
     filter: FilterExpression | None = None
-
-
-class PatientStatusChangedTrigger(BaseModel):
-    """Enroll when a workflow records a matching local patient status event."""
-
-    model_config = ConfigDict(extra="forbid")
-
-    type: Literal["patient_status_changed"] = "patient_status_changed"
-    # Optional eligibility filter, evaluated against the trigger event's
-    # context BEFORE a run is created. Filtering here rather than in an
-    # opening condition node is what keeps ineligible subjects from writing
-    # a run, a step execution and analytics rows only to exit at node one.
-    filter: FilterExpression | None = None
-    statuses: list[str] = Field(min_length=1)
     campaign_goal: str | None = None
 
-    @field_validator("statuses")
+    @field_validator("to_statuses", "from_statuses")
     @classmethod
-    def validate_statuses(cls, values: list[str]) -> list[str]:
-        statuses = [status.strip() for status in values if status.strip()]
-        if not statuses:
-            raise ValueError("statuses must include at least one non-empty value")
-        return statuses
+    def normalize_statuses(cls, values: list[str]) -> list[str]:
+        normalized: list[str] = []
+        for value in values:
+            cleaned = value.strip()
+            if cleaned and cleaned.casefold() not in {
+                item.casefold() for item in normalized
+            }:
+                normalized.append(cleaned)
+        return normalized
+
+    @model_validator(mode="after")
+    def require_target_status(self) -> "InternalStatusTrigger":
+        if not self.to_statuses:
+            raise ValueError("to_statuses must include at least one non-empty value")
+        return self
 
     @field_validator("campaign_goal")
     @classmethod
     def normalize_campaign_goal(cls, value: str | None) -> str | None:
         if value is None:
             return None
-        normalized = value.strip()
-        return normalized or None
+        return value.strip() or None
 
 
-class SmsReplyTrigger(BaseModel):
-    """Enroll when an inbound patient SMS matches optional whole-token filters."""
+class InboundMessageTrigger(BaseModel):
+    """Enroll when a patient replies by SMS or email.
+
+    Merges the old ``sms_reply`` and ``email_reply`` triggers, which had
+    identical shapes. ``email_reply`` was accepted by the schema but had no
+    trigger service, so nothing ever enrolled from an inbound email; routing it
+    through here is what finally wires it up.
+
+    Only replies attributable to a known clinic reach this — unattributable mail
+    is held, never enrolled. STOP/START/HELP are handled by the consent pipeline
+    before a campaign ever sees them.
+    """
 
     model_config = ConfigDict(extra="forbid")
 
-    type: Literal["sms_reply"] = "sms_reply"
+    type: Literal["inbound_message"] = "inbound_message"
+    channels: list[Literal["sms", "email"]] = Field(min_length=1)
+    #: Whole-token matches against the message body. Empty means any reply.
+    tokens: list[str] = Field(default_factory=list)
     # Optional eligibility filter, evaluated against the trigger event's
     # context BEFORE a run is created. Filtering here rather than in an
     # opening condition node is what keeps ineligible subjects from writing
     # a run, a step execution and analytics rows only to exit at node one.
     filter: FilterExpression | None = None
-    tokens: list[str] = Field(default_factory=list)
     campaign_goal: str | None = None
+
+    @field_validator("channels")
+    @classmethod
+    def normalize_channels(cls, values: list[str]) -> list[str]:
+        normalized: list[str] = []
+        for value in values:
+            if value not in normalized:
+                normalized.append(value)
+        if not normalized:
+            raise ValueError("inbound_message needs at least one channel")
+        return normalized
 
     @field_validator("tokens")
     @classmethod
@@ -276,57 +387,174 @@ class SmsReplyTrigger(BaseModel):
     def normalize_campaign_goal(cls, value: str | None) -> str | None:
         if value is None:
             return None
-        normalized = value.strip()
-        return normalized or None
-
-
-class EmailReplyTrigger(BaseModel):
-    """Enroll when an inbound patient email matches optional whole-token filters.
-
-    The email counterpart to ``SmsReplyTrigger``. Only replies that routed to a
-    known clinic reach this — unattributable mail is held, never enrolled.
-    """
-
-    model_config = ConfigDict(extra="forbid")
-
-    type: Literal["email_reply"] = "email_reply"
-    # Optional eligibility filter, evaluated against the trigger event's
-    # context BEFORE a run is created. Filtering here rather than in an
-    # opening condition node is what keeps ineligible subjects from writing
-    # a run, a step execution and analytics rows only to exit at node one.
-    filter: FilterExpression | None = None
-    tokens: list[str] = Field(default_factory=list)
-    campaign_goal: str | None = None
-
-    @field_validator("tokens")
-    @classmethod
-    def normalize_tokens(cls, values: list[str]) -> list[str]:
-        normalized: list[str] = []
-        for value in values:
-            token = value.strip()
-            if token and token.casefold() not in {
-                item.casefold() for item in normalized
-            }:
-                normalized.append(token)
-        return normalized
+        return value.strip() or None
 
 
 WorkflowTrigger = Annotated[
     Union[
-        AppointmentOffsetTrigger,
-        AppointmentStateChangedTrigger,
-        RecallScanTrigger,
+        EventTrigger,
         ManualTrigger,
-        BulkImportTrigger,
-        EnquiryReceivedTrigger,
         FormSubmittedTrigger,
-        CallbackRequestedTrigger,
-        PatientStatusChangedTrigger,
-        SmsReplyTrigger,
-        EmailReplyTrigger,
+        InternalStatusTrigger,
+        ScheduleTrigger,
+        InboundMessageTrigger,
     ],
     Field(discriminator="type"),
 ]
+
+
+# ---------------------------------------------------------------------------
+# Legacy trigger conversion
+# ---------------------------------------------------------------------------
+
+#: GoTracker disposition ids → the canonical event a workflow watching that
+#: status was really waiting for.
+_LEGACY_STATUS_EVENTS: dict[str, str] = {
+    "cancelled": "appointment.cancelled",
+    "no_show": "appointment.no_show",
+    "waiting": "appointment.checked_in",
+    "booked": "appointment.booked",
+}
+
+#: The eleven retired trigger types, kept only so a clear error can name them.
+LEGACY_TRIGGER_TYPES: frozenset[str] = frozenset(
+    {
+        "appointment_offset",
+        "appointment_state_changed",
+        "recall_scan",
+        "bulk_import",
+        "enquiry_received",
+        "callback_requested",
+        "patient_status_changed",
+        "sms_reply",
+        "email_reply",
+    }
+)
+
+
+def upconvert_legacy_trigger(data: Any) -> Any:
+    """Rewrite a pre-rearchitecture trigger dict into the current shape.
+
+    This is the read half of a deliberate clean break. The eleven legacy trigger
+    *classes* are gone; this converts their stored JSON on load so already-
+    published definitions keep executing while the one-off script rewrites them
+    at rest. Once that script has run everywhere, this function and its callers
+    can be deleted — it is a migration aid, not a permanent compatibility shim.
+
+    Unknown shapes are returned untouched so Pydantic reports the real error
+    rather than this function masking it.
+    """
+    if not isinstance(data, dict):
+        return data
+    kind = data.get("type")
+    if kind not in LEGACY_TRIGGER_TYPES:
+        return data
+
+    common: dict[str, Any] = {}
+    if data.get("filter") is not None:
+        common["filter"] = data["filter"]
+    if data.get("campaign_goal"):
+        common["campaign_goal"] = data["campaign_goal"]
+
+    if kind == "appointment_offset":
+        # The offset decided when the reminder fired, so it stays as the
+        # interval on the reminder event rather than being lost.
+        return {
+            "type": "event",
+            "event_keys": ["appointment.reminder_due"],
+            "reminder_offset_hours": int(data.get("offset_hours") or 0),
+            **common,
+        }
+
+    if kind == "appointment_state_changed":
+        keys: list[str] = []
+        for status_id in data.get("status_ids") or []:
+            status = status_for_id(status_id)
+            mapped = _LEGACY_STATUS_EVENTS.get(getattr(status, "semantics", "") or "")
+            if mapped and mapped not in keys:
+                keys.append(mapped)
+        for flow_state in data.get("flow_states") or []:
+            if str(flow_state).strip().casefold() == "completed":
+                if "appointment.completed" not in keys:
+                    keys.append("appointment.completed")
+        if data.get("confirmed") is True and "appointment.confirmed" not in keys:
+            keys.append("appointment.confirmed")
+        if not keys:
+            # A matcher we cannot map (preconfirmed, a bespoke Chair Flow state)
+            # still has to enroll on *something* observable.
+            keys = ["appointment.completed"]
+        converted: dict[str, Any] = {
+            "type": "event",
+            "event_keys": keys,
+            **common,
+        }
+        if data.get("max_followup_delay_hours") is not None:
+            converted["max_followup_delay_hours"] = data["max_followup_delay_hours"]
+        return converted
+
+    if kind == "recall_scan":
+        return {
+            "type": "schedule",
+            # The old scanner ran hourly and relied on a monthly idempotency key
+            # to stay quiet. A daily morning tick is the same behaviour without
+            # 23 wasted sweeps a day.
+            "cron": "0 9 * * *",
+            "timezone_mode": "location",
+            "source": {
+                "kind": "pms_recall",
+                "recall_interval_months": int(data.get("recall_interval_months") or 6),
+                "reenrollment_cooldown_days": int(
+                    data.get("recall_reenrollment_cooldown_days") or 90
+                ),
+            },
+            **common,
+        }
+
+    if kind == "bulk_import":
+        return {"type": "manual", **common}
+
+    if kind == "enquiry_received":
+        return {"type": "event", "event_keys": ["enquiry.received"], **common}
+
+    if kind == "callback_requested":
+        # The old trigger was fired only for calls already classified
+        # needs_callback, so the classification becomes an explicit filter.
+        callback_filter = {
+            "kind": "rule",
+            "field": "call.outcome",
+            "op": "eq",
+            "value": "needs_callback",
+        }
+        existing = common.pop("filter", None)
+        merged = (
+            {"kind": "group", "op": "and", "children": [existing, callback_filter]}
+            if existing is not None
+            else callback_filter
+        )
+        return {
+            "type": "event",
+            "event_keys": ["call.inbound.completed"],
+            "filter": merged,
+            **common,
+        }
+
+    if kind == "patient_status_changed":
+        return {
+            "type": "internal_status",
+            "field": "patient_workflow_status",
+            "to_statuses": list(data.get("statuses") or []),
+            **common,
+        }
+
+    if kind in {"sms_reply", "email_reply"}:
+        return {
+            "type": "inbound_message",
+            "channels": ["sms" if kind == "sms_reply" else "email"],
+            "tokens": list(data.get("tokens") or []),
+            **common,
+        }
+
+    return data
 
 # ---------------------------------------------------------------------------
 # Wait delay configs (discriminated by delay_type)
@@ -1446,7 +1674,10 @@ class WorkflowDefinition(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     schema_version: Literal["1.0"] = "1.0"
-    trigger: WorkflowTrigger
+    # Plural so one campaign can start from several events. Definitions stored
+    # with the singular `trigger` key are up-converted on load; `.trigger` below
+    # keeps the many single-trigger call sites working.
+    triggers: list[WorkflowTrigger] = Field(min_length=1, max_length=10)
     entry_node_id: str
     nodes: list[WorkflowNode] = Field(min_length=1)
     compliance: ComplianceMetadata | None = None
@@ -1460,6 +1691,35 @@ class WorkflowDefinition(BaseModel):
     pms_context_fields: list[str] = Field(default_factory=list)
     # node_id -> {x, y}; presentational only, ignored by the runtime.
     layout: dict[str, NodeLayout] | None = None
+
+    @model_validator(mode="before")
+    @classmethod
+    def upgrade_triggers(cls, value: object) -> object:
+        """Accept the singular ``trigger`` key and pre-rearchitecture types.
+
+        Runs before field validation so a definition published against the old
+        schema loads unchanged. An explicit ``triggers`` list always wins; the
+        singular key is only a fallback.
+        """
+        if not isinstance(value, dict):
+            return value
+        upgraded = dict(value)
+        if "trigger" in upgraded:
+            legacy = upgraded.pop("trigger")
+            upgraded.setdefault("triggers", [legacy] if legacy is not None else [])
+        triggers = upgraded.get("triggers")
+        if isinstance(triggers, list):
+            upgraded["triggers"] = [upconvert_legacy_trigger(t) for t in triggers]
+        return upgraded
+
+    @property
+    def trigger(self) -> WorkflowTrigger:
+        """The first trigger.
+
+        Most of the engine still reasons about a single entry point, and this
+        keeps those call sites honest rather than scattering ``triggers[0]``.
+        """
+        return self.triggers[0]
 
     @field_validator("pms_context_fields")
     @classmethod

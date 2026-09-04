@@ -1,40 +1,56 @@
 import { describe, expect, it } from "vitest"
 
-import { selectableTriggerTypes, triggerAllowedForPms } from "@/lib/workflow/catalog"
+import {
+    NODE_PMS,
+    PALETTE_GROUPS,
+    selectableTriggerTypes,
+    TRIGGER_META,
+    triggerAllowedForPms,
+} from "@/lib/workflow/catalog"
 import {
     contextFieldsForTrigger,
     NEXHEALTH_APPOINTMENT_CONTEXT_SAMPLE,
     sampleWorkflowContext,
 } from "@/lib/workflow/context-fields"
+import type { TriggerType } from "@/types/workflow"
+
+const ALL_TRIGGERS = Object.keys(TRIGGER_META) as TriggerType[]
 
 describe("PMS scoping of the workflow builder", () => {
-    it("hides the GoTracker-only trigger from NexHealth institutions", () => {
-        const offered = selectableTriggerTypes("manual", "nexhealth")
-        expect(offered).not.toContain("appointment_state_changed")
-        expect(offered).toContain("appointment_offset")
-    })
-
-    it("offers the appointment-state trigger to GoTracker institutions", () => {
-        expect(selectableTriggerTypes("manual", "gotracker")).toContain(
-            "appointment_state_changed",
-        )
-    })
-
-    it("fails closed while the PMS type is unknown", () => {
-        expect(triggerAllowedForPms("appointment_state_changed", null)).toBe(false)
-        expect(selectableTriggerTypes("manual", null)).not.toContain(
-            "appointment_state_changed",
-        )
+    // The trigger-level PMS gate is gone. It existed to hide
+    // `appointment_state_changed` from NexHealth tenants, because some of the
+    // states it matched were GoTracker-only; per-PMS availability now lives on
+    // individual event keys in the served event catalog, which is finer-grained.
+    it("offers every trigger on every PMS, and while the PMS is still unknown", () => {
+        for (const pms of ["gotracker", "nexhealth", null] as const) {
+            const offered = selectableTriggerTypes("manual", pms)
+            expect(offered).toEqual(ALL_TRIGGERS)
+            for (const trigger of ALL_TRIGGERS) {
+                expect(triggerAllowedForPms(trigger, pms)).toBe(true)
+            }
+        }
     })
 
     it("keeps an already-selected trigger visible so old workflows still render", () => {
-        expect(
-            selectableTriggerTypes("appointment_state_changed", "nexhealth"),
-        ).toContain("appointment_state_changed")
+        expect(selectableTriggerTypes("schedule", "nexhealth")).toContain("schedule")
+    })
+
+    // What survives the rearchitecture is the NODE-level gate: the GoTracker
+    // appointment write-back binds a workflow to one practice-management system,
+    // so it stays owned by GoTracker.
+    it("keeps the GoTracker appointment node owned by GoTracker", () => {
+        expect(NODE_PMS.update_gotracker_appointment).toEqual(["gotracker"])
+        expect(NODE_PMS.update_appointment).toBeUndefined()
+    })
+
+    it("keeps the GoTracker-only node out of the palette entirely", () => {
+        const palette = PALETTE_GROUPS.flatMap((group) => group.types)
+        expect(palette).not.toContain("update_gotracker_appointment")
+        expect(palette).toContain("update_appointment")
     })
 
     it("serves no GoTracker context fields to a NexHealth institution", () => {
-        const fields = contextFieldsForTrigger("appointment_offset", "nexhealth")
+        const fields = contextFieldsForTrigger("event", "nexhealth")
         expect(fields.length).toBeGreaterThan(0)
         for (const field of fields) {
             expect(field.name).not.toMatch(/gotracker/)
@@ -44,9 +60,7 @@ describe("PMS scoping of the workflow builder", () => {
     })
 
     it("still serves the GoTracker payload fields to GoTracker institutions", () => {
-        const names = contextFieldsForTrigger("appointment_offset", "gotracker").map(
-            (f) => f.name,
-        )
+        const names = contextFieldsForTrigger("event", "gotracker").map((f) => f.name)
         expect(names).toContain("gotracker_appointment_id")
         expect(names).not.toContain("appointment_id")
     })

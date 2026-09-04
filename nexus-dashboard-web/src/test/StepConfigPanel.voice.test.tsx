@@ -9,7 +9,7 @@ vi.mock("@/lib/workflow-api", () => ({
 
 const DEF: WorkflowDefinition = {
     schema_version: "1.0",
-    trigger: { type: "callback_requested" },
+    trigger: { type: "event", event_keys: ["call.inbound.completed"] },
     entry_node_id: "voice-1",
     nodes: [
         {

@@ -14,7 +14,7 @@ from src.app.pms.models import (
     UniversalSlot,
 )
 from src.app.services.automation.definition_schema import (
-    AppointmentOffsetTrigger,
+    EventTrigger,
     ExitNode,
     BookAppointmentNode,
     WorkflowDefinition,
@@ -72,7 +72,7 @@ def _run() -> AutomationWorkflowRun:
 
 def _definition() -> WorkflowDefinition:
     return WorkflowDefinition(
-        trigger=AppointmentOffsetTrigger(offset_hours=-24),
+        trigger=EventTrigger(event_keys=["appointment.reminder_due"], reminder_offset_hours=-24),
         entry_node_id="book-1",
         nodes=[
             BookAppointmentNode(

@@ -1,9 +1,9 @@
 """The merge-field catalog must cover every trigger the schema accepts.
 
-`appointment_state_changed` and `email_reply` were added to the definition schema
+Two of the pre-rearchitecture trigger types were added to the definition schema
 but never to `merge_field_catalog.WorkflowTriggerType`. Because `fields_for`
 filters on membership, both resolved to an EMPTY catalog: the builder's
-insert-field menu was blank on the primary GoTracker trigger, and
+insert-field menu was blank on the primary appointment trigger, and
 `validation_service` raised `merge_field_unavailable_for_trigger` for every token
 in both live production campaigns.
 
@@ -20,6 +20,7 @@ import pytest
 from src.app.services.automation.definition_schema import WorkflowTrigger
 from src.app.services.automation.merge_field_catalog import (
     ALL_TRIGGERS,
+    APPOINTMENT_TRIGGERS,
     MERGE_FIELD_CATALOG,
     WorkflowTriggerType,
     fields_for,
@@ -68,12 +69,15 @@ def test_every_trigger_resolves_fields(trigger_type: str) -> None:
 
 
 def test_appointment_triggers_expose_appointment_fields() -> None:
-    """The appointment-state trigger must reach the appointment context.
+    """A trigger whose run carries an appointment must reach the appointment context.
 
     Both live campaigns render appointment date/time; before this scope fix the
-    post-op campaign could not insert them from the builder at all.
+    post-op campaign could not insert them from the builder at all. The two
+    appointment trigger types are now one ``event`` trigger, plus
+    ``internal_status``, whose run inherits the appointment from the run that
+    recorded the status.
     """
-    for trigger_type in ("appointment_offset", "appointment_state_changed"):
+    for trigger_type in APPOINTMENT_TRIGGERS:
         names = {field.name for field in fields_for(trigger_type=trigger_type)}
         assert {
             "appointment_date",
@@ -82,19 +86,45 @@ def test_appointment_triggers_expose_appointment_fields() -> None:
         } <= names, f"{trigger_type} is missing appointment merge fields"
 
 
-def test_reply_fields_stay_on_their_own_channel() -> None:
-    """SMS-named fields must not surface on the email-reply trigger."""
-    email_names = {field.name for field in fields_for(trigger_type="email_reply")}
-    assert "sms_reply_body" not in email_names
-    assert "email_reply_intent" in email_names
+def test_reply_fields_reach_only_the_inbound_message_trigger() -> None:
+    """Both reply field families belong to ``inbound_message`` and nothing else.
 
-    sms_names = {field.name for field in fields_for(trigger_type="sms_reply")}
-    assert "email_reply_intent" not in sms_names
-    assert "sms_reply_body" in sms_names
+    ``sms_reply`` and ``email_reply`` were merged into one trigger, so the
+    separation that used to be per-trigger is now per-group: an author picking
+    the SMS channel still sees the SMS group, but the catalog scope is shared.
+    What must not regress is the field families leaking onto unrelated triggers.
+    """
+    inbound_fields = fields_for(trigger_type="inbound_message")
+    inbound_names = {field.name for field in inbound_fields}
+    assert {"sms_reply_body", "sms_reply_intent", "email_reply_intent"} <= inbound_names
+
+    groups = {
+        field.name: field.group for field in inbound_fields if field.name in inbound_names
+    }
+    assert groups["sms_reply_body"] == "sms_reply"
+    assert groups["email_reply_intent"] == "email_reply"
+
+    for trigger_type in ALL_TRIGGERS:
+        if trigger_type == "inbound_message":
+            continue
+        other = {field.name for field in fields_for(trigger_type=trigger_type)}
+        assert not (
+            {"sms_reply_body", "sms_reply_intent", "email_reply_intent"} & other
+        ), f"{trigger_type} exposes reply fields its runs never carry"
+
+
+def test_reply_body_is_never_insertable_into_an_sms() -> None:
+    """Quoting the patient's own text back at them over SMS is not offered."""
+    sms_names = {
+        field.name for field in fields_for(trigger_type="inbound_message", channel="sms")
+    }
+    assert "sms_reply_body" not in sms_names
+    assert "sms_reply_intent" in sms_names
 
 
 def test_enquiry_trigger_exposes_sales_enquiry_fields() -> None:
-    names = {field.name for field in fields_for(trigger_type="enquiry_received")}
+    # `enquiry_received` is now the `enquiry.received` key on the event trigger.
+    names = {field.name for field in fields_for(trigger_type="event")}
 
     assert {
         "enquiry_source",

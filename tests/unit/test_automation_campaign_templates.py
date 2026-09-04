@@ -25,6 +25,36 @@ from src.app.api.routes.automation_templates import (
 )
 
 
+def _gotracker_only_template():
+    """A template narrowed to GoTracker by one of its nodes.
+
+    Every shipped template runs on both systems now, so the narrowing rule has
+    nothing left to act on in the library — it has to be exercised against a
+    template built here or it goes untested.
+    """
+    import dataclasses
+
+    base = TEMPLATES["appointment-reminder-24h"]
+    return dataclasses.replace(
+        base,
+        id="gotracker-writeback",
+        name="GoTracker write-back",
+        definition={
+            "trigger": {"type": "event", "event_keys": ["appointment.confirmed"]},
+            "entry_node_id": "write-tracker",
+            "nodes": [
+                {
+                    "type": "update_gotracker_appointment",
+                    "id": "write-tracker",
+                    "status_id": 1,
+                    "next_node_id": "exit-1",
+                },
+                {"type": "exit", "id": "exit-1"},
+            ],
+        },
+    )
+
+
 # ---------------------------------------------------------------------------
 # Template library — schema validation
 # ---------------------------------------------------------------------------
@@ -55,7 +85,7 @@ def test_list_templates_returns_all() -> None:
 def test_get_template_known_id() -> None:
     t = get_template("surgery-pre-appointment-confirmation")
     assert t is not None
-    assert t.trigger_type == "appointment_offset"
+    assert t.trigger_type == "event"
 
 
 def test_get_template_unknown_id_returns_none() -> None:
@@ -67,16 +97,24 @@ def test_get_template_unknown_id_returns_none() -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_appointment_templates_use_appointment_offset_trigger() -> None:
-    t = TEMPLATES["surgery-pre-appointment-confirmation"]
-    assert t.definition["trigger"]["type"] == "appointment_offset"
+def test_appointment_templates_use_the_reminder_due_event_trigger() -> None:
+    """The offset that used to be a trigger type is now the reminder interval.
+
+    ``appointment_offset`` was retired; what made it distinct — "fire N hours
+    relative to the appointment" — survives as ``reminder_offset_hours`` on the
+    ``appointment.reminder_due`` event, so the same template runs on either PMS.
+    """
+    trigger = TEMPLATES["surgery-pre-appointment-confirmation"].definition["trigger"]
+    assert trigger["type"] == "event"
+    assert trigger["event_keys"] == ["appointment.reminder_due"]
+    assert trigger["reminder_offset_hours"] == -24
 
 
 def test_appointment_reminder_template_is_launchable_sms_ladder() -> None:
     template = TEMPLATES["appointment-reminder-24h"]
     nodes = {node["id"]: node for node in template.definition["nodes"]}
 
-    assert template.trigger_type == "appointment_offset"
+    assert template.trigger_type == "event"
     assert template.definition["entry_node_id"] == "configure-reminder-links"
     assert nodes["configure-reminder-links"]["type"] == "booking_link"
     assert nodes["configure-reminder-links"]["actions"] == ["confirm", "reschedule"]
@@ -177,7 +215,7 @@ def test_appointment_reminder_setup_controls_timing_windows() -> None:
     )
     nodes = {node["id"]: node for node in definition["nodes"]}
 
-    assert definition["trigger"]["offset_hours"] == -18
+    assert definition["trigger"]["reminder_offset_hours"] == -18
     assert nodes["wait-retry-1"]["wait_for"]["response_window_seconds"] == int(
         4.5 * 60 * 60
     )
@@ -190,14 +228,19 @@ def test_overdue_recall_template_is_launchable_with_item25_eligibility() -> None
     template = TEMPLATES["recall-sms-6month"]
     nodes = {node["id"]: node for node in template.definition["nodes"]}
 
-    assert template.trigger_type == "recall_scan"
+    assert template.trigger_type == "schedule"
     assert template.definition["entry_node_id"] == "configure-recall-booking-link"
     assert template.definition["pms_context_fields"] == [
         "recall_due_date",
         "recall_type_name",
         "has_active_treatment_plan",
     ]
-    assert template.definition["trigger"]["recall_reenrollment_cooldown_days"] == 90
+    # The recall sweep is a scheduled tick over a declared source now, so the
+    # cooldown belongs to the source rather than to the trigger itself.
+    source = template.definition["trigger"]["source"]
+    assert source["kind"] == "pms_recall"
+    assert source["recall_interval_months"] == 6
+    assert source["reenrollment_cooldown_days"] == 90
     assert template.definition["trigger"]["filter"] == {
         "kind": "group",
         "op": "and",
@@ -295,7 +338,7 @@ def test_overdue_recall_setup_controls_cooldown_and_booking_window() -> None:
     )
     nodes = {node["id"]: node for node in definition["nodes"]}
 
-    assert definition["trigger"]["recall_reenrollment_cooldown_days"] == 120
+    assert definition["trigger"]["source"]["reenrollment_cooldown_days"] == 120
     assert nodes["configure-recall-booking-link"]["window_days"] == 45
 
 
@@ -332,7 +375,7 @@ def test_surgery_confirmation_template_configures_reasons_and_retry_timing() -> 
     )
 
     assert "appointment_type_ids" not in definition["trigger"]
-    assert definition["trigger"]["offset_hours"] == -36
+    assert definition["trigger"]["reminder_offset_hours"] == -36
     nodes = {node["id"]: node for node in definition["nodes"]}
     # Eligibility lives on the trigger, so an ineligible appointment never
     # creates a run at all.
@@ -376,7 +419,7 @@ def test_surgery_confirmation_template_allows_call_at_appointment_time() -> None
         },
     )
 
-    assert definition["trigger"]["offset_hours"] == 0
+    assert definition["trigger"]["reminder_offset_hours"] == 0
 
 
 def test_surgery_confirmation_template_requires_at_least_one_reason() -> None:
@@ -452,16 +495,15 @@ def test_surgery_confirmation_template_does_not_treat_answered_as_confirmed() ->
     assert router["default_next_node_id"] == "mark-followup"
 
 
-def test_post_op_template_starts_from_completed_flow_state_and_waits_one_day() -> None:
+def test_post_op_template_starts_from_the_completed_visit_event_and_waits_one_day() -> None:
     t = TEMPLATES["post-op-followup-after-confirmation"]
     nodes = {node["id"]: node for node in t.definition["nodes"]}
 
+    # The Chair Flow "Completed" string the old trigger matched on is now the
+    # canonical event, which NexHealth derives rather than impersonates.
     assert t.definition["trigger"] == {
-        "type": "appointment_state_changed",
-        "status_ids": [],
-        "confirmed": None,
-        "preconfirmed": None,
-        "flow_states": ["Completed"],
+        "type": "event",
+        "event_keys": ["appointment.completed"],
         "max_followup_delay_hours": 72,
         "campaign_goal": "post_op_followup",
     }
@@ -528,8 +570,11 @@ def test_sales_template_starts_from_enquiry_received_trigger() -> None:
     template = TEMPLATES["sales-qualification"]
     nodes = {node["id"]: node for node in template.definition["nodes"]}
 
-    assert template.trigger_type == "enquiry_received"
-    assert template.definition["trigger"] == {"type": "enquiry_received"}
+    assert template.trigger_type == "event"
+    assert template.definition["trigger"] == {
+        "type": "event",
+        "event_keys": ["enquiry.received"],
+    }
     assert template.definition["entry_node_id"] == "mark-engaged"
     assert nodes["ai-qualification"]["type"] == "retell_sms_conversation"
     assert nodes["configure-registration"]["type"] == "patient_registration"
@@ -550,7 +595,8 @@ def test_sales_template_configures_profile_provider_types_and_window() -> None:
     parsed = WorkflowDefinition.model_validate(definition)
     nodes = {node["id"]: node for node in definition["nodes"]}
 
-    assert parsed.trigger.type == "enquiry_received"
+    assert parsed.trigger.type == "event"
+    assert parsed.trigger.event_keys == ["enquiry.received"]
     assert nodes["ai-qualification"]["chat_profile_id"] == "sms-profile-1"
     assert nodes["configure-registration"]["provider_id"] == "provider-1"
     assert nodes["configure-booking-link"]["provider_id"] == "provider-1"
@@ -659,7 +705,13 @@ def test_list_route_returns_all_templates() -> None:
     assert len(result) == 5
 
 
-def test_list_route_hides_gotracker_templates_from_nexhealth() -> None:
+def test_list_route_offers_every_launch_template_to_nexhealth() -> None:
+    """The post-op campaign is no longer GoTracker-only.
+
+    It used to be hidden because its trigger matched a Chair Flow state only
+    GoTracker sends. It now starts from ``appointment.completed``, which
+    NexHealth derives, so a NexHealth clinic gets the same five templates.
+    """
     import unittest.mock as mock
 
     user = MagicMock()
@@ -669,8 +721,29 @@ def test_list_route_hides_gotracker_templates_from_nexhealth() -> None:
     ):
         result = asyncio.run(list_campaign_templates(user))
     ids = {t.id for t in result}
-    assert "post-op-followup-after-confirmation" not in ids
-    assert len(result) == 4
+    assert "post-op-followup-after-confirmation" in ids
+    assert len(result) == 5
+
+
+def test_list_route_still_hides_a_template_whose_nodes_are_gotracker_only() -> None:
+    """Node ownership is what narrows a template now, and it still narrows."""
+    import unittest.mock as mock
+
+    from src.app.services.automation import campaign_templates
+
+    user = MagicMock()
+    with (
+        mock.patch.dict(
+            campaign_templates.TEMPLATES,
+            {"gotracker-writeback": _gotracker_only_template()},
+        ),
+        mock.patch(
+            "src.app.api.routes.automation_templates._institution_pms_type",
+            new=AsyncMock(return_value="nexhealth"),
+        ),
+    ):
+        result = asyncio.run(list_campaign_templates(user))
+    assert "gotracker-writeback" not in {t.id for t in result}
 
 
 # ---------------------------------------------------------------------------
@@ -692,21 +765,42 @@ def test_get_route_returns_template() -> None:
     assert result.id == "surgery-pre-appointment-confirmation"
 
 
-def test_get_route_hides_gotracker_template_from_nexhealth() -> None:
+def test_get_route_hides_a_gotracker_only_template_from_nexhealth() -> None:
     import unittest.mock as mock
 
     from fastapi import HTTPException
+
+    from src.app.services.automation import campaign_templates
+
+    user = MagicMock()
+    with (
+        mock.patch.dict(
+            campaign_templates.TEMPLATES,
+            {"gotracker-writeback": _gotracker_only_template()},
+        ),
+        mock.patch(
+            "src.app.api.routes.automation_templates._institution_pms_type",
+            new=AsyncMock(return_value="nexhealth"),
+        ),
+    ):
+        with pytest.raises(HTTPException) as exc_info:
+            asyncio.run(get_campaign_template("gotracker-writeback", user))
+    assert exc_info.value.status_code == 404
+
+
+def test_get_route_offers_the_post_op_template_to_nexhealth() -> None:
+    """Its completed-visit event is derived on NexHealth, not GoTracker-only."""
+    import unittest.mock as mock
 
     user = MagicMock()
     with mock.patch(
         "src.app.api.routes.automation_templates._institution_pms_type",
         new=AsyncMock(return_value="nexhealth"),
     ):
-        with pytest.raises(HTTPException) as exc_info:
-            asyncio.run(
-                get_campaign_template("post-op-followup-after-confirmation", user)
-            )
-    assert exc_info.value.status_code == 404
+        result = asyncio.run(
+            get_campaign_template("post-op-followup-after-confirmation", user)
+        )
+    assert result.id == "post-op-followup-after-confirmation"
 
 
 def test_get_route_unknown_id_raises_404() -> None:
@@ -799,7 +893,7 @@ def test_instantiate_creates_publishes_and_pauses_workflow() -> None:
 
     assert result.id == "wf-new"
     assert result.status == "paused"
-    assert result.trigger_type == "appointment_offset"
+    assert result.trigger_type == "event"
     # create_draft must NOT receive trigger_type/definition (the original bug).
     mock_svc.create_draft.assert_awaited_once()
     _, create_kwargs = mock_svc.create_draft.call_args
@@ -882,11 +976,14 @@ def test_instantiate_sales_template_publishes_enquiry_definition() -> None:
             )
         )
 
-    assert result.trigger_type == "enquiry_received"
+    assert result.trigger_type == "event"
     _, create_kwargs = mock_svc.create_draft.call_args
     assert create_kwargs["category"] == "sales"
     published_def = mock_svc.publish_version.call_args.args[1]
-    assert published_def["trigger"] == {"type": "enquiry_received"}
+    assert published_def["trigger"] == {
+        "type": "event",
+        "event_keys": ["enquiry.received"],
+    }
     published_nodes = {node["id"]: node for node in published_def["nodes"]}
     assert published_nodes["ai-qualification"]["chat_profile_id"] == "sms-profile-1"
     assert published_nodes["configure-registration"]["provider_id"] == "provider-1"
@@ -926,18 +1023,24 @@ def test_instantiate_gotracker_template_rejected_for_nexhealth() -> None:
 
     from fastapi import HTTPException
 
+    from src.app.services.automation import campaign_templates
+
     user = MagicMock()
     user.institution_id = "inst-1"
     user.id = "user-1"
 
-    with mock.patch(
-        "src.app.api.routes.automation_templates._institution_pms_type",
-        new=AsyncMock(return_value="nexhealth"),
+    with (
+        mock.patch.dict(
+            campaign_templates.TEMPLATES,
+            {"gotracker-writeback": _gotracker_only_template()},
+        ),
+        mock.patch(
+            "src.app.api.routes.automation_templates._institution_pms_type",
+            new=AsyncMock(return_value="nexhealth"),
+        ),
     ):
         with pytest.raises(HTTPException) as exc_info:
-            asyncio.run(
-                instantiate_template("post-op-followup-after-confirmation", user)
-            )
+            asyncio.run(instantiate_template("gotracker-writeback", user))
 
     assert exc_info.value.status_code == 422
     assert exc_info.value.detail["code"] == "template_unsupported_for_pms"
@@ -973,32 +1076,30 @@ def test_instantiate_unknown_template_raises_404() -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_template_pms_types_derivation() -> None:
+def test_every_launch_template_runs_on_nexhealth() -> None:
+    """No shipped template is PMS-exclusive any more.
+
+    Triggers are no longer PMS-owned — availability is decided per event key,
+    and every key the launch templates subscribe to is at least derived on both
+    systems. What can still exclude a PMS is a node, so the check is that none
+    of the launch templates reaches for a PMS-owned one.
+    """
     from src.app.services.automation.campaign_templates import (
         list_templates,
         template_pms_types,
     )
 
     for template in list_templates():
-        pms_types = template_pms_types(template)
-        trigger_type = (template.definition.get("trigger") or {}).get("type")
-        if trigger_type == "appointment_state_changed":
-            assert pms_types == frozenset({"gotracker"}), template.id
-        else:
-            assert "nexhealth" in pms_types, (
-                f"{template.id} unexpectedly excludes nexhealth"
-            )
+        assert "nexhealth" in template_pms_types(template), (
+            f"{template.id} unexpectedly excludes nexhealth"
+        )
 
 
-def test_gotracker_only_template_is_hidden_from_nexhealth() -> None:
-    from src.app.services.automation.campaign_templates import (
-        get_template,
-        template_pms_types,
-    )
+def test_template_with_a_gotracker_only_node_excludes_nexhealth() -> None:
+    """Node ownership is the remaining narrowing rule, and it still applies."""
+    from src.app.services.automation.campaign_templates import template_pms_types
 
-    template = get_template("post-op-followup-after-confirmation")
-    assert template is not None
-    assert template_pms_types(template) == frozenset({"gotracker"})
+    assert template_pms_types(_gotracker_only_template()) == frozenset({"gotracker"})
 
 
 def test_no_gotracker_wording_in_shared_templates() -> None:
@@ -1024,3 +1125,39 @@ def test_no_gotracker_wording_in_shared_templates() -> None:
         assert "gotracker" not in blob, (
             f"shared template {template.id} still mentions GoTracker in its copy"
         )
+
+
+def test_every_template_instantiates_into_a_publishable_definition() -> None:
+    """Setup fields must write keys the schema actually accepts.
+
+    The trigger rename broke exactly this: a setup field kept writing the
+    retired ``offset_hours``, and because the schema forbids unknown keys, two
+    shipped templates could no longer be published at all. Asserting the raw
+    dict did not catch it — only validating does.
+    """
+    for template in list_templates():
+        options = {
+            field["id"]: _sample_setup_value(field)
+            for field in (template.metadata.setup_fields or [])
+        }
+        definition = instantiate_definition(
+            template,
+            voice_profile_id="vp-1",
+            voice_agent_id="agent-1",
+            setup_options=options,
+        )
+        # Raises on any key the schema does not accept.
+        WorkflowDefinition.model_validate(definition)
+
+
+def _sample_setup_value(field: dict) -> object:
+    """A plausible value for one setup field, by declared type."""
+    kind = field.get("type")
+    if kind in {"string_list", "appointment_type_multiselect"}:
+        return ["implant surgery"]
+    if kind in {"voice_profile_select", "provider_select", "location", "select"}:
+        return "vp-1"
+    if kind == "number":
+        default = field.get("default")
+        return default if isinstance(default, int) else 1
+    return field.get("default") or "sample"

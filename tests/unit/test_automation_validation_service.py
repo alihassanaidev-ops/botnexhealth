@@ -335,8 +335,8 @@ def _validate_with_pms(definition: dict, pms_type: str):
     )
 
 
-_STATE_CHANGED_SMS = {
-    "trigger": {"type": "appointment_state_changed", "flow_states": ["Completed"]},
+_COMPLETED_VISIT_SMS = {
+    "trigger": {"type": "event", "event_keys": ["appointment.completed"]},
     "entry_node_id": "s1",
     "nodes": [
         {"type": "send_sms", "id": "s1", "body_template": "hi", "next_node_id": "x1"},
@@ -345,18 +345,40 @@ _STATE_CHANGED_SMS = {
 }
 
 
-def test_gotracker_trigger_blocks_publish_on_nexhealth() -> None:
-    issues = _validate_with_pms(_STATE_CHANGED_SMS, "nexhealth")
-    assert WorkflowValidationService.is_publishable(issues) is False
-    assert any(
-        i.code == "trigger_unsupported_for_pms" and i.severity == "error"
-        for i in issues
-    )
+def test_appointment_event_trigger_publishes_on_either_pms() -> None:
+    """No trigger type is PMS-owned any more.
+
+    The old ``appointment_state_changed`` trigger was GoTracker-only because it
+    matched Chair Flow states, and publishing it on NexHealth was blocked here.
+    Its replacement names the *event* rather than the vendor's representation of
+    it, so the same definition publishes on both — the per-PMS decision moved
+    down to the individual event key.
+    """
+    for pms_type in ("nexhealth", "gotracker"):
+        issues = _validate_with_pms(_COMPLETED_VISIT_SMS, pms_type)
+        assert not any(i.code == "trigger_unsupported_for_pms" for i in issues)
+        assert WorkflowValidationService.is_publishable(issues) is True
 
 
-def test_gotracker_trigger_is_allowed_on_gotracker() -> None:
-    issues = _validate_with_pms(_STATE_CHANGED_SMS, "gotracker")
-    assert not any(i.code == "trigger_unsupported_for_pms" for i in issues)
+def test_gotracker_only_event_key_is_not_offered_to_nexhealth() -> None:
+    """The gate the retired trigger map used to provide, at event granularity.
+
+    ``appointment.checked_in`` has no NexHealth equivalent, so the builder's
+    trigger picker must not offer it there — otherwise a clinic can author a
+    campaign that silently never enrolls anyone.
+    """
+    from src.app.services.automation import event_catalog
+
+    assert event_catalog.supports("appointment.checked_in", "nexhealth") == "unsupported"
+    assert event_catalog.supports("appointment.checked_in", "gotracker") == "native"
+
+    nexhealth_keys = {event["key"] for event in event_catalog.public_events("nexhealth")}
+    gotracker_keys = {event["key"] for event in event_catalog.public_events("gotracker")}
+    assert "appointment.checked_in" not in nexhealth_keys
+    assert "appointment.checked_in" in gotracker_keys
+    # The completed-visit event is derived rather than absent on NexHealth, so
+    # it stays on offer — that is the distinction the whole-trigger gate lost.
+    assert "appointment.completed" in nexhealth_keys
 
 
 def test_gotracker_node_blocks_publish_on_nexhealth() -> None:

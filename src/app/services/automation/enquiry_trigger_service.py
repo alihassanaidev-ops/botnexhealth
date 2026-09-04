@@ -17,7 +17,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from src.app.models.automation_workflow import AutomationWorkflow
 from src.app.models.contact import Contact
 from src.app.services.automation.definition_schema import (
-    EnquiryReceivedTrigger,
+    EventTrigger,
     WorkflowDefinition,
 )
 from src.app.services.automation.trigger_filter import trigger_filter_matches
@@ -185,7 +185,11 @@ def workflow_matches_enquiry(
         definition = WorkflowDefinition.model_validate(workflow.definition)
     except Exception:
         return False
-    if not isinstance(definition.trigger, EnquiryReceivedTrigger):
+    subscribed = any(
+        isinstance(trigger, EventTrigger) and "enquiry.received" in trigger.event_keys
+        for trigger in definition.triggers
+    )
+    if not subscribed:
         return False
     return trigger_filter_matches(workflow, context)
 

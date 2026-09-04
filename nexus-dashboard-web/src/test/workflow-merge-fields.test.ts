@@ -50,16 +50,12 @@ describe("merge-field catalog", () => {
                 phi_level: "none",
                 channels: ["sms", "email", "voice"],
                 trigger_types: [
-                    "appointment_offset",
-                    "appointment_state_changed",
-                    "recall_scan",
+                    "event",
                     "manual",
-                    "bulk_import",
-                    "callback_requested",
-                    "enquiry_received",
-                    "patient_status_changed",
-                    "sms_reply",
-                    "email_reply",
+                    "form_submitted",
+                    "internal_status",
+                    "schedule",
+                    "inbound_message",
                 ],
             },
         ])
@@ -90,15 +86,15 @@ describe("merge-field catalog", () => {
             catalogItem("provider_name", "{{provider_name}}", "Provider", "Dr. Smith"),
         ])
         const fields = await loadMergeFields({
-            triggerType: "appointment_offset",
+            triggerType: "event",
             channel: "sms",
         })
         expect(mockList).toHaveBeenCalledWith({
-            triggerType: "appointment_offset",
+            triggerType: "event",
             channel: "sms",
         })
         expect(fields.map((f) => f.token)).toEqual(["{{provider_name}}"])
-        expect(getMergeFields({ triggerType: "appointment_offset", channel: "sms" })).toBe(fields)
+        expect(getMergeFields({ triggerType: "event", channel: "sms" })).toBe(fields)
     })
 
     it("identifies tokens unavailable for a trigger or channel", () => {
@@ -110,13 +106,13 @@ describe("merge-field catalog", () => {
         ).toEqual(["{{appointment_date}}"])
         expect(
             unavailableTokens("Hi {{appointment_date}}", {
-                triggerType: "patient_status_changed",
+                triggerType: "internal_status",
                 channel: "voice",
             }),
         ).toEqual([])
         expect(
             unavailableTokens("Hi {{appointment_type}}", {
-                triggerType: "appointment_offset",
+                triggerType: "event",
                 channel: "sms",
             }),
         ).toEqual([])
@@ -136,16 +132,12 @@ function catalogItem(name: string, token: string, label: string, sample: string)
         phi_level: "none" as const,
         channels: ["sms", "email", "voice"],
         trigger_types: [
-            "appointment_offset",
-            "appointment_state_changed",
-            "recall_scan",
+            "event",
             "manual",
-            "bulk_import",
-            "callback_requested",
-            "enquiry_received",
-            "patient_status_changed",
-            "sms_reply",
-            "email_reply",
+            "form_submitted",
+            "internal_status",
+            "schedule",
+            "inbound_message",
         ],
     }
 }

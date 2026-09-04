@@ -33,7 +33,9 @@ from src.app.models.sms_consent import (
     SmsSuppression,
 )
 from src.app.services.automation.definition_schema import (
+    PmsRecallSource,
     RetellSmsConversationNode,
+    ScheduleTrigger,
     SendEmailNode,
     SendSmsNode,
     SendVoiceNode,
@@ -901,7 +903,12 @@ def _preview_warnings(
     warnings: list[str] = []
     if definition_row is None:
         warnings.append("No saved audience definition exists; using the default safe exclusions.")
-    if segment.filters.recall_due_before is not None or (definition and definition.trigger.type == "recall_scan"):
+    recall_sourced = bool(definition) and any(
+        isinstance(trigger, ScheduleTrigger)
+        and isinstance(trigger.source, PmsRecallSource)
+        for trigger in definition.triggers
+    )
+    if segment.filters.recall_due_before is not None or recall_sourced:
         warnings.append("Recall working-set data is not available yet; recall filters are treated as missing context.")
     if segment.filters.preferred_language_in:
         warnings.append("Preferred-language projection is not available yet; language filters are treated as missing context.")

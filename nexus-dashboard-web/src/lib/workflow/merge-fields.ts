@@ -12,19 +12,15 @@ import { listMergeFields } from "@/lib/workflow-api"
 type MergeChannel = "sms" | "email" | "voice"
 
 const ALL_TRIGGERS: TriggerType[] = [
-    "appointment_offset",
-    "appointment_state_changed",
-    "recall_scan",
+    "event",
     "manual",
-    "bulk_import",
-    "callback_requested",
-    "enquiry_received",
-    "patient_status_changed",
-    "sms_reply",
-    "email_reply",
+    "form_submitted",
+    "internal_status",
+    "schedule",
+    "inbound_message",
 ]
 const ALL_CHANNELS: MergeChannel[] = ["sms", "email", "voice"]
-const APPOINTMENT_CONTEXT_TRIGGERS: TriggerType[] = ["appointment_offset", "appointment_state_changed", "patient_status_changed"]
+const APPOINTMENT_CONTEXT_TRIGGERS: TriggerType[] = ["event", "internal_status"]
 
 export const FALLBACK_MERGE_FIELDS: MergeField[] = [
     field("patient_first_name", "Patient first name", "Jordan", "patient", "derived", "low", ALL_CHANNELS, ALL_TRIGGERS),
@@ -54,23 +50,23 @@ export const FALLBACK_MERGE_FIELDS: MergeField[] = [
     field("location_address", "Location address", "100 Main St, Austin, TX", "location", "derived", "none", ["email", "voice"], ALL_TRIGGERS),
     field("booking_link", "Booking link", "https://book.example.com/r/jordan", "booking", "required_context", "low", ["sms", "email"], ALL_TRIGGERS),
     field("registration_link", "Registration link", "https://book.example.com/book/register?token=abc123", "booking", "required_context", "low", ["sms", "email"], ALL_TRIGGERS),
-    field("confirmation_link", "Confirmation link", "https://book.example.com/c/abc123", "booking", "required_context", "low", ["sms", "email"], ["appointment_offset"]),
-    field("reschedule_link", "Reschedule link", "https://book.example.com/r/abc123", "booking", "required_context", "low", ["sms", "email"], ["appointment_offset"]),
-    field("recall_due_date", "Recall due date", "August 15, 2026", "recall", "required_context", "medium", ALL_CHANNELS, ["recall_scan"]),
-    field("recall_type", "Recall type", "Hygiene", "recall", "optional_context", "high", ["email"], ["recall_scan"]),
-    field("last_visit_date", "Last visit date", "February 12, 2026", "recall", "optional_context", "high", ["email"], ["recall_scan"]),
-    field("callback_requested_at", "Callback requested at", "July 18, 2026 at 10:30 AM", "callback", "required_context", "low", ALL_CHANNELS, ["callback_requested"]),
-    field("callback_reason", "Callback reason", "Reschedule request", "callback", "optional_context", "medium", ["email", "voice"], ["callback_requested"]),
-    field("preferred_callback_time", "Preferred callback time", "Today after 3:00 PM", "callback", "optional_context", "low", ALL_CHANNELS, ["callback_requested"]),
-    field("enquiry_source", "Enquiry source", "website_form", "enquiry", "required_context", "none", ALL_CHANNELS, ["enquiry_received"]),
-    field("enquiry_status", "Enquiry status", "new", "enquiry", "optional_context", "none", ALL_CHANNELS, ["enquiry_received"]),
-    field("enquiry_external_ref", "Enquiry external ref", "typeform-response-123", "enquiry", "optional_context", "low", ["email", "voice"], ["enquiry_received"]),
-    field("matched_existing_contact", "Matched existing contact", "false", "enquiry", "required_context", "none", ALL_CHANNELS, ["enquiry_received"]),
-    field("sms_reply_body", "SMS reply body", "I need to reschedule", "sms_reply", "required_context", "high", ["email", "voice"], ["sms_reply"]),
-    field("sms_reply_intent", "SMS reply intent", "free_text", "sms_reply", "required_context", "none", ALL_CHANNELS, ["sms_reply"]),
-    field("inbound_sms_message_id", "Inbound SMS message ID", "inbound-1", "sms_reply", "required_context", "none", ALL_CHANNELS, ["sms_reply"]),
-    field("email_reply_intent", "Email reply intent", "reschedule_request", "email_reply", "required_context", "none", ALL_CHANNELS, ["email_reply"]),
-    field("email_reply_message_id", "Inbound email message ID", "inbound-email-1", "email_reply", "required_context", "none", ALL_CHANNELS, ["email_reply"]),
+    field("confirmation_link", "Confirmation link", "https://book.example.com/c/abc123", "booking", "required_context", "low", ["sms", "email"], ["event"]),
+    field("reschedule_link", "Reschedule link", "https://book.example.com/r/abc123", "booking", "required_context", "low", ["sms", "email"], ["event"]),
+    field("recall_due_date", "Recall due date", "August 15, 2026", "recall", "required_context", "medium", ALL_CHANNELS, ["schedule"]),
+    field("recall_type", "Recall type", "Hygiene", "recall", "optional_context", "high", ["email"], ["schedule"]),
+    field("last_visit_date", "Last visit date", "February 12, 2026", "recall", "optional_context", "high", ["email"], ["schedule"]),
+    field("callback_requested_at", "Callback requested at", "July 18, 2026 at 10:30 AM", "callback", "required_context", "low", ALL_CHANNELS, ["event"]),
+    field("callback_reason", "Callback reason", "Reschedule request", "callback", "optional_context", "medium", ["email", "voice"], ["event"]),
+    field("preferred_callback_time", "Preferred callback time", "Today after 3:00 PM", "callback", "optional_context", "low", ALL_CHANNELS, ["event"]),
+    field("enquiry_source", "Enquiry source", "website_form", "enquiry", "required_context", "none", ALL_CHANNELS, ["event"]),
+    field("enquiry_status", "Enquiry status", "new", "enquiry", "optional_context", "none", ALL_CHANNELS, ["event"]),
+    field("enquiry_external_ref", "Enquiry external ref", "typeform-response-123", "enquiry", "optional_context", "low", ["email", "voice"], ["event"]),
+    field("matched_existing_contact", "Matched existing contact", "false", "enquiry", "required_context", "none", ALL_CHANNELS, ["event"]),
+    field("sms_reply_body", "SMS reply body", "I need to reschedule", "inbound_message", "required_context", "high", ["email", "voice"], ["inbound_message"]),
+    field("sms_reply_intent", "SMS reply intent", "free_text", "inbound_message", "required_context", "none", ALL_CHANNELS, ["inbound_message"]),
+    field("inbound_sms_message_id", "Inbound SMS message ID", "inbound-1", "inbound_message", "required_context", "none", ALL_CHANNELS, ["inbound_message"]),
+    field("email_reply_intent", "Email reply intent", "reschedule_request", "inbound_message", "required_context", "none", ALL_CHANNELS, ["inbound_message"]),
+    field("email_reply_message_id", "Inbound email message ID", "inbound-email-1", "inbound_message", "required_context", "none", ALL_CHANNELS, ["inbound_message"]),
 ]
 
 let catalog: MergeField[] = FALLBACK_MERGE_FIELDS

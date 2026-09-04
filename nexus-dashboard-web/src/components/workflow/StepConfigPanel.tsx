@@ -82,6 +82,7 @@ import {
     sampleWorkflowContext,
 } from "@/lib/workflow/context-fields"
 import { usePmsType } from "@/context/InstitutionContext"
+import { useEventCatalog } from "@/lib/workflow/event-catalog"
 import type {
     CachedAppointmentType,
     CachedProvider,
@@ -98,6 +99,7 @@ import type {
     FilterOp,
     FilterRule,
     FormSubmittedTrigger,
+    InternalStatusField,
     SwitchCase,
     SwitchNode,
     SplitBranch,
@@ -271,150 +273,17 @@ function TriggerForm({
                     </Select>
                 </Field>
 
-                {trigger.type === "appointment_offset" && (
-                    <>
-                        <Field label="Hours relative to appointment" hint="Negative = before (e.g. -24 = 24h before).">
-                            <Input
-                                type="number"
-                                value={trigger.offset_hours}
-                                disabled={readOnly}
-                                onChange={(e) => onChange({ ...trigger, offset_hours: toInt(e.target.value, 0) })}
-                            />
-                        </Field>
-                        <ContextPreview triggerType={trigger.type} />
-                    </>
+                {trigger.type === "event" && (
+                    <EventTriggerFields
+                        trigger={trigger}
+                        onChange={onChange}
+                        readOnly={readOnly}
+                    />
                 )}
-                {trigger.type === "appointment_state_changed" && (
-                    <>
-                        <Field
-                            label="Chair Flow states"
-                            htmlFor="trigger-flow-states"
-                            hint="Comma-separated exact Tracker wording, for example Completed. Status and confirmation fields below are optional AND filters."
-                        >
-                            <Input
-                                id="trigger-flow-states"
-                                defaultValue={(trigger.flow_states ?? []).join(", ")}
-                                disabled={readOnly}
-                                placeholder="Completed"
-                                onChange={(e) => {
-                                    onChange({
-                                        ...trigger,
-                                        flow_states: textToStringList(e.target.value),
-                                    })
-                                }}
-                            />
-                        </Field>
-                        <Field
-                            label="GoTracker statuses (optional filter)"
-                            hint="Select none to match any status. Selecting several matches any one of them."
-                        >
-                            <StatusIdMultiSelect
-                                selected={trigger.status_ids}
-                                disabled={readOnly}
-                                ariaLabel="GoTracker statuses (optional filter)"
-                                onChange={(status_ids) => onChange({ ...trigger, status_ids })}
-                            />
-                        </Field>
-                        <div className="grid grid-cols-2 gap-2">
-                            <Field label="Confirmed (optional AND filter)">
-                                <TriStateBooleanSelect
-                                    value={trigger.confirmed}
-                                    disabled={readOnly}
-                                    ariaLabel="Confirmed (optional AND filter)"
-                                    nullLabel="Do not restrict"
-                                    trueLabel="Is true"
-                                    falseLabel="Is false"
-                                    onChange={(value) => onChange({ ...trigger, confirmed: value })}
-                                />
-                            </Field>
-                            <Field label="Preconfirmed (optional AND filter)">
-                                <TriStateBooleanSelect
-                                    value={trigger.preconfirmed}
-                                    disabled={readOnly}
-                                    ariaLabel="Preconfirmed (optional AND filter)"
-                                    nullLabel="Do not restrict"
-                                    trueLabel="Is true"
-                                    falseLabel="Is false"
-                                    onChange={(value) => onChange({ ...trigger, preconfirmed: value })}
-                                />
-                            </Field>
-                        </div>
-                        <Field
-                            label="Latest follow-up window (hours after flow change)"
-                            htmlFor="trigger-max-followup-hours"
-                            hint="Optional. Post-op calls are blocked after this many hours from FlowChange."
-                        >
-                            <Input
-                                id="trigger-max-followup-hours"
-                                type="number"
-                                min={0}
-                                max={168}
-                                step={1}
-                                value={trigger.max_followup_delay_hours ?? ""}
-                                disabled={readOnly}
-                                placeholder="72"
-                                onChange={(e) => onChange({
-                                    ...trigger,
-                                    max_followup_delay_hours: e.target.value === ""
-                                        ? null
-                                        : toInt(e.target.value, 0),
-                                })}
-                            />
-                        </Field>
-                        <p className="rounded-md border border-border bg-muted/40 p-3 text-xs text-muted-foreground">
-                            Any listed Chair Flow state can match. Non-empty status and confirmation filters are
-                            combined with it using AND. For Completed-only post-op, leave those filters unrestricted.
-                        </p>
-                        <Field label="Campaign goal">
-                            <Input
-                                value={trigger.campaign_goal ?? ""}
-                                disabled={readOnly}
-                                placeholder="post_op_followup"
-                                onChange={(e) => onChange({
-                                    ...trigger,
-                                    campaign_goal: e.target.value.trim() || null,
-                                })}
-                            />
-                        </Field>
-                        <ContextPreview triggerType={trigger.type} />
-                    </>
-                )}
-                {trigger.type === "recall_scan" && (
-                    <>
-                        <Field label="Recall interval (months)">
-                            <Input
-                                type="number"
-                                min={1}
-                                value={trigger.recall_interval_months}
-                                disabled={readOnly}
-                                onChange={(e) => onChange({ ...trigger, recall_interval_months: toInt(e.target.value, 1) })}
-                            />
-                        </Field>
-                        <Field label="Recall cooldown (days)">
-                            <Input
-                                type="number"
-                                min={1}
-                                max={730}
-                                value={trigger.recall_reenrollment_cooldown_days ?? 90}
-                                disabled={readOnly}
-                                onChange={(e) =>
-                                    onChange({
-                                        ...trigger,
-                                        recall_reenrollment_cooldown_days: toInt(e.target.value, 90),
-                                    })
-                                }
-                            />
-                        </Field>
-                    </>
-                )}
-                {(trigger.type === "manual" || trigger.type === "bulk_import") && (
+                {trigger.type === "manual" && (
                     <p className="text-sm text-muted-foreground">
-                        No timing configuration — contacts are enrolled manually or by import.
-                    </p>
-                )}
-                {trigger.type === "enquiry_received" && (
-                    <p className="text-sm text-muted-foreground">
-                        Enrolls when a permitted enquiry intake source lands a lead.
+                        No timing configuration — contacts are enrolled by hand or from a
+                        CSV upload on the campaign page.
                     </p>
                 )}
                 {trigger.type === "form_submitted" && (
@@ -424,67 +293,26 @@ function TriggerForm({
                         readOnly={readOnly}
                     />
                 )}
-                {trigger.type === "callback_requested" && (
-                    <p className="text-sm text-muted-foreground">
-                        Enrolls when an inbound interaction requests staff follow-up.
-                    </p>
+                {trigger.type === "internal_status" && (
+                    <InternalStatusTriggerFields
+                        trigger={trigger}
+                        onChange={onChange}
+                        readOnly={readOnly}
+                    />
                 )}
-                {trigger.type === "patient_status_changed" && (
-                    <>
-                        <Field label="Statuses" hint="Comma or newline separated status labels.">
-                            <Textarea
-                                value={trigger.statuses.join(", ")}
-                                disabled={readOnly}
-                                placeholder="appointment_confirmed"
-                                onChange={(e) => {
-                                    const statuses = e.target.value
-                                        .split(/[,\n]/)
-                                        .map((v) => v.trim())
-                                        .filter(Boolean)
-                                    onChange({ ...trigger, statuses })
-                                }}
-                            />
-                        </Field>
-                        <Field label="Campaign goal">
-                            <Input
-                                value={trigger.campaign_goal ?? ""}
-                                disabled={readOnly}
-                                placeholder="post_op_followup"
-                                onChange={(e) => onChange({
-                                    ...trigger,
-                                    campaign_goal: e.target.value.trim() || null,
-                                })}
-                            />
-                        </Field>
-                        <ContextPreview triggerType={trigger.type} />
-                    </>
+                {trigger.type === "schedule" && (
+                    <ScheduleTriggerFields
+                        trigger={trigger}
+                        onChange={onChange}
+                        readOnly={readOnly}
+                    />
                 )}
-                {trigger.type === "sms_reply" && (
-                    <>
-                        <Field label="Reply tokens" hint="Optional comma-separated whole-token filters. Leave empty for any non-compliance inbound SMS.">
-                            <Textarea
-                                value={(trigger.tokens ?? []).join(", ")}
-                                disabled={readOnly}
-                                placeholder="pricing, reschedule, question"
-                                onChange={(e) => onChange({
-                                    ...trigger,
-                                    tokens: textToStringList(e.target.value),
-                                })}
-                            />
-                        </Field>
-                        <Field label="Campaign goal">
-                            <Input
-                                value={trigger.campaign_goal ?? ""}
-                                disabled={readOnly}
-                                placeholder="inbound_sms_followup"
-                                onChange={(e) => onChange({
-                                    ...trigger,
-                                    campaign_goal: e.target.value.trim() || null,
-                                })}
-                            />
-                        </Field>
-                        <ContextPreview triggerType={trigger.type} />
-                    </>
+                {trigger.type === "inbound_message" && (
+                    <InboundMessageTriggerFields
+                        trigger={trigger}
+                        onChange={onChange}
+                        readOnly={readOnly}
+                    />
                 )}
 
                 <TriggerEligibilityFilter
@@ -504,6 +332,451 @@ function TriggerForm({
  * in-memory check instead of a run row, a step row and analytics rows that an
  * opening condition node would then immediately exit.
  */
+/**
+ * Event picker for the `event` trigger.
+ *
+ * Offers only the events the caller's practice software can actually raise —
+ * the served catalog drops the rest — so a campaign cannot be published against
+ * an event that will never fire. Derived events are still offered, but labelled,
+ * because they work and the author should know the provenance.
+ */
+function EventTriggerFields({
+    trigger,
+    onChange,
+    readOnly,
+}: {
+    trigger: Extract<WorkflowTrigger, { type: "event" }>
+    onChange: (t: WorkflowTrigger) => void
+    readOnly?: boolean
+}) {
+    const events = useEventCatalog()
+    const pmsType = usePmsType()
+    const selected = new Set(trigger.event_keys)
+    const isReminder = selected.has("appointment.reminder_due")
+
+    function toggle(key: string) {
+        const next = new Set(selected)
+        if (next.has(key)) next.delete(key)
+        else next.add(key)
+        // Rebuild from the catalog order rather than click order, so the same
+        // subscription always serialises identically.
+        const event_keys = events.map((e) => e.key).filter((k) => next.has(k))
+        const wantsReminder = event_keys.includes("appointment.reminder_due")
+        onChange({
+            ...trigger,
+            event_keys,
+            reminder_offset_hours: wantsReminder
+                ? (trigger.reminder_offset_hours ?? -24)
+                : null,
+        })
+    }
+
+    return (
+        <>
+            <Field label="Events" hint="The campaign starts when any of these happens.">
+                {events.length === 0 ? (
+                    <p className="text-sm text-muted-foreground">Loading events…</p>
+                ) : (
+                    <div
+                        role="group"
+                        aria-label="Events"
+                        className="max-h-64 space-y-1 overflow-y-auto rounded-md border border-border p-2"
+                    >
+                        {events.map((event) => {
+                            const support = pmsType ? event.pms_support[pmsType] : undefined
+                            return (
+                                <label
+                                    key={event.key}
+                                    className="flex cursor-pointer items-start gap-2 rounded p-1.5 hover:bg-muted/50"
+                                >
+                                    <Checkbox
+                                        className="mt-0.5"
+                                        aria-label={event.label}
+                                        checked={selected.has(event.key)}
+                                        disabled={readOnly}
+                                        onCheckedChange={() => toggle(event.key)}
+                                    />
+                                    <span className="min-w-0">
+                                        <span className="block text-sm font-medium">
+                                            {event.label}
+                                            {support === "derived" && (
+                                                <span className="ml-1.5 text-xs font-normal text-muted-foreground">
+                                                    (derived on {pmsType})
+                                                </span>
+                                            )}
+                                        </span>
+                                        <span className="block text-xs text-muted-foreground">
+                                            {event.description}
+                                        </span>
+                                    </span>
+                                </label>
+                            )
+                        })}
+                    </div>
+                )}
+            </Field>
+
+            {trigger.event_keys.length === 0 && (
+                <p className="text-sm text-amber-600 dark:text-amber-500">
+                    Pick at least one event, or this campaign can never start.
+                </p>
+            )}
+
+            {isReminder && (
+                <Field
+                    label="Hours relative to appointment"
+                    hint="Negative is before, so -24 means 24 hours before the appointment."
+                >
+                    <Input
+                        type="number"
+                        value={trigger.reminder_offset_hours ?? -24}
+                        disabled={readOnly}
+                        onChange={(e) =>
+                            onChange({
+                                ...trigger,
+                                reminder_offset_hours: toInt(e.target.value, -24),
+                            })
+                        }
+                    />
+                </Field>
+            )}
+
+            <Field
+                label="Give up after (hours)"
+                hint="Optional. If a send is deferred past this, the run stops rather than arriving too late to be useful."
+            >
+                <Input
+                    type="number"
+                    value={trigger.max_followup_delay_hours ?? ""}
+                    disabled={readOnly}
+                    onChange={(e) =>
+                        onChange({
+                            ...trigger,
+                            max_followup_delay_hours:
+                                e.target.value === "" ? null : toInt(e.target.value, 0),
+                        })
+                    }
+                />
+            </Field>
+
+            <Field label="Campaign goal" hint="Optional label used in analytics.">
+                <Input
+                    value={trigger.campaign_goal ?? ""}
+                    disabled={readOnly}
+                    onChange={(e) =>
+                        onChange({ ...trigger, campaign_goal: e.target.value || null })
+                    }
+                />
+            </Field>
+        </>
+    )
+}
+
+const INTERNAL_STATUS_FIELD_LABELS: Record<InternalStatusField, string> = {
+    call_workflow_status: "Call workflow status",
+    contact_lead_status: "Contact lead status",
+    handoff_status: "Staff handoff status",
+    patient_workflow_status: "Status recorded by a campaign",
+}
+
+function InternalStatusTriggerFields({
+    trigger,
+    onChange,
+    readOnly,
+}: {
+    trigger: Extract<WorkflowTrigger, { type: "internal_status" }>
+    onChange: (t: WorkflowTrigger) => void
+    readOnly?: boolean
+}) {
+    return (
+        <>
+            <Field label="Status field" hint="Which record's status to watch.">
+                <Select
+                    value={trigger.field}
+                    onValueChange={(v) =>
+                        onChange({ ...trigger, field: v as InternalStatusField })
+                    }
+                    disabled={readOnly}
+                >
+                    <SelectTrigger><SelectValue /></SelectTrigger>
+                    <SelectContent>
+                        {(Object.keys(INTERNAL_STATUS_FIELD_LABELS) as InternalStatusField[]).map(
+                            (field) => (
+                                <SelectItem key={field} value={field}>
+                                    {INTERNAL_STATUS_FIELD_LABELS[field]}
+                                </SelectItem>
+                            ),
+                        )}
+                    </SelectContent>
+                </Select>
+            </Field>
+            <Field label="Changed to" hint="Comma or newline separated. The campaign starts on any of these.">
+                <Textarea
+                    value={trigger.to_statuses.join(", ")}
+                    disabled={readOnly}
+                    onChange={(e) =>
+                        onChange({ ...trigger, to_statuses: splitStatuses(e.target.value) })
+                    }
+                />
+            </Field>
+            <Field
+                label="Changed from"
+                hint="Optional. Leave empty to start whatever the previous status was."
+            >
+                <Textarea
+                    value={(trigger.from_statuses ?? []).join(", ")}
+                    disabled={readOnly}
+                    onChange={(e) =>
+                        onChange({ ...trigger, from_statuses: splitStatuses(e.target.value) })
+                    }
+                />
+            </Field>
+            {trigger.to_statuses.length === 0 && (
+                <p className="text-sm text-amber-600 dark:text-amber-500">
+                    Name at least one status, or this campaign can never start.
+                </p>
+            )}
+            <Field label="Campaign goal" hint="Optional label used in analytics.">
+                <Input
+                    value={trigger.campaign_goal ?? ""}
+                    disabled={readOnly}
+                    onChange={(e) =>
+                        onChange({ ...trigger, campaign_goal: e.target.value || null })
+                    }
+                />
+            </Field>
+        </>
+    )
+}
+
+/** Comma/newline separated status labels, trimmed and de-duplicated. */
+function splitStatuses(raw: string): string[] {
+    const seen: string[] = []
+    for (const part of raw.split(/[,\n]/)) {
+        const value = part.trim()
+        if (value && !seen.some((v) => v.toLowerCase() === value.toLowerCase())) {
+            seen.push(value)
+        }
+    }
+    return seen
+}
+
+/**
+ * Cron presets, plus the raw expression behind a toggle.
+ *
+ * Most schedules are "every weekday at 9", which nobody should have to write as
+ * a cron string; the raw field stays for the ones that are not.
+ */
+const CRON_PRESETS: Array<{ label: string; cron: string }> = [
+    { label: "Every day", cron: "0 9 * * *" },
+    { label: "Every weekday", cron: "0 9 * * 1-5" },
+    { label: "Every Monday", cron: "0 9 * * 1" },
+    { label: "First of the month", cron: "0 9 1 * *" },
+]
+
+function ScheduleTriggerFields({
+    trigger,
+    onChange,
+    readOnly,
+}: {
+    trigger: Extract<WorkflowTrigger, { type: "schedule" }>
+    onChange: (t: WorkflowTrigger) => void
+    readOnly?: boolean
+}) {
+    const [advanced, setAdvanced] = useState(
+        () => !CRON_PRESETS.some((p) => p.cron === trigger.cron),
+    )
+    const source = trigger.source
+
+    return (
+        <>
+            <Field label="Runs" hint="Evaluated in the clinic's own timezone.">
+                {advanced ? (
+                    <Input
+                        value={trigger.cron}
+                        disabled={readOnly}
+                        aria-label="Cron expression"
+                        onChange={(e) => onChange({ ...trigger, cron: e.target.value })}
+                    />
+                ) : (
+                    <Select
+                        value={trigger.cron}
+                        onValueChange={(v) => onChange({ ...trigger, cron: v })}
+                        disabled={readOnly}
+                    >
+                        <SelectTrigger><SelectValue /></SelectTrigger>
+                        <SelectContent>
+                            {CRON_PRESETS.map((preset) => (
+                                <SelectItem key={preset.cron} value={preset.cron}>
+                                    {preset.label}
+                                </SelectItem>
+                            ))}
+                        </SelectContent>
+                    </Select>
+                )}
+            </Field>
+            <button
+                type="button"
+                className="text-xs text-muted-foreground underline"
+                onClick={() => setAdvanced((v) => !v)}
+            >
+                {advanced ? "Use a preset" : "Write a cron expression"}
+            </button>
+
+            <Field label="Who to enroll">
+                <Select
+                    value={source.kind}
+                    onValueChange={(v) =>
+                        onChange({
+                            ...trigger,
+                            source:
+                                v === "pms_recall"
+                                    ? {
+                                          kind: "pms_recall",
+                                          recall_interval_months: 6,
+                                          reenrollment_cooldown_days: 90,
+                                      }
+                                    : { kind: "audience_segment" },
+                        })
+                    }
+                    disabled={readOnly}
+                >
+                    <SelectTrigger><SelectValue /></SelectTrigger>
+                    <SelectContent>
+                        <SelectItem value="pms_recall">Patients due for recall</SelectItem>
+                        <SelectItem value="audience_segment">This campaign's audience</SelectItem>
+                    </SelectContent>
+                </Select>
+            </Field>
+
+            {source.kind === "pms_recall" && (
+                <>
+                    <Field label="Recall interval (months)">
+                        <Input
+                            type="number"
+                            value={source.recall_interval_months}
+                            disabled={readOnly}
+                            onChange={(e) =>
+                                onChange({
+                                    ...trigger,
+                                    source: {
+                                        ...source,
+                                        recall_interval_months: toInt(e.target.value, 6),
+                                    },
+                                })
+                            }
+                        />
+                    </Field>
+                    <Field
+                        label="Wait before re-enrolling (days)"
+                        hint="How long before the same patient can enter this campaign again."
+                    >
+                        <Input
+                            type="number"
+                            value={source.reenrollment_cooldown_days ?? 90}
+                            disabled={readOnly}
+                            onChange={(e) =>
+                                onChange({
+                                    ...trigger,
+                                    source: {
+                                        ...source,
+                                        reenrollment_cooldown_days: toInt(e.target.value, 90),
+                                    },
+                                })
+                            }
+                        />
+                    </Field>
+                </>
+            )}
+
+            <Field
+                label="Most patients per run"
+                hint="A ceiling on each tick, so one schedule cannot flood the clinic's sending capacity."
+            >
+                <Input
+                    type="number"
+                    value={trigger.max_enrollments_per_run ?? 500}
+                    disabled={readOnly}
+                    onChange={(e) =>
+                        onChange({
+                            ...trigger,
+                            max_enrollments_per_run: toInt(e.target.value, 500),
+                        })
+                    }
+                />
+            </Field>
+        </>
+    )
+}
+
+function InboundMessageTriggerFields({
+    trigger,
+    onChange,
+    readOnly,
+}: {
+    trigger: Extract<WorkflowTrigger, { type: "inbound_message" }>
+    onChange: (t: WorkflowTrigger) => void
+    readOnly?: boolean
+}) {
+    const channels = new Set(trigger.channels)
+
+    function toggleChannel(channel: "sms" | "email") {
+        const next = new Set(channels)
+        if (next.has(channel)) next.delete(channel)
+        else next.add(channel)
+        onChange({
+            ...trigger,
+            channels: (["sms", "email"] as const).filter((c) => next.has(c)),
+        })
+    }
+
+    return (
+        <>
+            <Field label="Channels" hint="Which kind of reply starts this campaign.">
+                <div role="group" aria-label="Channels" className="flex gap-4">
+                    {(["sms", "email"] as const).map((channel) => (
+                        <label key={channel} className="flex cursor-pointer items-center gap-2">
+                            <Checkbox
+                                aria-label={channel === "sms" ? "SMS" : "Email"}
+                                checked={channels.has(channel)}
+                                disabled={readOnly}
+                                onCheckedChange={() => toggleChannel(channel)}
+                            />
+                            <span className="text-sm">{channel === "sms" ? "SMS" : "Email"}</span>
+                        </label>
+                    ))}
+                </div>
+            </Field>
+            {trigger.channels.length === 0 && (
+                <p className="text-sm text-amber-600 dark:text-amber-500">
+                    Pick at least one channel, or this campaign can never start.
+                </p>
+            )}
+            <Field
+                label="Only when the reply contains"
+                hint="Comma or newline separated whole words. Leave empty to start on any reply."
+            >
+                <Textarea
+                    value={(trigger.tokens ?? []).join(", ")}
+                    disabled={readOnly}
+                    onChange={(e) =>
+                        onChange({ ...trigger, tokens: splitStatuses(e.target.value) })
+                    }
+                />
+            </Field>
+            <Field label="Campaign goal" hint="Optional label used in analytics.">
+                <Input
+                    value={trigger.campaign_goal ?? ""}
+                    disabled={readOnly}
+                    onChange={(e) =>
+                        onChange({ ...trigger, campaign_goal: e.target.value || null })
+                    }
+                />
+            </Field>
+        </>
+    )
+}
+
 function TriggerEligibilityFilter({
     trigger,
     onChange,
@@ -3789,61 +4062,6 @@ function FormSubmittedTriggerFields({
 }
 
 
-function StatusIdMultiSelect({
-    selected,
-    disabled,
-    ariaLabel,
-    onChange,
-}: {
-    selected: number[]
-    disabled?: boolean
-    ariaLabel: string
-    onChange: (statusIds: number[]) => void
-}) {
-    const statuses = usePmsAppointmentStatuses()
-    const chosen = new Set(selected)
-
-    const toggle = (id: number) => {
-        // Preserve catalog order rather than click order, so two workflows with
-        // the same selection serialize identically.
-        const next = new Set(chosen)
-        if (next.has(id)) next.delete(id)
-        else next.add(id)
-        onChange(statuses.filter((s) => next.has(s.id)).map((s) => s.id))
-    }
-
-    return (
-        <div role="group" aria-label={ariaLabel} className="space-y-1.5">
-            <div className="grid grid-cols-1 gap-1.5 rounded-md border border-border p-2 sm:grid-cols-2">
-                {statuses.map((status) => (
-                    <label
-                        key={status.id}
-                        className={cn(
-                            "flex items-center gap-2 text-sm",
-                            disabled ? "cursor-not-allowed opacity-60" : "cursor-pointer",
-                        )}
-                        title={status.description || undefined}
-                    >
-                        <Checkbox
-                            checked={chosen.has(status.id)}
-                            disabled={disabled}
-                            aria-label={status.label}
-                            onCheckedChange={() => toggle(status.id)}
-                        />
-                        <span className="truncate">
-                            <span className="text-muted-foreground">{status.id}</span> {status.label}
-                        </span>
-                    </label>
-                ))}
-            </div>
-            <p className="text-xs text-muted-foreground">
-                {chosen.size === 0
-                    ? "Any status matches."
-                    : `Matches ${chosen.size} of ${statuses.length} statuses.`}
-            </p>
-        </div>
-    )
-}
 
 
 function TriStateBooleanSelect({

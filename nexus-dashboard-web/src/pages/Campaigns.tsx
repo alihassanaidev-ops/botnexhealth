@@ -37,6 +37,7 @@ import {
     deleteCampaign,
 } from "@/lib/automation-api"
 import type { AutomationWorkflow, OutboundHaltStatus } from "@/types"
+import { triggerTypeLabelFor } from "@/lib/workflow/catalog"
 
 const STATUS_STYLES: Record<string, string> = {
     active: "bg-emerald-50 text-emerald-700 border-emerald-200 dark:bg-emerald-950/40 dark:text-emerald-400 dark:border-emerald-800",
@@ -60,17 +61,9 @@ function StatusBadge({ status }: { status: string }) {
 
 function TriggerLabel({ triggerType }: { triggerType: string | null }) {
     if (!triggerType) return <span className="text-muted-foreground text-xs">—</span>
-    const labels: Record<string, string> = {
-        appointment_offset: "Appointment reminder",
-        recall_scan: "Recall / reactivation",
-        manual: "Manual",
-        bulk_import: "Bulk import",
-        callback_requested: "Callback",
-        patient_status_changed: "Patient status",
-    }
     return (
         <span className="text-xs text-muted-foreground">
-            {labels[triggerType] ?? triggerType}
+            {triggerTypeLabelFor(triggerType)}
         </span>
     )
 }

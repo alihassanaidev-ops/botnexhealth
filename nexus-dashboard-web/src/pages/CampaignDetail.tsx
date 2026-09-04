@@ -67,6 +67,7 @@ import {
 } from "@/lib/automation-api"
 import { listContacts, type ContactListItem } from "@/lib/contacts-api"
 import { cn } from "@/lib/utils"
+import { triggerTypeLabelFor } from "@/lib/workflow/catalog"
 import type {
     AutomationWorkflow,
     AutomationWorkflowRun,
@@ -93,15 +94,6 @@ const RUN_STATUS_STYLES: Record<string, string> = {
     cancelled: "border-zinc-200 bg-zinc-100 text-zinc-500 dark:border-zinc-700 dark:bg-zinc-800/60 dark:text-zinc-400",
     failed: "border-red-200 bg-red-50 text-red-700 dark:border-red-800 dark:bg-red-950/40 dark:text-red-400",
     blocked: "border-red-200 bg-red-50 text-red-700 dark:border-red-800 dark:bg-red-950/40 dark:text-red-400",
-}
-
-const TRIGGER_LABELS: Record<string, string> = {
-    appointment_offset: "Appointment reminder",
-    recall_scan: "Recall",
-    manual: "Manual",
-    bulk_import: "Bulk import",
-    callback_requested: "Callback",
-    patient_status_changed: "Patient status",
 }
 
 function fmt(iso: string | null): string {
@@ -340,7 +332,7 @@ function OverviewTab({
                     </CardHeader>
                     <CardContent className="grid gap-3 text-sm md:grid-cols-2">
                         <InfoRow label="Latest version" value={overview?.latest_version ? `v${overview.latest_version.version_number}` : "-"} />
-                        <InfoRow label="Trigger" value={overview?.trigger_type ? (TRIGGER_LABELS[overview.trigger_type] ?? overview.trigger_type) : "-"} />
+                        <InfoRow label="Trigger" value={triggerTypeLabelFor(overview?.trigger_type)} />
                         <InfoRow label="Open handoffs" value={number(overview?.open_handoff_count)} />
                     </CardContent>
                 </Card>
@@ -1075,7 +1067,7 @@ export default function CampaignDetail() {
                             <WorkflowStatusBadge status={campaign.status} />
                             <span className="text-xs text-muted-foreground">
                                 {campaign.trigger_type
-                                    ? (TRIGGER_LABELS[campaign.trigger_type] ?? campaign.trigger_type)
+                                    ? triggerTypeLabelFor(campaign.trigger_type)
                                     : "No trigger"}
                             </span>
                             <span className="text-xs text-muted-foreground">

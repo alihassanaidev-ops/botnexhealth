@@ -236,6 +236,48 @@ export async function listPhoneCountryRegions(): Promise<PhoneCountryRegion[]> {
     return data
 }
 
+/** How well a practice-management system can supply an event or a field. */
+export type PmsSupport = "native" | "derived" | "unsupported"
+
+export interface EventContextField {
+    path: string
+    label: string
+    type: string
+    description: string
+    sample: unknown
+    pms_support: Record<string, PmsSupport>
+    phi_level: "none" | "low" | "medium" | "high"
+    pms_specific: boolean
+}
+
+export interface EventCatalogEntry {
+    key: string
+    label: string
+    description: string
+    pms_support: Record<string, PmsSupport>
+    context: EventContextField[]
+}
+
+interface EventCatalogPayload {
+    pms: string
+    events: EventCatalogEntry[]
+}
+
+/**
+ * The canonical event vocabulary the builder authors against.
+ *
+ * Served rather than hardcoded so the picker can only ever offer events the
+ * caller's practice software actually raises — the endpoint drops the
+ * unsupported ones. Omit `pms` to let the backend use the caller's own.
+ */
+export async function listEventCatalog(pms?: string): Promise<EventCatalogEntry[]> {
+    const { data } = await api.get<EventCatalogPayload>(
+        "/automation/workflows/event-catalog",
+        pms ? { params: { pms } } : undefined,
+    )
+    return data.events
+}
+
 /**
  * PMS appointment disposition catalog. Served rather than hardcoded so labels,
  * semantics and writability live in one place (`src/app/pms/gotracker/statuses.py`).

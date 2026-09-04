@@ -28,10 +28,14 @@ const WORKFLOW: AutomationWorkflow = {
     id: "wf-1",
     name: "My Reminder Campaign",
     status: "active",
-    trigger_type: "appointment_offset",
+    trigger_type: "event",
     definition: {
         schema_version: "1.0",
-        trigger: { type: "appointment_offset", offset_hours: -24 },
+        trigger: {
+            type: "event",
+            event_keys: ["appointment.reminder_due"],
+            reminder_offset_hours: -24,
+        },
         entry_node_id: "sms-1",
         nodes: [
             {

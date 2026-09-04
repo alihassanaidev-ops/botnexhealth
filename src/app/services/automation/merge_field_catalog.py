@@ -24,17 +24,12 @@ if TYPE_CHECKING:
 # ``merge_field_unavailable_for_trigger`` warning on every token in the workflow.
 # ``test_merge_field_catalog_coverage`` enforces the correspondence.
 WorkflowTriggerType = Literal[
-    "appointment_offset",
-    "appointment_state_changed",
-    "recall_scan",
+    "event",
     "manual",
-    "bulk_import",
-    "callback_requested",
-    "enquiry_received",
     "form_submitted",
-    "patient_status_changed",
-    "sms_reply",
-    "email_reply",
+    "internal_status",
+    "schedule",
+    "inbound_message",
 ]
 MergeChannel = Literal["sms", "email", "voice"]
 MergeAvailability = Literal["required_context", "optional_context", "derived"]
@@ -42,26 +37,20 @@ MergePhiLevel = Literal["none", "low", "medium", "high"]
 MergeFieldSource = Literal["contact", "location", "context", "derived"]
 
 ALL_TRIGGERS: tuple[WorkflowTriggerType, ...] = (
-    "appointment_offset",
-    "appointment_state_changed",
-    "recall_scan",
+    "event",
     "manual",
-    "bulk_import",
-    "callback_requested",
-    "enquiry_received",
     "form_submitted",
-    "patient_status_changed",
-    "sms_reply",
-    "email_reply",
+    "internal_status",
+    "schedule",
+    "inbound_message",
 )
 
-# Triggers whose run context carries an appointment. ``appointment_state_changed``
-# is the GoTracker/NexHealth appointment-state trigger and carries the richest
-# appointment context of all three, so it belongs here.
+# Triggers whose run context can carry an appointment. ``event`` covers every
+# appointment event, and an internal status change inherits the context of the
+# run that recorded it, which usually has the appointment on it.
 APPOINTMENT_TRIGGERS: tuple[WorkflowTriggerType, ...] = (
-    "appointment_offset",
-    "appointment_state_changed",
-    "patient_status_changed",
+    "event",
+    "internal_status",
 )
 
 ALL_CHANNELS: tuple[MergeChannel, ...] = ("sms", "email", "voice")
@@ -893,7 +882,7 @@ MERGE_FIELD_CATALOG: tuple[MergeFieldSpec, ...] = (
         requires=("booking.confirmation_link",),
         phi_level="low",
         channels=("sms", "email"),
-        triggers=("appointment_offset",),
+        triggers=("event",),
         resolve=_context_field("confirmation_link"),
     ),
     MergeFieldSpec(
@@ -907,7 +896,7 @@ MERGE_FIELD_CATALOG: tuple[MergeFieldSpec, ...] = (
         requires=("booking.reschedule_link",),
         phi_level="low",
         channels=("sms", "email"),
-        triggers=("appointment_offset",),
+        triggers=("event",),
         resolve=_context_field("reschedule_link"),
     ),
     MergeFieldSpec(
@@ -921,7 +910,7 @@ MERGE_FIELD_CATALOG: tuple[MergeFieldSpec, ...] = (
         requires=("recall.due_date",),
         phi_level="medium",
         channels=ALL_CHANNELS,
-        triggers=("recall_scan",),
+        triggers=("schedule",),
         resolve=_recall_due_date,
     ),
     MergeFieldSpec(
@@ -935,7 +924,7 @@ MERGE_FIELD_CATALOG: tuple[MergeFieldSpec, ...] = (
         requires=("recall.type",),
         phi_level="high",
         channels=("email",),
-        triggers=("recall_scan",),
+        triggers=("schedule",),
         resolve=_context_field("recall_type"),
     ),
     MergeFieldSpec(
@@ -949,7 +938,7 @@ MERGE_FIELD_CATALOG: tuple[MergeFieldSpec, ...] = (
         requires=("recall.type",),
         phi_level="high",
         channels=("sms", "email"),
-        triggers=("recall_scan",),
+        triggers=("schedule",),
         resolve=_context_field("recall_type_name"),
     ),
     MergeFieldSpec(
@@ -963,7 +952,7 @@ MERGE_FIELD_CATALOG: tuple[MergeFieldSpec, ...] = (
         requires=("recall.last_visit_date",),
         phi_level="high",
         channels=("email",),
-        triggers=("recall_scan",),
+        triggers=("schedule",),
         resolve=_last_visit_date,
     ),
     MergeFieldSpec(
@@ -977,7 +966,7 @@ MERGE_FIELD_CATALOG: tuple[MergeFieldSpec, ...] = (
         requires=("callback.requested_at",),
         phi_level="low",
         channels=ALL_CHANNELS,
-        triggers=("callback_requested",),
+        triggers=("event",),
         resolve=_callback_requested_at,
     ),
     MergeFieldSpec(
@@ -991,7 +980,7 @@ MERGE_FIELD_CATALOG: tuple[MergeFieldSpec, ...] = (
         requires=("callback.reason",),
         phi_level="medium",
         channels=("email", "voice"),
-        triggers=("callback_requested",),
+        triggers=("event",),
         resolve=_context_field("callback_reason"),
     ),
     MergeFieldSpec(
@@ -1005,7 +994,7 @@ MERGE_FIELD_CATALOG: tuple[MergeFieldSpec, ...] = (
         requires=("callback.preferred_time",),
         phi_level="low",
         channels=ALL_CHANNELS,
-        triggers=("callback_requested",),
+        triggers=("event",),
         resolve=_preferred_callback_time,
     ),
     MergeFieldSpec(
@@ -1019,7 +1008,7 @@ MERGE_FIELD_CATALOG: tuple[MergeFieldSpec, ...] = (
         requires=("enquiry.source",),
         phi_level="none",
         channels=ALL_CHANNELS,
-        triggers=("enquiry_received",),
+        triggers=("event",),
         resolve=_context_field("enquiry_source"),
     ),
     MergeFieldSpec(
@@ -1033,7 +1022,7 @@ MERGE_FIELD_CATALOG: tuple[MergeFieldSpec, ...] = (
         requires=("enquiry.status",),
         phi_level="none",
         channels=ALL_CHANNELS,
-        triggers=("enquiry_received",),
+        triggers=("event",),
         resolve=_context_field("enquiry_status"),
     ),
     MergeFieldSpec(
@@ -1047,7 +1036,7 @@ MERGE_FIELD_CATALOG: tuple[MergeFieldSpec, ...] = (
         requires=("enquiry.external_ref",),
         phi_level="low",
         channels=("email", "voice"),
-        triggers=("enquiry_received",),
+        triggers=("event",),
         resolve=_context_field("enquiry_external_ref"),
     ),
     MergeFieldSpec(
@@ -1061,7 +1050,7 @@ MERGE_FIELD_CATALOG: tuple[MergeFieldSpec, ...] = (
         requires=("matched_existing_contact",),
         phi_level="none",
         channels=ALL_CHANNELS,
-        triggers=("enquiry_received", "form_submitted"),
+        triggers=("event", "form_submitted"),
         resolve=_context_field("matched_existing_contact"),
     ),
     MergeFieldSpec(
@@ -1103,7 +1092,7 @@ MERGE_FIELD_CATALOG: tuple[MergeFieldSpec, ...] = (
         requires=("sms_reply_body",),
         phi_level="high",
         channels=("email", "voice"),
-        triggers=("sms_reply",),
+        triggers=("inbound_message",),
         resolve=_context_field("sms_reply_body"),
     ),
     MergeFieldSpec(
@@ -1117,7 +1106,7 @@ MERGE_FIELD_CATALOG: tuple[MergeFieldSpec, ...] = (
         requires=("sms_reply_intent",),
         phi_level="none",
         channels=ALL_CHANNELS,
-        triggers=("sms_reply",),
+        triggers=("inbound_message",),
         resolve=_context_field("sms_reply_intent"),
     ),
     MergeFieldSpec(
@@ -1131,7 +1120,7 @@ MERGE_FIELD_CATALOG: tuple[MergeFieldSpec, ...] = (
         requires=("inbound_sms_message_id",),
         phi_level="none",
         channels=ALL_CHANNELS,
-        triggers=("sms_reply",),
+        triggers=("inbound_message",),
         resolve=_context_field("inbound_sms_message_id"),
     ),
     # Email counterparts. The inbound-email resume path writes these two keys
@@ -1150,7 +1139,7 @@ MERGE_FIELD_CATALOG: tuple[MergeFieldSpec, ...] = (
         requires=("email_reply_intent",),
         phi_level="none",
         channels=ALL_CHANNELS,
-        triggers=("email_reply",),
+        triggers=("inbound_message",),
         resolve=_context_field("email_reply_intent"),
     ),
     MergeFieldSpec(
@@ -1164,7 +1153,7 @@ MERGE_FIELD_CATALOG: tuple[MergeFieldSpec, ...] = (
         requires=("email_reply_message_id",),
         phi_level="none",
         channels=ALL_CHANNELS,
-        triggers=("email_reply",),
+        triggers=("inbound_message",),
         resolve=_context_field("email_reply_message_id"),
     ),
 )

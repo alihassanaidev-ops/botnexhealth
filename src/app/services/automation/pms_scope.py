@@ -1,11 +1,14 @@
 """PMS ownership map for workflow triggers and nodes.
 
 A trigger or node is either shared across every practice-management system or
-owned by exactly one of them. ``appointment_state_changed`` only ever fires
-from the GoTracker webhook route, and ``update_gotracker_appointment`` only
-runs against a GoTracker location, so offering or publishing them for a
-NexHealth institution produces a workflow that silently never enrolls or a
+owned by exactly one of them. ``update_gotracker_appointment`` only runs against
+a GoTracker location, so publishing it for a NexHealth institution produces a
 step that can never execute.
+
+Triggers are no longer gated here — every one of the six is PMS-neutral, and
+per-PMS availability is decided per *event key* by ``event_catalog.supports``.
+That is a finer instrument: the old map had to hide a whole trigger from a
+tenant because one of the states it matched was GoTracker-only.
 
 This module is the single source of truth: the builder-capabilities endpoint,
 publish validation, the launch checklist, and template filtering all read from
@@ -20,18 +23,22 @@ from __future__ import annotations
 ALL_PMS_TYPES: frozenset[str] = frozenset({"nexhealth", "gotracker", "none"})
 _GOTRACKER_ONLY: frozenset[str] = frozenset({"gotracker"})
 
+#: Every current trigger is available on every PMS.
+#:
+#: This map used to carry the per-PMS gating, which is why
+#: ``appointment_state_changed`` was GoTracker-only: the trigger itself was
+#: GoTracker-shaped, so offering it to a NexHealth tenant built a campaign that
+#: silently never enrolled anyone. Triggers are PMS-neutral now, and the gating
+#: moved down to the individual event key, where it belongs — see
+#: ``event_catalog.supports``. A NexHealth tenant gets the event trigger; it
+#: just is not offered ``appointment.checked_in`` inside it.
 TRIGGER_PMS: dict[str, frozenset[str]] = {
-    "appointment_offset": ALL_PMS_TYPES,
-    "appointment_state_changed": _GOTRACKER_ONLY,
-    "recall_scan": ALL_PMS_TYPES,
+    "event": ALL_PMS_TYPES,
     "manual": ALL_PMS_TYPES,
-    "bulk_import": ALL_PMS_TYPES,
-    "enquiry_received": ALL_PMS_TYPES,
     "form_submitted": ALL_PMS_TYPES,
-    "callback_requested": ALL_PMS_TYPES,
-    "patient_status_changed": ALL_PMS_TYPES,
-    "sms_reply": ALL_PMS_TYPES,
-    "email_reply": ALL_PMS_TYPES,
+    "internal_status": ALL_PMS_TYPES,
+    "schedule": ALL_PMS_TYPES,
+    "inbound_message": ALL_PMS_TYPES,
 }
 
 NODE_PMS: dict[str, frozenset[str]] = {

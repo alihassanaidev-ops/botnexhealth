@@ -56,6 +56,7 @@ from src.app.services.automation.campaign_analytics_service import (
     resolve_window,
 )
 from src.app.pms.gotracker.statuses import public_statuses
+from src.app.services.automation.event_catalog import public_events
 from src.app.services.automation.merge_field_catalog import fields_for
 from src.app.services.automation.node_registry import (
     NODE_REGISTRY_VERSION,
@@ -299,6 +300,38 @@ class PmsAppointmentStatusResponse(BaseModel):
 class PmsAppointmentStatusCatalogResponse(BaseModel):
     pms: str
     statuses: list[PmsAppointmentStatusResponse] = Field(default_factory=list)
+
+
+class EventContextFieldResponse(BaseModel):
+    """One canonical context field an event carries.
+
+    ``pms_support`` is per-PMS (``native``/``derived``/``unsupported``) so the
+    builder can grey out a field the caller's practice software cannot supply,
+    with a reason, instead of letting someone branch on a value that will always
+    be absent.
+    """
+
+    path: str
+    label: str
+    type: str
+    description: str
+    sample: Any = None
+    pms_support: dict[str, str] = Field(default_factory=dict)
+    phi_level: str = "none"
+    pms_specific: bool = False
+
+
+class EventCatalogEntryResponse(BaseModel):
+    key: str
+    label: str
+    description: str
+    pms_support: dict[str, str] = Field(default_factory=dict)
+    context: list[EventContextFieldResponse] = Field(default_factory=list)
+
+
+class EventCatalogResponse(BaseModel):
+    pms: str
+    events: list[EventCatalogEntryResponse] = Field(default_factory=list)
 
 
 class MergeFieldResponse(BaseModel):
@@ -952,6 +985,39 @@ async def list_pms_appointment_statuses(
         pms="gotracker",
         statuses=[
             PmsAppointmentStatusResponse(**status) for status in public_statuses()
+        ],
+    )
+
+
+@router.get("/event-catalog", response_model=EventCatalogResponse)
+async def get_event_catalog(
+    current_user: _InstitutionAdmin,
+    pms: Annotated[str | None, Query()] = None,
+) -> EventCatalogResponse:
+    """Return the canonical event vocabulary the builder authors against.
+
+    Events a PMS cannot raise at all are dropped, so the trigger picker only
+    offers what the caller's location can actually deliver — a NexHealth tenant
+    is not shown ``appointment.checked_in`` and left wondering why the campaign
+    never enrolls anyone. Field-level support is carried through on each entry
+    so the filter editor can annotate rather than hide.
+
+    NOTE: declared before ``/{workflow_id}`` so this literal path is not captured
+    as a workflow id by the parameterised route.
+    """
+    inst_id = _institution_id(current_user)
+    normalized = (pms or "").strip().lower()
+    if not normalized:
+        async with get_db_session() as session:
+            institution = await session.get(Institution, inst_id)
+        normalized = institution.pms_type if institution else "none"
+    # A tenant with no PMS still authors platform events (inbound message,
+    # enquiry, schedule), so filter only for a PMS we actually know.
+    filter_pms = normalized if normalized in {"gotracker", "nexhealth"} else None
+    return EventCatalogResponse(
+        pms=normalized,
+        events=[
+            EventCatalogEntryResponse(**entry) for entry in public_events(filter_pms)
         ],
     )
 

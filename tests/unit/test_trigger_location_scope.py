@@ -24,17 +24,68 @@ from src.app.services.automation.patient_status_trigger_service import (
     PatientStatusTriggerService,
 )
 from src.app.services.automation.sms_reply_trigger_service import SmsReplyTriggerService
-from src.app.services.automation.trigger_lookup import workflow_matches_location
+from src.app.services.automation.trigger_lookup import (
+    TRIGGER_EVENT_KEYS,
+    workflow_matches_location,
+)
+
+
+#: Each service's lookup key paired with the trigger a campaign now authors for
+#: it. The dispatch tasks still ask by the retired key names, so the bridge in
+#: ``trigger_lookup.TRIGGER_EVENT_KEYS`` is what has to resolve them — which is
+#: only exercised if the fixtures carry the *new* trigger shapes.
+_TRIGGERS: dict[str, dict] = {
+    "appointment_offset": {
+        "type": "event",
+        "event_keys": ["appointment.reminder_due"],
+        "reminder_offset_hours": -24,
+    },
+    "appointment_state_changed": {
+        "type": "event",
+        "event_keys": ["appointment.completed", "appointment.cancelled"],
+    },
+    "recall_scan": {
+        "type": "schedule",
+        "cron": "0 9 * * *",
+        "source": {"kind": "pms_recall", "recall_interval_months": 6},
+    },
+    "callback_requested": {
+        "type": "event",
+        "event_keys": ["call.inbound.completed"],
+    },
+    "patient_status_changed": {
+        "type": "internal_status",
+        "field": "patient_workflow_status",
+        "to_statuses": ["appointment_confirmed"],
+    },
+    "sms_reply": {"type": "inbound_message", "channels": ["sms"]},
+    "enquiry_received": {"type": "event", "event_keys": ["enquiry.received"]},
+    "manual": {"type": "manual"},
+}
 
 
 def _workflow(*, trigger_type: str, location_id: str | None, wf_id: str = "wf"):
+    trigger = _TRIGGERS[trigger_type]
     wf = MagicMock()
     wf.id = wf_id
     wf.institution_id = "inst-1"
     wf.location_id = location_id
     wf.status = AutomationWorkflowStatus.ACTIVE.value
     wf.current_version_id = "ver-1"
-    wf.trigger_type = trigger_type
+    wf.definition = {
+        "triggers": [trigger],
+        "entry_node_id": "exit-1",
+        "nodes": [{"type": "exit", "id": "exit-1"}],
+    }
+    # Mirrors AutomationWorkflow's derived properties, which a MagicMock cannot
+    # compute from `definition` on its own.
+    wf.trigger_type = trigger["type"]
+    wf.trigger_types = [trigger["type"]]
+    wf.subscribed_event_keys = list(trigger.get("event_keys") or []) + [
+        key
+        for key in TRIGGER_EVENT_KEYS.get(trigger["type"], ())
+        if key not in (trigger.get("event_keys") or [])
+    ]
     return wf
 
 

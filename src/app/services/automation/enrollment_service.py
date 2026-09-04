@@ -64,14 +64,16 @@ class AutomationWorkflowEnrollmentService:
                 return existing, False
 
         # Conflicting-active-run dedup: a contact already in a non-terminal run of
-        # this workflow is not enrolled again (avoids double-contact). Appointment
-        # offset workflows are appointment-scoped, not patient-scoped: one patient
-        # can legitimately have multiple appointments/runs. Those rely on the
-        # appointment id/time idempotency key plus send-time voice cooldown.
+        # this workflow is not enrolled again (avoids double-contact).
+        #
+        # Appointment-triggered workflows are the exception: they are
+        # appointment-scoped, not patient-scoped, so one patient can legitimately
+        # have several concurrent runs — one per appointment. Those rely on the
+        # appointment id/time idempotency key plus the send-time voice cooldown.
+        # Keyed on what the run *references* rather than the trigger's name, so
+        # it survives the trigger rename and covers every appointment event.
         appointment_scoped = (
-            trigger_type == "appointment_offset"
-            and trigger_ref_type == "appointment"
-            and trigger_ref_id is not None
+            trigger_ref_type == "appointment" and trigger_ref_id is not None
         )
         if contact_id is not None and not appointment_scoped:
             conflicting = await self._find_active_run(

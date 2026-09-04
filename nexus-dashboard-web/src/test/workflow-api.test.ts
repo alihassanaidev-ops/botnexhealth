@@ -233,16 +233,12 @@ describe("workflow-api", () => {
                     phi_level: "none",
                     channels: ["sms", "email", "voice"],
                     trigger_types: [
-                        "appointment_offset",
-                        "appointment_state_changed",
-                        "recall_scan",
+                        "event",
                         "manual",
-                        "bulk_import",
-                        "callback_requested",
-                        "enquiry_received",
-                        "patient_status_changed",
-                        "sms_reply",
-                        "email_reply",
+                        "form_submitted",
+                        "internal_status",
+                        "schedule",
+                        "inbound_message",
                     ],
                 },
             ],
@@ -254,9 +250,9 @@ describe("workflow-api", () => {
 
     it("listMergeFields forwards trigger and channel filters", async () => {
         get.mockResolvedValue({ data: [] })
-        await listMergeFields({ triggerType: "appointment_offset", channel: "sms" })
+        await listMergeFields({ triggerType: "event", channel: "sms" })
         expect(get).toHaveBeenCalledWith(
-            "/automation/workflows/merge-fields?trigger_type=appointment_offset&channel=sms",
+            "/automation/workflows/merge-fields?trigger_type=event&channel=sms",
         )
     })
 })

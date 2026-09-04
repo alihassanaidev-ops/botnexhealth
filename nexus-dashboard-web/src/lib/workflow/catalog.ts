@@ -5,7 +5,6 @@
  */
 import {
     CalendarCheck,
-    CalendarClock,
     CalendarPlus,
     ClipboardCheck,
     Clock,
@@ -19,9 +18,6 @@ import {
     MousePointerClick,
     Phone,
     RefreshCw,
-    Upload,
-    PhoneIncoming,
-    Inbox,
     ClipboardList,
     FormInput,
     Stethoscope,
@@ -177,92 +173,60 @@ export interface TriggerMeta {
 }
 
 export const TRIGGER_META: Record<TriggerType, TriggerMeta> = {
-    appointment_offset: {
-        label: "Appointment offset",
-        description: "Enroll a set time before/after an appointment.",
-        icon: CalendarClock,
-    },
-    appointment_state_changed: {
-        label: "Appointment state",
-        description: "Enroll when GoTracker appointment state changes.",
+    event: {
+        label: "Event",
+        description: "Enroll when something happens in the practice software.",
         icon: Stethoscope,
     },
-    recall_scan: {
-        label: "Recall scan",
-        description: "Enroll patients due for recall on a schedule.",
-        icon: RefreshCw,
-    },
     manual: {
-        label: "Manual / bulk",
-        description: "Enroll contacts manually or by CSV.",
+        label: "Manual / CSV",
+        description: "Enroll contacts by hand or from a CSV upload.",
         icon: MousePointerClick,
-    },
-    bulk_import: {
-        label: "Bulk import",
-        description: "Enroll a batch of imported contacts.",
-        icon: Upload,
-    },
-    enquiry_received: {
-        label: "Enquiry received",
-        description: "Enroll when a sales enquiry lands.",
-        icon: Inbox,
     },
     form_submitted: {
         label: "Form submitted",
         description: "Enroll when a connected Meta or Typeform form is submitted.",
         icon: FormInput,
     },
-    callback_requested: {
-        label: "Callback requested",
-        description: "Enroll patients who asked for a callback.",
-        icon: PhoneIncoming,
-    },
-    patient_status_changed: {
+    internal_status: {
         label: "Internal status",
-        description: "Enroll when a workflow records an internal status.",
+        description: "Enroll when a status changes on a call, contact or handoff.",
         icon: ClipboardList,
     },
-    sms_reply: {
-        label: "SMS reply",
-        description: "Enroll when a patient texts the clinic.",
-        icon: MessageSquareReply,
+    schedule: {
+        label: "Schedule",
+        description: "Enroll a group of patients on a recurring schedule.",
+        icon: RefreshCw,
     },
-    email_reply: {
-        label: "Email reply",
-        description: "Enroll when a patient replies to a clinic email.",
-        icon: Mail,
+    inbound_message: {
+        label: "Patient reply",
+        description: "Enroll when a patient texts or emails the clinic back.",
+        icon: MessageSquareReply,
     },
 }
 
 /**
  * Trigger types the builder does not offer for new workflows.
  *
- * They stay in `TRIGGER_META` so an existing definition still renders its own
- * trigger with a proper label instead of a raw key.
- *
- * - `bulk_import` has no enrollment path at all: there is no CSV import route on
- *   `/automation/workflows`, so a workflow using it can never enroll anyone.
- * - `email_reply` is accepted by the backend schema but has no trigger service
- *   yet, so nothing enrolls from an inbound email. (The email *wait* node is
- *   fully wired — that is a different feature.)
+ * Empty since the rearchitecture: the two dead triggers (`bulk_import`, which
+ * had no enrollment path, and `email_reply`, which had no trigger service) were
+ * deleted rather than hidden. Kept as the seam for hiding a trigger without
+ * removing it from `TRIGGER_META`, which is what lets an existing definition
+ * keep rendering its own label.
  */
-export const UNAVAILABLE_TRIGGER_TYPES: ReadonlySet<TriggerType> = new Set<TriggerType>([
-    "bulk_import",
-    "email_reply",
-])
+export const UNAVAILABLE_TRIGGER_TYPES: ReadonlySet<TriggerType> = new Set<TriggerType>([])
 
 /**
  * PMS ownership of triggers and nodes. Mirrors the backend's
  * `src/app/services/automation/pms_scope.py` (parity-tested) — a trigger/node
  * absent from these maps is shared across every practice-management system.
  *
- * `appointment_state_changed` only ever fires from the GoTracker webhook
- * route, so offering it to a NexHealth institution builds a campaign that
- * silently never enrolls anyone.
+ * Triggers are no longer gated here. Per-PMS availability is decided per *event
+ * key* by the served event catalog, which is a finer instrument: this map had
+ * to hide the whole appointment-state trigger from NexHealth tenants because
+ * some of the states it matched were GoTracker-only.
  */
-export const TRIGGER_PMS: Partial<Record<TriggerType, readonly string[]>> = {
-    appointment_state_changed: ["gotracker"],
-}
+export const TRIGGER_PMS: Partial<Record<TriggerType, readonly string[]>> = {}
 
 export const NODE_PMS: Partial<Record<NodeType, readonly string[]>> = {
     update_gotracker_appointment: ["gotracker"],
@@ -322,4 +286,30 @@ export function nodeTypeLabel(type: NodeType): string {
 
 export function triggerTypeLabel(type: TriggerType): string {
     return TRIGGER_META[type].label
+}
+
+/**
+ * Labels for a trigger type read off a saved record rather than a definition.
+ *
+ * Campaign runs store the trigger type as a plain string and keep the value
+ * they were created with, so lists still show runs stamped with retired types.
+ * They get their old label rather than a raw key; anything unrecognised falls
+ * through to the key itself, which is ugly but never wrong.
+ */
+const RETIRED_TRIGGER_LABELS: Record<string, string> = {
+    appointment_offset: "Appointment reminder",
+    appointment_state_changed: "Appointment state",
+    recall_scan: "Recall / reactivation",
+    bulk_import: "Bulk import",
+    enquiry_received: "Enquiry received",
+    callback_requested: "Callback",
+    patient_status_changed: "Internal status",
+    sms_reply: "SMS reply",
+    email_reply: "Email reply",
+}
+
+export function triggerTypeLabelFor(type: string | null | undefined): string {
+    if (!type) return "—"
+    if (type in TRIGGER_META) return TRIGGER_META[type as TriggerType].label
+    return RETIRED_TRIGGER_LABELS[type] ?? type
 }

@@ -22,7 +22,7 @@ from src.app.models.automation_workflow import (
 )
 from src.app.services.automation.definition_schema import (
     AppointmentRelativeDelay,
-    AppointmentOffsetTrigger,
+    EventTrigger,
     CalendarDelay,
     ConditionNode,
     ConditionRule,
@@ -141,7 +141,7 @@ def _make_session() -> AsyncMock:
 
 def _definition(nodes: list, entry: str, trigger=None) -> WorkflowDefinition:
     return WorkflowDefinition(
-        trigger=trigger or AppointmentOffsetTrigger(offset_hours=-24),
+        trigger=trigger or EventTrigger(event_keys=["appointment.reminder_due"], reminder_offset_hours=-24),
         entry_node_id=entry,
         nodes=nodes,
     )

@@ -15,7 +15,7 @@ from src.app.services.automation.callback_trigger_service import (
     make_callback_idempotency_key,
 )
 from src.app.services.automation.definition_schema import (
-    CallbackRequestedTrigger,
+    EventTrigger,
     WorkflowDefinition,
 )
 from src.app.tasks.automation_workflow import _trigger_callback_async
@@ -28,19 +28,45 @@ _NOW = datetime(2026, 7, 10, 12, 0, 0, tzinfo=timezone.utc)
 # ---------------------------------------------------------------------------
 
 
-def _make_workflow(trigger_type="callback_requested", version_id="ver-1", location_id=None):
+#: The callback campaign's trigger, in post-rearchitecture terms: an inbound call
+#: that ended, narrowed to the needs_callback disposition.
+_CALLBACK_TRIGGER = {
+    "type": "event",
+    "event_keys": ["call.inbound.completed"],
+    "filter": {
+        "kind": "rule",
+        "field": "call.outcome",
+        "op": "eq",
+        "value": "needs_callback",
+    },
+}
+_REMINDER_TRIGGER = {
+    "type": "event",
+    "event_keys": ["appointment.reminder_due"],
+    "reminder_offset_hours": -24,
+}
+
+
+def _make_workflow(
+    trigger=None, version_id="ver-1", location_id=None, wf_id="wf-1"
+):
+    trigger = trigger or _CALLBACK_TRIGGER
     wf = MagicMock()
-    wf.id = "wf-1"
+    wf.id = wf_id
     wf.institution_id = "inst-1"
     wf.location_id = location_id
     wf.status = AutomationWorkflowStatus.ACTIVE.value
-    wf.trigger_type = trigger_type
     wf.current_version_id = version_id
     wf.definition = {
-        "trigger": {"type": trigger_type},
+        "triggers": [trigger],
         "entry_node_id": "exit-1",
         "nodes": [{"type": "exit", "id": "exit-1", "outcome": "done"}],
     }
+    # The lookup reads these model properties, which a MagicMock cannot derive
+    # from `definition` on its own.
+    wf.trigger_type = trigger["type"]
+    wf.trigger_types = [trigger["type"]]
+    wf.subscribed_event_keys = list(trigger.get("event_keys") or [])
     return wf
 
 
@@ -81,6 +107,13 @@ def _make_session(workflows=None, callback_resolved=False):
 
 
 def test_callback_trigger_parses_in_definition():
+    """A published `callback_requested` definition still loads, as an event trigger.
+
+    The trigger type was retired; the behaviour it named was not. Loading one
+    must yield the inbound-call event plus the needs_callback filter that the old
+    type applied implicitly, or already-live callback campaigns would start
+    enrolling on every inbound call.
+    """
     defn = WorkflowDefinition.model_validate(
         {
             "trigger": {"type": "callback_requested"},
@@ -88,8 +121,12 @@ def test_callback_trigger_parses_in_definition():
             "nodes": [{"type": "exit", "id": "exit-1", "outcome": "done"}],
         }
     )
-    assert isinstance(defn.trigger, CallbackRequestedTrigger)
-    assert defn.trigger.type == "callback_requested"
+    assert isinstance(defn.trigger, EventTrigger)
+    assert defn.trigger.type == "event"
+    assert defn.trigger.event_keys == ["call.inbound.completed"]
+    assert defn.trigger.filter is not None
+    assert defn.trigger.filter.field == "call.outcome"
+    assert defn.trigger.filter.value == "needs_callback"
 
 
 # ---------------------------------------------------------------------------
@@ -134,15 +171,17 @@ def test_idempotency_key_stable():
 
 
 def test_find_active_callback_workflows_filters_by_trigger_type():
-    callback_wf = _make_workflow(trigger_type="callback_requested")
-    other_wf = _make_workflow(trigger_type="appointment_offset")
+    # Both workflows now carry an `event` trigger, so only the subscribed event
+    # keys tell them apart — which is exactly what the lookup has to match on.
+    callback_wf = _make_workflow(wf_id="callback")
+    other_wf = _make_workflow(trigger=_REMINDER_TRIGGER, wf_id="reminder")
     session = _make_session(workflows=[callback_wf, other_wf])
 
     async def run():
         return await CallbackTriggerService(session).find_active_callback_workflows("inst-1")
 
     results = asyncio.run(run())
-    assert [wf.trigger_type for wf in results] == ["callback_requested"]
+    assert [wf.id for wf in results] == ["callback"]
     session.execute.assert_awaited_once()
 
 

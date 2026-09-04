@@ -17,6 +17,7 @@ from src.app.services.automation.appointment_trigger_service import (
     make_recall_idempotency_key,
     workflow_matches_appointment,
 )
+from src.app.services.automation.trigger_lookup import TRIGGER_EVENT_KEYS
 from src.app.models.automation_workflow import AutomationWorkflowStatus
 from src.app.tasks.automation_workflow import (
     _enroll_and_start_async,
@@ -54,7 +55,6 @@ def _make_workflow(
     wf.institution_id = "inst-1"
     wf.location_id = location_id
     wf.status = AutomationWorkflowStatus.ACTIVE.value
-    wf.trigger_type = trigger_type
     wf.current_version_id = version_id
     if trigger_type == "recall_scan":
         trigger = {"type": trigger_type, "recall_interval_months": 6}
@@ -71,6 +71,17 @@ def _make_workflow(
     }
     if pms_context_fields is not None:
         wf.definition["pms_context_fields"] = pms_context_fields
+    # AutomationWorkflow derives these from the stored JSON; a MagicMock cannot,
+    # and the shared lookup reads them before any trigger-specific matching. The
+    # stored JSON here is deliberately the pre-rearchitecture shape — that is what
+    # already-published definitions still hold until the rewrite script runs, and
+    # the model reports their type verbatim rather than the up-converted one. Note
+    # that `_scan_recall_async` compares `trigger_type` to "recall_scan" literally
+    # instead of going through `workflow_starts_from`, so a recall campaign
+    # authored with the new `schedule` trigger is not picked up by the sweep.
+    wf.trigger_type = trigger["type"]
+    wf.trigger_types = [trigger["type"]]
+    wf.subscribed_event_keys = list(TRIGGER_EVENT_KEYS.get(trigger["type"], ()))
     return wf
 
 

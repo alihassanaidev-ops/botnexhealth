@@ -63,58 +63,87 @@ export function validateDefinition(def: WorkflowDefinition): ValidationIssue[] {
     }
 
     // ---- Trigger ----
-    if (def.trigger.type === "recall_scan" && def.trigger.recall_interval_months < 1) {
-        issues.push({
-            node_id: TRIGGER_NODE_ID,
-            severity: "error",
-            message: "Recall interval must be at least 1 month.",
-        })
+    // Mirrors the backend trigger validators so the builder reports the problem
+    // in place instead of failing at publish.
+    if (def.trigger.type === "event") {
+        const trigger = def.trigger
+        if (trigger.event_keys.length === 0) {
+            issues.push({
+                node_id: TRIGGER_NODE_ID,
+                severity: "error",
+                message: "Pick at least one event, or this campaign can never start.",
+            })
+        }
+        const wantsReminder = trigger.event_keys.includes("appointment.reminder_due")
+        if (wantsReminder && trigger.reminder_offset_hours == null) {
+            issues.push({
+                node_id: TRIGGER_NODE_ID,
+                severity: "error",
+                message: "Reminders need an interval relative to the appointment.",
+            })
+        }
+        if (!wantsReminder && trigger.reminder_offset_hours != null) {
+            issues.push({
+                node_id: TRIGGER_NODE_ID,
+                severity: "error",
+                message: "An appointment interval only applies to the reminder event.",
+            })
+        }
+        if (
+            trigger.max_followup_delay_hours != null &&
+            (!Number.isInteger(trigger.max_followup_delay_hours) ||
+                trigger.max_followup_delay_hours < 0 ||
+                trigger.max_followup_delay_hours > 168)
+        ) {
+            issues.push({
+                node_id: TRIGGER_NODE_ID,
+                severity: "error",
+                message: "Latest follow-up window must be a whole number from 0 to 168 hours.",
+            })
+        }
     }
-    if (
-        def.trigger.type === "recall_scan" &&
-        def.trigger.recall_reenrollment_cooldown_days !== undefined &&
-        (!Number.isInteger(def.trigger.recall_reenrollment_cooldown_days) ||
-            def.trigger.recall_reenrollment_cooldown_days < 1 ||
-            def.trigger.recall_reenrollment_cooldown_days > 730)
-    ) {
-        issues.push({
-            node_id: TRIGGER_NODE_ID,
-            severity: "error",
-            message: "Recall cooldown must be a whole number from 1 to 730 days.",
-        })
+    if (def.trigger.type === "schedule") {
+        const source = def.trigger.source
+        if (source.kind === "pms_recall") {
+            if (source.recall_interval_months < 1) {
+                issues.push({
+                    node_id: TRIGGER_NODE_ID,
+                    severity: "error",
+                    message: "Recall interval must be at least 1 month.",
+                })
+            }
+            const cooldown = source.reenrollment_cooldown_days
+            if (
+                cooldown !== undefined &&
+                (!Number.isInteger(cooldown) || cooldown < 1 || cooldown > 730)
+            ) {
+                issues.push({
+                    node_id: TRIGGER_NODE_ID,
+                    severity: "error",
+                    message: "Recall cooldown must be a whole number from 1 to 730 days.",
+                })
+            }
+        }
+        if (def.trigger.timezone_mode === "fixed" && !def.trigger.fixed_timezone) {
+            issues.push({
+                node_id: TRIGGER_NODE_ID,
+                severity: "error",
+                message: "A fixed schedule needs a timezone.",
+            })
+        }
     }
-    if (
-        def.trigger.type === "appointment_state_changed" &&
-        def.trigger.status_ids.length === 0 &&
-        (def.trigger.confirmed === null || def.trigger.confirmed === undefined) &&
-        (def.trigger.preconfirmed === null || def.trigger.preconfirmed === undefined) &&
-        !(def.trigger.flow_states ?? []).some((state) => state.trim())
-    ) {
-        issues.push({
-            node_id: TRIGGER_NODE_ID,
-            severity: "error",
-            message: "Appointment state trigger needs at least one matcher.",
-        })
-    }
-    if (
-        def.trigger.type === "appointment_state_changed" &&
-        def.trigger.max_followup_delay_hours !== null &&
-        def.trigger.max_followup_delay_hours !== undefined &&
-        (!Number.isInteger(def.trigger.max_followup_delay_hours) ||
-            def.trigger.max_followup_delay_hours < 0 ||
-            def.trigger.max_followup_delay_hours > 168)
-    ) {
-        issues.push({
-            node_id: TRIGGER_NODE_ID,
-            severity: "error",
-            message: "Latest follow-up window must be a whole number from 0 to 168 hours.",
-        })
-    }
-    if (def.trigger.type === "patient_status_changed" && def.trigger.statuses.length === 0) {
+    if (def.trigger.type === "internal_status" && def.trigger.to_statuses.length === 0) {
         issues.push({
             node_id: TRIGGER_NODE_ID,
             severity: "error",
             message: "Internal status trigger needs at least one status.",
+        })
+    }
+    if (def.trigger.type === "inbound_message" && def.trigger.channels.length === 0) {
+        issues.push({
+            node_id: TRIGGER_NODE_ID,
+            severity: "error",
+            message: "Patient reply trigger needs at least one channel.",
         })
     }
 

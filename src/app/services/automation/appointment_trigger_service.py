@@ -15,12 +15,20 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from src.app.models.appointment_working_set import AppointmentWorkingSet
 from src.app.models.automation_workflow import AutomationWorkflow
 from src.app.models.institution_appointment_type import InstitutionAppointmentType
+from src.app.pms.gotracker.statuses import status_for_id
 from src.app.services.automation.definition_schema import (
-    AppointmentOffsetTrigger,
-    AppointmentStateChangedTrigger,
-    RecallScanTrigger,
+    EventTrigger,
+    PmsRecallSource,
+    ScheduleTrigger,
     WorkflowDefinition,
 )
+
+#: PMS-neutral appointment status → the event that status change represents.
+_STATE_EVENT_BY_SEMANTICS: dict[str, str] = {
+    "cancelled": "appointment.cancelled",
+    "no_show": "appointment.no_show",
+    "waiting": "appointment.checked_in",
+}
 from src.app.services.automation.trigger_filter import trigger_filter_matches
 from src.app.services.automation.trigger_lookup import find_active_workflows
 
@@ -121,27 +129,44 @@ class AppointmentTriggerService:
         )
 
 
-def compute_enrollment_eta(
-    workflow: AutomationWorkflow, appointment_at: datetime
-) -> datetime | None:
-    """Return the UTC datetime at which to enroll, or None if the window has passed.
-
-    Parses the trigger from the workflow's current definition to extract
-    offset_hours, then computes appointment_at + offset_hours.
-    If the result is already in the past, returns None (skip enrollment).
-    """
+def _validated_definition(workflow: AutomationWorkflow) -> WorkflowDefinition | None:
     if not workflow.definition:
         return None
-
     try:
-        defn = WorkflowDefinition.model_validate(workflow.definition)
+        return WorkflowDefinition.model_validate(workflow.definition)
     except Exception:
         return None
 
-    if not isinstance(defn.trigger, AppointmentOffsetTrigger):
+
+def _event_trigger_for(
+    defn: WorkflowDefinition, event_key: str
+) -> EventTrigger | None:
+    """The workflow's event trigger subscribed to ``event_key``, if any."""
+    for trigger in defn.triggers:
+        if isinstance(trigger, EventTrigger) and event_key in trigger.event_keys:
+            return trigger
+    return None
+
+
+def compute_enrollment_eta(
+    workflow: AutomationWorkflow, appointment_at: datetime
+) -> datetime | None:
+    """Return the UTC datetime at which to enroll, or None if the window passed.
+
+    Only ``appointment.reminder_due`` carries an interval — it is the event whose
+    whole meaning is "a configured time relative to the appointment". Every other
+    appointment event fires when it happens, and a campaign that wants to wait
+    puts a wait node after the trigger.
+    """
+    defn = _validated_definition(workflow)
+    if defn is None:
         return None
 
-    enrollment_eta = appointment_at + timedelta(hours=defn.trigger.offset_hours)
+    trigger = _event_trigger_for(defn, "appointment.reminder_due")
+    if trigger is None or trigger.reminder_offset_hours is None:
+        return None
+
+    enrollment_eta = appointment_at + timedelta(hours=trigger.reminder_offset_hours)
     now = datetime.now(tz=timezone.utc)
     if enrollment_eta <= now:
         return None
@@ -155,27 +180,44 @@ def workflow_matches_appointment(
     appointment_type_id: str | None = None,
     appointment_type_name: str | None = None,
 ) -> bool:
-    """Return whether an appointment workflow should receive this appointment.
+    """Whether a reminder workflow should receive this appointment.
 
     Appointment type selection used to happen here through the trigger's
-    ``appointment_type_ids`` field. New definitions route appointment payloads
-    through workflow nodes (JSON mapper / LLM / condition) instead, because
-    GoTracker sends appointment reasons rather than our local appointment type
-    ids. The unused parameters remain for compatibility with older call sites.
+    ``appointment_type_ids`` field. Definitions express it as a trigger filter on
+    canonical context instead, because GoTracker sends appointment reasons rather
+    than our local appointment type ids. The unused parameters remain for
+    compatibility with older call sites.
     """
     _ = (appointment_type_id, appointment_type_name)
-    if not workflow.definition:
+    defn = _validated_definition(workflow)
+    if defn is None:
         return False
+    return _event_trigger_for(defn, "appointment.reminder_due") is not None
 
-    try:
-        defn = WorkflowDefinition.model_validate(workflow.definition)
-    except Exception:
-        return False
 
-    if not isinstance(defn.trigger, AppointmentOffsetTrigger):
-        return False
+def appointment_state_event_key(
+    *,
+    status_id: int | None = None,
+    confirmed: bool | None = None,
+    flow_state: str | None = None,
+) -> str | None:
+    """Canonical event key for a cached appointment-state change.
 
-    return True
+    The state matchers a workflow used to spell out — status ids, Chair Flow
+    strings, a confirmed flag — collapse into the event that state *means*, so a
+    campaign written once matches on either practice-management system.
+    """
+    if flow_state and flow_state.strip().casefold() == "completed":
+        return "appointment.completed"
+    if status_id is not None:
+        status = status_for_id(status_id)
+        semantics = getattr(status, "semantics", None)
+        mapped = _STATE_EVENT_BY_SEMANTICS.get(semantics or "")
+        if mapped:
+            return mapped
+    if confirmed:
+        return "appointment.confirmed"
+    return None
 
 
 def workflow_matches_appointment_state(
@@ -186,31 +228,17 @@ def workflow_matches_appointment_state(
     preconfirmed: bool | None = None,
     flow_state: str | None = None,
 ) -> bool:
-    if not workflow.definition:
+    _ = preconfirmed  # no canonical event; a filter on raw.* expresses it
+    defn = _validated_definition(workflow)
+    if defn is None:
         return False
 
-    try:
-        defn = WorkflowDefinition.model_validate(workflow.definition)
-    except Exception:
+    event_key = appointment_state_event_key(
+        status_id=status_id, confirmed=confirmed, flow_state=flow_state
+    )
+    if event_key is None:
         return False
-
-    if not isinstance(defn.trigger, AppointmentStateChangedTrigger):
-        return False
-
-    trigger = defn.trigger
-    if trigger.status_ids and status_id not in trigger.status_ids:
-        return False
-    if trigger.confirmed is not None and confirmed != trigger.confirmed:
-        return False
-    if trigger.preconfirmed is not None and preconfirmed != trigger.preconfirmed:
-        return False
-    if trigger.flow_states and (
-        not flow_state
-        or flow_state.casefold()
-        not in {configured.casefold() for configured in trigger.flow_states}
-    ):
-        return False
-    return True
+    return _event_trigger_for(defn, event_key) is not None
 
 
 def workflow_matches_recall(
@@ -219,16 +247,17 @@ def workflow_matches_recall(
     *,
     location_timezone: str = "UTC",
 ) -> bool:
-    """Return whether a recall_scan workflow should receive this recall row."""
-    if not workflow.definition:
+    """Whether a scheduled recall workflow should receive this recall row."""
+    defn = _validated_definition(workflow)
+    if defn is None:
         return False
 
-    try:
-        defn = WorkflowDefinition.model_validate(workflow.definition)
-    except Exception:
-        return False
-
-    if not isinstance(defn.trigger, RecallScanTrigger):
+    sourced = any(
+        isinstance(trigger, ScheduleTrigger)
+        and isinstance(trigger.source, PmsRecallSource)
+        for trigger in defn.triggers
+    )
+    if not sourced:
         return False
 
     return trigger_filter_matches(

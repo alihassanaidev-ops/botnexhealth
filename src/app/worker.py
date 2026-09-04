@@ -72,9 +72,14 @@ def _build_celery_app() -> Celery:
                 "task": "src.app.tasks.automation_workflow.poll_workflow_timers",
                 "schedule": 30.0,  # seconds
             },
-            "scan-recall-workflows": {
-                "task": "src.app.tasks.automation_workflow.scan_recall_workflows",
-                "schedule": 3600.0,  # hourly — patient visit history changes slowly
+            # Campaign schedules are DB rows, not beat entries: beat here is
+            # static and runs in a single pinned worker, so a per-tenant cron
+            # cannot live in this dict. One frequent tick claims whatever is due
+            # and no-ops when nothing is, which is what gives a campaign its
+            # authored cron rather than this interval.
+            "tick-workflow-schedules": {
+                "task": "src.app.tasks.automation_workflow.tick_workflow_schedules",
+                "schedule": 60.0,
             },
             "poll-inbound-email": {
                 "task": "src.app.tasks.inbound_email.poll_inbound_email",

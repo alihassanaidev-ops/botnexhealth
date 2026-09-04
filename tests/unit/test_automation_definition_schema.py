@@ -63,7 +63,11 @@ def _with_condition() -> dict:
 def _with_wait() -> dict:
     """Definition with a calendar-based wait node."""
     return {
-        "trigger": {"type": "recall_scan", "recall_interval_months": 6},
+        "trigger": {
+            "type": "schedule",
+            "cron": "0 9 * * *",
+            "source": {"kind": "pms_recall", "recall_interval_months": 6},
+        },
         "entry_node_id": "wait-1",
         "nodes": [
             {
@@ -217,26 +221,57 @@ def test_unified_sms_reply_wait_validates() -> None:
     assert wait.wait_for.response_mappings[0].tokens == ["YES", "Y"]
 
 
-def test_sms_reply_trigger_validates() -> None:
+def test_inbound_message_trigger_validates() -> None:
     defn = _sms_to_exit()
     defn["trigger"] = {
-        "type": "sms_reply",
+        "type": "inbound_message",
+        "channels": ["sms"],
         "tokens": ["pricing", "Pricing", "reschedule"],
         "campaign_goal": "inbound_sms_followup",
     }
 
     d = WorkflowDefinition.model_validate(defn)
-    assert d.trigger.type == "sms_reply"
+    assert d.trigger.type == "inbound_message"
+    assert d.trigger.channels == ["sms"]
     assert d.trigger.tokens == ["pricing", "reschedule"]
 
 
-def test_enquiry_received_trigger_validates_with_filter() -> None:
+def test_inbound_message_trigger_serves_both_channels() -> None:
+    defn = _sms_to_exit()
+    defn["trigger"] = {"type": "inbound_message", "channels": ["sms", "email"]}
+
+    d = WorkflowDefinition.model_validate(defn)
+    assert d.trigger.channels == ["sms", "email"]
+
+
+def test_legacy_sms_reply_upconverts_to_inbound_message() -> None:
+    """A published sms_reply definition keeps running after the rename."""
+    defn = _sms_to_exit()
+    defn["trigger"] = {"type": "sms_reply", "tokens": ["YES"]}
+
+    d = WorkflowDefinition.model_validate(defn)
+    assert d.trigger.type == "inbound_message"
+    assert d.trigger.channels == ["sms"]
+    assert d.trigger.tokens == ["YES"]
+
+
+def test_legacy_email_reply_upconverts_to_the_email_channel() -> None:
+    defn = _sms_to_exit()
+    defn["trigger"] = {"type": "email_reply", "tokens": ["YES"]}
+
+    d = WorkflowDefinition.model_validate(defn)
+    assert d.trigger.type == "inbound_message"
+    assert d.trigger.channels == ["email"]
+
+
+def test_enquiry_event_trigger_validates_with_filter() -> None:
     defn = _sms_to_exit()
     defn["trigger"] = {
-        "type": "enquiry_received",
+        "type": "event",
+        "event_keys": ["enquiry.received"],
         "filter": {
             "kind": "rule",
-            "field": "enquiry_source",
+            "field": "enquiry.source",
             "op": "eq",
             "value": "website_form",
         },
@@ -244,8 +279,64 @@ def test_enquiry_received_trigger_validates_with_filter() -> None:
 
     d = WorkflowDefinition.model_validate(defn)
 
-    assert d.trigger.type == "enquiry_received"
+    assert d.trigger.type == "event"
+    assert d.trigger.event_keys == ["enquiry.received"]
     assert d.trigger.filter is not None
+
+
+def test_event_trigger_rejects_an_unknown_event_key() -> None:
+    defn = _sms_to_exit()
+    defn["trigger"] = {"type": "event", "event_keys": ["appointment.exploded"]}
+
+    with pytest.raises(ValidationError):
+        WorkflowDefinition.model_validate(defn)
+
+
+def test_event_trigger_dedupes_and_preserves_key_order() -> None:
+    defn = _sms_to_exit()
+    defn["trigger"] = {
+        "type": "event",
+        "event_keys": ["appointment.cancelled", "appointment.no_show", "appointment.cancelled"],
+    }
+
+    d = WorkflowDefinition.model_validate(defn)
+    assert d.trigger.event_keys == ["appointment.cancelled", "appointment.no_show"]
+
+
+def test_reminder_offset_is_required_for_the_reminder_event() -> None:
+    """The reminder event is defined by its interval, so it cannot go unset."""
+    defn = _sms_to_exit()
+    defn["trigger"] = {"type": "event", "event_keys": ["appointment.reminder_due"]}
+
+    with pytest.raises(ValidationError):
+        WorkflowDefinition.model_validate(defn)
+
+
+def test_reminder_offset_is_rejected_on_other_events() -> None:
+    defn = _sms_to_exit()
+    defn["trigger"] = {
+        "type": "event",
+        "event_keys": ["appointment.cancelled"],
+        "reminder_offset_hours": -24,
+    }
+
+    with pytest.raises(ValidationError):
+        WorkflowDefinition.model_validate(defn)
+
+
+def test_a_workflow_can_start_from_several_triggers() -> None:
+    defn = _sms_to_exit()
+    defn.pop("trigger")
+    defn["triggers"] = [
+        {"type": "event", "event_keys": ["appointment.cancelled"]},
+        {"type": "manual"},
+    ]
+
+    d = WorkflowDefinition.model_validate(defn)
+
+    assert [t.type for t in d.triggers] == ["event", "manual"]
+    # `.trigger` keeps the single-entry-point call sites working.
+    assert d.trigger.type == "event"
 
 
 def test_condition_branch_definition() -> None:
@@ -446,19 +537,75 @@ def test_respect_quiet_hours_defaults_true() -> None:
     assert d.nodes[0].respect_quiet_hours is True
 
 
-def test_patient_status_changed_trigger() -> None:
+def test_internal_status_trigger() -> None:
     defn = _sms_to_exit()
     defn["trigger"] = {
-        "type": "patient_status_changed",
-        "statuses": [" appointment_confirmed "],
+        "type": "internal_status",
+        "field": "contact_lead_status",
+        "to_statuses": [" qualified "],
         "campaign_goal": " post_op_followup ",
     }
 
     d = WorkflowDefinition.model_validate(defn)
 
-    assert d.trigger.type == "patient_status_changed"
-    assert d.trigger.statuses == ["appointment_confirmed"]
+    assert d.trigger.type == "internal_status"
+    assert d.trigger.field == "contact_lead_status"
+    assert d.trigger.to_statuses == ["qualified"]
+    assert d.trigger.from_statuses == []
     assert d.trigger.campaign_goal == "post_op_followup"
+
+
+def test_internal_status_trigger_can_pin_the_transition() -> None:
+    defn = _sms_to_exit()
+    defn["trigger"] = {
+        "type": "internal_status",
+        "field": "call_workflow_status",
+        "from_statuses": ["Pending"],
+        "to_statuses": ["Completed"],
+    }
+
+    d = WorkflowDefinition.model_validate(defn)
+    assert d.trigger.from_statuses == ["Pending"]
+    assert d.trigger.to_statuses == ["Completed"]
+
+
+def test_internal_status_trigger_rejects_an_unwatched_field() -> None:
+    defn = _sms_to_exit()
+    defn["trigger"] = {
+        "type": "internal_status",
+        "field": "call_ai_classification",
+        "to_statuses": ["needs_callback"],
+    }
+
+    with pytest.raises(ValidationError):
+        WorkflowDefinition.model_validate(defn)
+
+
+def test_legacy_patient_status_changed_upconverts() -> None:
+    defn = _sms_to_exit()
+    defn["trigger"] = {
+        "type": "patient_status_changed",
+        "statuses": ["appointment_confirmed"],
+    }
+
+    d = WorkflowDefinition.model_validate(defn)
+
+    assert d.trigger.type == "internal_status"
+    assert d.trigger.field == "patient_workflow_status"
+    assert d.trigger.to_statuses == ["appointment_confirmed"]
+
+
+def test_legacy_callback_requested_becomes_a_filtered_call_event() -> None:
+    defn = _sms_to_exit()
+    defn["trigger"] = {"type": "callback_requested"}
+
+    d = WorkflowDefinition.model_validate(defn)
+
+    assert d.trigger.type == "event"
+    assert d.trigger.event_keys == ["call.inbound.completed"]
+    # The classification the old trigger implied is now explicit.
+    assert d.trigger.filter.field == "call.outcome"
+    assert d.trigger.filter.value == "needs_callback"
 
 
 def test_book_appointment_node_validates_three_outcome_branches() -> None:
@@ -680,7 +827,7 @@ def test_empty_condition_rules_raises() -> None:
 
 def test_recall_interval_must_be_positive() -> None:
     defn = _with_wait()
-    defn["trigger"]["recall_interval_months"] = 0
+    defn["trigger"]["source"]["recall_interval_months"] = 0
     with pytest.raises(ValidationError):
         WorkflowDefinition.model_validate(defn)
 
@@ -688,13 +835,60 @@ def test_recall_interval_must_be_positive() -> None:
 def test_recall_cooldown_defaults_to_decision_d() -> None:
     definition = WorkflowDefinition.model_validate(_with_wait())
 
-    assert definition.trigger.type == "recall_scan"
-    assert definition.trigger.recall_reenrollment_cooldown_days == 90
+    assert definition.trigger.type == "schedule"
+    assert definition.trigger.source.reenrollment_cooldown_days == 90
+
+
+def test_schedule_trigger_rejects_a_bad_cron_expression() -> None:
+    defn = _with_wait()
+    defn["trigger"]["cron"] = "not a cron"
+    with pytest.raises(ValidationError):
+        WorkflowDefinition.model_validate(defn)
+
+
+def test_schedule_trigger_normalises_cron_whitespace() -> None:
+    defn = _with_wait()
+    defn["trigger"]["cron"] = "0   9  *  * *"
+
+    definition = WorkflowDefinition.model_validate(defn)
+    assert definition.trigger.cron == "0 9 * * *"
+
+
+def test_fixed_timezone_mode_requires_a_real_timezone() -> None:
+    defn = _with_wait()
+    defn["trigger"]["timezone_mode"] = "fixed"
+    with pytest.raises(ValidationError):
+        WorkflowDefinition.model_validate(defn)
+
+    defn["trigger"]["fixed_timezone"] = "Mars/Olympus"
+    with pytest.raises(ValidationError):
+        WorkflowDefinition.model_validate(defn)
+
+    defn["trigger"]["fixed_timezone"] = "America/Toronto"
+    assert WorkflowDefinition.model_validate(defn).trigger.fixed_timezone == (
+        "America/Toronto"
+    )
+
+
+def test_legacy_recall_scan_upconverts_to_a_schedule() -> None:
+    defn = _with_wait()
+    defn["trigger"] = {
+        "type": "recall_scan",
+        "recall_interval_months": 18,
+        "recall_reenrollment_cooldown_days": 120,
+    }
+
+    d = WorkflowDefinition.model_validate(defn)
+
+    assert d.trigger.type == "schedule"
+    assert d.trigger.source.kind == "pms_recall"
+    assert d.trigger.source.recall_interval_months == 18
+    assert d.trigger.source.reenrollment_cooldown_days == 120
 
 
 def test_recall_cooldown_must_be_positive() -> None:
     defn = _with_wait()
-    defn["trigger"]["recall_reenrollment_cooldown_days"] = 0
+    defn["trigger"]["source"]["reenrollment_cooldown_days"] = 0
     with pytest.raises(ValidationError):
         WorkflowDefinition.model_validate(defn)
 

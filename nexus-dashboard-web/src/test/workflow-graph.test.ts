@@ -26,7 +26,11 @@ import type { WorkflowDefinition } from "@/types/workflow"
 
 const LINEAR: WorkflowDefinition = {
     schema_version: "1.0",
-    trigger: { type: "appointment_offset", offset_hours: -24 },
+    trigger: {
+        type: "event",
+        event_keys: ["appointment.reminder_due"],
+        reminder_offset_hours: -24,
+    },
     entry_node_id: "sms-1",
     nodes: [
         {
@@ -261,20 +265,33 @@ describe("workflow graph — factories", () => {
         })
     })
     it("createTrigger yields sensible defaults", () => {
-        expect(createTrigger("appointment_offset")).toMatchObject({ offset_hours: -24 })
-        expect(createTrigger("recall_scan")).toMatchObject({
-            recall_interval_months: 6,
-            recall_reenrollment_cooldown_days: 90,
+        // A fresh event trigger must already be publishable, so it names a key
+        // that needs no further configuration.
+        expect(createTrigger("event")).toMatchObject({
+            event_keys: ["appointment.cancelled"],
+        })
+        expect(createTrigger("schedule")).toMatchObject({
+            cron: "0 9 * * *",
+            timezone_mode: "location",
+            source: {
+                kind: "pms_recall",
+                recall_interval_months: 6,
+                reenrollment_cooldown_days: 90,
+            },
+            max_enrollments_per_run: 500,
         })
         expect(createTrigger("manual").type).toBe("manual")
-        expect(createTrigger("bulk_import").type).toBe("bulk_import")
-        expect(createTrigger("enquiry_received").type).toBe("enquiry_received")
-        expect(createTrigger("callback_requested").type).toBe("callback_requested")
-        expect(createTrigger("patient_status_changed")).toMatchObject({
-            statuses: ["appointment_confirmed"],
-            campaign_goal: "post_op_followup",
+        expect(createTrigger("form_submitted")).toMatchObject({
+            provider: null,
+            form_ids: [],
         })
-        expect(createTrigger("sms_reply")).toMatchObject({
+        expect(createTrigger("internal_status")).toMatchObject({
+            field: "contact_lead_status",
+            to_statuses: [],
+            from_statuses: [],
+        })
+        expect(createTrigger("inbound_message")).toMatchObject({
+            channels: ["sms"],
             tokens: [],
             campaign_goal: "inbound_sms_followup",
         })
@@ -378,7 +395,7 @@ describe("workflow graph — voice outcome branch helper", () => {
     it("adds a call_outcome condition and staff handoff fallback after a voice node", () => {
         const def: WorkflowDefinition = {
             schema_version: "1.0",
-            trigger: { type: "callback_requested" },
+            trigger: { type: "event", event_keys: ["call.inbound.completed"] },
             entry_node_id: "voice-1",
             nodes: [
                 {
