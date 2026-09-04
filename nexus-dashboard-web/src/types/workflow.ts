@@ -771,9 +771,23 @@ export interface TestRunStep {
     /** Optional detail — rendered message, humanized wait, branch taken. */
     detail?: string
 }
+export interface EmptyMergeField {
+    name: string
+    /** Ids of the send nodes whose templates reference it. */
+    nodes: string[]
+}
 export interface TestRunResult {
     steps: TestRunStep[]
     outcome: string | null
     /** True if the simulation hit the step ceiling (possible cycle). */
     truncated: boolean
+    /** Whether merge values came from catalog samples or a real contact. */
+    context_source?: "sample" | "contact"
+    /** Display name of the previewed contact, when one was used. */
+    contact_name?: string | null
+    /**
+     * Merge fields a message references that rendered blank. Only populated for
+     * a contact preview — samples fill every field by construction.
+     */
+    empty_fields?: EmptyMergeField[]
 }

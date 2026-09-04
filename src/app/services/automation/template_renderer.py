@@ -23,6 +23,16 @@ if TYPE_CHECKING:
 _VAR_RE = re.compile(r"\{\{\s*(\w+)\s*\}\}")
 
 
+def extract_tokens(template: str) -> list[str]:
+    """Merge-variable names referenced by ``template``, in first-seen order.
+
+    The token syntax lives here, so anything that needs to know which variables a
+    template depends on — publish validation, the builder's preview — asks this
+    rather than carrying its own copy of the pattern.
+    """
+    return list(dict.fromkeys(match.group(1) for match in _VAR_RE.finditer(template)))
+
+
 def build_merge_vars(
     contact: "Contact | None",
     location: "InstitutionLocation | None",
@@ -63,5 +73,6 @@ __all__ = [
     "MergeContextBuilder",
     "MergeFieldSpec",
     "build_merge_vars",
+    "extract_tokens",
     "render_sms_body",
 ]

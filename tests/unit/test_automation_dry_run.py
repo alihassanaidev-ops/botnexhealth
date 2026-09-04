@@ -163,3 +163,85 @@ def test_dry_run_supports_campaign_booking_node() -> None:
     ]
     assert result.steps[0].summary == "Book appointment"
     assert result.outcome == "booked"
+
+
+# --- contact preview: blank merge fields are reported, not papered over -------
+
+
+def _sms_defn(body: str) -> WorkflowDefinition:
+    return _defn(
+        [
+            {"type": "send_sms", "id": "s1", "body_template": body, "next_node_id": "x1"},
+            {"type": "exit", "id": "x1", "outcome": "sent"},
+        ],
+        "s1",
+    )
+
+
+def test_sample_preview_reports_no_empty_fields() -> None:
+    """The sample layer fills every catalog field, so nothing can read blank."""
+    result = simulate_run(_sms_defn("Hi {{patient_first_name}}, on {{appointment_date}}"))
+
+    assert result.empty_fields == []
+    assert "Jordan" in (result.steps[0].detail or "")
+
+
+def test_contact_preview_reports_fields_the_record_cannot_fill() -> None:
+    d = _sms_defn("Hi {{patient_first_name}}, see you on {{appointment_date}}")
+
+    result = simulate_run(
+        d,
+        context={"patient_first_name": "Sarah", "appointment_date": ""},
+        prefill_samples=False,
+    )
+
+    assert [f.name for f in result.empty_fields] == ["appointment_date"]
+    assert result.empty_fields[0].nodes == ["s1"]
+    # The blank must survive into the rendered copy: seeing "on ." is the point.
+    assert "Sarah" in (result.steps[0].detail or "")
+    assert "July" not in (result.steps[0].detail or "")
+
+
+def test_contact_preview_does_not_borrow_samples_for_absent_fields() -> None:
+    """Without prefill, a field the caller never supplied stays blank."""
+    result = simulate_run(
+        _sms_defn("Call {{location_phone}}"),
+        context={"patient_first_name": "Sarah"},
+        prefill_samples=False,
+    )
+
+    assert [f.name for f in result.empty_fields] == ["location_phone"]
+
+
+def test_empty_fields_cover_branches_the_simulation_did_not_walk() -> None:
+    """A blank on the untaken branch is still a blank the author should see."""
+    d = _defn(
+        [
+            {
+                "type": "condition",
+                "id": "c1",
+                "rules": [{"field": "patient_first_name", "op": "is_not_null"}],
+                "true_next_node_id": "s1",
+                "false_next_node_id": "s2",
+            },
+            {
+                "type": "send_sms",
+                "id": "s1",
+                "body_template": "Taken branch",
+                "next_node_id": "x1",
+            },
+            {
+                "type": "send_sms",
+                "id": "s2",
+                "body_template": "Untaken {{appointment_time}}",
+                "next_node_id": "x1",
+            },
+            {"type": "exit", "id": "x1", "outcome": "sent"},
+        ],
+        "c1",
+    )
+
+    result = simulate_run(d, context={}, prefill_samples=False, condition_choices={"c1": True})
+
+    assert [f.name for f in result.empty_fields] == ["appointment_time"]
+    assert result.empty_fields[0].nodes == ["s2"]
