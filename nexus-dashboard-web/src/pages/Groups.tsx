@@ -192,6 +192,7 @@ export default function Groups() {
     return (
         <div className="relative flex-1 space-y-6 bg-background p-8 pt-6">
             <PageHeader
+                art="groups"
                 icon={Layers}
                 title="Groups"
                 description="DSO / practice-group umbrellas with read-only cross-practice oversight."

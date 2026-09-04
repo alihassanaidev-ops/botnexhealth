@@ -188,6 +188,7 @@ export default function NotificationPreferences() {
     return (
         <div className="p-6 max-w-4xl mx-auto space-y-6">
             <PageHeader
+                art="emailPreferences"
                 icon={MailCheck}
                 title="Email Preferences"
                 description="Manage how you and others receive email notifications."

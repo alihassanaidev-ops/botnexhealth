@@ -125,6 +125,7 @@ export default function EmailInboxSettingsPage() {
     return (
         <div className="space-y-6">
             <PageHeader
+                art="inbox"
                 icon={Inbox}
                 title="Inbound Email"
                 description="Receive patient email in the shared inbox and reply without leaving ScaleNexus."

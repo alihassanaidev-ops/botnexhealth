@@ -561,6 +561,7 @@ export default function Dashboard() {
 
             <div className="relative z-10 p-8 pt-6 space-y-6">
                 <PageHeader
+                    art="dashboard"
                     icon={Home}
                     title="Dashboard"
                     description={<>{todayStr} · Call activity overview.</>}

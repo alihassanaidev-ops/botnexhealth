@@ -201,6 +201,7 @@ export default function AppointmentSync() {
     return (
         <div className="relative flex-1 space-y-6 bg-background p-8 pt-6">
             <PageHeader
+                art="appointmentSync"
                 icon={CalendarClock}
                 title="Appointment Sync"
                 description="Current appointment synchronization snapshot known to ScaleNexus."

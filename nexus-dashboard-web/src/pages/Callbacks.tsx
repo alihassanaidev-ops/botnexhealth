@@ -2,7 +2,6 @@ import { useState, useCallback, useEffect, useRef } from "react"
 import { useNavigate, useSearchParams } from "react-router-dom"
 import {
     PhoneForwarded,
-    CalendarIcon,
     Search,
     ChevronLeft,
     ChevronRight,
@@ -15,15 +14,12 @@ import {
     MessagesSquare,
 } from "lucide-react"
 import { PageHeader } from "@/components/PageHeader"
-import { format } from "date-fns"
-import type { DateRange } from "react-day-picker"
 import { Card, CardContent } from "@/components/ui/card"
 import { RevealablePhone } from "@/components/RevealablePhone"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Skeleton } from "@/components/ui/skeleton"
-import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover"
-import { Calendar } from "@/components/ui/calendar"
+import { DateRangeFilter } from "@/components/DateRangeFilter"
 import {
     Select,
     SelectContent,
@@ -84,80 +80,6 @@ function formatDateTime(dateStr: string | null, timeStr: string | null): string 
     const ampm = hour >= 12 ? "PM" : "AM"
     const h12 = hour % 12 || 12
     return `${datePart} · ${h12}:${m} ${ampm}`
-}
-
-function parseDateString(value: string): Date | undefined {
-    if (!value) return undefined
-    const [year, month, day] = value.split("-").map(Number)
-    if (!year || !month || !day) return undefined
-    const parsed = new Date(year, month - 1, day)
-    return Number.isNaN(parsed.getTime()) ? undefined : parsed
-}
-
-function formatDateParam(value: Date): string {
-    return format(value, "yyyy-MM-dd")
-}
-
-// ── Date Range Filter ────────────────────────────────────────────────────────
-
-interface DateRangeFilterProps {
-    from: string
-    to: string
-    onChange: (next: { from: string; to: string }) => void
-}
-
-function DateRangeFilter({ from, to, onChange }: DateRangeFilterProps) {
-    const fromDate = parseDateString(from)
-    const toDate = parseDateString(to)
-    const selectedRange: DateRange | undefined = (fromDate || toDate)
-        ? { from: fromDate, to: toDate }
-        : undefined
-
-    const label = selectedRange?.from
-        ? selectedRange.to
-            ? `${format(selectedRange.from, "MMM d, yyyy")} - ${format(selectedRange.to, "MMM d, yyyy")}`
-            : format(selectedRange.from, "MMM d, yyyy")
-        : "Date range"
-
-    return (
-        <Popover>
-            <PopoverTrigger asChild>
-                <Button
-                    variant="outline"
-                    size="sm"
-                    className="h-8 w-[215px] justify-start text-left font-normal"
-                >
-                    <CalendarIcon className="mr-2 h-4 w-4" />
-                    <span className={cn(!selectedRange?.from && "text-muted-foreground")}>{label}</span>
-                </Button>
-            </PopoverTrigger>
-            <PopoverContent className="w-auto p-0" align="start">
-                <Calendar
-                    mode="range"
-                    numberOfMonths={2}
-                    selected={selectedRange}
-                    onSelect={(range) => onChange({
-                        from: range?.from ? formatDateParam(range.from) : "",
-                        to: range?.to ? formatDateParam(range.to) : "",
-                    })}
-                    initialFocus
-                />
-                {selectedRange?.from && (
-                    <div className="border-t p-2">
-                        <Button
-                            type="button"
-                            variant="ghost"
-                            size="sm"
-                            className="h-7 px-2 text-xs"
-                            onClick={() => onChange({ from: "", to: "" })}
-                        >
-                            Clear
-                        </Button>
-                    </div>
-                )}
-            </PopoverContent>
-        </Popover>
-    )
 }
 
 // ── Resolve Dialog ───────────────────────────────────────────────────────────
@@ -461,6 +383,7 @@ export default function Callbacks() {
         <div className="relative flex-1 space-y-6 bg-background p-8 pt-6">
             <div className="fixed inset-0 overflow-hidden pointer-events-none"><div className="absolute -top-32 -right-32 w-[420px] h-[420px] bg-transparent dark:bg-violet-700/20 rounded-full blur-[100px]" /></div>
             <PageHeader
+                art="callbackQueue"
                 icon={PhoneForwarded}
                 title="Callback Queue"
                 description="Track and manage patient callbacks that need follow-up."

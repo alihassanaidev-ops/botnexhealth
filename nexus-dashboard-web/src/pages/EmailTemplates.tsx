@@ -261,6 +261,7 @@ export default function EmailTemplates() {
                         <span className="text-sm font-medium">Email Templates</span>
                     </div>
                     <PageHeader
+                        art="emailTemplates"
                         icon={Mail}
                         title="Email Templates"
                         description="Customize the notification emails sent to your team. Each template is linked to a specific notification type."

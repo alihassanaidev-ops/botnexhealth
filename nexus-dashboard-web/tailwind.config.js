@@ -7,6 +7,12 @@ export default {
   ],
   theme: {
 	extend: {
+		// One step below Tailwind's `xs`, for micro-labels: table meta rows,
+		// counts, badge text. In rem so it tracks the root clamp — a hardcoded
+		// px size would stay frozen while the rest of the UI scales.
+		fontSize: {
+			'2xs': ['0.68rem', { lineHeight: '1.35' }],
+		},
 		colors: {
 			border: 'hsl(var(--border))',
 			input: 'hsl(var(--input))',
@@ -60,10 +66,16 @@ export default {
 				ring: 'hsl(var(--sidebar-ring))'
 			}
 		},
+		// Bound to the token scale rather than arithmetic off a single
+		// --radius. Deriving md/sm by subtracting pixels made the steps
+		// drift as --radius changed; naming each one keeps the rounding
+		// consistent between a button, a card and a dialog.
 		borderRadius: {
-			lg: 'var(--radius)',
-			md: 'calc(var(--radius) - 2px)',
-			sm: 'calc(var(--radius) - 4px)'
+			sm: 'var(--radius-sm)',
+			md: 'var(--radius-md)',
+			lg: 'var(--radius-lg)',
+			xl: 'var(--radius-xl)',
+			'2xl': 'var(--radius-xl)'
 		},
 		keyframes: {
 			'accordion-down': {

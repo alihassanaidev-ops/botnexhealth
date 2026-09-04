@@ -194,6 +194,7 @@ export default function SmsPreferences() {
     return (
         <div className="p-6 max-w-3xl mx-auto space-y-6">
             <PageHeader
+                art="messaging"
                 icon={MessageSquare}
                 title="SMS Preferences"
                 description="Choose which automated alerts each phone number receives."

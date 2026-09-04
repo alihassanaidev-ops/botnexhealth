@@ -363,6 +363,7 @@ export default function Inbox() {
         return (
             <div className="space-y-6">
                 <PageHeader
+                    art="inbox"
                     icon={InboxIcon}
                     title="Patient Conversations"
                     description="Volumes and response times across your practices."
@@ -375,6 +376,7 @@ export default function Inbox() {
     return (
         <div className="space-y-6">
             <PageHeader
+                art="inbox"
                 icon={InboxIcon}
                 title="Inbox"
                 description="Patient replies across email and SMS, in one place."

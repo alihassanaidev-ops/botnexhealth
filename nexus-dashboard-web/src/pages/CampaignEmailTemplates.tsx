@@ -239,6 +239,7 @@ export default function CampaignEmailTemplates() {
     return (
         <div className="space-y-6">
             <PageHeader
+                art="campaignEmails"
                 icon={Mail}
                 title="Campaign Email Templates"
                 description="Reusable emails you can select from any Send Email step in a campaign."

@@ -156,7 +156,7 @@ export default function EmailSendingIdentityPage() {
     if (loading) return <CardsSkeleton />
 
     return <div className="space-y-6">
-        <PageHeader icon={MailCheck} title="Email domains & addresses" description="Clinic-owned domains, receiving subdomains, and the addresses workflows can use." />
+        <PageHeader art="sendingAddress" icon={MailCheck} title="Email domains & addresses" description="Clinic-owned domains, receiving subdomains, and the addresses workflows can use." />
         {picker}
         {ready && <div className="flex flex-wrap items-center justify-between gap-3 rounded-md border bg-muted/20 px-4 py-3">
             <div><p className="text-sm font-medium">{domains.length} domain{domains.length === 1 ? "" : "s"}, {activeAddresses.length} active sender address{activeAddresses.length === 1 ? "" : "es"}</p><p className="text-xs text-muted-foreground">Locations inherit the practice default unless a location default is selected.</p></div>
