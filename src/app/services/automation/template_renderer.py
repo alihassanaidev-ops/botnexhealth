@@ -46,6 +46,33 @@ def build_merge_vars(
     )
 
 
+def render_sms_body_reporting_blanks(
+    template: str,
+    contact: "Contact | None",
+    location: "InstitutionLocation | None",
+    context: dict,
+) -> tuple[str, list[str]]:
+    """Render the body, and name the tokens that resolved to nothing.
+
+    Substitution stays permissive — a missing value becomes an empty string so a
+    patient never receives raw ``{{token}}`` text. That is right for the patient
+    and invisible to everyone else, which is why the blanks are reported back
+    rather than merely tolerated: the caller records them on the step so a
+    message that went out with a hole in it can be found afterwards.
+    """
+    merge_vars = build_merge_vars(contact, location, context)
+    blanks: list[str] = []
+
+    def _replace(match: re.Match) -> str:
+        name = match.group(1)
+        value = merge_vars.get(name, "")
+        if not str(value).strip() and name not in blanks:
+            blanks.append(name)
+        return value
+
+    return _VAR_RE.sub(_replace, template), blanks
+
+
 def render_sms_body(
     template: str,
     contact: "Contact | None",
@@ -59,12 +86,8 @@ def render_sms_body(
     conditionals, and re-rendering every published SMS template through a
     different parser is risk without benefit. Email uses the Jinja engine.
     """
-    merge_vars = build_merge_vars(contact, location, context)
-
-    def _replace(match: re.Match) -> str:
-        return merge_vars.get(match.group(1), "")
-
-    return _VAR_RE.sub(_replace, template)
+    body, _ = render_sms_body_reporting_blanks(template, contact, location, context)
+    return body
 
 
 __all__ = [
@@ -75,4 +98,5 @@ __all__ = [
     "build_merge_vars",
     "extract_tokens",
     "render_sms_body",
+    "render_sms_body_reporting_blanks",
 ]
