@@ -1,3 +1,5 @@
+// @ui-variant refresh — delete this file and ./svg to drop the refreshed UI.
+//
 // Illustrated page artwork, traced from the original PNGs to SVG so the
 // drawings take their colours from the theme instead of carrying them baked
 // in. Every fill resolves to one of five CSS variables — --art-ink,

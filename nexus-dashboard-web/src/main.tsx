@@ -6,6 +6,8 @@ import { ErrorBoundary } from './components/ErrorBoundary'
 import { router } from './router'
 import { installChunkErrorReload } from './lib/chunk-reload'
 import './index.css'
+// @ui-variant classic
+import './styles/classic-ui.css'
 
 import { applyUiMode } from "@/lib/ui-mode"
 

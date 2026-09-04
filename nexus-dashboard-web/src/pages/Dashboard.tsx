@@ -242,6 +242,7 @@ function useAnimatedCount(target: number | undefined, duration = 600): number {
 }
 
 
+// @ui-variant refresh
 // Artwork for the metric cards, keyed by label — the same metric appears in
 // the range, monthly and no-PMS configs and should look identical in each.
 // "Emergency" is deliberately absent: its red accent chip is carrying the
@@ -306,6 +307,7 @@ function GlassCard({
             <div className="relative p-6">
                 <div className="flex items-center justify-between mb-5">
                     <span className="text-sm font-medium text-muted-foreground">{label}</span>
+                    {/* @ui-variant classic: the !isClassicUi() guard and the Icon branch */}
                     {CARD_ART[label] && !isClassicUi() ? (
                         <Art name={CARD_ART[label]!} className="ui-artwork size-12 shrink-0" />
                     ) : (

@@ -32,6 +32,7 @@ export function PageHeader({
     return (
         <div className={cn("flex flex-wrap items-start justify-between gap-4", className)}>
             <div className="flex items-start gap-3">
+                {/* @ui-variant classic: the !isClassicUi() guard and the icon branch */}
                 {art && !isClassicUi() ? (
                     <Art name={art} className="ui-artwork size-11 shrink-0" />
                 ) : (

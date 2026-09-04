@@ -10,35 +10,10 @@ import {
     SidebarRail,
 } from "@/components/ui/sidebar"
 import { LocationSelector } from "@/components/location-selector"
-import {
-    Armchair,
-    Building2,
-    CalendarCheck,
-    CalendarClock,
-    CalendarOff,
-    ClipboardList,
-    FormInput as FormInputIcon,
-    Home,
-    Inbox as InboxIcon,
-    Layers,
-    LayoutDashboard,
-    Mail,
-    MailCheck,
-    Megaphone,
-    MessageSquare,
-    Phone,
-    PhoneForwarded,
-    Settings,
-    Shield,
-    ShieldCheck,
-    ShieldOff,
-    Tag,
-    TriangleAlert,
-    UserCog,
-    Users,
-} from "lucide-react"
-import type { LucideIcon } from "lucide-react"
 import { isClassicUi } from "@/lib/ui-mode"
+// @ui-variant classic
+import { NAV_GLYPH } from "@/components/nav-glyphs"
+import type { LucideIcon } from "lucide-react"
 import { type PageArtName } from "@/assets/icons"
 import { Art } from "@/components/Art"
 import { Link, useLocation } from "react-router-dom"
@@ -47,50 +22,7 @@ import { useInstitution } from "@/context/InstitutionContext"
 
 type NavItemDef = { title: string; url: string; exact?: boolean }
 
-// The glyphs the nav used before the artwork replaced it, kept so classic
-// mode is a real fallback rather than a nav with no icons at all.
-const NAV_GLYPH: Record<string, LucideIcon> = {
-    "/admin": LayoutDashboard,
-    "/admin/audit-logs": ShieldCheck,
-    "/admin/twilio": MessageSquare,
-    "/admin/users": UserCog,
-    "/callbacks": PhoneForwarded,
-    "/calls": Phone,
-    "/contacts": Users,
-    "/dashboard": Home,
-    "/group": Layers,
-    "/groups": Layers,
-    "/inbox": InboxIcon,
-    "/institution-admin": Building2,
-    "/institution-admin/appointment-sync": CalendarClock,
-    "/institution-admin/call-statuses": Tag,
-    "/institution-admin/campaign-email-templates": Mail,
-    "/institution-admin/campaigns": Megaphone,
-    "/institution-admin/do-not-contact": ShieldOff,
-    "/institution-admin/email-inbox": InboxIcon,
-    "/institution-admin/email-sending-address": MailCheck,
-    "/institution-admin/email-templates": Mail,
-    "/institution-admin/enquiry-forms": InboxIcon,
-    "/institution-admin/lead-forms": FormInputIcon,
-    "/institution-admin/quiet-hours-exceptions": CalendarOff,
-    "/institution-admin/settings": Settings,
-    "/institution-admin/sms-templates": MessageSquare,
-    "/institution-admin/users": Users,
-    "/institutions": Users,
-    "/location-admin": Building2,
-    "/notification-preferences": MailCheck,
-    "/patients": ClipboardList,
-    "/setup": ClipboardList,
-    "/setup/appointment-types": CalendarCheck,
-    "/setup/audit-logs": ShieldCheck,
-    "/setup/insurance-plans": Shield,
-    "/setup/operatories": Armchair,
-    "/setup/providers": UserCog,
-    "/setup/reasons": Tag,
-    "/sms-preferences": MessageSquare,
-    "/undeliverables": TriangleAlert,
-}
-
+// @ui-variant refresh
 // Illustrated artwork for the nav, keyed by route rather than by nav title:
 // the same route appears in several role-specific nav lists and must always
 // carry the same icon. Every route is intentionally required here so a new
@@ -336,7 +268,10 @@ const navSetup: NavItemDef[] = [
 function NavItem({ item, isActive }: { item: NavItemDef; isActive: boolean }) {
     const art = NAV_ART[item.url]
     const classic = isClassicUi()
-    const Glyph = NAV_GLYPH[item.url] ?? Home
+    // @ui-variant classic. Indexing a Record yields the value type rather
+    // than `| undefined`, so a route with no glyph type-checks and then
+    // renders nothing; the JSX below falls back to artwork instead.
+    const Glyph: LucideIcon | undefined = NAV_GLYPH[item.url]
 
     return (
         <SidebarMenuItem>
@@ -355,7 +290,7 @@ function NavItem({ item, isActive }: { item: NavItemDef; isActive: boolean }) {
                 `}
             >
                 <Link to={item.url} aria-current={isActive ? "page" : undefined}>
-                    {classic ? (
+                    {classic && Glyph ? (
                         <Glyph className={`transition-colors ${isActive ? "text-sidebar-primary" : ""}`} />
                     ) : (
                         <Art

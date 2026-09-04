@@ -1,3 +1,4 @@
+// @ui-variant refresh — delete this file to drop the refreshed UI.
 import type { ReactElement } from "react"
 import { pageArt, type PageArtName } from "@/assets/icons"
 

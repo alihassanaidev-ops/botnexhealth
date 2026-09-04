@@ -451,6 +451,7 @@ export function MfaFlow({ challenge, onAuthenticated, onCancel }: MfaFlowProps) 
     if (step.kind === "verify") {
         return (
             <div className="space-y-3">
+                {/* @ui-variant classic: the !isClassicUi() guard */}
                 {step.mode === "passkey" && !isClassicUi() && (
                     <Art name="passkey" className="ui-artwork mx-auto size-16" />
                 )}

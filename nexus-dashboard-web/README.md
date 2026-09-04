@@ -94,6 +94,30 @@ This covers the visual layer only. Refactors with no visual opinion — the
 shared `DateRangeFilter`, Campaigns finally using `PageHeader` — are not part
 of "the old UI" in any sense worth preserving, and are not reverted.
 
+## Dropping one of the two UIs
+
+Once the team picks, the loser should be deleted rather than left behind as a
+second code path nobody exercises. Run:
+
+```bash
+scripts/ui_variant_inventory.sh classic    # what to delete to keep the refresh
+scripts/ui_variant_inventory.sh refresh    # what to delete to keep classic
+```
+
+It prints the files that exist only for that treatment, every individual site
+tagged with `@ui-variant <name>`, and the handful of things a grep cannot
+find. Keep those tags accurate when touching either treatment — the script is
+only as good as they are.
+
+One asymmetry worth knowing. Dropping *classic* is pure deletion. Dropping
+*refresh* is mostly deletion, but `src/styles/classic-ui.css` holds the
+pre-refresh type scale, radii and dark palette as overrides rather than as the
+primary values — so those get folded back into `index.css`, replacing the
+refreshed ones, before that file goes. The script says so.
+
+Either way `src/lib/ui-mode.ts` goes too: with one treatment left there is
+nothing to switch between.
+
 ## Branding and deployment
 
 Branding (HTML title, logo in `public/`) and the API target (`VITE_API_URL`)
