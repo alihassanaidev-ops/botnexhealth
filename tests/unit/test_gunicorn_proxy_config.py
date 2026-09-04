@@ -18,6 +18,13 @@ def test_gunicorn_trusts_configured_proxy_cidrs(monkeypatch) -> None:
     assert config.forwarded_allow_ips == trusted_cidrs
 
 
+def test_gunicorn_access_log_excludes_query_strings() -> None:
+    config = importlib.import_module("src.app.gunicorn_conf")
+
+    assert "%U" in config.access_log_format
+    assert "%r" not in config.access_log_format
+
+
 def test_trusted_alb_preserves_forwarded_https_scheme(monkeypatch) -> None:
     monkeypatch.setenv("TRUSTED_PROXY_CIDRS", "10.0.0.0/8")
     config = importlib.import_module("src.app.gunicorn_conf")
