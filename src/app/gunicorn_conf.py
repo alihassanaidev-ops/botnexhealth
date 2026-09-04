@@ -35,6 +35,10 @@ keepalive = 5
 max_requests = 10000
 max_requests_jitter = 1000
 accesslog = "-"
+# Gunicorn's default format includes the complete request line, including the
+# query string. Patient search filters are PHI, so keep access logs useful for
+# tracing without persisting query parameters.
+access_log_format = '%({X-Request-ID}i)s "%m %U %H" %s %b'
 errorlog = "-"
 capture_output = True
 enable_stdio_inheritance = True

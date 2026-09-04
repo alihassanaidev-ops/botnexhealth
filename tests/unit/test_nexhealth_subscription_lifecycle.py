@@ -18,6 +18,7 @@ from src.app.services.automation.nexhealth_subscription_service import (
     DEFAULT_WEBHOOK_EVENTS,
     NexHealthSubscriptionLifecycleService,
     nexhealth_live_callback_url,
+    live_signature_secrets_for_subscription,
     _resource_type_for_event,
 )
 
@@ -223,6 +224,42 @@ def test_live_callback_uses_public_api_url_when_no_override():
 
 
 @pytest.mark.asyncio
+async def test_live_signature_secret_requires_matching_subscription_and_subdomain():
+    matching = SimpleNamespace(
+        provider_subscription_id="endpoint-1",
+        provider_subscription_ids=["subscription-42"],
+        subdomain="practice",
+        secret_key="endpoint-secret",
+    )
+    unrelated = SimpleNamespace(
+        provider_subscription_id="endpoint-2",
+        provider_subscription_ids=["subscription-99"],
+        subdomain="other-practice",
+        secret_key="other-secret",
+    )
+    result = MagicMock()
+    result.scalars.return_value.all.return_value = [matching, unrelated]
+
+    assert await live_signature_secrets_for_subscription(
+        _session(result),
+        provider_subscription_id="subscription-42",
+        subdomain="practice",
+    ) == ["endpoint-secret"]
+
+
+@pytest.mark.asyncio
+async def test_live_signature_secret_rejects_unknown_subscription():
+    result = MagicMock()
+    result.scalars.return_value.all.return_value = []
+
+    assert await live_signature_secrets_for_subscription(
+        _session(result),
+        provider_subscription_id="unknown",
+        subdomain="practice",
+    ) == []
+
+
+@pytest.mark.asyncio
 async def test_institution_setup_groups_sibling_locations_by_subdomain():
     locations = [
         SimpleNamespace(
@@ -387,3 +424,74 @@ async def test_remote_group_reuses_account_endpoint_for_another_subdomain():
     assert row.provider_subscription_id == "77"
     assert row.secret_key == "shared-signing-secret"
     assert len(row.provider_subscription_ids) == len(DEFAULT_WEBHOOK_EVENTS)
+
+
+@pytest.mark.asyncio
+async def test_remote_group_moves_legacy_shared_endpoint_to_institution_endpoint():
+    row = SimpleNamespace(
+        provider_subscription_id="77",
+        provider_subscription_ids=["201", "202"],
+        callback_url=None,
+        credential_mode="platform",
+        api_key_hash="hash-1",
+        status="pending",
+        error_metadata=None,
+        last_health_check_at=None,
+        updated_at=None,
+        secret_key="old-secret",
+    )
+    shared_result = MagicMock()
+    shared_result.scalar_one_or_none.return_value = "other-row"
+    managed_result = MagicMock()
+    managed_result.scalar_one_or_none.return_value = None
+    session = AsyncMock()
+    session.execute = AsyncMock(side_effect=[shared_result, managed_result])
+    adapter = SimpleNamespace(
+        _client=object(),
+        credential_mode="platform",
+        api_key_hash="hash-1",
+        _default_params=lambda: {"subdomain": "practice"},
+        close=AsyncMock(),
+    )
+    calls: list[tuple[str, str]] = []
+    next_subscription_id = 300
+
+    async def provider_call(_client, method, path, **kwargs):
+        nonlocal next_subscription_id
+        calls.append((method, path))
+        if method == "POST" and path == "/webhook_endpoints":
+            return {"data": {"id": 88, "secret_key": "new-secret"}}
+        if method == "PATCH" and path.startswith(
+            "/webhook_endpoints/77/webhook_subscriptions/"
+        ):
+            assert kwargs["json"] == {"new_endpoint_id": 88}
+            return {"data": {"id": path.rsplit("/", 1)[-1]}}
+        if method == "GET" and path.endswith("/webhook_subscriptions"):
+            return {"data": []}
+        if method == "POST" and path.endswith("/webhook_subscriptions"):
+            next_subscription_id += 1
+            return {"data": {"id": next_subscription_id, **kwargs["json"]}}
+        raise AssertionError((method, path, kwargs))
+
+    svc = NexHealthSubscriptionLifecycleService(session)
+    with pytest.MonkeyPatch.context() as monkeypatch:
+        monkeypatch.setattr(
+            "src.app.pms.nexhealth.adapter.NexHealthAdapter.create",
+            AsyncMock(return_value=adapter),
+        )
+        monkeypatch.setattr(
+            "src.app.api.helpers.handle_nexhealth_request", provider_call
+        )
+        await svc._ensure_remote_group(
+            rows=[row],
+            institution=SimpleNamespace(id="inst-2"),
+            location=SimpleNamespace(nexhealth_subdomain="practice"),
+            callback_url="https://api.example.test/api/v1/nexhealth/webhooks/appointments",
+            event_types=DEFAULT_WEBHOOK_EVENTS,
+        )
+
+    assert ("POST", "/webhook_endpoints") in calls
+    assert ("PATCH", "/webhook_endpoints/77/webhook_subscriptions/201") in calls
+    assert ("PATCH", "/webhook_endpoints/77/webhook_subscriptions/202") in calls
+    assert row.provider_subscription_id == "88"
+    assert row.secret_key == "new-secret"
