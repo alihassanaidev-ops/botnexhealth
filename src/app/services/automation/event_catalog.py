@@ -26,6 +26,7 @@ never matches.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from collections.abc import Iterable
 from typing import Any, Literal
 
 EventKey = Literal[
@@ -40,14 +41,10 @@ EventKey = Literal[
     "patient.recall_due",
     "patient.status_changed",
     "call.inbound.completed",
-    "call.outbound.completed",
-    "call.missed",
     "message.sms.inbound",
     "message.email.inbound",
     "enquiry.received",
     "schedule.tick",
-    "external.webhook",
-    "campaign.run.finished",
 ]
 
 FieldType = Literal["string", "number", "boolean", "datetime", "date", "list", "object"]
@@ -85,6 +82,15 @@ class ContextFieldSpec:
     phi_level: Literal["none", "low", "medium", "high"] = "none"
     #: True for fields under ``raw.*``: usable, but they do not port across PMSs.
     pms_specific: bool = False
+    #: Channels this field can be rendered into. A booking URL is fine in an SMS
+    #: and useless read aloud by a voice agent, so the field set is scoped on
+    #: channel as well as on trigger.
+    channels: tuple[str, ...] = ("sms", "email", "voice")
+
+    @property
+    def token(self) -> str:
+        """What an author types to insert this field into a message body."""
+        return "{{" + self.path + "}}"
 
     def as_dict(self) -> dict[str, Any]:
         return {
@@ -96,6 +102,7 @@ class ContextFieldSpec:
             "pms_support": dict(self.pms_support),
             "phi_level": self.phi_level,
             "pms_specific": self.pms_specific,
+            "channels": list(self.channels),
         }
 
 
@@ -108,6 +115,7 @@ def _field(
     *,
     support: dict[str, PmsSupport] | None = None,
     phi_level: Literal["none", "low", "medium", "high"] = "none",
+    channels: tuple[str, ...] = ("sms", "email", "voice"),
 ) -> ContextFieldSpec:
     return ContextFieldSpec(
         path=path,
@@ -117,6 +125,7 @@ def _field(
         sample=sample,
         pms_support=support or dict(_ALL_NATIVE),
         phi_level=phi_level,
+        channels=channels,
     )
 
 
@@ -138,9 +147,10 @@ PATIENT_FIELDS: tuple[ContextFieldSpec, ...] = (
         "patient.preferred_language",
         "Preferred language",
         "string",
-        "Language the patient prefers to be contacted in, when recorded.",
+        "Language the patient prefers to be contacted in. Carried on patient "
+        "records rather than appointment events.",
         "en",
-        support={"gotracker": "unsupported", "nexhealth": "native"},
+        support={"gotracker": "unsupported", "nexhealth": "unsupported"},
     ),
 )
 
@@ -158,8 +168,10 @@ APPOINTMENT_FIELDS: tuple[ContextFieldSpec, ...] = (
         "appointment.duration_minutes",
         "Duration (minutes)",
         "number",
-        "Scheduled length.",
+        "Scheduled length. GoTracker sends it on the appointment; NexHealth does "
+        "not, so it is only known where the appointment type is cached locally.",
         15,
+        support={"gotracker": "native", "nexhealth": "unsupported"},
     ),
     _field(
         "appointment.status",
@@ -207,9 +219,10 @@ APPOINTMENT_FIELDS: tuple[ContextFieldSpec, ...] = (
         "appointment.provider.name",
         "Provider name",
         "string",
-        "Treating provider's display name, when synced.",
+        "Treating provider's display name, when synced. Neither system sends "
+        "it on an appointment event; it is resolved from cached providers.",
         "Dr Chan",
-        support={"gotracker": "derived", "nexhealth": "native"},
+        support={"gotracker": "native", "nexhealth": "unsupported"},
     ),
     _field(
         "appointment.type.id", "Appointment type ID", "string", "PMS type id.", "at-4",
@@ -229,7 +242,7 @@ APPOINTMENT_FIELDS: tuple[ContextFieldSpec, ...] = (
         "datetime",
         "Start time before the most recent reschedule.",
         "2026-09-01T10:00:00",
-        support={"gotracker": "native", "nexhealth": "derived"},
+        support={"gotracker": "native", "nexhealth": "unsupported"},
         phi_level="medium",
     ),
 )
@@ -426,36 +439,10 @@ EVENT_CONTEXT: dict[str, tuple[ContextFieldSpec, ...]] = {
     # a campaign inherits the source run's context, which usually has them.
     "patient.status_changed": _APPOINTMENT_CONTEXT + _INTERNAL_STATUS_FIELDS,
     "call.inbound.completed": _COMMON_FIELDS + PATIENT_FIELDS + LOCATION_FIELDS + _CALL_FIELDS,
-    "call.outbound.completed": _COMMON_FIELDS + PATIENT_FIELDS + LOCATION_FIELDS + _CALL_FIELDS,
-    "call.missed": _COMMON_FIELDS + PATIENT_FIELDS + LOCATION_FIELDS + _CALL_FIELDS,
     "message.sms.inbound": _COMMON_FIELDS + PATIENT_FIELDS + LOCATION_FIELDS + _MESSAGE_FIELDS,
     "message.email.inbound": _COMMON_FIELDS + PATIENT_FIELDS + LOCATION_FIELDS + _MESSAGE_FIELDS,
     "enquiry.received": _COMMON_FIELDS + PATIENT_FIELDS + LOCATION_FIELDS + _ENQUIRY_FIELDS,
     "schedule.tick": _COMMON_FIELDS + PATIENT_FIELDS + LOCATION_FIELDS + _RECALL_FIELDS,
-    "external.webhook": _COMMON_FIELDS
-    + LOCATION_FIELDS
-    + (
-        _field(
-            "payload",
-            "Webhook payload",
-            "object",
-            "The body posted to the workflow webhook endpoint.",
-            {"lead_id": "abc"},
-        ),
-    ),
-    "campaign.run.finished": _COMMON_FIELDS
-    + PATIENT_FIELDS
-    + LOCATION_FIELDS
-    + (
-        _field(
-            "run.outcome",
-            "Previous run outcome",
-            "string",
-            "Outcome recorded by the campaign that just finished.",
-            "appointment_confirmed",
-        ),
-        _field("run.workflow_id", "Previous campaign", "string", "Which campaign finished.", "wf-1"),
-    ),
 }
 
 ALL_EVENT_KEYS: tuple[str, ...] = tuple(EVENT_CONTEXT)
@@ -507,8 +494,17 @@ EVENTS: tuple[EventSpec, ...] = (
     EventSpec(
         "appointment.no_show",
         "Patient did not attend",
-        "The appointment time passed without the patient attending.",
-        {"gotracker": "native", "nexhealth": "derived"},
+        (
+            "The appointment time passed without the patient attending. "
+            "GoTracker reports this as a status; NexHealth cannot detect it at "
+            "all — a patient who never arrived is indistinguishable there from "
+            "one who was treated."
+        ),
+        # NOT "derived". There is nothing to derive it from: NexHealth exposes
+        # no no-show status, and the appointment is not cancelled, so the
+        # completion sweep marks it complete. Offering this to a NexHealth
+        # clinic would build a campaign that can never fire.
+        {"gotracker": "native", "nexhealth": "unsupported"},
     ),
     EventSpec(
         "appointment.checked_in",
@@ -520,8 +516,11 @@ EVENTS: tuple[EventSpec, ...] = (
         "appointment.completed",
         "Visit completed",
         (
-            "The visit finished. GoTracker reports it through Chair Flow; for "
-            "NexHealth it is derived, because no checkout event exists."
+            "The visit finished. GoTracker reports it through Chair Flow. For "
+            "NexHealth it is inferred from the appointment time passing without "
+            "a cancellation — which means a patient who did not turn up is "
+            "counted as completed. Follow-ups on NexHealth will reach some "
+            "people who were never seen."
         ),
         {"gotracker": "native", "nexhealth": "derived"},
     ),
@@ -554,18 +553,6 @@ EVENTS: tuple[EventSpec, ...] = (
         dict(_PLATFORM_NATIVE),
     ),
     EventSpec(
-        "call.outbound.completed",
-        "Outbound call ended",
-        "A call the platform placed finished, with a disposition.",
-        dict(_PLATFORM_NATIVE),
-    ),
-    EventSpec(
-        "call.missed",
-        "Call missed",
-        "An inbound call was not answered.",
-        dict(_PLATFORM_NATIVE),
-    ),
-    EventSpec(
         "message.sms.inbound",
         "SMS received",
         "A patient texted the clinic.",
@@ -589,18 +576,6 @@ EVENTS: tuple[EventSpec, ...] = (
         "A recurring time-based trigger fired.",
         dict(_PLATFORM_NATIVE),
     ),
-    EventSpec(
-        "external.webhook",
-        "External webhook",
-        "Something outside the platform posted to this campaign's webhook.",
-        dict(_PLATFORM_NATIVE),
-    ),
-    EventSpec(
-        "campaign.run.finished",
-        "Campaign finished",
-        "Another campaign's run reached an exit, so this one can chain from it.",
-        dict(_PLATFORM_NATIVE),
-    ),
 )
 
 _EVENTS_BY_KEY = {event.key: event for event in EVENTS}
@@ -612,6 +587,33 @@ def event_spec(key: str) -> EventSpec | None:
 
 def context_fields(key: str) -> tuple[ContextFieldSpec, ...]:
     return EVENT_CONTEXT.get(key, ())
+
+
+
+def fields_for_events(
+    event_keys: Iterable[str],
+    *,
+    pms: str | None = None,
+    channel: str | None = None,
+) -> list[ContextFieldSpec]:
+    """Canonical fields an author may use, given what the campaign starts from.
+
+    Scoped on both axes: a field must be carried by one of the subscribed events
+    *and* be renderable in the channel. Fields the current practice software
+    cannot supply are dropped, because offering them is how a campaign ends up
+    branching on a value that is never present.
+    """
+    seen: dict[str, ContextFieldSpec] = {}
+    for key in event_keys:
+        for spec in context_fields(key):
+            if spec.path in seen:
+                continue
+            if pms and spec.pms_support.get(pms) == "unsupported":
+                continue
+            if channel and channel not in spec.channels:
+                continue
+            seen[spec.path] = spec
+    return sorted(seen.values(), key=lambda spec: spec.path)
 
 
 def supports(key: str, pms: str) -> PmsSupport:

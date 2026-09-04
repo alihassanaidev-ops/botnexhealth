@@ -74,7 +74,6 @@ import {
     VOICE_OUTCOME_BRANCH_VALUES,
 } from "@/lib/workflow/graph"
 import {
-    contextFieldsForTrigger,
     contextValueAtPath,
     formatContextValue,
     GOTRACKER_APPOINTMENT_WEBHOOK_SAMPLE,
@@ -82,7 +81,10 @@ import {
     sampleWorkflowContext,
 } from "@/lib/workflow/context-fields"
 import { usePmsType } from "@/context/InstitutionContext"
-import { useEventCatalog } from "@/lib/workflow/event-catalog"
+import {
+    canonicalFieldsForTrigger,
+    useEventCatalog,
+} from "@/lib/workflow/event-catalog"
 import type {
     CachedAppointmentType,
     CachedProvider,
@@ -836,6 +838,7 @@ function TriggerEligibilityFilter({
             <FilterEditor
                 value={filter}
                 triggerType={trigger.type}
+                eventKeys={trigger.type === "event" ? trigger.event_keys : undefined}
                 readOnly={readOnly}
                 onChange={(next) => onChange({ ...trigger, filter: next })}
             />
@@ -2912,7 +2915,7 @@ function JsonMapperFields({
 function ContextPreview({ triggerType }: { triggerType: TriggerType }) {
     const [open, setOpen] = useState(false)
     const pmsType = usePmsType()
-    const fields = contextFieldsForTrigger(triggerType, pmsType)
+    const fields = canonicalFieldsForTrigger(useEventCatalog(), triggerType)
     if (fields.length === 0) return null
     const sample =
         pmsType === "gotracker"
@@ -2965,8 +2968,7 @@ function LlmFields({
     const [defaultModel, setDefaultModel] = useState(node.model ?? "")
     const [modelLoadFailed, setModelLoadFailed] = useState(false)
     const [variableOpen, setVariableOpen] = useState(false)
-    const pmsType = usePmsType()
-    const variables = contextFieldsForTrigger(def.trigger.type, pmsType)
+    const variables = canonicalFieldsForTrigger(useEventCatalog(), def.trigger.type)
     useEffect(() => {
         let active = true
         listWorkflowLlmModels()
@@ -3147,10 +3149,10 @@ function LlmFields({
                             <div className="max-h-72 overflow-y-auto p-1">
                                 {variables.map((field) => (
                                     <button
-                                        key={field.name}
+                                        key={field.path}
                                         type="button"
                                         className="flex w-full items-center justify-between gap-3 rounded-sm px-2 py-2 text-left text-sm hover:bg-accent"
-                                        onClick={() => insertVariable(field.name)}
+                                        onClick={() => insertVariable(field.path)}
                                     >
                                         <span>{field.label}</span>
                                         <span className="truncate font-mono text-xs text-muted-foreground">
@@ -3197,18 +3199,18 @@ function LlmFields({
                         <div className="max-h-48 space-y-0.5 overflow-y-auto">
                             {variables.map((field) => (
                                 <label
-                                    key={field.name}
+                                    key={field.path}
                                     className="flex cursor-pointer items-center gap-2 rounded-sm px-1.5 py-1 text-sm hover:bg-accent"
                                 >
                                     <Checkbox
                                         className="h-3.5 w-3.5"
                                         disabled={readOnly}
-                                        checked={contextFields.includes(field.name)}
-                                        onCheckedChange={() => toggleContextField(field.name)}
+                                        checked={contextFields.includes(field.path)}
+                                        onCheckedChange={() => toggleContextField(field.path)}
                                     />
                                     <span className="truncate">{field.label}</span>
                                     <span className="ml-auto truncate font-mono text-xs text-muted-foreground">
-                                        {field.name}
+                                        {field.path}
                                     </span>
                                 </label>
                             ))}
@@ -3236,9 +3238,8 @@ function ConditionFields({
     onChange: (n: WorkflowNode) => void
     readOnly?: boolean
 }) {
-    const pmsType = usePmsType()
-    const contextFields = contextFieldsForTrigger(def.trigger.type, pmsType)
-    const contextFieldNames = new Set(contextFields.map((field) => field.name))
+    const contextFields = canonicalFieldsForTrigger(useEventCatalog(), def.trigger.type)
+    const contextFieldNames = new Set(contextFields.map((field) => field.path))
     const legacyRules = node.rules ?? []
     const updateRule = (i: number, patch: Partial<ConditionRule>) => {
         const rules = legacyRules.map((r, idx) => (idx === i ? { ...r, ...patch } : r))
@@ -3257,6 +3258,9 @@ function ConditionFields({
                 <FilterEditor
                     value={node.filter}
                     triggerType={def.trigger.type}
+                    eventKeys={
+                        def.trigger.type === "event" ? def.trigger.event_keys : undefined
+                    }
                     readOnly={readOnly}
                     label="Continue on the Yes branch when"
                     onChange={(filter) => onChange({ ...node, filter })}
@@ -3333,7 +3337,7 @@ function ConditionFields({
                                         <SelectGroup>
                                             <SelectLabel>Trigger context</SelectLabel>
                                             {contextFields.map((field) => (
-                                                <SelectItem key={field.name} value={field.name}>{field.label}</SelectItem>
+                                                <SelectItem key={field.path} value={field.path}>{field.label}</SelectItem>
                                             ))}
                                         </SelectGroup>
                                         <SelectGroup>
@@ -3358,7 +3362,7 @@ function ConditionFields({
                             )}
                             {selectedKnownField !== CUSTOM_CONDITION_FIELD && (
                                 <p className="rounded-md bg-muted px-2 py-1 font-mono text-xs text-muted-foreground">
-                                    {formatContextValue(contextFields.find((field) => field.name === rule.field)?.sample)}
+                                    {formatContextValue(contextFields.find((field) => field.path === rule.field)?.sample)}
                                 </p>
                             )}
                             <div className="flex gap-2">
@@ -3572,6 +3576,11 @@ function SwitchFields({
                         <FilterEditor
                             value={switchCase.filter}
                             triggerType={def.trigger.type}
+                            eventKeys={
+                                def.trigger.type === "event"
+                                    ? def.trigger.event_keys
+                                    : undefined
+                            }
                             readOnly={readOnly}
                             onChange={(filter) => setCase(index, { filter })}
                         />

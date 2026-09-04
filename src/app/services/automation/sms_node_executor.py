@@ -14,7 +14,7 @@ from src.app.models.sms_history_log import SmsHistoryLog, SmsStatus
 from src.app.services.automation.definition_schema import SendSmsNode
 from src.app.services.automation.campaign_conversation_service import CampaignConversationService
 from src.app.services.automation.runtime_service import AutomationWorkflowRuntimeService
-from src.app.services.automation.template_renderer import render_sms_body
+from src.app.services.automation.template_renderer import render_body
 from src.app.services.circuit_breaker import (
     BreakerService,
     NoOpCircuitBreaker,
@@ -122,7 +122,26 @@ class SmsNodeExecutor:
         thread = await CampaignConversationService(self.session).open_sms_thread(run)
 
         # --- Render body ---
-        body = render_sms_body(node.body_template, contact, location, context)
+        # Fail closed: a token that resolves to nothing leaves a hole in the
+        # message ("Time for your  visit"). Publish-time validation catches most
+        # of these, but a value can still be absent for one particular patient,
+        # and delivering the gap is worse than skipping the send. The run
+        # continues so later steps still get their chance.
+        rendered = render_body(node.body_template, contact, location, context)
+        if not rendered.complete:
+            logger.warning(
+                "send_sms: skipping run=%s node=%s, unresolved merge fields %s",
+                run.id,
+                node.id,
+                rendered.unresolved,
+            )
+            await self.runtime.complete_step(
+                step,
+                result_code="skipped_incomplete_merge",
+                result_metadata={"unresolved_fields": rendered.unresolved},
+            )
+            return node.next_node_id
+        body = rendered.text
 
         # --- Send ---
         # SmsService does not raise on a provider failure: it records the

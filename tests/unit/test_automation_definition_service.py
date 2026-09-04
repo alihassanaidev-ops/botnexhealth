@@ -84,7 +84,7 @@ _VALID_DEFINITION = {
         {
             "type": "send_sms",
             "id": "sms-1",
-            "body_template": "Reminder for {{patient_name}}.",
+            "body_template": "Reminder for {{patient_first_name}}.",
             "next_node_id": "exit-1",
         },
         {"type": "exit", "id": "exit-1"},

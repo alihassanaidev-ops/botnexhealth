@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 import logging
 from typing import Any
 
@@ -51,6 +52,37 @@ _IN_FLIGHT_RUN_STATUSES = (
     AutomationRunStatus.RUNNING.value,
     AutomationRunStatus.WAITING.value,
 )
+
+
+def derive_pms_context_fields(definition_json: dict) -> list[str]:
+    """PMS facts this definition actually references, for the runtime allowlist.
+
+    ``pms_context_fields`` gates which extra practice-software facts — recall
+    type, last visit, treatment-plan state — are fetched and put into run
+    context. It defaults to empty and no builder surface ever set it, so a
+    campaign authored in the UI silently lost every one of those fields:
+    ``{{recall_type_name}}`` rendered blank while the shipped templates worked,
+    because those hardcode the list in their JSON.
+
+    Deriving it from what the definition mentions closes that gap without asking
+    an author to understand the concept. Anything explicitly declared is kept,
+    so a published definition never loses a field it already had.
+    """
+    from src.app.services.patient_communication import (
+        PATIENT_COMMUNICATION_CONTEXT_FIELDS,
+    )
+
+    declared = list(definition_json.get("pms_context_fields") or [])
+    # Cheap and complete: these names are distinctive enough that a substring
+    # hit anywhere in the definition — a merge token, a condition field, a
+    # switch case — means the campaign depends on the fact.
+    blob = json.dumps(definition_json)
+    for name in sorted(PATIENT_COMMUNICATION_CONTEXT_FIELDS):
+        # Word-bounded so `recall_type` is not dragged in by every mention of
+        # `recall_type_name`.
+        if re.search(rf"\b{re.escape(name)}\b", blob) and name not in declared:
+            declared.append(name)
+    return declared
 
 
 class AutomationWorkflowDefinitionService:
@@ -210,6 +242,13 @@ class AutomationWorkflowDefinitionService:
         )
         last = result.scalar_one_or_none()
         next_number = (last.version_number + 1) if last else 1
+
+        # Fill in the PMS-fact allowlist from what the definition references, so
+        # a builder-authored campaign carries the same context a template does.
+        definition = {
+            **definition,
+            "pms_context_fields": derive_pms_context_fields(definition),
+        }
 
         checksum = hashlib.sha256(
             json.dumps(definition, sort_keys=True).encode()

@@ -41,7 +41,11 @@ import type {
     FilterRule,
     TriggerType,
 } from "@/types/workflow"
-import { contextFieldsForTrigger } from "@/lib/workflow/context-fields"
+import {
+    canonicalFieldsForTrigger,
+    supportNote,
+    useEventCatalog,
+} from "@/lib/workflow/event-catalog"
 import { usePmsType } from "@/context/InstitutionContext"
 
 const CUSTOM_FIELD = "__custom__"
@@ -52,6 +56,7 @@ export interface FilterEditorProps {
     onChange: (next: FilterExpression) => void
     /** Scopes the field suggestions to what this trigger's context carries. */
     triggerType?: TriggerType
+    eventKeys?: string[]
     readOnly?: boolean
     /** Shown above the tree; omit inside a case row where the label is enough. */
     label?: string
@@ -62,6 +67,7 @@ export default function FilterEditor({
     value,
     onChange,
     triggerType,
+    eventKeys,
     readOnly,
     label,
     hint,
@@ -79,6 +85,7 @@ export default function FilterEditor({
                 onChange={onChange}
                 onRemove={undefined}
                 triggerType={triggerType}
+                eventKeys={eventKeys}
                 readOnly={readOnly}
                 depth={0}
             />
@@ -91,6 +98,7 @@ function ExpressionNode({
     onChange,
     onRemove,
     triggerType,
+    eventKeys,
     readOnly,
     depth,
 }: {
@@ -98,6 +106,7 @@ function ExpressionNode({
     onChange: (next: FilterExpression) => void
     onRemove?: () => void
     triggerType?: TriggerType
+    eventKeys?: string[]
     readOnly?: boolean
     depth: number
 }) {
@@ -108,6 +117,7 @@ function ExpressionNode({
                 onChange={onChange}
                 onRemove={onRemove}
                 triggerType={triggerType}
+                eventKeys={eventKeys}
                 readOnly={readOnly}
                 depth={depth}
             />
@@ -124,6 +134,7 @@ function ExpressionNode({
                     : undefined
             }
             triggerType={triggerType}
+            eventKeys={eventKeys}
             readOnly={readOnly}
         />
     )
@@ -134,6 +145,7 @@ function GroupNode({
     onChange,
     onRemove,
     triggerType,
+    eventKeys,
     readOnly,
     depth,
 }: {
@@ -141,6 +153,7 @@ function GroupNode({
     onChange: (next: FilterExpression) => void
     onRemove?: () => void
     triggerType?: TriggerType
+    eventKeys?: string[]
     readOnly?: boolean
     depth: number
 }) {
@@ -234,6 +247,7 @@ function GroupNode({
                             onChange={(next) => setChild(index, next)}
                             onRemove={() => removeChild(index)}
                             triggerType={triggerType}
+                            eventKeys={eventKeys}
                             readOnly={readOnly}
                             depth={depth + 1}
                         />
@@ -250,6 +264,7 @@ function RuleRow({
     onRemove,
     onGroup,
     triggerType,
+    eventKeys,
     readOnly,
 }: {
     rule: FilterRule
@@ -257,11 +272,17 @@ function RuleRow({
     onRemove?: () => void
     onGroup?: () => void
     triggerType?: TriggerType
+    eventKeys?: string[]
     readOnly?: boolean
 }) {
     const pmsType = usePmsType()
-    const suggestions = triggerType ? contextFieldsForTrigger(triggerType, pmsType) : []
-    const known = suggestions.some((f) => f.name === rule.field)
+    const events = useEventCatalog()
+    // The same canonical vocabulary the trigger picker and the message insert
+    // menu use, so a field an author sees in one panel is usable in the next.
+    const suggestions = triggerType
+        ? canonicalFieldsForTrigger(events, triggerType, eventKeys)
+        : []
+    const known = suggestions.some((f) => f.path === rule.field)
     const takesValue = !OPS_WITHOUT_VALUE.has(rule.op)
     const takesList = OPS_WITH_LIST_VALUE.has(rule.op)
 
@@ -295,8 +316,13 @@ function RuleRow({
                             <SelectGroup>
                                 <SelectLabel>Event fields</SelectLabel>
                                 {suggestions.map((f) => (
-                                    <SelectItem key={f.name} value={f.name}>
+                                    <SelectItem key={f.path} value={f.path}>
                                         {f.label}
+                                        {supportNote(f, pmsType) ? (
+                                            <span className="ml-1.5 text-xs text-muted-foreground">
+                                                ({supportNote(f, pmsType)})
+                                            </span>
+                                        ) : null}
                                     </SelectItem>
                                 ))}
                             </SelectGroup>

@@ -31,6 +31,8 @@ from src.app.services.automation.definition_schema import (
     WorkflowDefinition,
     sms_reply_wait_spec,
 )
+from src.app.services.automation.event_catalog import sample_context
+from src.app.services.automation.trigger_lookup import TRIGGER_EVENT_KEYS
 from src.app.services.automation.merge_field_catalog import MERGE_FIELD_CATALOG
 from src.app.services.automation.node_registry import capability_for
 from src.app.services.automation.step_dispatcher import (
@@ -59,13 +61,64 @@ class DryRunResult:
     truncated: bool = False
 
 
-def _sample_context(extra: dict | None) -> dict:
-    """Sample merge values so previews render realistic copy. Caller-supplied
-    context overrides the defaults."""
-    ctx = {spec.name: spec.sample for spec in MERGE_FIELD_CATALOG}
+def _sample_context(extra: dict | None, definition: "WorkflowDefinition | None" = None) -> dict:
+    """Sample values so a preview shows what a real run would carry.
+
+    Seeded from the same event catalog the builder offers fields from, so a
+    condition on ``appointment.status`` evaluates in the preview instead of
+    resolving to nothing and always taking the false branch. Merge-field samples
+    are layered underneath for the derived contact/location tokens, which are
+    computed rather than read from context. Caller-supplied context wins.
+    """
+    ctx: dict = {spec.name: spec.sample for spec in MERGE_FIELD_CATALOG}
+
+    for key in _preview_event_keys(definition):
+        for path, value in _flatten(sample_context(key)):
+            ctx.setdefault(path, value)
+        _deep_update(ctx, sample_context(key))
+
     if extra:
         ctx.update(extra)
     return ctx
+
+
+def _preview_event_keys(definition: "WorkflowDefinition | None") -> list[str]:
+    """Events this definition could start from, for seeding the preview."""
+    if definition is None:
+        return []
+    keys: list[str] = []
+    for trigger in definition.triggers:
+        for key in getattr(trigger, "event_keys", None) or ():
+            if key not in keys:
+                keys.append(key)
+        for key in TRIGGER_EVENT_KEYS.get(trigger.type, ()):
+            if key not in keys:
+                keys.append(key)
+    return keys
+
+
+def _flatten(nested: dict, prefix: str = "") -> list[tuple[str, object]]:
+    """Dotted paths for a nested sample, so flat lookups also resolve."""
+    out: list[tuple[str, object]] = []
+    for key, value in nested.items():
+        path = f"{prefix}{key}"
+        if isinstance(value, dict):
+            out.extend(_flatten(value, f"{path}."))
+        else:
+            out.append((path, value))
+    return out
+
+
+def _deep_update(target: dict, source: dict) -> None:
+    for key, value in source.items():
+        if isinstance(value, dict):
+            branch = target.get(key)
+            if not isinstance(branch, dict):
+                branch = {}
+                target[key] = branch
+            _deep_update(branch, value)
+        else:
+            target.setdefault(key, value)
 
 
 def _describe_wait(node: WaitNode) -> str:
@@ -99,7 +152,7 @@ def simulate_run(
     follow ``switch_case_choices[node_id]``, naming the case label to take
     (default: the fallback branch). Bounded by _MAX_STEPS.
     """
-    ctx = _sample_context(context)
+    ctx = _sample_context(context, definition)
     choices = condition_choices or {}
     case_choices = switch_case_choices or {}
     node_map = {n.id: n for n in definition.nodes}

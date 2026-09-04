@@ -858,6 +858,7 @@ class WorkflowStepDispatcher:
                     if value is None:
                         value = mapping.default_value
                     _assign_context_value(context, mapping.target_field, value)
+                    _persist_context_field(run, context, mapping.target_field)
                     mapped[mapping.target_field] = _metadata_value(value)
                 await self.runtime.complete_step(
                     step,
@@ -889,6 +890,7 @@ class WorkflowStepDispatcher:
                         steps_advanced=steps_advanced,
                         patient_status_event_ids=patient_status_event_ids,
                     )
+                _persist_context_field(run, context, node.output_field)
                 await self.runtime.complete_step(
                     step,
                     result_code="classified",
@@ -2616,6 +2618,24 @@ def _value_to_text(value: object) -> str:
     if isinstance(value, dict):
         return " ".join(_value_to_text(item) for item in value.values())
     return str(value)
+
+
+
+def _persist_context_field(run, context: dict, path: str) -> None:
+    """Copy one computed context value onto the run so it survives a wait.
+
+    Every resume path re-seeds context from ``run.trigger_metadata``, so a value
+    written only to the in-memory dict is gone the moment a run pauses. That is
+    what made the obvious pattern — classify the reply, wait, then send using the
+    classification — render empty. Mirrors what the booking-link and registration
+    nodes already do explicitly.
+    """
+    value = _context_value(context, path)
+    if value is None:
+        return
+    metadata = dict(run.trigger_metadata or {})
+    _assign_context_value(metadata, path, value)
+    run.trigger_metadata = metadata
 
 
 def _metadata_value(value: object) -> object:

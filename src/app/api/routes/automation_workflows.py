@@ -56,7 +56,10 @@ from src.app.services.automation.campaign_analytics_service import (
     resolve_window,
 )
 from src.app.pms.gotracker.statuses import public_statuses
-from src.app.services.automation.event_catalog import public_events
+from src.app.services.automation.event_catalog import (
+    fields_for_events,
+    public_events,
+)
 from src.app.services.automation.merge_field_catalog import fields_for
 from src.app.services.automation.node_registry import (
     NODE_REGISTRY_VERSION,
@@ -1072,16 +1075,45 @@ async def list_merge_fields(
     trigger_type: Annotated[str | None, Query()] = None,
     channel: Annotated[str | None, Query()] = None,
     include_unavailable: Annotated[bool, Query()] = False,
+    event_keys: Annotated[list[str] | None, Query()] = None,
+    pms: Annotated[str | None, Query()] = None,
 ) -> list[MergeFieldResponse]:
-    """Return the merge-field catalog the message renderer substitutes.
+    """Return the fields the builder may insert into a message.
 
-    Sourced from the backend catalog so the builder's insert-field menu can
-    filter by trigger/channel without drifting from render semantics.
+    Two families, deliberately in one list so the author sees one menu:
+
+    * **Canonical context fields** (``{{appointment.start_at}}``) — the same
+      vocabulary the trigger picker and condition editor use, scoped to the
+      events this campaign subscribes to and to the channel being written.
+    * **Derived merge fields** (``{{patient_first_name}}``) — values computed
+      from the contact and location records rather than read from context, so
+      they cannot be expressed as a context path.
 
     NOTE: declared before ``/{workflow_id}`` so this literal path is not
     captured as a workflow id by the parameterised route.
     """
-    return [
+    canonical = [
+        MergeFieldResponse(
+            name=spec.path,
+            token=spec.token,
+            label=spec.label,
+            description=spec.description,
+            sample="" if spec.sample is None else str(spec.sample),
+            group=spec.path.split(".", 1)[0],
+            # Present whenever the event fires, unless the PMS derives it.
+            availability=(
+                "derived"
+                if pms and spec.pms_support.get(pms) == "derived"
+                else "required_context"
+            ),
+            requires=[],
+            phi_level=spec.phi_level,
+            channels=list(spec.channels),
+            trigger_types=[trigger_type] if trigger_type else [],
+        )
+        for spec in fields_for_events(event_keys or [], pms=pms, channel=channel)
+    ]
+    return canonical + [
         MergeFieldResponse(
             name=f.name,
             token=f.token,

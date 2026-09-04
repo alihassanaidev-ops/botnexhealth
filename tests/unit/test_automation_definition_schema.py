@@ -24,7 +24,7 @@ def _sms_to_exit() -> dict:
             {
                 "type": "send_sms",
                 "id": "sms-1",
-                "body_template": "Hi {{patient_name}}, reminder tomorrow.",
+                "body_template": "Hi {{patient_first_name}}, reminder tomorrow.",
                 "next_node_id": "exit-1",
             },
             {"type": "exit", "id": "exit-1", "outcome": "sent"},
@@ -83,7 +83,7 @@ def _with_wait() -> dict:
             {
                 "type": "send_sms",
                 "id": "sms-1",
-                "body_template": "It's time for your check-up, {{patient_name}}.",
+                "body_template": "It's time for your check-up, {{patient_first_name}}.",
                 "next_node_id": "exit-1",
             },
             {"type": "exit", "id": "exit-1"},
@@ -460,7 +460,7 @@ def test_email_node() -> None:
                 "type": "send_email",
                 "id": "email-1",
                 "subject_template": "Your appointment",
-                "body_template": "<p>Hi {{patient_name}}</p>",
+                "body_template": "<p>Hi {{patient_first_name}}</p>",
                 "next_node_id": "exit-1",
             },
             {"type": "exit", "id": "exit-1"},

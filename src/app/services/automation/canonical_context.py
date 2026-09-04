@@ -141,7 +141,13 @@ def canonical_context(
     reasons = metadata.get("appointment_reasons") or metadata.get("gotracker_reasons")
     if isinstance(reasons, (list, tuple)) and reasons:
         put("appointment.reasons", list(reasons))
-    put("appointment.is_confirmed", _as_bool(metadata.get("is_confirmed")))
+    # GoTracker sends `is_confirmed`; NexHealth's route emits
+    # `appointment_confirmed`. Reading only the first meant the canonical field
+    # was absent on every NexHealth appointment even though the value was there.
+    put(
+        "appointment.is_confirmed",
+        _as_bool(_first(metadata, "is_confirmed", "appointment_confirmed")),
+    )
     put("appointment.is_recall", _as_bool(metadata.get("is_recall")))
     put("appointment.provider.id", metadata.get("provider_id"))
     put("appointment.provider.name", metadata.get("provider_name"))

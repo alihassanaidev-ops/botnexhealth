@@ -58,7 +58,15 @@ def workflow_matches_location(
 #: subscribed to ``appointment.reminder_due``.
 TRIGGER_EVENT_KEYS: dict[str, tuple[str, ...]] = {
     # Retired types, still named by the dispatch tasks that have not moved yet.
-    "appointment_offset": ("appointment.reminder_due",),
+    #
+    # The appointment webhook path serves the reminder interval *and* the plain
+    # scheduling events, because one delivery tells us both that an appointment
+    # exists and when to remind about it.
+    "appointment_offset": (
+        "appointment.reminder_due",
+        "appointment.booked",
+        "appointment.rescheduled",
+    ),
     "appointment_state_changed": (
         "appointment.completed",
         "appointment.cancelled",

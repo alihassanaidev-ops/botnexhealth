@@ -509,7 +509,11 @@ async def test_scan_recall_applies_declared_patient_communication_context_filter
     kwargs = mock_task.apply_async.call_args.kwargs["kwargs"]
     period = datetime.now(tz=timezone.utc).strftime("%Y-%m")
     assert kwargs["trigger_ref_id"] == "p1"
-    assert kwargs["trigger_metadata"] == {
+    # Subset, not equality: the canonical projection now adds a `recall.*` and
+    # `trigger.*` section on top. The legacy flat keys are what published
+    # definitions branch on, so those are what must not move.
+    metadata = kwargs["trigger_metadata"]
+    assert metadata.items() >= {
         "nexhealth_patient_id": "p1",
         "recall_due_date": "2020-01-01",
         "recall_period": period,
@@ -517,7 +521,11 @@ async def test_scan_recall_applies_declared_patient_communication_context_filter
         "treatment_plan_statuses": [],
         "has_active_treatment_plan": False,
         "recall_reenrollment_cooldown_days": 90,
-    }
+    }.items()
+    # …and the canonical view of the same facts is present for new campaigns.
+    assert metadata["recall"]["due_at"] == "2020-01-01"
+    assert metadata["recall"]["type"] == "Hygiene"
+    assert metadata["trigger"]["key"] == "patient.recall_due"
     assert "treatment_plans" not in kwargs["trigger_metadata"]
 
 
@@ -784,7 +792,11 @@ async def test_scan_recall_enrolls_gotracker_with_completed_history_and_inline_c
     kwargs = mock_task.apply_async.call_args.kwargs["kwargs"]
     period = datetime.now(tz=timezone.utc).strftime("%Y-%m")
     assert kwargs["trigger_ref_id"] == "gt-p1"
-    assert kwargs["trigger_metadata"] == {
+    # Subset, not equality: the canonical projection now adds a `recall.*` and
+    # `trigger.*` section on top. The legacy flat keys are what published
+    # definitions branch on, so those are what must not move.
+    metadata = kwargs["trigger_metadata"]
+    assert metadata.items() >= {
         "nexhealth_patient_id": "gt-p1",
         "recall_due_date": "2020-01-01",
         "recall_period": period,
@@ -792,7 +804,11 @@ async def test_scan_recall_enrolls_gotracker_with_completed_history_and_inline_c
         "treatment_plan_statuses": [],
         "has_active_treatment_plan": False,
         "recall_reenrollment_cooldown_days": 90,
-    }
+    }.items()
+    # …and the canonical view of the same facts is present for new campaigns.
+    assert metadata["recall"]["due_at"] == "2020-01-01"
+    assert metadata["recall"]["type"] == "Hygiene"
+    assert metadata["trigger"]["key"] == "patient.recall_due"
     assert not hasattr(adapter, "list_treatment_plans")
 
 
