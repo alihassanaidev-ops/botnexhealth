@@ -1123,7 +1123,14 @@ def test_validate_accepts_valid_definition():
 
 
 def test_node_capabilities_expose_authoritative_engine_support():
-    result = asyncio.run(list_node_capabilities(_make_user()))
+    # The response now carries the caller's PMS and what it may author, so the
+    # route opens a session to read the institution.
+    session = _make_session()
+    with patch(
+        "src.app.api.routes.automation_workflows.get_db_session",
+        return_value=session,
+    ):
+        result = asyncio.run(list_node_capabilities(_make_user()))
 
     by_type = {node.node_type: node for node in result.nodes}
     assert result.registry_version == "1.0"
@@ -1280,8 +1287,10 @@ def test_list_merge_fields_returns_catalog_with_tokens():
 
 def test_list_merge_fields_filters_by_trigger_and_channel():
     user = _make_user()
+    # `appointment_offset` folded into the event trigger, which is what now
+    # scopes the appointment merge fields.
     result = asyncio.run(
-        list_merge_fields(user, trigger_type="appointment_offset", channel="sms")
+        list_merge_fields(user, trigger_type="event", channel="sms")
     )
     names = {f.name for f in result}
 

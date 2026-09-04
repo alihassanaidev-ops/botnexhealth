@@ -355,6 +355,10 @@ ROUTES_BY_BOUNDARY: dict[str, tuple[str, ...]] = {
         "DELETE /api/compliance/quiet-hours/exceptions/{exception_id}",
         "GET /api/automation/workflows/node-capabilities",
         "GET /api/automation/workflows/pms-appointment-statuses",
+        # The canonical event vocabulary the builder authors against. Same
+        # boundary as the other builder catalogs: it describes the engine's
+        # capabilities and carries no tenant data.
+        "GET /api/automation/workflows/event-catalog",
         "POST /api/automation/workflows",
         "POST /api/automation/workflows/draft",
         "GET /api/automation/workflows",

@@ -50,6 +50,52 @@ def workflow_matches_location(
     return str(workflow.location_id) == str(location_id) if location_id else False
 
 
+#: What each trigger type is really watching, in canonical event terms.
+#:
+#: This is the bridge that lets the existing per-type dispatch tasks find an
+#: `event`-authored workflow without every publisher being rewritten first: a
+#: task that asks for ``"appointment_offset"`` also matches a workflow
+#: subscribed to ``appointment.reminder_due``.
+TRIGGER_EVENT_KEYS: dict[str, tuple[str, ...]] = {
+    # Retired types, still named by the dispatch tasks that have not moved yet.
+    "appointment_offset": ("appointment.reminder_due",),
+    "appointment_state_changed": (
+        "appointment.completed",
+        "appointment.cancelled",
+        "appointment.confirmed",
+        "appointment.no_show",
+        "appointment.checked_in",
+    ),
+    "recall_scan": ("patient.recall_due",),
+    "enquiry_received": ("enquiry.received",),
+    "callback_requested": ("call.inbound.completed",),
+    "patient_status_changed": ("patient.status_changed",),
+    "sms_reply": ("message.sms.inbound",),
+    "email_reply": ("message.email.inbound",),
+    # Current types.
+    "internal_status": ("patient.status_changed",),
+    "inbound_message": ("message.sms.inbound", "message.email.inbound"),
+    "schedule": ("patient.recall_due", "schedule.tick"),
+}
+
+
+def workflow_starts_from(workflow: AutomationWorkflow, trigger_type: str) -> bool:
+    """Whether ``workflow`` should react to what ``trigger_type`` represents.
+
+    A direct type match wins. Otherwise the workflow matches when the events it
+    subscribes to overlap the events that trigger type raises — which is how an
+    `event` trigger is found by a dispatch task that still speaks the old
+    vocabulary.
+    """
+    if trigger_type in workflow.trigger_types:
+        return True
+    produced = TRIGGER_EVENT_KEYS.get(trigger_type)
+    if not produced:
+        return False
+    subscribed = set(workflow.subscribed_event_keys)
+    return any(key in subscribed for key in produced)
+
+
 async def find_active_workflows(
     session: AsyncSession,
     *,
@@ -59,14 +105,15 @@ async def find_active_workflows(
 ) -> list[AutomationWorkflow]:
     """Active workflows for one trigger type that are in scope for this location.
 
-    ``trigger_type`` is read from the current version's definition JSON rather
-    than a column, so the filter stays in Python. Phase 4 replaces this with an
-    indexed subscription table; the contract of this function does not change.
+    Triggers are read from the current version's definition JSON rather than a
+    column, so the filter stays in Python. An indexed subscription table would
+    narrow the candidate set, but it could never decide what a workflow's
+    trigger actually is — that stays here.
     """
     result = await session.execute(active_workflows_stmt(institution_id))
     return [
         workflow
         for workflow in result.scalars().all()
-        if workflow.trigger_type == trigger_type
+        if workflow_starts_from(workflow, trigger_type)
         and workflow_matches_location(workflow, location_id)
     ]

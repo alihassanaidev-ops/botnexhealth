@@ -16,14 +16,13 @@ export interface WorkflowContextField {
 }
 
 export const APPOINTMENT_CONTEXT_TRIGGERS: TriggerType[] = [
-    "appointment_offset",
-    "appointment_state_changed",
-    "patient_status_changed",
+    "event",
+    "internal_status",
 ]
 const GOTRACKER = ["gotracker"] as const
 const NEXHEALTH = ["nexhealth"] as const
-const SMS_REPLY_CONTEXT_TRIGGERS: TriggerType[] = ["sms_reply"]
-const RECALL_CONTEXT_TRIGGERS: TriggerType[] = ["recall_scan"]
+const SMS_REPLY_CONTEXT_TRIGGERS: TriggerType[] = ["inbound_message"]
+const RECALL_CONTEXT_TRIGGERS: TriggerType[] = ["schedule"]
 const FORM_CONTEXT_TRIGGERS: TriggerType[] = ["form_submitted"]
 
 export const WORKFLOW_CONTEXT_FIELDS: WorkflowContextField[] = [

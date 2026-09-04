@@ -42,6 +42,30 @@ def _result(value):
     return result
 
 
+def _institution(pms_type: str = "nexhealth"):
+    institution = MagicMock(spec=Institution)
+    institution.id = "inst-1"
+    institution.pms_type = pms_type
+    return institution
+
+
+def _get_by_model(*, institution=None, location=None):
+    """A ``session.get`` that dispatches on the model rather than call order.
+
+    The checklist runs publish validation, which looks the institution up to
+    decide PMS scope. A positional ``side_effect`` list hands that lookup the
+    location — an object with no ``pms_type`` — and every trigger and node then
+    reads as unsupported.
+    """
+
+    async def _get(model, _pk):
+        if model is Institution:
+            return institution if institution is not None else _institution()
+        return location
+
+    return _get
+
+
 def _run(service: CampaignLaunchChecklistService, workflow, **kwargs):
     return asyncio.run(service.build(workflow, institution_id="inst-1", **kwargs))
 
@@ -62,6 +86,7 @@ def test_manual_campaign_surfaces_unknown_audience_and_volume() -> None:
         "compliance": {"content_class": "transactional_care", "consent_required": True},
     }
     session = AsyncMock()
+    session.get = AsyncMock(side_effect=_get_by_model())
     checklist = _run(CampaignLaunchChecklistService(session), _workflow(definition))
 
     assert checklist.overall_status == "warning"
@@ -106,7 +131,11 @@ def test_marketing_without_consent_blocks_launch_checklist() -> None:
 
 def test_appointment_campaign_passes_fresh_nexhealth_check() -> None:
     definition = {
-        "trigger": {"type": "appointment_offset", "offset_hours": -24},
+        "trigger": {
+            "type": "event",
+            "event_keys": ["appointment.reminder_due"],
+            "reminder_offset_hours": -24,
+        },
         "entry_node_id": "x1",
         "nodes": [{"type": "exit", "id": "x1", "outcome": "done"}],
     }
@@ -121,7 +150,7 @@ def test_appointment_campaign_passes_fresh_nexhealth_check() -> None:
     sync_status.write_status = "green"
     sync_status.last_checked_at = datetime.now(timezone.utc)
     session = AsyncMock()
-    session.get = AsyncMock(return_value=location)
+    session.get = AsyncMock(side_effect=_get_by_model(location=location))
     session.execute = AsyncMock(
         side_effect=[_result(subscription), _result(_NOW), _result(sync_status)]
     )
@@ -140,7 +169,11 @@ def test_appointment_campaign_passes_fresh_nexhealth_check() -> None:
 
 def test_appointment_campaign_passes_fresh_gotracker_check() -> None:
     definition = {
-        "trigger": {"type": "appointment_offset", "offset_hours": -24},
+        "trigger": {
+            "type": "event",
+            "event_keys": ["appointment.reminder_due"],
+            "reminder_offset_hours": -24,
+        },
         "entry_node_id": "x1",
         "nodes": [{"type": "exit", "id": "x1", "outcome": "done"}],
     }
@@ -155,7 +188,9 @@ def test_appointment_campaign_passes_fresh_gotracker_check() -> None:
     subscription.last_event_at = _NOW
     subscription.event_types = ["appointment.created", "appointment.updated"]
     session = AsyncMock()
-    session.get = AsyncMock(return_value=location)
+    session.get = AsyncMock(
+        side_effect=_get_by_model(institution=_institution("gotracker"), location=location)
+    )
     session.execute = AsyncMock(side_effect=[_result(subscription), _result(_NOW)])
 
     with patch("src.app.services.automation.launch_checklist_service.datetime") as dt:
@@ -172,7 +207,11 @@ def test_appointment_campaign_passes_fresh_gotracker_check() -> None:
 
 def test_recall_campaign_blocks_gotracker_when_history_sync_is_incomplete() -> None:
     definition = {
-        "trigger": {"type": "recall_scan", "recall_interval_months": 6},
+        "trigger": {
+            "type": "schedule",
+            "cron": "0 9 * * *",
+            "source": {"kind": "pms_recall", "recall_interval_months": 6},
+        },
         "entry_node_id": "x1",
         "nodes": [{"type": "exit", "id": "x1", "outcome": "done"}],
         "pms_context_fields": [
@@ -231,7 +270,11 @@ def test_recall_campaign_blocks_gotracker_when_history_sync_is_incomplete() -> N
 
 def test_appointment_campaign_blocks_when_pms_read_sync_is_unhealthy() -> None:
     definition = {
-        "trigger": {"type": "appointment_offset", "offset_hours": -24},
+        "trigger": {
+            "type": "event",
+            "event_keys": ["appointment.reminder_due"],
+            "reminder_offset_hours": -24,
+        },
         "entry_node_id": "x1",
         "nodes": [{"type": "exit", "id": "x1", "outcome": "done"}],
     }
@@ -246,7 +289,7 @@ def test_appointment_campaign_blocks_when_pms_read_sync_is_unhealthy() -> None:
     sync_status.write_status = "green"
     sync_status.last_checked_at = datetime.now(timezone.utc)
     session = AsyncMock()
-    session.get = AsyncMock(return_value=location)
+    session.get = AsyncMock(side_effect=_get_by_model(location=location))
     session.execute = AsyncMock(
         side_effect=[_result(subscription), _result(_NOW), _result(sync_status)]
     )
@@ -281,7 +324,9 @@ def test_treatment_campaign_blocks_when_pms_lacks_treatment_plans() -> None:
     sync_status.sync_source_type = None
     sync_status.emr_payload = {"display_name": "Dentrix Ascend"}
     session = AsyncMock()
-    session.get = AsyncMock(side_effect=[institution, location])
+    session.get = AsyncMock(
+        side_effect=_get_by_model(institution=institution, location=location)
+    )
     session.execute = AsyncMock(side_effect=[_result(sync_status), _result(None)])
 
     checklist = _run(CampaignLaunchChecklistService(session), workflow)
@@ -309,7 +354,16 @@ def test_checklist_derives_pms_requirements_from_context_fields() -> None:
 
 def test_callback_campaign_surfaces_voice_outcome_and_handoff_readiness() -> None:
     definition = {
-        "trigger": {"type": "callback_requested"},
+        "trigger": {
+            "type": "event",
+            "event_keys": ["call.inbound.completed"],
+            "filter": {
+                "kind": "rule",
+                "field": "call.outcome",
+                "op": "eq",
+                "value": "needs_callback",
+            },
+        },
         "entry_node_id": "voice-1",
         "nodes": [
             {
@@ -332,6 +386,7 @@ def test_callback_campaign_surfaces_voice_outcome_and_handoff_readiness() -> Non
         "compliance": {"content_class": "transactional_care", "consent_required": True},
     }
     session = AsyncMock()
+    session.get = AsyncMock(side_effect=_get_by_model())
 
     checklist = _run(CampaignLaunchChecklistService(session), _workflow(definition))
 

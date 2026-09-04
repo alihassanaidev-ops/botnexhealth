@@ -20,15 +20,15 @@ function flow() {
 }
 
 describe("WorkflowCanvas — Auto layout control", () => {
-    it("shows the Chair Flow state in a post-op trigger card", () => {
+    // Was "shows the Chair Flow state in a post-op trigger card". Chair Flow
+    // states belonged to the retired `appointment_state_changed` trigger; the
+    // same card now summarises the canonical event the campaign subscribes to.
+    it("shows the subscribed event in a post-op trigger card", () => {
         const postOp: WorkflowDefinition = {
             ...DEF,
             trigger: {
-                type: "appointment_state_changed",
-                status_ids: [],
-                confirmed: null,
-                preconfirmed: null,
-                flow_states: ["Completed"],
+                type: "event",
+                event_keys: ["appointment.completed"],
                 max_followup_delay_hours: 72,
                 campaign_goal: "post_op_followup",
             },
@@ -37,7 +37,7 @@ describe("WorkflowCanvas — Auto layout control", () => {
 
         render(<WorkflowCanvas nodes={nodes} edges={edges} />)
 
-        expect(screen.getByText("Flow: Completed")).toBeInTheDocument()
+        expect(screen.getByText("appointment.completed")).toBeInTheDocument()
     })
 
     it("shows an Auto layout button in editable mode and invokes onAutoLayout on click", async () => {

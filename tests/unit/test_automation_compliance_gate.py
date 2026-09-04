@@ -13,7 +13,7 @@ from src.app.services.automation.compliance_gate import (
     NoOpComplianceGate,
 )
 from src.app.services.automation.definition_schema import (
-    AppointmentOffsetTrigger,
+    EventTrigger,
     ExitNode,
     SendSmsNode,
     WorkflowDefinition,
@@ -57,7 +57,7 @@ def _make_session():
 
 def _sms_to_exit_definition():
     return WorkflowDefinition(
-        trigger=AppointmentOffsetTrigger(offset_hours=-24),
+        trigger=EventTrigger(event_keys=["appointment.reminder_due"], reminder_offset_hours=-24),
         entry_node_id="sms-1",
         nodes=[
             SendSmsNode(id="sms-1", body_template="Hi", next_node_id="exit-1"),

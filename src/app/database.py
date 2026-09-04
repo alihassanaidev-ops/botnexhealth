@@ -272,6 +272,16 @@ def init_database(database_url: str, *, use_null_pool: bool = False) -> None:
         autoflush=False,
     )
 
+    # Campaigns that start from an internal status change observe the flush
+    # rather than requiring every write site to remember to announce itself.
+    # Registered here, not at import time, so importing a model does not attach
+    # engine-level behaviour as a side effect.
+    from src.app.services.automation.internal_status_events import (
+        register_internal_status_listeners,
+    )
+
+    register_internal_status_listeners()
+
 
 async def close_database() -> None:
     """Close database connections."""

@@ -14,70 +14,51 @@ export const SCHEMA_VERSION = "1.0" as const
 // Triggers (discriminated on `type`)
 // ---------------------------------------------------------------------------
 export type TriggerType =
-    | "appointment_offset"
-    | "appointment_state_changed"
-    | "recall_scan"
+    | "event"
     | "manual"
-    | "bulk_import"
-    | "enquiry_received"
     | "form_submitted"
-    | "callback_requested"
-    | "patient_status_changed"
-    | "sms_reply"
-    | "email_reply"
+    | "internal_status"
+    | "schedule"
+    | "inbound_message"
 
-export interface AppointmentOffsetTrigger {
-    type: "appointment_offset"
+/**
+ * One of the canonical events from `GET /automation/workflows/event-catalog`.
+ *
+ * Authors pick clinic-language keys (`appointment.cancelled`), never a PMS
+ * payload field, so one campaign definition runs unchanged on either practice-
+ * management system. The catalog says which PMS can raise each key, so the
+ * picker hides what a location cannot deliver rather than letting someone
+ * publish a campaign that silently never enrolls anyone.
+ */
+export interface EventTrigger {
+    type: "event"
+    event_keys: string[]
     /** Optional eligibility filter, evaluated before a run is created. */
     filter?: FilterExpression | null
-    /** Hours relative to the appointment (negative = before, e.g. -24). */
-    offset_hours: number
-    appointment_type_ids?: string[] | null
-}
-export interface AppointmentStateChangedTrigger {
-    type: "appointment_state_changed"
-    /** Optional eligibility filter, evaluated before a run is created. */
-    filter?: FilterExpression | null
-    status_ids: number[]
-    confirmed?: boolean | null
-    preconfirmed?: boolean | null
-    /** Exact Tracker Chair Flow labels; all configured matchers are ANDed. */
-    flow_states?: string[]
-    /** Optional deadline measured from FlowChange (0–168 hours). */
+    /** Canonical context path whose value dedupes enrollment. */
+    dedupe_field?: string | null
+    /**
+     * Hours relative to the appointment for `appointment.reminder_due`
+     * (negative = before, e.g. -24). Required for that key and rejected on any
+     * other, because it is what decides when that event fires.
+     */
+    reminder_offset_hours?: number | null
+    /** How long after the event the campaign is still worth running (0–168h). */
     max_followup_delay_hours?: number | null
     campaign_goal?: string | null
-}
-export interface RecallScanTrigger {
-    type: "recall_scan"
-    /** Optional eligibility filter, evaluated before a run is created. */
-    filter?: FilterExpression | null
-    /** Inactivity/recall interval in months (>= 1). */
-    recall_interval_months: number
-    /** Days before the same patient may be enrolled in this recall workflow again. */
-    recall_reenrollment_cooldown_days?: number
 }
 export interface ManualTrigger {
     type: "manual"
     /** Optional eligibility filter, evaluated before a run is created. */
     filter?: FilterExpression | null
 }
-export interface BulkImportTrigger {
-    type: "bulk_import"
-    /** Optional eligibility filter, evaluated before a run is created. */
-    filter?: FilterExpression | null
-}
-export interface EnquiryReceivedTrigger {
-    type: "enquiry_received"
-    /** Optional eligibility filter, evaluated before a run is created. */
-    filter?: FilterExpression | null
-}
 /**
  * A connected Meta or Typeform form was submitted.
  *
- * Narrower than `enquiry_received`, which fires for anything landing through
- * intake — a token endpoint, a staff member typing in a phone enquiry. This
- * fires only for forms the practice connected, synced and mapped, which is what
- * makes "when the ABC form is submitted" expressible at all.
+ * Narrower than the `enquiry.received` event, which fires for anything landing
+ * through intake — a token endpoint, a staff member typing in a phone enquiry.
+ * This fires only for forms the practice connected, synced and mapped, which is
+ * what makes "when the ABC form is submitted" expressible at all.
  */
 export interface FormSubmittedTrigger {
     type: "form_submitted"
@@ -88,51 +69,66 @@ export interface FormSubmittedTrigger {
     /** Our own form ids. Empty means every enabled form of that provider. */
     form_ids?: string[]
 }
-export interface CallbackRequestedTrigger {
-    type: "callback_requested"
+
+/** Status fields the platform owns and can start a campaign from. */
+export type InternalStatusField =
+    | "call_workflow_status"
+    | "contact_lead_status"
+    | "handoff_status"
+    | "patient_workflow_status"
+
+export interface InternalStatusTrigger {
+    type: "internal_status"
+    field: InternalStatusField
+    to_statuses: string[]
+    /** Empty means "arrived here from anything". */
+    from_statuses?: string[]
     /** Optional eligibility filter, evaluated before a run is created. */
     filter?: FilterExpression | null
-}
-export interface PatientStatusChangedTrigger {
-    type: "patient_status_changed"
-    /** Optional eligibility filter, evaluated before a run is created. */
-    filter?: FilterExpression | null
-    statuses: string[]
     campaign_goal?: string | null
 }
-export interface SmsReplyTrigger {
-    type: "sms_reply"
+
+export interface PmsRecallSource {
+    kind: "pms_recall"
+    recall_interval_months: number
+    /** Days before the same patient may enter this campaign again. */
+    reenrollment_cooldown_days?: number
+}
+export interface AudienceSegmentSource {
+    kind: "audience_segment"
+}
+export type ScheduleSource = PmsRecallSource | AudienceSegmentSource
+
+export interface ScheduleTrigger {
+    type: "schedule"
+    /** Standard five-field cron expression; the presets write this. */
+    cron: string
+    timezone_mode?: "location" | "fixed"
+    fixed_timezone?: string | null
+    source: ScheduleSource
+    max_enrollments_per_run?: number
     /** Optional eligibility filter, evaluated before a run is created. */
     filter?: FilterExpression | null
-    /** Optional whole-token filters. Empty means any non-compliance inbound SMS. */
-    tokens?: string[]
     campaign_goal?: string | null
 }
-/**
- * The email counterpart to SmsReplyTrigger. Only replies routed to a known
- * clinic reach it — unattributable mail is held, never enrolled.
- */
-export interface EmailReplyTrigger {
-    type: "email_reply"
+
+export interface InboundMessageTrigger {
+    type: "inbound_message"
+    channels: Array<"sms" | "email">
+    /** Optional whole-token filters. Empty means any routed inbound reply. */
+    tokens?: string[]
     /** Optional eligibility filter, evaluated before a run is created. */
     filter?: FilterExpression | null
-    /** Optional whole-token filters. Empty means any routed inbound email. */
-    tokens?: string[]
     campaign_goal?: string | null
 }
 
 export type WorkflowTrigger =
-    | AppointmentOffsetTrigger
-    | AppointmentStateChangedTrigger
-    | RecallScanTrigger
+    | EventTrigger
     | ManualTrigger
-    | BulkImportTrigger
-    | EnquiryReceivedTrigger
     | FormSubmittedTrigger
-    | CallbackRequestedTrigger
-    | PatientStatusChangedTrigger
-    | SmsReplyTrigger
-    | EmailReplyTrigger
+    | InternalStatusTrigger
+    | ScheduleTrigger
+    | InboundMessageTrigger
 
 // ---------------------------------------------------------------------------
 // Wait delay (discriminated on `delay_type`)

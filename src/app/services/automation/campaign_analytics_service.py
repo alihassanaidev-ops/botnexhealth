@@ -1206,21 +1206,28 @@ class CampaignAnalyticsService:
 
 
 def campaign_category(workflow: AutomationWorkflow) -> str:
-    """Resolve a workflow to the analytics category used for labels."""
+    """Resolve a workflow to the analytics category used for labels.
+
+    Categorisation reads the events a workflow subscribes to rather than its
+    trigger's name, so a campaign keeps its analytics identity across the
+    trigger rename and so two campaigns watching the same events are grouped
+    together however their triggers were authored.
+    """
     raw_category = (workflow.category or "").lower()
     trigger_type = (workflow.trigger_type or "").lower()
     name = (workflow.name or "").lower()
+    events = set(workflow.subscribed_event_keys)
     if raw_category in {"recall", "callback", "treatment", "reactivation"}:
         return raw_category
-    if raw_category == "appointment_ops" or trigger_type == "appointment_offset":
+    if raw_category == "appointment_ops" or "appointment.reminder_due" in events:
         if "confirm" in name or _definition_has_outcome(
             workflow.definition, "confirmed"
         ):
             return "appointment_confirmation"
         return "appointment_ops"
-    if trigger_type == "callback_requested":
+    if "call.inbound.completed" in events:
         return "callback"
-    if trigger_type == "recall_scan":
+    if "patient.recall_due" in events or trigger_type == "schedule":
         return "recall"
     return raw_category or "default"
 

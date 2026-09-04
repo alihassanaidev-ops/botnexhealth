@@ -63,6 +63,10 @@ from src.app.models.gotracker_webhook_subscription import (  # noqa: F401 — mo
 from src.app.models.patient_working_set import (  # noqa: F401 — model registration
     PatientWorkingSet,
 )
+from src.app.models.internal_status_event import (  # noqa: F401 — model registration
+    INTERNAL_STATUS_FIELDS,
+    InternalStatusEvent,
+)
 from src.app.models.patient_workflow_status import (  # noqa: F401 — model registration
     PatientWorkflowStatusEvent,
 )
@@ -181,6 +185,8 @@ __all__ = [
     "AutomationWorkflowDripState",
     "AutomationWorkflowTimer",
     "AutomationWorkflowEvent",
+    "INTERNAL_STATUS_FIELDS",
+    "InternalStatusEvent",
     "PatientWorkflowStatusEvent",
     "AutomationWorkflowStatus",
     "AutomationRunStatus",

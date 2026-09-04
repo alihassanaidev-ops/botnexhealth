@@ -432,9 +432,12 @@ def test_time_wait_is_not_an_email_wait():
 
 
 def test_email_reply_trigger_normalises_tokens():
-    from src.app.services.automation.definition_schema import EmailReplyTrigger
+    """The email reply trigger is now the email channel of inbound_message."""
+    from src.app.services.automation.definition_schema import InboundMessageTrigger
 
-    trigger = EmailReplyTrigger(tokens=[" Yes ", "yes", "NO", ""])
+    trigger = InboundMessageTrigger(
+        channels=["email"], tokens=[" Yes ", "yes", "NO", ""]
+    )
     assert trigger.tokens == ["Yes", "NO"]
 
 

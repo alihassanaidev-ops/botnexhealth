@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -73,7 +74,11 @@ def test_emergency_halt_version_noop_when_no_runs() -> None:
     assert count == 0
 
 _VALID_DEFINITION = {
-    "trigger": {"type": "appointment_offset", "offset_hours": -24},
+    "trigger": {
+        "type": "event",
+        "event_keys": ["appointment.reminder_due"],
+        "reminder_offset_hours": -24,
+    },
     "entry_node_id": "sms-1",
     "nodes": [
         {
@@ -97,6 +102,18 @@ def _make_session(*, execute_returns=None) -> AsyncMock:
         execute_returns if isinstance(execute_returns, list) else []
     )
     session.execute = AsyncMock(return_value=mock_result)
+
+    async def _get(model, _pk):
+        # Publish validation loads the institution to decide PMS scope. A bare
+        # AsyncMock hands it an institution whose pms_type matches nothing, so
+        # every trigger and node reads as unsupported and publish fails.
+        from src.app.models.institution import Institution
+
+        if model is Institution:
+            return SimpleNamespace(id="inst-1", pms_type="nexhealth")
+        return None
+
+    session.get = AsyncMock(side_effect=_get)
     return session
 
 

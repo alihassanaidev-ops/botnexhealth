@@ -15,7 +15,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 from src.app.models.automation_workflow import AutomationWorkflowRun
 from src.app.pms.base import SupportsAppointmentConfirmation
 from src.app.services.automation.definition_schema import (
-    AppointmentOffsetTrigger,
+    EventTrigger,
     ExitNode,
     UpdateAppointmentNode,
     WorkflowDefinition,
@@ -103,7 +103,7 @@ def _run() -> AutomationWorkflowRun:
 
 def _definition(operation: str, **node_kwargs) -> WorkflowDefinition:
     return WorkflowDefinition(
-        trigger=AppointmentOffsetTrigger(offset_hours=-24),
+        trigger=EventTrigger(event_keys=["appointment.reminder_due"], reminder_offset_hours=-24),
         entry_node_id="write",
         nodes=[
             UpdateAppointmentNode(

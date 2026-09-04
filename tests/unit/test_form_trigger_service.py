@@ -36,6 +36,8 @@ def _workflow(*, wf_id: str = "wf-1", definition: dict | None = None, location_i
     # Read from the version's definition JSON in production; set here because
     # the lookup filters on it before any trigger-specific matching runs.
     workflow.trigger_type = "form_submitted"
+    workflow.trigger_types = ["form_submitted"]
+    workflow.subscribed_event_keys = []
     workflow.definition = definition or _definition()
     return workflow
 

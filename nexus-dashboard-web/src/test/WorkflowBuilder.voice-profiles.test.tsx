@@ -40,11 +40,11 @@ const WORKFLOW: AutomationWorkflow = {
     id: "wf-voice",
     name: "Voice Campaign",
     status: "active",
-    trigger_type: "appointment_offset",
+    trigger_type: "event",
     location_id: "loc-1",
     definition: {
         schema_version: "1.0",
-        trigger: { type: "appointment_offset", offset_hours: 0 },
+        trigger: { type: "event", event_keys: ["call.inbound.completed"] },
         entry_node_id: "voice-1",
         nodes: [
             {

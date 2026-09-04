@@ -10,7 +10,11 @@ import type { WorkflowDefinition } from "@/types/workflow"
 function base(): WorkflowDefinition {
     return {
         schema_version: "1.0",
-        trigger: { type: "appointment_offset", offset_hours: -24 },
+        trigger: {
+            type: "event",
+            event_keys: ["appointment.reminder_due"],
+            reminder_offset_hours: -24,
+        },
         entry_node_id: "sms-1",
         nodes: [
             {
@@ -26,37 +30,65 @@ function base(): WorkflowDefinition {
 }
 
 describe("workflow validation", () => {
-    it("accepts a Chair Flow state as the only appointment-state matcher", () => {
+    // Was "accepts a Chair Flow state as the only appointment-state matcher".
+    // The `appointment_state_changed` trigger and its "at least one matcher"
+    // rule are gone; the equivalent today is that naming the canonical event a
+    // post-op campaign starts from is by itself enough to validate.
+    it("accepts a single canonical event as the whole post-op subscription", () => {
         const def = base()
         def.trigger = {
-            type: "appointment_state_changed",
-            status_ids: [],
-            confirmed: null,
-            preconfirmed: null,
-            flow_states: ["Completed"],
+            type: "event",
+            event_keys: ["appointment.completed"],
             max_followup_delay_hours: 72,
             campaign_goal: "post_op_followup",
         }
 
         const issues = validateDefinition(def)
 
-        expect(issues.some((issue) => issue.message.includes("at least one matcher"))).toBe(false)
+        expect(issues.filter((issue) => issue.severity === "error")).toHaveLength(0)
+    })
+
+    it("flags an event trigger with no events, which could never start", () => {
+        const def = base()
+        def.trigger = { type: "event", event_keys: [] }
+
+        const issues = validateDefinition(def)
+
+        expect(issues.some((issue) => issue.message.includes("Pick at least one event"))).toBe(true)
     })
 
     it("rejects a post-op deadline outside the backend's 168-hour limit", () => {
         const def = base()
         def.trigger = {
-            type: "appointment_state_changed",
-            status_ids: [],
-            confirmed: null,
-            preconfirmed: null,
-            flow_states: ["Completed"],
+            type: "event",
+            event_keys: ["appointment.completed"],
             max_followup_delay_hours: 169,
         }
 
         const issues = validateDefinition(def)
 
         expect(issues.some((issue) => issue.message.includes("0 to 168 hours"))).toBe(true)
+    })
+
+    it("requires a reminder interval for the reminder event, and only for it", () => {
+        const def = base()
+        def.trigger = { type: "event", event_keys: ["appointment.reminder_due"] }
+        expect(
+            validateDefinition(def).some((i) =>
+                i.message.includes("Reminders need an interval"),
+            ),
+        ).toBe(true)
+
+        def.trigger = {
+            type: "event",
+            event_keys: ["appointment.completed"],
+            reminder_offset_hours: -24,
+        }
+        expect(
+            validateDefinition(def).some((i) =>
+                i.message.includes("only applies to the reminder event"),
+            ),
+        ).toBe(true)
     })
 
     it("a well-formed workflow has no errors", () => {
@@ -120,7 +152,7 @@ describe("workflow validation", () => {
     it("requires a Retell SMS profile", () => {
         const def: WorkflowDefinition = {
             schema_version: "1.0",
-            trigger: { type: "sms_reply" },
+            trigger: { type: "inbound_message", channels: ["sms"] },
             entry_node_id: "chat-1",
             nodes: [
                 {
@@ -264,7 +296,12 @@ describe("workflow validation", () => {
 
     it("flags a recall interval below 1", () => {
         const def = base()
-        def.trigger = { type: "recall_scan", recall_interval_months: 0 }
+        def.trigger = {
+            type: "schedule",
+            cron: "0 9 * * *",
+            timezone_mode: "location",
+            source: { kind: "pms_recall", recall_interval_months: 0 },
+        }
         const issues = validateDefinition(def)
         expect(issues.some((i) => i.message.includes("Recall interval"))).toBe(true)
     })
@@ -272,9 +309,14 @@ describe("workflow validation", () => {
     it("flags an invalid recall re-enrollment cooldown", () => {
         const def = base()
         def.trigger = {
-            type: "recall_scan",
-            recall_interval_months: 6,
-            recall_reenrollment_cooldown_days: 0,
+            type: "schedule",
+            cron: "0 9 * * *",
+            timezone_mode: "location",
+            source: {
+                kind: "pms_recall",
+                recall_interval_months: 6,
+                reenrollment_cooldown_days: 0,
+            },
         }
 
         const issues = validateDefinition(def)
@@ -282,11 +324,38 @@ describe("workflow validation", () => {
         expect(issues.some((i) => i.message.includes("Recall cooldown"))).toBe(true)
     })
 
-    it("flags patient status triggers without statuses", () => {
+    it("flags a fixed-timezone schedule with no timezone", () => {
         const def = base()
-        def.trigger = { type: "patient_status_changed", statuses: [] }
+        def.trigger = {
+            type: "schedule",
+            cron: "0 9 * * *",
+            timezone_mode: "fixed",
+            fixed_timezone: null,
+            source: { kind: "audience_segment" },
+        }
+
+        const issues = validateDefinition(def)
+
+        expect(issues.some((i) => i.message.includes("fixed schedule needs a timezone"))).toBe(true)
+    })
+
+    it("flags internal status triggers without statuses", () => {
+        const def = base()
+        def.trigger = {
+            type: "internal_status",
+            field: "patient_workflow_status",
+            to_statuses: [],
+            from_statuses: [],
+        }
         const issues = validateDefinition(def)
         expect(issues.some((i) => i.message.includes("Internal status trigger"))).toBe(true)
+    })
+
+    it("flags a patient reply trigger with no channel", () => {
+        const def = base()
+        def.trigger = { type: "inbound_message", channels: [] }
+        const issues = validateDefinition(def)
+        expect(issues.some((i) => i.message.includes("at least one channel"))).toBe(true)
     })
 
     it("flags condition branches that are not connected", () => {

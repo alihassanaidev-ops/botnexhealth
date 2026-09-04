@@ -149,12 +149,61 @@ class AutomationWorkflow(Base):
         return None
 
     @property
-    def trigger_type(self) -> str | None:
-        """Trigger type extracted from the current version's definition."""
+    def trigger_definitions(self) -> list[dict]:
+        """Raw trigger dicts from the current version, singular or plural.
+
+        Deliberately reads the JSON rather than validating the definition:
+        trigger matching runs for every active workflow on every event, and a
+        full Pydantic validation there is what made it O(N) validations per
+        event. Callers that need typed access validate the ones that matched.
+        """
         defn = self.definition
-        if defn is not None:
-            return (defn.get("trigger") or {}).get("type")
-        return None
+        if not defn:
+            return []
+        triggers = defn.get("triggers")
+        if isinstance(triggers, list):
+            return [t for t in triggers if isinstance(t, dict)]
+        single = defn.get("trigger")
+        return [single] if isinstance(single, dict) else []
+
+    @property
+    def trigger_type(self) -> str | None:
+        """First trigger's type, for the many single-trigger call sites."""
+        triggers = self.trigger_definitions
+        return triggers[0].get("type") if triggers else None
+
+    @property
+    def trigger_types(self) -> list[str]:
+        """Every trigger type on this workflow, order-preserved and deduped."""
+        seen: list[str] = []
+        for trigger in self.trigger_definitions:
+            kind = trigger.get("type")
+            if isinstance(kind, str) and kind not in seen:
+                seen.append(kind)
+        return seen
+
+    @property
+    def subscribed_event_keys(self) -> list[str]:
+        """Canonical event keys this workflow starts from.
+
+        Includes the keys an `event` trigger names directly, plus the keys the
+        other trigger types imply — so one event-keyed lookup can find every
+        workflow that should react, whatever shape its trigger takes.
+        """
+        from src.app.services.automation.trigger_lookup import TRIGGER_EVENT_KEYS
+
+        keys: list[str] = []
+        for trigger in self.trigger_definitions:
+            kind = trigger.get("type")
+            declared = trigger.get("event_keys")
+            if isinstance(declared, list):
+                for key in declared:
+                    if isinstance(key, str) and key not in keys:
+                        keys.append(key)
+            for key in TRIGGER_EVENT_KEYS.get(kind or "", ()):
+                if key not in keys:
+                    keys.append(key)
+        return keys
 
 
 class AutomationWorkflowVersion(Base):

@@ -2183,6 +2183,125 @@ def _enqueue_patient_status_triggers(
 
 
 @celery_app.task(
+    name="src.app.tasks.automation_workflow.trigger_internal_status_workflows",
+    bind=True,
+    max_retries=3,
+    queue="workflow",
+)
+def trigger_internal_status_workflows(
+    self,
+    *,
+    institution_id: str,
+    status_event_id: str,
+) -> dict:
+    """Enroll workflows watching a status field this platform owns."""
+    _ensure_db()
+    try:
+        return asyncio.run(
+            _trigger_internal_status_async(
+                institution_id=institution_id,
+                status_event_id=status_event_id,
+            )
+        )
+    except Exception as exc:
+        logger.exception(
+            "trigger_internal_status_workflows failed: institution=%s event=%s: %s",
+            institution_id,
+            status_event_id,
+            exc,
+        )
+        raise self.retry(exc=exc, countdown=_retry_countdown(self.request.retries))
+
+
+async def _trigger_internal_status_async(
+    *,
+    institution_id: str,
+    status_event_id: str,
+) -> dict:
+    from src.app.models.internal_status_event import InternalStatusEvent
+    from src.app.services.automation.patient_status_trigger_service import (
+        PatientStatusTriggerService,
+        workflow_matches_patient_status,
+    )
+
+    async with get_system_db_session(
+        "celery",
+        institution_id=institution_id,
+        external_id=f"internal_status_trigger:{status_event_id}",
+    ) as session:
+        event = await session.get(InternalStatusEvent, status_event_id)
+        if event is None or event.institution_id != institution_id:
+            return {
+                "status_event_id": status_event_id,
+                "scheduled": 0,
+                "reason": "event_not_found",
+            }
+
+        service = PatientStatusTriggerService(session)
+        workflows = await service.find_active_status_workflows(
+            institution_id, location_id=event.location_id
+        )
+        matched = [
+            workflow
+            for workflow in workflows
+            if workflow_matches_patient_status(
+                workflow,
+                event.to_status,
+                field=event.field,
+                previous_status=event.from_status,
+            )
+        ]
+        payload = {
+            "institution_id": institution_id,
+            "location_id": event.location_id,
+            "contact_id": event.contact_id,
+            "field": event.field,
+            "subject_type": event.subject_type,
+            "subject_id": event.subject_id,
+            "to_status": event.to_status,
+            "from_status": event.from_status,
+            "version_ids": [
+                (str(workflow.id), str(workflow.current_version_id))
+                for workflow in matched
+            ],
+        }
+
+    scheduled = 0
+    trigger_metadata = {
+        "event": "patient.status_changed",
+        "trigger_type": "internal_status",
+        "contact_id": payload["contact_id"],
+        "location_id": payload["location_id"],
+        "patient_status": payload["to_status"],
+        "patient_status_previous": payload["from_status"],
+        "patient_status_field": payload["field"],
+        "status_subject_type": payload["subject_type"],
+        "status_subject_id": payload["subject_id"],
+    }
+    for workflow_id, workflow_version_id in payload["version_ids"]:
+        enroll_and_start_workflow_run.apply_async(
+            kwargs={
+                "institution_id": institution_id,
+                "workflow_id": workflow_id,
+                "workflow_version_id": workflow_version_id,
+                "contact_id": payload["contact_id"],
+                "location_id": payload["location_id"],
+                "trigger_type": "internal_status",
+                "trigger_ref_type": "internal_status_event",
+                "trigger_ref_id": status_event_id,
+                # One run per status event per workflow version, so a retried
+                # task cannot enroll the same patient twice.
+                "idempotency_key": f"internal-status:{workflow_version_id}:{status_event_id}",
+                "trigger_metadata": trigger_metadata,
+            },
+            queue="workflow",
+        )
+        scheduled += 1
+
+    return {"status_event_id": status_event_id, "scheduled": scheduled}
+
+
+@celery_app.task(
     name="src.app.tasks.automation_workflow.trigger_patient_status_workflows",
     bind=True,
     max_retries=3,
@@ -2221,7 +2340,7 @@ async def _trigger_patient_status_async(
     from src.app.models.automation_workflow import AutomationWorkflowRun
     from src.app.models.patient_workflow_status import PatientWorkflowStatusEvent
     from src.app.services.automation.definition_schema import (
-        PatientStatusChangedTrigger,
+        InternalStatusTrigger,
     )
 
     async with get_system_db_session(
@@ -2282,11 +2401,18 @@ async def _trigger_patient_status_async(
             skipped += 1
             continue
         trigger_metadata = base_trigger_metadata
-        trigger = definition.trigger
-        if not isinstance(trigger, PatientStatusChangedTrigger):
-            skipped += 1
-            continue
-        if event_data["status"] not in trigger.statuses:
+        trigger = next(
+            (
+                candidate
+                for candidate in definition.triggers
+                if isinstance(candidate, InternalStatusTrigger)
+                and candidate.field == "patient_workflow_status"
+                and event_data["status"].casefold()
+                in {value.casefold() for value in candidate.to_statuses}
+            ),
+            None,
+        )
+        if trigger is None:
             skipped += 1
             continue
         if trigger.campaign_goal:
@@ -3238,6 +3364,125 @@ async def _confirm_appointments_for_runs(
 
 
 @celery_app.task(
+    name="src.app.tasks.automation_workflow.tick_workflow_schedules",
+    bind=True,
+    max_retries=3,
+    queue="workflow",
+)
+def tick_workflow_schedules(self) -> dict:
+    """Fire every campaign schedule that has come due.
+
+    Schedules are rows rather than Celery beat entries because beat here is
+    static and runs in a single pinned worker. Cursors advance inside the claim,
+    so a crash mid-fan-out loses one tick instead of replaying it.
+    """
+    _ensure_db()
+    try:
+        return asyncio.run(_tick_workflow_schedules_async())
+    except Exception as exc:
+        logger.exception("tick_workflow_schedules failed: %s", exc)
+        raise self.retry(exc=exc, countdown=_retry_countdown(self.request.retries))
+
+
+async def _tick_workflow_schedules_async() -> dict:
+    from src.app.models.automation_workflow import AutomationWorkflow
+    from src.app.services.automation.audience_service import AudienceService
+    from src.app.services.automation.definition_schema import (
+        PmsRecallSource,
+        ScheduleTrigger,
+        WorkflowDefinition,
+    )
+    from src.app.services.automation.schedule_service import WorkflowScheduleService
+
+    async with _superadmin_system_session("workflow_schedule_tick") as session:
+        due = await WorkflowScheduleService(session).claim_due()
+        claimed = [
+            {
+                "workflow_id": row.workflow_id,
+                "institution_id": row.institution_id,
+                "location_id": row.location_id,
+                "workflow_version_id": row.workflow_version_id,
+            }
+            for row in due
+        ]
+        await session.commit()
+
+    if not claimed:
+        return {"claimed": 0, "recall": 0, "audience": 0}
+
+    recall_by_institution: dict[str, list[dict]] = {}
+    audience_jobs: list[dict] = []
+
+    for entry in claimed:
+        async with get_system_db_session(
+            "celery",
+            institution_id=entry["institution_id"],
+            external_id=f"workflow_schedule:{entry['workflow_id']}",
+        ) as session:
+            workflow = await session.get(AutomationWorkflow, entry["workflow_id"])
+            if workflow is None or not workflow.definition:
+                continue
+            try:
+                definition = WorkflowDefinition.model_validate(workflow.definition)
+            except Exception:
+                logger.exception(
+                    "schedule tick could not read definition for workflow %s",
+                    entry["workflow_id"],
+                )
+                continue
+            trigger = next(
+                (t for t in definition.triggers if isinstance(t, ScheduleTrigger)), None
+            )
+            if trigger is None:
+                continue
+
+            if isinstance(trigger.source, PmsRecallSource):
+                # Hand off to the existing recall path: it carries the
+                # alias-tolerant due-date parsing, the fail-closed treatment-plan
+                # check and GoTracker's history-sync gate, none of which should
+                # be reimplemented here.
+                recall_by_institution.setdefault(entry["institution_id"], []).append(
+                    {
+                        "workflow_id": entry["workflow_id"],
+                        "workflow_version_id": entry["workflow_version_id"],
+                        "location_id": workflow.location_id,
+                        "definition": workflow.definition,
+                        "campaign_goal": trigger.campaign_goal,
+                    }
+                )
+            else:
+                result = await AudienceService(session).enqueue_enrollment(
+                    workflow,
+                    institution_id=entry["institution_id"],
+                    segment=None,
+                    actor_user_id=None,
+                    max_enrollments=trigger.max_enrollments_per_run,
+                )
+                await session.commit()
+                audience_jobs.append(
+                    {
+                        "workflow_id": entry["workflow_id"],
+                        "enrolled": getattr(result, "enrolled", 0),
+                    }
+                )
+
+    recall_enrolled = 0
+    for institution_id, workflows in recall_by_institution.items():
+        try:
+            counters = await _enroll_recalls_for_institution(institution_id, workflows)
+            recall_enrolled += int(counters.get("enrollments_scheduled", 0))
+        except Exception:
+            # One tenant's PMS being unreachable must not stop the others.
+            logger.exception("scheduled recall failed for institution %s", institution_id)
+
+    return {
+        "claimed": len(claimed),
+        "recall": recall_enrolled,
+        "audience": sum(job["enrolled"] for job in audience_jobs),
+    }
+
+
+@celery_app.task(
     name="src.app.tasks.automation_workflow.scan_recall_workflows",
     bind=True,
     max_retries=3,
@@ -3625,6 +3870,7 @@ async def _scan_recall_async() -> dict:
         AutomationWorkflow,
         AutomationWorkflowStatus,
     )
+    from src.app.services.automation.trigger_lookup import workflow_starts_from
 
     # Enumerate only workflow routing metadata globally; each institution is
     # processed below in its own tenant-scoped session.
@@ -3637,7 +3883,10 @@ async def _scan_recall_async() -> dict:
         )
         by_institution: dict[str, list[dict]] = {}
         for wf in result.scalars().all():
-            if wf.trigger_type != "recall_scan":
+            # Match on the event, not the trigger's name: a recall campaign is
+            # authored as a schedule with a PMS-recall source now, and comparing
+            # the literal old type would skip every one of them.
+            if not workflow_starts_from(wf, "recall_scan"):
                 continue
             by_institution.setdefault(str(wf.institution_id), []).append(
                 {

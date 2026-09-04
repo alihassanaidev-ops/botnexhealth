@@ -137,6 +137,20 @@ class AutomationWorkflowDefinitionService:
         await self.session.flush()
         return workflow
 
+    async def _sync_schedules(self, workflow: AutomationWorkflow) -> None:
+        """Keep the campaign's cron rows in step with its published state.
+
+        Never fatal: a publish must not fail because a schedule row could not be
+        written. A campaign whose schedule is stale is recoverable on the next
+        publish; a publish that 500s loses the author's work.
+        """
+        from src.app.services.automation.schedule_service import WorkflowScheduleService
+
+        try:
+            await WorkflowScheduleService(self.session).sync_for_workflow(workflow)
+        except Exception:
+            logger.exception("schedule sync failed for workflow %s", workflow.id)
+
     async def publish_version(
         self,
         workflow: AutomationWorkflow,
@@ -218,6 +232,7 @@ class AutomationWorkflowDefinitionService:
         workflow.current_version = version
         workflow.status = AutomationWorkflowStatus.ACTIVE.value
         await self.session.flush()
+        await self._sync_schedules(workflow)
         await self.session.refresh(workflow, attribute_names=["updated_at"])
         return version
 
@@ -229,6 +244,7 @@ class AutomationWorkflowDefinitionService:
             )
         workflow.status = AutomationWorkflowStatus.PAUSED.value
         await self.session.flush()
+        await self._sync_schedules(workflow)
         await self.session.refresh(workflow, attribute_names=["updated_at"])
         return workflow
 
@@ -240,6 +256,7 @@ class AutomationWorkflowDefinitionService:
             )
         workflow.status = AutomationWorkflowStatus.ACTIVE.value
         await self.session.flush()
+        await self._sync_schedules(workflow)
         await self.session.refresh(workflow, attribute_names=["updated_at"])
         return workflow
 
@@ -248,6 +265,7 @@ class AutomationWorkflowDefinitionService:
             return workflow
         workflow.status = AutomationWorkflowStatus.ARCHIVED.value
         await self.session.flush()
+        await self._sync_schedules(workflow)
         await self.session.refresh(workflow, attribute_names=["updated_at"])
         return workflow
 

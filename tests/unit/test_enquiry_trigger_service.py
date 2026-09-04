@@ -16,10 +16,14 @@ from src.app.services.automation.enquiry_trigger_service import (
 )
 
 
+#: A landed enquiry is now the `enquiry.received` key on the event trigger.
+_ENQUIRY_TRIGGER = {"type": "event", "event_keys": ["enquiry.received"]}
+
+
 def _definition(trigger: dict | None = None) -> dict:
     return {
         "schema_version": "1.0",
-        "trigger": trigger or {"type": "enquiry_received"},
+        "triggers": [trigger or dict(_ENQUIRY_TRIGGER)],
         "entry_node_id": "exit-1",
         "nodes": [{"type": "exit", "id": "exit-1", "outcome": "done"}],
     }
@@ -28,17 +32,22 @@ def _definition(trigger: dict | None = None) -> dict:
 def _workflow(
     *,
     wf_id: str,
-    trigger_type: str = "enquiry_received",
     location_id: str | None = "loc-1",
     definition: dict | None = None,
 ):
+    definition = definition or _definition()
+    trigger = definition["triggers"][0]
     workflow = MagicMock()
     workflow.id = wf_id
     workflow.institution_id = "inst-1"
     workflow.location_id = location_id
     workflow.current_version_id = f"ver-{wf_id}"
-    workflow.trigger_type = trigger_type
-    workflow.definition = definition or _definition()
+    workflow.definition = definition
+    # The shared lookup reads these model properties; a MagicMock cannot derive
+    # them from `definition` the way AutomationWorkflow does.
+    workflow.trigger_type = trigger["type"]
+    workflow.trigger_types = [trigger["type"]]
+    workflow.subscribed_event_keys = list(trigger.get("event_keys") or [])
     return workflow
 
 
@@ -93,7 +102,7 @@ def test_context_is_normalized_and_does_not_include_contact_details() -> None:
 
 def test_prepare_dispatches_matches_location_and_trigger_filter() -> None:
     matching_filter = {
-        "type": "enquiry_received",
+        **_ENQUIRY_TRIGGER,
         "filter": {
             "kind": "rule",
             "field": "enquiry_source",
@@ -102,7 +111,7 @@ def test_prepare_dispatches_matches_location_and_trigger_filter() -> None:
         },
     }
     wrong_filter = {
-        "type": "enquiry_received",
+        **_ENQUIRY_TRIGGER,
         "filter": {
             "kind": "rule",
             "field": "enquiry_source",
@@ -132,7 +141,11 @@ def test_prepare_dispatches_matches_location_and_trigger_filter() -> None:
                 location_id="loc-1",
                 definition=_definition(wrong_filter),
             ),
-            _workflow(wf_id="manual", trigger_type="manual", location_id="loc-1"),
+            _workflow(
+                wf_id="manual",
+                location_id="loc-1",
+                definition=_definition({"type": "manual"}),
+            ),
         ]
     )
 
@@ -185,7 +198,6 @@ def test_prepare_dispatches_does_not_match_scoped_workflow_without_event_locatio
 def test_workflow_matches_enquiry_rejects_other_trigger_definitions() -> None:
     workflow = _workflow(
         wf_id="manual",
-        trigger_type="enquiry_received",
         definition=_definition({"type": "manual"}),
     )
 

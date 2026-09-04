@@ -83,7 +83,7 @@ beforeEach(() => {
         id: "wf-1",
         name: "Recall campaign",
         status: "active",
-        trigger_type: "recall_scan",
+        trigger_type: "schedule",
         definition: null,
         current_version_id: "ver-1",
         created_at: "2026-07-01T00:00:00Z",
@@ -93,7 +93,7 @@ beforeEach(() => {
         workflow_id: "wf-1",
         workflow_name: "Recall campaign",
         workflow_status: "active",
-        trigger_type: "recall_scan",
+        trigger_type: "schedule",
         location_id: "loc-1",
         latest_version: null,
         readiness: {

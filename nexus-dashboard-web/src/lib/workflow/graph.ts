@@ -797,49 +797,40 @@ export function addVoiceOutcomeBranch(def: WorkflowDefinition, voiceNodeId: stri
 
 export function createTrigger(type: TriggerType): WorkflowTrigger {
     switch (type) {
-        case "appointment_offset":
-            return { type, offset_hours: -24 }
-        case "appointment_state_changed":
-            return {
-                type,
-                status_ids: [],
-                confirmed: true,
-                preconfirmed: null,
-                flow_states: [],
-                max_followup_delay_hours: null,
-                campaign_goal: "post_op_followup",
-            }
-        case "recall_scan":
-            return { type, recall_interval_months: 6, recall_reenrollment_cooldown_days: 90 }
+        case "event":
+            // Cancellation is the most common starting point and needs no extra
+            // configuration, so a fresh event trigger is immediately valid.
+            return { type, event_keys: ["appointment.cancelled"], campaign_goal: null }
         case "manual":
-            return { type }
-        case "bulk_import":
-            return { type }
-        case "enquiry_received":
             return { type }
         case "form_submitted":
             // No provider and no form ids: every enabled form. A practice
             // running one form is done; one running several narrows it here.
             return { type, provider: null, form_ids: [] }
-        case "callback_requested":
-            return { type }
-        case "patient_status_changed":
+        case "internal_status":
             return {
                 type,
-                statuses: ["appointment_confirmed"],
-                campaign_goal: "post_op_followup",
+                field: "contact_lead_status",
+                to_statuses: [],
+                from_statuses: [],
+                campaign_goal: null,
             }
-        case "sms_reply":
+        case "schedule":
             return {
                 type,
+                cron: "0 9 * * *",
+                timezone_mode: "location",
+                fixed_timezone: null,
+                source: { kind: "pms_recall", recall_interval_months: 6, reenrollment_cooldown_days: 90 },
+                max_enrollments_per_run: 500,
+                campaign_goal: null,
+            }
+        case "inbound_message":
+            return {
+                type,
+                channels: ["sms"],
                 tokens: [],
                 campaign_goal: "inbound_sms_followup",
-            }
-        case "email_reply":
-            return {
-                type,
-                tokens: [],
-                campaign_goal: null,
             }
     }
 }

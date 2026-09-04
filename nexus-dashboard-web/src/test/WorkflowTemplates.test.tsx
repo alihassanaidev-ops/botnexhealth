@@ -38,7 +38,7 @@ const TEMPLATES = [
         id: "appointment-reminder-24h",
         name: "Appointment Reminder (24h)",
         description: "Remind patients 24h before.",
-        trigger_type: "appointment_offset",
+        trigger_type: "event",
         definition: { schema_version: "1.0", trigger: { type: "manual" }, entry_node_id: "e", nodes: [] },
         tags: ["sms", "reminder"],
         category: "appointment_ops",
@@ -129,7 +129,7 @@ const SALES_TEMPLATE = {
     id: "sales-qualification",
     name: "Sales Qualification",
     description: "Qualify inbound sales enquiries over SMS.",
-    trigger_type: "enquiry_received",
+    trigger_type: "event",
     category: "sales",
     metadata: {
         ...TEMPLATES[0].metadata,
@@ -149,7 +149,7 @@ const RECALL_TEMPLATE = {
     id: "recall-sms-6month",
     name: "Recall Outreach (6-Month)",
     description: "Bring overdue recall patients back onto the schedule.",
-    trigger_type: "recall_scan",
+    trigger_type: "schedule",
     category: "recall",
     metadata: {
         ...TEMPLATES[0].metadata,

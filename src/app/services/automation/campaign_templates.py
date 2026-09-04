@@ -192,8 +192,10 @@ def _apply_required_setup_fields(
                 field_id,
                 integer=True,
             )
-            if definition.get("trigger", {}).get("type") == "recall_scan":
-                definition["trigger"]["recall_reenrollment_cooldown_days"] = int(days)
+            trigger = definition.get("trigger") or {}
+            source = trigger.get("source") or {}
+            if trigger.get("type") == "schedule" and source.get("kind") == "pms_recall":
+                source["reenrollment_cooldown_days"] = int(days)
             continue
         if field_id == "recall_booking_window_days":
             days = _positive_number(
@@ -209,7 +211,7 @@ def _apply_required_setup_fields(
             reasons = _string_list(setup_options.get(field_id))
             if setup_field.get("required") and not reasons:
                 raise ValueError(
-                    "appointment_reasons must contain at least one GoTracker reason"
+                    "appointment_reasons must contain at least one appointment reason"
                 )
             if reasons:
                 _set_filter_rule_value(
@@ -238,7 +240,7 @@ def _apply_required_setup_fields(
                 integer=True,
                 allow_zero=True,
             )
-            definition["trigger"]["offset_hours"] = -int(hours)
+            definition["trigger"]["reminder_offset_hours"] = -int(hours)
             continue
         if field_id in {"retry_delay_1_hours", "retry_delay_2_hours"}:
             hours = _positive_number(
@@ -277,7 +279,7 @@ def _apply_required_setup_fields(
             reasons = _string_list(setup_options.get(field_id))
             if setup_field.get("required") and not reasons:
                 raise ValueError(
-                    "post_op_reasons must contain at least one GoTracker reason"
+                    "post_op_reasons must contain at least one appointment reason"
                 )
             node = _node_by_id(definition, "check-post-op-eligible-reason")
             if node:
@@ -521,8 +523,9 @@ _APPOINTMENT_REMINDER_REPLY_MAPPINGS: list[dict[str, Any]] = [
 _APPOINTMENT_REMINDER_24H: dict[str, Any] = {
     "schema_version": "1.0",
     "trigger": {
-        "type": "appointment_offset",
-        "offset_hours": -24,
+        "type": "event",
+        "event_keys": ["appointment.reminder_due"],
+        "reminder_offset_hours": -24,
         "filter": {
             "kind": "rule",
             "field": "appointment_status",
@@ -718,7 +721,11 @@ _APPOINTMENT_REMINDER_24H: dict[str, Any] = {
 
 _APPOINTMENT_CONFIRMATION_48H: dict[str, Any] = {
     "schema_version": "1.0",
-    "trigger": {"type": "appointment_offset", "offset_hours": -48},
+    "trigger": {
+        "type": "event",
+        "event_keys": ["appointment.reminder_due"],
+        "reminder_offset_hours": -48,
+    },
     "entry_node_id": "sms-confirm",
     "nodes": [
         {
@@ -779,9 +786,13 @@ _RECALL_REPLY_MAPPINGS: list[dict[str, Any]] = [
 _RECALL_SMS_6MONTH: dict[str, Any] = {
     "schema_version": "1.0",
     "trigger": {
-        "type": "recall_scan",
-        "recall_interval_months": 6,
-        "recall_reenrollment_cooldown_days": 90,
+        "type": "schedule",
+        "cron": "0 9 * * *",
+        "source": {
+            "kind": "pms_recall",
+            "recall_interval_months": 6,
+            "reenrollment_cooldown_days": 90,
+        },
         "filter": {
             "kind": "group",
             "op": "and",
@@ -968,7 +979,11 @@ _RECALL_SMS_6MONTH: dict[str, Any] = {
 
 _REACTIVATION_SMS_EMAIL_18MONTH: dict[str, Any] = {
     "schema_version": "1.0",
-    "trigger": {"type": "recall_scan", "recall_interval_months": 18},
+    "trigger": {
+        "type": "schedule",
+        "cron": "0 9 * * *",
+        "source": {"kind": "pms_recall", "recall_interval_months": 18},
+    },
     "entry_node_id": "sms-reactivation",
     "nodes": [
         {
@@ -1013,7 +1028,11 @@ _REACTIVATION_SMS_EMAIL_18MONTH: dict[str, Any] = {
 
 _NO_SHOW_RECOVERY: dict[str, Any] = {
     "schema_version": "1.0",
-    "trigger": {"type": "appointment_offset", "offset_hours": 2},
+    "trigger": {
+        "type": "event",
+        "event_keys": ["appointment.reminder_due"],
+        "reminder_offset_hours": 2,
+    },
     "entry_node_id": "check-missed",
     "nodes": [
         {
@@ -1055,7 +1074,11 @@ _NO_SHOW_RECOVERY: dict[str, Any] = {
 
 _CANCELLATION_REBOOKING: dict[str, Any] = {
     "schema_version": "1.0",
-    "trigger": {"type": "appointment_offset", "offset_hours": 1},
+    "trigger": {
+        "type": "event",
+        "event_keys": ["appointment.reminder_due"],
+        "reminder_offset_hours": 1,
+    },
     "entry_node_id": "check-cancelled",
     "nodes": [
         {
@@ -1085,7 +1108,16 @@ _CANCELLATION_REBOOKING: dict[str, Any] = {
 
 _CALLBACK_AUTOMATION: dict[str, Any] = {
     "schema_version": "1.0",
-    "trigger": {"type": "callback_requested"},
+    "trigger": {
+        "type": "event",
+        "event_keys": ["call.inbound.completed"],
+        "filter": {
+            "kind": "rule",
+            "field": "call.outcome",
+            "op": "eq",
+            "value": "needs_callback",
+        },
+    },
     "entry_node_id": "voice-callback",
     "nodes": [
         {
@@ -1164,7 +1196,7 @@ _UNSCHEDULED_TREATMENT_FOLLOWUP: dict[str, Any] = {
 
 _SALES_QUALIFICATION: dict[str, Any] = {
     "schema_version": "1.0",
-    "trigger": {"type": "enquiry_received"},
+    "trigger": {"type": "event", "event_keys": ["enquiry.received"]},
     "entry_node_id": "mark-engaged",
     "nodes": [
         {
@@ -1484,8 +1516,9 @@ def _preappointment_attempt_nodes(attempt: int) -> list[dict[str, Any]]:
 _SURGERY_PRE_APPOINTMENT_CONFIRMATION: dict[str, Any] = {
     "schema_version": "1.0",
     "trigger": {
-        "type": "appointment_offset",
-        "offset_hours": -24,
+        "type": "event",
+        "event_keys": ["appointment.reminder_due"],
+        "reminder_offset_hours": -24,
         # Eligibility is decided before enrollment. It used to be the first
         # condition node, whose false branch exited immediately — so every
         # appointment in the clinic wrote a run, a step execution and analytics
@@ -1625,11 +1658,8 @@ _SURGERY_PRE_APPOINTMENT_CONFIRMATION: dict[str, Any] = {
 _POST_OP_FOLLOWUP_AFTER_CONFIRMATION: dict[str, Any] = {
     "schema_version": "1.0",
     "trigger": {
-        "type": "appointment_state_changed",
-        "status_ids": [],
-        "confirmed": None,
-        "preconfirmed": None,
-        "flow_states": ["Completed"],
+        "type": "event",
+        "event_keys": ["appointment.completed"],
         "max_followup_delay_hours": 72,
         "campaign_goal": "post_op_followup",
     },
@@ -1753,7 +1783,7 @@ _ALL_TEMPLATES: dict[str, CampaignTemplate] = {
             "Send a two-step SMS reminder before a still-active appointment, "
             "with confirm/reschedule links and reply handling."
         ),
-        trigger_type="appointment_offset",
+        trigger_type="event",
         definition=_APPOINTMENT_REMINDER_24H,
         metadata=_metadata(
             category="appointment_ops",
@@ -1859,7 +1889,7 @@ _ALL_TEMPLATES: dict[str, CampaignTemplate] = {
             "Send an SMS confirmation request 48 hours before the appointment "
             "and check for a response after 2 hours."
         ),
-        trigger_type="appointment_offset",
+        trigger_type="event",
         definition=_APPOINTMENT_CONFIRMATION_48H,
         metadata=_metadata(
             category="appointment_ops",
@@ -1905,7 +1935,7 @@ _ALL_TEMPLATES: dict[str, CampaignTemplate] = {
         id="recall-sms-6month",
         name="Recall Outreach (6-Month)",
         description="Send an SMS recall message to patients overdue for a 6-month checkup.",
-        trigger_type="recall_scan",
+        trigger_type="schedule",
         definition=_RECALL_SMS_6MONTH,
         metadata=_metadata(
             category="recall",
@@ -2002,7 +2032,7 @@ _ALL_TEMPLATES: dict[str, CampaignTemplate] = {
             "Re-engage patients inactive for 18 months with an SMS outreach "
             "followed by an email if no appointment is booked within 48 hours."
         ),
-        trigger_type="recall_scan",
+        trigger_type="schedule",
         definition=_REACTIVATION_SMS_EMAIL_18MONTH,
         metadata=_metadata(
             category="reactivation",
@@ -2047,7 +2077,7 @@ _ALL_TEMPLATES: dict[str, CampaignTemplate] = {
         id="no-show-recovery",
         name="No-Show Recovery",
         description="Send a same-day rebooking link after a missed appointment and flag no booking for staff follow-up.",
-        trigger_type="appointment_offset",
+        trigger_type="event",
         definition=_NO_SHOW_RECOVERY,
         metadata=_metadata(
             category="appointment_ops",
@@ -2094,7 +2124,7 @@ _ALL_TEMPLATES: dict[str, CampaignTemplate] = {
         id="cancellation-rebooking",
         name="Cancellation Rebooking",
         description="Offer a rebooking path after a cancelled appointment is observed.",
-        trigger_type="appointment_offset",
+        trigger_type="event",
         definition=_CANCELLATION_REBOOKING,
         metadata=_metadata(
             category="appointment_ops",
@@ -2140,7 +2170,7 @@ _ALL_TEMPLATES: dict[str, CampaignTemplate] = {
             "Call patients before major appointments to confirm whether they "
             "still plan to attend."
         ),
-        trigger_type="appointment_offset",
+        trigger_type="event",
         definition=_SURGERY_PRE_APPOINTMENT_CONFIRMATION,
         metadata=_metadata(
             category="appointment_ops",
@@ -2257,7 +2287,7 @@ _ALL_TEMPLATES: dict[str, CampaignTemplate] = {
             "Call patients after a completed surgical/major appointment "
             "to check whether staff follow-up is needed."
         ),
-        trigger_type="appointment_state_changed",
+        trigger_type="event",
         definition=_POST_OP_FOLLOWUP_AFTER_CONFIRMATION,
         metadata=_metadata(
             category="appointment_ops",
@@ -2294,7 +2324,7 @@ _ALL_TEMPLATES: dict[str, CampaignTemplate] = {
                 "call_outcome": "post_op_ok",
                 "appointment_flow_state": "Completed",
                 "flow_changed_at": "2026-07-22T14:00:00+00:00",
-                "gotracker_status_id": 1,
+                "appointment_status": "booked",
             },
             setup_fields=[
                 {
@@ -2306,7 +2336,7 @@ _ALL_TEMPLATES: dict[str, CampaignTemplate] = {
                 },
                 {
                     "id": "post_op_reasons",
-                    "label": "Eligible completed GoTracker reasons",
+                    "label": "Eligible completed visit reasons",
                     "type": "string_list",
                     "required": True,
                     "placeholder": "implant surgery, extraction",
@@ -2343,7 +2373,7 @@ _ALL_TEMPLATES: dict[str, CampaignTemplate] = {
             "Start an AI SMS conversation when a sales enquiry lands, qualify the "
             "lead, and route qualified patients to registration and booking."
         ),
-        trigger_type="enquiry_received",
+        trigger_type="event",
         definition=_SALES_QUALIFICATION,
         metadata=_metadata(
             category="sales",
@@ -2434,7 +2464,7 @@ _ALL_TEMPLATES: dict[str, CampaignTemplate] = {
         id="callback-automation",
         name="Callback Automation",
         description="Place an AI voice callback for patients who requested a return call and route unresolved calls to staff.",
-        trigger_type="callback_requested",
+        trigger_type="event",
         definition=_CALLBACK_AUTOMATION,
         metadata=_metadata(
             category="callback",

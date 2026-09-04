@@ -32,8 +32,11 @@ from src.app.models.nexhealth_sync_status import NexHealthSyncStatus
 from src.app.services.automation.channel_readiness import ChannelReadinessService
 from src.app.services.automation.definition_schema import (
     ConditionNode,
+    EventTrigger,
     ExitNode,
+    PmsRecallSource,
     RetellSmsConversationNode,
+    ScheduleTrigger,
     SendEmailNode,
     SendSmsNode,
     SendVoiceNode,
@@ -55,11 +58,42 @@ _SEND_NODE_TYPES = (
     SendEmailNode,
     SendVoiceNode,
 )
-_BROAD_TRIGGER_TYPES = {"recall_scan"}
-_APPOINTMENT_TRIGGER_TYPES = {"appointment_offset", "recall_scan"}
-_STATUS_EVENT_TRIGGER_TYPES = {"patient_status_changed"}
+# Triggers that can enroll a large cohort in one go, so the checklist insists on
+# audience review before launch.
+_BROAD_TRIGGER_TYPES = {"schedule"}
+# Triggers whose runs carry appointment context worth validating up front.
+_APPOINTMENT_TRIGGER_TYPES = {"event", "schedule"}
+_STATUS_EVENT_TRIGGER_TYPES = {"internal_status"}
 _FRESHNESS_WINDOW = timedelta(hours=24)
 _SMS_STOP_COPY = "All SMS steps include automatic STOP copy at send time."
+
+
+def starts_from_event(definition: WorkflowDefinition, event_key: str) -> bool:
+    """Whether any trigger subscribes to ``event_key``.
+
+    Checklist sections used to key off a trigger *type*. Several of those types
+    collapsed into ``event``, so the question that still discriminates is which
+    event a campaign listens for.
+    """
+    return any(
+        isinstance(trigger, EventTrigger) and event_key in trigger.event_keys
+        for trigger in definition.triggers
+    )
+
+
+def uses_pms_recall_source(definition: WorkflowDefinition) -> bool:
+    """Whether any trigger pulls its cohort from the PMS recall list.
+
+    Gates the checks that only make sense for PMS-sourced recall — the
+    ``patient_recalls`` capability requirement and GoTracker's history-sync
+    precondition. A scheduled campaign running an audience segment needs
+    neither.
+    """
+    return any(
+        isinstance(trigger, ScheduleTrigger)
+        and isinstance(trigger.source, PmsRecallSource)
+        for trigger in definition.triggers
+    )
 
 
 @dataclass(frozen=True)
@@ -826,7 +860,7 @@ class CampaignLaunchChecklistService:
         institution_id: str,
         location: InstitutionLocation,
     ) -> list[CampaignLaunchChecklistItem]:
-        if definition.trigger.type != "recall_scan":
+        if not uses_pms_recall_source(definition):
             return []
 
         institution = await self.session.get(Institution, institution_id)
@@ -1001,7 +1035,7 @@ class CampaignLaunchChecklistService:
     def _callback_items(
         definition: WorkflowDefinition,
     ) -> list[CampaignLaunchChecklistItem]:
-        if definition.trigger.type != "callback_requested":
+        if not starts_from_event(definition, "call.inbound.completed"):
             return []
 
         voice_nodes = [n for n in definition.nodes if isinstance(n, SendVoiceNode)]
@@ -1082,7 +1116,7 @@ class CampaignLaunchChecklistService:
                 "Broad campaign audience size is unknown until audience preview is available.",
                 None,
             )
-        if trigger_type in {"manual", "bulk_import"}:
+        if trigger_type == "manual":
             return (
                 "warning",
                 "Audience is selected at enrollment/import time; preview exclusions are not available yet.",
@@ -1224,7 +1258,7 @@ def _pms_capability_requirements(
     from src.app.services.patient_communication import pms_context_requirements
 
     requirements: list[str] = []
-    if definition.trigger.type == "recall_scan":
+    if uses_pms_recall_source(definition):
         requirements.append("patient_recalls")
     if getattr(workflow, "category", None) == "treatment":
         requirements.append("treatment_plans")

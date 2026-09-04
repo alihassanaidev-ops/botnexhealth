@@ -66,6 +66,7 @@ src/app/api/routes/sms.py
 src/app/api/routes/sms_notification_recipients.py
 src/app/api/routes/sms_templates.py
 src/app/api/routes/sse.py
+src/app/api/routes/test_suite.py
 src/app/api/routes/twilio.py
 src/app/api/routes/twilio_webhooks.py
 src/app/api/routes/usage_reporting.py
@@ -177,6 +178,7 @@ src/app/retell/security.py
 src/app/retell/webhooks.py
 src/app/scripts/__init__.py
 src/app/scripts/apply_retention_policy.py
+src/app/scripts/audit_pms_scope_mismatch.py
 src/app/scripts/bootstrap_database.py
 src/app/scripts/cleanup_idempotency.py
 src/app/scripts/create_super_admin.py
@@ -223,6 +225,7 @@ src/app/services/post_call_service.py
 src/app/services/refresh_token_service.py
 src/app/services/retention_policy.py
 src/app/services/slot_filter.py
+src/app/services/slot_policy.py
 src/app/services/sms_compliance.py
 src/app/services/sms_notification_recipients.py
 src/app/services/sms_privacy.py
@@ -249,6 +252,7 @@ src/app/services/automation/campaign_identity.py
 src/app/services/automation/campaign_operations_service.py
 src/app/services/automation/campaign_response_service.py
 src/app/services/automation/campaign_templates.py
+src/app/services/automation/canonical_context.py
 src/app/services/automation/channel_readiness.py
 src/app/services/automation/compliance_gate.py
 src/app/services/automation/compliance_gate_service.py
@@ -261,12 +265,14 @@ src/app/services/automation/email_node_executor.py
 src/app/services/automation/enquiry_intake_service.py
 src/app/services/automation/enquiry_trigger_service.py
 src/app/services/automation/enrollment_service.py
+src/app/services/automation/event_catalog.py
 src/app/services/automation/execution_trace.py
 src/app/services/automation/filter_expression.py
 src/app/services/automation/form_trigger_service.py
 src/app/services/automation/gotracker_recall_readiness.py
 src/app/services/automation/gotracker_subscription_service.py
 src/app/services/automation/gotracker_writeback_service.py
+src/app/services/automation/inbound_message_trigger_service.py
 src/app/services/automation/inbound_sms_routing_service.py
 src/app/services/automation/launch_checklist_service.py
 src/app/services/automation/llm_node_executor.py
@@ -280,6 +286,7 @@ src/app/services/automation/nexhealth_sync_status_service.py
 src/app/services/automation/node_registry.py
 src/app/services/automation/patient_status_trigger_service.py
 src/app/services/automation/pms_capability_service.py
+src/app/services/automation/pms_scope.py
 src/app/services/automation/quiet_hours_exception_service.py
 src/app/services/automation/quiet_hours_service.py
 src/app/services/automation/retell_chat_client.py

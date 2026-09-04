@@ -12,20 +12,27 @@ from src.app.services.automation.sms_reply_trigger_service import (
 )
 
 
-def _workflow(*, location_id="loc-1", tokens=None):
+def _workflow(*, location_id="loc-1", tokens=None, trigger=None):
+    # `sms_reply` is now the SMS channel of the merged inbound_message trigger.
+    trigger = trigger or {
+        "type": "inbound_message",
+        "channels": ["sms"],
+        "tokens": tokens or [],
+    }
     wf = MagicMock()
     wf.id = "wf-1"
     wf.location_id = location_id
     wf.current_version_id = "ver-1"
-    wf.trigger_type = "sms_reply"
     wf.definition = {
-        "trigger": {
-            "type": "sms_reply",
-            "tokens": tokens or [],
-        },
+        "triggers": [trigger],
         "entry_node_id": "exit-1",
         "nodes": [{"type": "exit", "id": "exit-1"}],
     }
+    # The shared lookup reads these model properties; a MagicMock cannot derive
+    # them from `definition` the way AutomationWorkflow does.
+    wf.trigger_type = trigger["type"]
+    wf.trigger_types = [trigger["type"]]
+    wf.subscribed_event_keys = list(trigger.get("event_keys") or [])
     return wf
 
 
@@ -46,8 +53,7 @@ def test_find_active_sms_reply_workflows_honors_location_scope() -> None:
     matching = _workflow(location_id="loc-1")
     other_location = _workflow(location_id="loc-2")
     institution_wide = _workflow(location_id=None)
-    non_sms = _workflow(location_id="loc-1")
-    non_sms.trigger_type = "manual"
+    non_sms = _workflow(location_id="loc-1", trigger={"type": "manual"})
     session = AsyncMock()
     session.execute = AsyncMock(
         return_value=_result([matching, other_location, institution_wide, non_sms])

@@ -108,41 +108,41 @@ function stepSummary(node: WfNode): string {
 /** One-line summary of the trigger for the trigger card. */
 function triggerSummary(t: WorkflowTrigger): string {
     switch (t.type) {
-        case "appointment_offset": {
-            const h = Math.abs(t.offset_hours)
-            return `${h}h ${t.offset_hours < 0 ? "before" : "after"} appointment`
+        case "event": {
+            if (t.reminder_offset_hours != null) {
+                const h = Math.abs(t.reminder_offset_hours)
+                return `${h}h ${t.reminder_offset_hours < 0 ? "before" : "after"} appointment`
+            }
+            if (t.event_keys.length === 0) return "No events selected"
+            // Two keys still fit the card; beyond that the count reads better
+            // than a truncated list.
+            return t.event_keys.length <= 2
+                ? t.event_keys.join(", ")
+                : `${t.event_keys.length} events`
         }
-        case "appointment_state_changed":
-            return t.flow_states?.length
-                ? `Flow: ${t.flow_states.join(", ")}`
-                : t.confirmed !== null && t.confirmed !== undefined
-                ? `Confirmed: ${t.confirmed ? "yes" : "no"}`
-                : t.preconfirmed !== null && t.preconfirmed !== undefined
-                    ? `Preconfirmed: ${t.preconfirmed ? "yes" : "no"}`
-                    : t.status_ids.length
-                        ? `StatusId: ${t.status_ids.join(", ")}`
-                        : "Appointment state"
-        case "recall_scan":
-            return `Every ${t.recall_interval_months} month(s)`
         case "manual":
-            return "Manual / bulk enrollment"
-        case "bulk_import":
-            return "Bulk import"
-        case "enquiry_received":
-            return "Sales enquiry"
+            return "Manual / CSV enrollment"
         case "form_submitted": {
             const count = t.form_ids?.length ?? 0
             const scope = count === 0 ? "any form" : `${count} form(s)`
             return t.provider ? `${t.provider} · ${scope}` : `Form submitted · ${scope}`
         }
-        case "callback_requested":
-            return "Callback request"
-        case "patient_status_changed":
-            return `Internal status: ${t.statuses.join(", ")}`
-        case "sms_reply":
-            return t.tokens?.length ? `Matches: ${t.tokens.join(", ")}` : "Any inbound SMS"
-        case "email_reply":
-            return t.tokens?.length ? `Matches: ${t.tokens.join(", ")}` : "Any inbound email"
+        case "internal_status": {
+            const to = t.to_statuses.join(", ") || "any status"
+            return t.from_statuses?.length
+                ? `${t.from_statuses.join(", ")} → ${to}`
+                : `Status → ${to}`
+        }
+        case "schedule":
+            return t.source.kind === "pms_recall"
+                ? `Recall, every ${t.source.recall_interval_months} month(s)`
+                : `Audience, on ${t.cron}`
+        case "inbound_message": {
+            const where = t.channels.length === 2 ? "reply" : `${t.channels[0]} reply`
+            return t.tokens?.length
+                ? `Matches: ${t.tokens.join(", ")}`
+                : `Any inbound ${where}`
+        }
     }
 }
 

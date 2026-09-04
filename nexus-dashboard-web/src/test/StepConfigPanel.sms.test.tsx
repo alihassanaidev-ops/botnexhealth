@@ -50,7 +50,7 @@ describe("StepConfigPanel SMS footer control", () => {
     it("shows only the agent profile and next step for Retell SMS", () => {
         const definition: WorkflowDefinition = {
             schema_version: "1.0",
-            trigger: { type: "sms_reply" },
+            trigger: { type: "inbound_message", channels: ["sms"] },
             entry_node_id: "chat-1",
             nodes: [
                 {
