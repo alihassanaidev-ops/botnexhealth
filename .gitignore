@@ -25,6 +25,10 @@ MANIFEST
 .env
 .env.*
 !.env.example
+# Dev-server profile for pointing the local UI at the deployed staging
+# backend. Holds a public URL and nothing else — no credentials — and the
+# workflow is useless if every developer has to rediscover it.
+!nexus-dashboard-web/.env.staging
 .nexusdental.env
 .venv
 infra/.venv/
