@@ -11,6 +11,7 @@ from typing import Any
 from fastapi import APIRouter, HTTPException, Request, status
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.exc import MultipleResultsFound
 
 from src.app.config import settings
 from src.app.database import get_system_db_session
@@ -407,6 +408,7 @@ def _verify_signature(
     timestamp_header: str | None,
     *,
     candidate_secrets: list[str] | None = None,
+    allow_global_fallback: bool = True,
 ) -> None:
     """Raise 403 if HMAC-SHA256 signature does not match.
 
@@ -416,7 +418,7 @@ def _verify_signature(
     become an unauthenticated, potentially cross-tenant enrollment path.
     """
     secrets = [secret for secret in candidate_secrets or [] if secret]
-    if not secrets:
+    if not secrets and allow_global_fallback:
         secret = settings.nexhealth_webhook_secret
         if secret:
             secrets = [secret]
@@ -449,19 +451,66 @@ def _verify_signature(
     )
 
 
-async def _live_signature_candidates() -> list[str]:
+async def _live_signature_candidates(payload: dict[str, Any]) -> list[str]:
     # Local/unit-test receivers retain the existing optional-signature behavior.
     # Staging must exercise the same stored endpoint-secret path as production.
     if not settings.is_production and settings.app_env != "staging":
         return []
     from src.app.services.automation.nexhealth_subscription_service import (
-        live_signature_secrets,
+        live_signature_secrets_for_subscription,
     )
+
+    provider_subscription_id = str(payload.get("webhook_subscription_id") or "")
+    subdomain = str(payload.get("subdomain") or "")
+    if not provider_subscription_id or not subdomain:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="NexHealth webhook is missing tenant binding fields",
+        )
 
     async with get_system_db_session(
         "celery", external_id="nexhealth_live_signature_lookup"
     ) as session:
-        return await live_signature_secrets(session)
+        secrets = await live_signature_secrets_for_subscription(
+            session,
+            provider_subscription_id=provider_subscription_id,
+            subdomain=subdomain,
+        )
+    if not secrets:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Unknown NexHealth webhook subscription",
+        )
+    return secrets
+
+
+async def _read_and_verify_webhook(
+    request: Request,
+) -> tuple[bytes, dict[str, Any]]:
+    """Read, parse, and verify one live NexHealth webhook request."""
+    raw_body = await request.body()
+    try:
+        payload = await request.json()
+    except Exception:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid JSON payload"
+        )
+    if not isinstance(payload, dict):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid JSON payload"
+        )
+
+    live = settings.is_production or settings.app_env == "staging"
+    candidate_secrets = await _live_signature_candidates(payload)
+    _verify_signature(
+        raw_body,
+        request.headers.get("signature")
+        or request.headers.get("X-NexHealth-Signature"),
+        request.headers.get("timestamp"),
+        candidate_secrets=candidate_secrets,
+        allow_global_fallback=not live,
+    )
+    return raw_body, payload
 
 
 @router.post("/appointments", status_code=status.HTTP_200_OK)
@@ -477,22 +526,7 @@ async def nexhealth_appointment_webhook(request: Request) -> dict[str, Any]:
     consistently, so errors that should not cause retry are surfaced as 200
     with ``"status": "ignored"`` bodies.
     """
-    raw_body = await request.body()
-    candidate_secrets = await _live_signature_candidates()
-    _verify_signature(
-        raw_body,
-        request.headers.get("signature")
-        or request.headers.get("X-NexHealth-Signature"),
-        request.headers.get("timestamp"),
-        candidate_secrets=candidate_secrets,
-    )
-
-    try:
-        payload = await request.json()
-    except Exception:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid JSON payload"
-        )
+    raw_body, payload = await _read_and_verify_webhook(request)
     raw_payload = _raw_payload_text(raw_body)
 
     # NexHealth uses `event_name` (e.g. "appointment_insertion.complete"); normalize to the base
@@ -548,22 +582,7 @@ async def nexhealth_appointment_webhook(request: Request) -> dict[str, Any]:
 @router.post("/patients", status_code=status.HTTP_200_OK)
 async def nexhealth_patient_webhook(request: Request) -> dict[str, Any]:
     """Handle NexHealth patient.created and patient.updated events."""
-    raw_body = await request.body()
-    candidate_secrets = await _live_signature_candidates()
-    _verify_signature(
-        raw_body,
-        request.headers.get("signature")
-        or request.headers.get("X-NexHealth-Signature"),
-        request.headers.get("timestamp"),
-        candidate_secrets=candidate_secrets,
-    )
-
-    try:
-        payload = await request.json()
-    except Exception:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid JSON payload"
-        )
+    raw_body, payload = await _read_and_verify_webhook(request)
     raw_payload = _raw_payload_text(raw_body)
 
     event_name: str = payload.get("event_name") or payload.get("event") or ""
@@ -581,22 +600,7 @@ async def nexhealth_patient_webhook(request: Request) -> dict[str, Any]:
 @router.post("/sync-status", status_code=status.HTTP_200_OK)
 async def nexhealth_sync_status_webhook(request: Request) -> dict[str, Any]:
     """Handle NexHealth sync-status read/write recovery events."""
-    raw_body = await request.body()
-    candidate_secrets = await _live_signature_candidates()
-    _verify_signature(
-        raw_body,
-        request.headers.get("signature")
-        or request.headers.get("X-NexHealth-Signature"),
-        request.headers.get("timestamp"),
-        candidate_secrets=candidate_secrets,
-    )
-
-    try:
-        payload = await request.json()
-    except Exception:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid JSON payload"
-        )
+    raw_body, payload = await _read_and_verify_webhook(request)
     raw_payload = _raw_payload_text(raw_body)
 
     event_name: str = payload.get("event_name") or payload.get("event") or ""
@@ -707,7 +711,19 @@ async def _process_sync_status_webhook_payload(
         )
         return {"status": "ignored", "reason": "unknown_location", "event": event}
 
-    institution_id = str(locations[0].institution_id)
+    institution_ids = {str(location.institution_id) for location in locations}
+    if len(institution_ids) != 1:
+        logger.error(
+            "nexhealth_sync_status_webhook: ambiguous tenant mapping subdomain=%s",
+            subdomain,
+        )
+        return {
+            "status": "ignored",
+            "reason": "ambiguous_location",
+            "event": event,
+        }
+
+    institution_id = next(iter(institution_ids))
     locations = [loc for loc in locations if str(loc.institution_id) == institution_id]
     local_location_ids = [str(loc.id) for loc in locations]
     dedup_key = _sync_status_dedup_key(
@@ -911,7 +927,20 @@ async def _process_patient_event(
             "patient_id": patient_id,
         }
 
-    institution_id = str(locations[0].institution_id)
+    institution_ids = {str(location.institution_id) for location in locations}
+    if len(institution_ids) != 1:
+        logger.error(
+            "nexhealth_patient_webhook: ambiguous tenant mapping subdomain=%s location_ids=%s",
+            subdomain,
+            nexhealth_location_ids,
+        )
+        return {
+            "status": "ignored",
+            "reason": "ambiguous_location",
+            "patient_id": patient_id,
+        }
+
+    institution_id = next(iter(institution_ids))
     locations = [loc for loc in locations if str(loc.institution_id) == institution_id]
     event_location_ids = [str(loc.id) for loc in locations]
     local_location_ids = event_location_ids
@@ -1036,7 +1065,7 @@ async def _process_appointment_event(
     async with get_system_db_session(
         "nexhealth_lookup", external_id=appointment_id
     ) as session:
-        loc_row = await session.execute(
+        location_stmt = (
             select(InstitutionLocation)
             .join(Institution, Institution.id == InstitutionLocation.institution_id)
             .where(
@@ -1044,7 +1073,21 @@ async def _process_appointment_event(
                 InstitutionLocation.nexhealth_location_id == nexhealth_location_id,
             )
         )
-        location = loc_row.scalar_one_or_none()
+        subdomain = str(payload.get("subdomain") or "")
+        if subdomain:
+            location_stmt = location_stmt.where(
+                InstitutionLocation.nexhealth_subdomain == subdomain
+            )
+        loc_row = await session.execute(location_stmt)
+        try:
+            location = loc_row.scalar_one_or_none()
+        except MultipleResultsFound:
+            logger.error(
+                "nexhealth_appointment_webhook: ambiguous location mapping=%s appt=%s",
+                nexhealth_location_id,
+                appointment_id,
+            )
+            return {"status": "ignored", "reason": "ambiguous_location"}
 
         if location is None:
             logger.warning(

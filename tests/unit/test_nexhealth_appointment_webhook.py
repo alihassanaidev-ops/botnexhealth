@@ -420,6 +420,20 @@ def test_verify_signature_accepts_candidate_endpoint_secret():
         )
 
 
+@pytest.mark.asyncio
+async def test_live_webhook_requires_subscription_and_subdomain_binding():
+    from fastapi import HTTPException
+
+    request = _make_request(_VALID_PAYLOAD)
+    with patch("src.app.api.routes.nexhealth_webhooks.settings") as mock_settings:
+        mock_settings.is_production = True
+        mock_settings.app_env = "production"
+        with pytest.raises(HTTPException) as exc:
+            await nexhealth_appointment_webhook(request)
+
+    assert exc.value.status_code == 403
+
+
 # ---------------------------------------------------------------------------
 # nexhealth_appointment_webhook — happy path
 # ---------------------------------------------------------------------------

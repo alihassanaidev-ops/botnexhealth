@@ -538,21 +538,47 @@ class NexHealthSubscriptionLifecycleService:
         adapter = None
         secret_key: str | None = None
         endpoint_id: str | int | None = controller.provider_subscription_id
+        old_endpoint_id: str | None = None
+        old_subscription_ids = [
+            str(value) for value in (controller.provider_subscription_ids or [])
+        ]
         provider_subscription_ids: list[str] = []
         try:
             adapter = await NexHealthAdapter.create(institution, location)
             subdomain = adapter._default_params().get("subdomain")  # noqa: SLF001
 
             # Endpoints belong to the authenticated API account, while event
-            # subscriptions below belong to a subdomain. Platform credentials
-            # can therefore serve multiple institutions/subdomains through one
-            # endpoint. Reuse our managed endpoint instead of creating duplicate
-            # account-level callbacks for every tenant.
+            # subscriptions below belong to a subdomain. The endpoint secret is
+            # therefore the tenant boundary used by the receiver. Reuse one
+            # endpoint across locations in this institution, but never across
+            # institutions, even when they use the platform API key.
+            if endpoint_id:
+                shared = (
+                    await self.session.execute(
+                        select(NexHealthWebhookSubscription.id)
+                        .where(
+                            NexHealthWebhookSubscription.provider_subscription_id
+                            == str(endpoint_id),
+                            NexHealthWebhookSubscription.institution_id
+                            != str(institution.id),
+                            NexHealthWebhookSubscription.status
+                            != NexHealthWebhookSubscriptionStatus.DISABLED.value,
+                        )
+                        .limit(1)
+                    )
+                ).scalar_one_or_none()
+                if shared is not None:
+                    old_endpoint_id = str(endpoint_id)
+                    endpoint_id = None
+                    secret_key = None
+
             if not endpoint_id or not controller.secret_key:
                 managed = (
                     await self.session.execute(
                         select(NexHealthWebhookSubscription)
                         .where(
+                            NexHealthWebhookSubscription.institution_id
+                            == str(institution.id),
                             NexHealthWebhookSubscription.api_key_hash
                             == adapter.api_key_hash,
                             NexHealthWebhookSubscription.provider_subscription_id.is_not(
@@ -570,6 +596,30 @@ class NexHealthSubscriptionLifecycleService:
                 if managed is not None:
                     endpoint_id = managed.provider_subscription_id
                     secret_key = managed.secret_key
+
+            if old_endpoint_id and not old_subscription_ids:
+                # Rows created before provider_subscription_ids was added may
+                # still point at a shared endpoint without the individual
+                # subscription ids. Discover only this subdomain's remote
+                # subscriptions before moving them to the new endpoint.
+                legacy_response = await handle_nexhealth_request(
+                    adapter._client,  # noqa: SLF001
+                    "GET",
+                    f"/webhook_endpoints/{old_endpoint_id}/webhook_subscriptions",
+                    params={"subdomain": subdomain},
+                )
+                legacy_data = (
+                    legacy_response.get("data", [])
+                    if isinstance(legacy_response, dict)
+                    else []
+                )
+                if isinstance(legacy_data, dict):
+                    legacy_data = [legacy_data]
+                old_subscription_ids = [
+                    str(item["id"])
+                    for item in legacy_data
+                    if isinstance(item, dict) and item.get("id") is not None
+                ]
 
             if endpoint_id and (secret_key or controller.secret_key):
                 await handle_nexhealth_request(
@@ -595,6 +645,19 @@ class NexHealthSubscriptionLifecycleService:
                 secret_key = (ep_data or {}).get("secret_key")
                 if not endpoint_id or not secret_key:
                     raise RuntimeError("webhook endpoint id or signing secret missing")
+
+            # Move this institution's existing subscriptions off a legacy
+            # shared endpoint before checking/creating subscriptions on the new
+            # endpoint. NexHealth keeps subscription ids stable when moved.
+            if old_endpoint_id and str(endpoint_id) != old_endpoint_id:
+                for subscription_id in old_subscription_ids:
+                    await handle_nexhealth_request(
+                        adapter._client,  # noqa: SLF001
+                        "PATCH",
+                        f"/webhook_endpoints/{old_endpoint_id}/webhook_subscriptions/{subscription_id}",
+                        params={"subdomain": subdomain},
+                        json={"new_endpoint_id": endpoint_id},
+                    )
 
             existing_response = await handle_nexhealth_request(
                 adapter._client,  # noqa: SLF001
@@ -723,6 +786,42 @@ async def live_signature_secrets(session: AsyncSession) -> list[str]:
     secrets: list[str] = []
     seen: set[str] = set()
     for row in result.scalars().all():
+        secret = row.secret_key
+        if secret and secret not in seen:
+            secrets.append(secret)
+            seen.add(secret)
+    return secrets
+
+
+async def live_signature_secrets_for_subscription(
+    session: AsyncSession,
+    *,
+    provider_subscription_id: str,
+    subdomain: str,
+) -> list[str]:
+    """Return endpoint secrets for one known NexHealth subscription.
+
+    NexHealth signs at the webhook-endpoint level, while subscriptions are
+    scoped by subdomain. Matching both values before verification prevents a
+    signed endpoint from being used to process an event for another tenant.
+    """
+    result = await session.execute(
+        select(NexHealthWebhookSubscription).where(
+            NexHealthWebhookSubscription.status
+            != NexHealthWebhookSubscriptionStatus.DISABLED.value,
+            NexHealthWebhookSubscription.secret_key_encrypted.is_not(None),
+            NexHealthWebhookSubscription.subdomain == subdomain,
+        )
+    )
+    secrets: list[str] = []
+    seen: set[str] = set()
+    for row in result.scalars().all():
+        subscription_ids = {str(value) for value in (row.provider_subscription_ids or [])}
+        # provider_subscription_id historically stores the provider endpoint id;
+        # retain it as a compatibility match for older local rows.
+        if str(row.provider_subscription_id or "") != str(provider_subscription_id):
+            if str(provider_subscription_id) not in subscription_ids:
+                continue
         secret = row.secret_key
         if secret and secret not in seen:
             secrets.append(secret)
