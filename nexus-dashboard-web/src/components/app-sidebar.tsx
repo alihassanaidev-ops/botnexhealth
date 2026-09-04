@@ -37,11 +37,57 @@ import {
     Tag,
     TriangleAlert,
 } from "lucide-react"
+import { pageArt, type PageArtName } from "@/assets/icons"
 import { Link, useLocation } from "react-router-dom"
 import { useAuth } from "@/context/AuthContext"
 import { useInstitution } from "@/context/InstitutionContext"
 
 type NavItemDef = { title: string; url: string; icon: React.ElementType; exact?: boolean }
+
+// Illustrated artwork for the nav, keyed by route rather than by nav title:
+// the same route appears in several role-specific nav lists and must always
+// carry the same icon, and a route is the thing that doesn't change when a
+// label is reworded. Routes absent here keep their lucide glyph.
+const NAV_ART: Partial<Record<string, PageArtName>> = {
+    "/admin": "dashboard",
+    "/admin/audit-logs": "audit",
+    "/admin/twilio": "telephony",
+    "/admin/users": "users",
+    "/callbacks": "callbackQueue",
+    "/calls": "calls",
+    "/contacts": "users",
+    "/dashboard": "dashboard",
+    "/group": "groups",
+    "/groups": "groups",
+    "/inbox": "inbox",
+    "/institution-admin": "admin",
+    "/institution-admin/appointment-sync": "appointmentSync",
+    "/institution-admin/call-statuses": "workflow",
+    "/institution-admin/campaign-email-templates": "campaignEmails",
+    "/institution-admin/campaigns": "campaigns",
+    "/institution-admin/do-not-contact": "patients",
+    "/institution-admin/email-inbox": "inbox",
+    "/institution-admin/email-sending-address": "sendingAddress",
+    "/institution-admin/email-templates": "emailTemplates",
+    "/institution-admin/quiet-hours-exceptions": "scheduling",
+    "/institution-admin/settings": "settings",
+    "/institution-admin/sms-templates": "messaging",
+    "/institution-admin/users": "users",
+    "/institutions": "admin",
+    "/location-admin": "admin",
+    "/notification-preferences": "emailPreferences",
+    "/patients": "patients",
+    "/setup": "settings",
+    "/setup/appointment-types": "appointmentTypes",
+    "/setup/audit-logs": "audit",
+    "/setup/insurance-plans": "insurancePlans",
+    "/setup/operatories": "operatories",
+    "/setup/providers": "scheduling",
+    "/setup/reasons": "appointmentTypes",
+    "/sms-preferences": "messaging",
+    "/undeliverables": "workflow",
+}
+
 
 // Admin-only nav items
 const adminNav: NavItemDef[] = [
@@ -294,7 +340,16 @@ function NavItem({ item, isActive }: { item: NavItemDef; isActive: boolean }) {
                 `}
             >
                 <Link to={item.url} aria-current={isActive ? "page" : undefined}>
-                    <item.icon className={`transition-colors ${isActive ? "text-sidebar-primary" : ""}`} />
+                    {NAV_ART[item.url] ? (
+                        <span
+                            className="nav-art grid size-9 shrink-0 place-items-center overflow-hidden rounded-md p-1 group-data-[collapsible=icon]:size-6 group-data-[collapsible=icon]:p-0.5"
+                            aria-hidden="true"
+                        >
+                            <img src={pageArt[NAV_ART[item.url]!]} alt="" />
+                        </span>
+                    ) : (
+                        <item.icon className={`transition-colors ${isActive ? "text-sidebar-primary" : ""}`} />
+                    )}
                     <span>{item.title}</span>
                 </Link>
             </SidebarMenuButton>

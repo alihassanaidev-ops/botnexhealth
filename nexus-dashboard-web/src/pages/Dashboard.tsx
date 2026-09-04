@@ -19,6 +19,7 @@ import {
 } from "lucide-react"
 
 import { PageHeader } from "@/components/PageHeader"
+import { pageArt, type PageArtName } from "@/assets/icons"
 import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
 import { Skeleton } from "@/components/ui/skeleton"
@@ -238,6 +239,21 @@ function useAnimatedCount(target: number | undefined, duration = 600): number {
     return displayed
 }
 
+
+// Artwork for the metric cards, keyed by label — the same metric appears in
+// the range, monthly and no-PMS configs and should look identical in each.
+// "Emergency" is deliberately absent: its red accent chip is carrying the
+// meaning, and a neutral illustration would throw that away.
+const CARD_ART: Partial<Record<string, PageArtName>> = {
+    "Total Calls": "calls",
+    "Appointments Booked": "scheduling",
+    "New Patients": "patients",
+    "Booking Rate": "dashboard",
+    "Needs Booking": "scheduling",
+    "Needs Callback": "callbackQueue",
+    "Avg Call Duration": "calls",
+}
+
 // ── Glass Card ───────────────────────────────────────────────────────────────
 
 interface GlassCardProps {
@@ -288,9 +304,15 @@ function GlassCard({
             <div className="relative p-6">
                 <div className="flex items-center justify-between mb-5">
                     <span className="text-sm font-medium text-muted-foreground">{label}</span>
-                    <div className="grid shrink-0 place-items-center rounded-xl bg-foreground p-2.5 shadow-[0_10px_24px_rgba(15,23,42,0.14)]">
-                        <Icon className="h-4 w-4 text-background" />
-                    </div>
+                    {CARD_ART[label] ? (
+                        <span className="ui-artwork size-12 shrink-0 p-1">
+                            <img src={pageArt[CARD_ART[label]!]} alt="" aria-hidden="true" />
+                        </span>
+                    ) : (
+                        <div className="grid shrink-0 place-items-center rounded-xl bg-foreground p-2.5 shadow-[0_10px_24px_rgba(15,23,42,0.14)]">
+                            <Icon className="h-4 w-4 text-background" />
+                        </div>
+                    )}
                 </div>
                 <div className="text-5xl font-extralight tabular-nums tracking-tight text-foreground animate-count-fade">
                     {formatValue

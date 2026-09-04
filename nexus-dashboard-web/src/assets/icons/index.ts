@@ -23,6 +23,7 @@ import inbox from "./presentation/inbox.png"
 import insurancePlans from "./presentation/insurance-plans.png"
 import messaging from "./presentation/messaging.png"
 import operatories from "./presentation/operatories.png"
+import passkey from "./passkey-shield-v2.png"
 import patients from "./presentation/patients-outlined.png"
 import scheduling from "./presentation/scheduling.png"
 import sendingAddress from "./presentation/sending-address-v2.png"
@@ -48,6 +49,7 @@ export const pageArt = {
     insurancePlans,
     messaging,
     operatories,
+    passkey,
     patients,
     scheduling,
     sendingAddress,

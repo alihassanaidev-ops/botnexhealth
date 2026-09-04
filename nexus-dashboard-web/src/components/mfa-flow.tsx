@@ -24,6 +24,7 @@ import { zodResolver } from "@hookform/resolvers/zod"
 import * as z from "zod"
 import { QRCodeSVG } from "qrcode.react"
 import { toast } from "sonner"
+import { pageArt } from "@/assets/icons"
 import axios from "axios"
 import {
     startRegistration,
@@ -449,6 +450,11 @@ export function MfaFlow({ challenge, onAuthenticated, onCancel }: MfaFlowProps) 
     if (step.kind === "verify") {
         return (
             <div className="space-y-3">
+                {step.mode === "passkey" && (
+                    <span className="ui-artwork mx-auto size-16 p-2">
+                        <img src={pageArt.passkey} alt="" aria-hidden="true" />
+                    </span>
+                )}
                 <p className="text-sm text-muted-foreground">
                     {step.mode === "passkey"
                         ? `Use your registered passkey for ${challenge.email}.`
