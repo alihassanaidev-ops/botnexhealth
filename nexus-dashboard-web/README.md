@@ -66,6 +66,34 @@ the proxy entirely and keeps the local-backend workflow unchanged.
 - **Live updates** — SSE subscription; events are PHI-free hints
   (`calls_updated` etc.) and the app refetches through the API.
 
+## Switching the UI back
+
+The 2026 refresh — type scale, corner radii, dark palette, and illustrated
+artwork in place of the lucide glyphs — is reversible at runtime.
+
+```
+https://staging.scalenexus.ai/?ui=classic     # the pre-refresh look
+https://staging.scalenexus.ai/?ui=refresh     # back to current
+```
+
+The choice sticks in that browser until changed, so it survives navigation and
+reloads. Nothing is rebuilt or redeployed, which means anyone can compare the
+two on the deployed site while a decision is being made.
+
+To change the default for everyone, set `VITE_UI_MODE=classic` at build time
+and publish. Resolution order is query parameter, then whatever that browser
+last pinned, then the build default.
+
+Implemented in `src/lib/ui-mode.ts`, which stamps `data-ui` on `<html>` before
+the first render. `index.css` keys the classic values off that attribute as
+overrides, so the refreshed values remain the ones you read first and anything
+added later inherits them rather than silently missing from one of two themes.
+Components that render artwork fall back to their glyph.
+
+This covers the visual layer only. Refactors with no visual opinion — the
+shared `DateRangeFilter`, Campaigns finally using `PageHeader` — are not part
+of "the old UI" in any sense worth preserving, and are not reverted.
+
 ## Branding and deployment
 
 Branding (HTML title, logo in `public/`) and the API target (`VITE_API_URL`)

@@ -25,6 +25,7 @@ import * as z from "zod"
 import { QRCodeSVG } from "qrcode.react"
 import { toast } from "sonner"
 import { Art } from "@/components/Art"
+import { isClassicUi } from "@/lib/ui-mode"
 import axios from "axios"
 import {
     startRegistration,
@@ -450,7 +451,7 @@ export function MfaFlow({ challenge, onAuthenticated, onCancel }: MfaFlowProps) 
     if (step.kind === "verify") {
         return (
             <div className="space-y-3">
-                {step.mode === "passkey" && (
+                {step.mode === "passkey" && !isClassicUi() && (
                     <Art name="passkey" className="ui-artwork mx-auto size-16" />
                 )}
                 <p className="text-sm text-muted-foreground">

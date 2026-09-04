@@ -21,6 +21,7 @@ import {
 import { PageHeader } from "@/components/PageHeader"
 import { type PageArtName } from "@/assets/icons"
 import { Art } from "@/components/Art"
+import { isClassicUi } from "@/lib/ui-mode"
 import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
 import { Skeleton } from "@/components/ui/skeleton"
@@ -305,7 +306,7 @@ function GlassCard({
             <div className="relative p-6">
                 <div className="flex items-center justify-between mb-5">
                     <span className="text-sm font-medium text-muted-foreground">{label}</span>
-                    {CARD_ART[label] ? (
+                    {CARD_ART[label] && !isClassicUi() ? (
                         <Art name={CARD_ART[label]!} className="ui-artwork size-12 shrink-0" />
                     ) : (
                         <div className="grid shrink-0 place-items-center rounded-xl bg-foreground p-2.5 shadow-[0_10px_24px_rgba(15,23,42,0.14)]">
