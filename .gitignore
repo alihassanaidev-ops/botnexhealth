@@ -108,6 +108,10 @@ git
 !/docs/adr/
 /docs/adr/*
 !/docs/adr/0002-retell-chat-generation-with-platform-sms-transport.md
+# Operating documentation that must ship with the code. `/docs/*` above ignores
+# new files by default, and gitignore does not apply to already-tracked ones, so
+# a doc added here is silently dropped by `git add` unless it is listed.
+!/docs/TEST_SUITE.md
 /Internal/
 
 # Playwright MCP session artifacts (console logs, page snapshots)
