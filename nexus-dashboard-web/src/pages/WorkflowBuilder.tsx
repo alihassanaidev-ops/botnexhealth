@@ -50,7 +50,7 @@ import {
     type NodeClipboard,
 } from "@/lib/workflow/graph"
 import { useDefinitionHistory } from "@/lib/workflow/use-history"
-import { NODE_META } from "@/lib/workflow/catalog"
+import { nodeTypeLabel } from "@/lib/workflow/catalog"
 import { validateDefinition as validateDefinitionLocally } from "@/lib/workflow/validation"
 import WorkflowCanvas from "@/components/workflow/WorkflowCanvas"
 import WorkflowPalette from "@/components/workflow/WorkflowPalette"
@@ -296,7 +296,7 @@ export default function WorkflowBuilder() {
                       .map((node) => ({
                           id: node.id,
                           type: node.type,
-                          label: NODE_META[node.type].label,
+                          label: nodeTypeLabel(node.type),
                       }))
                 : [],
         [def, nodeQuery],

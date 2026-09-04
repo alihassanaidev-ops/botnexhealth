@@ -49,6 +49,7 @@ import {
     CONDITION_OP_LABELS,
     TRIGGER_META,
     selectableTriggerTypes,
+    nodeTypeLabel,
 } from "@/lib/workflow/catalog"
 import {
     listCampaignEmailTemplates,
@@ -245,7 +246,10 @@ function TriggerForm({
     onChange: (t: WorkflowTrigger) => void
     readOnly?: boolean
 }) {
-    const meta = TRIGGER_META[trigger.type]
+    // Same reason the catalog's label lookups are guarded: trigger.type is an
+    // assertion about the API payload, not a promise from it. An unknown type
+    // used to make this `undefined.icon` and take the whole screen down.
+    const meta = TRIGGER_META[trigger.type] ?? TRIGGER_META.manual
     const pmsType = usePmsType()
     return (
         <>
@@ -3615,7 +3619,7 @@ function NextStepField({
                     <SelectItem value={NONE}>— Not connected —</SelectItem>
                     {options.map((n) => (
                         <SelectItem key={n.id} value={n.id}>
-                            {NODE_META[n.type].label} · {n.id}
+                            {nodeTypeLabel(n.type)} · {n.id}
                         </SelectItem>
                     ))}
                 </SelectContent>

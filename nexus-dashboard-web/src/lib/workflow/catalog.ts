@@ -315,11 +315,28 @@ export const CONDITION_OP_LABELS: Record<ConditionOp, string> = {
     not_contains: "does not contain",
 }
 
+/**
+ * Turn an unrecognised catalog key into something readable.
+ *
+ * Both label lookups below are fed values that came off the API, where the
+ * TypeScript type is an assertion about the payload rather than a guarantee
+ * from it. A stored definition can name a node or trigger this build has never
+ * heard of — one retired since it was saved, one added server-side ahead of
+ * the client, or a row with the field missing altogether. Indexing straight
+ * into the catalog turned any of those into a blank page: reading `.label` of
+ * undefined throws during render, so the error boundary takes the whole screen
+ * rather than one mislabelled row.
+ */
+function humanizeCatalogKey(type: string | null | undefined): string {
+    if (!type) return "Unknown"
+    return type.replace(/_/g, " ").replace(/^./, (c) => c.toUpperCase())
+}
+
 /** Short human label for a node in lists/validation. */
 export function nodeTypeLabel(type: NodeType): string {
-    return NODE_META[type].label
+    return NODE_META[type]?.label ?? humanizeCatalogKey(type)
 }
 
 export function triggerTypeLabel(type: TriggerType): string {
-    return TRIGGER_META[type].label
+    return TRIGGER_META[type]?.label ?? humanizeCatalogKey(type)
 }
