@@ -309,3 +309,84 @@ def test_drip_only_workflow_has_no_content_warning() -> None:
     issues = _validate(definition)
     assert not any(i.code == "content_class_unset" for i in issues)
     assert WorkflowValidationService.is_publishable(issues) is True
+
+
+# ---------------------------------------------------------------------------
+# PMS scope: triggers/nodes owned by another PMS must not publish
+# ---------------------------------------------------------------------------
+
+
+class _PmsSession:
+    """Just enough session for `_pms_scope_issues` to load the institution."""
+
+    def __init__(self, pms_type: str) -> None:
+        self._pms_type = pms_type
+
+    async def get(self, model, pk):  # noqa: ANN001
+        from types import SimpleNamespace
+
+        return SimpleNamespace(pms_type=self._pms_type)
+
+
+def _validate_with_pms(definition: dict, pms_type: str):
+    svc = WorkflowValidationService(session=_PmsSession(pms_type))
+    return asyncio.run(
+        svc.validate(definition, institution_id="inst-1", location_id=None)
+    )
+
+
+_STATE_CHANGED_SMS = {
+    "trigger": {"type": "appointment_state_changed", "flow_states": ["Completed"]},
+    "entry_node_id": "s1",
+    "nodes": [
+        {"type": "send_sms", "id": "s1", "body_template": "hi", "next_node_id": "x1"},
+        {"type": "exit", "id": "x1", "outcome": "done"},
+    ],
+}
+
+
+def test_gotracker_trigger_blocks_publish_on_nexhealth() -> None:
+    issues = _validate_with_pms(_STATE_CHANGED_SMS, "nexhealth")
+    assert WorkflowValidationService.is_publishable(issues) is False
+    assert any(
+        i.code == "trigger_unsupported_for_pms" and i.severity == "error"
+        for i in issues
+    )
+
+
+def test_gotracker_trigger_is_allowed_on_gotracker() -> None:
+    issues = _validate_with_pms(_STATE_CHANGED_SMS, "gotracker")
+    assert not any(i.code == "trigger_unsupported_for_pms" for i in issues)
+
+
+def test_gotracker_node_blocks_publish_on_nexhealth() -> None:
+    definition = {
+        "trigger": {"type": "manual"},
+        "entry_node_id": "g1",
+        "nodes": [
+            {
+                "type": "update_gotracker_appointment",
+                "id": "g1",
+                "status_id": 1,
+                "next_node_id": "x1",
+            },
+            {"type": "exit", "id": "x1", "outcome": "done"},
+        ],
+    }
+    issues = _validate_with_pms(definition, "nexhealth")
+    assert any(
+        i.code == "node_unsupported_for_pms" and i.node_id == "g1" for i in issues
+    )
+
+
+def test_shared_definition_passes_on_both_pms() -> None:
+    definition = {
+        **_SEND_NO_CLASS,
+        "compliance": {"content_class": "transactional_care", "consent_required": True},
+    }
+    for pms_type in ("nexhealth", "gotracker"):
+        issues = _validate_with_pms(definition, pms_type)
+        assert not any(
+            i.code in ("trigger_unsupported_for_pms", "node_unsupported_for_pms")
+            for i in issues
+        )

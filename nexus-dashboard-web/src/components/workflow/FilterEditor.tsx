@@ -42,6 +42,7 @@ import type {
     TriggerType,
 } from "@/types/workflow"
 import { contextFieldsForTrigger } from "@/lib/workflow/context-fields"
+import { usePmsType } from "@/context/InstitutionContext"
 
 const CUSTOM_FIELD = "__custom__"
 const MAX_DEPTH = 3
@@ -258,7 +259,8 @@ function RuleRow({
     triggerType?: TriggerType
     readOnly?: boolean
 }) {
-    const suggestions = triggerType ? contextFieldsForTrigger(triggerType) : []
+    const pmsType = usePmsType()
+    const suggestions = triggerType ? contextFieldsForTrigger(triggerType, pmsType) : []
     const known = suggestions.some((f) => f.name === rule.field)
     const takesValue = !OPS_WITHOUT_VALUE.has(rule.op)
     const takesList = OPS_WITH_LIST_VALUE.has(rule.op)

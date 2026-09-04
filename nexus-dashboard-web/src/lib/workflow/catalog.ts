@@ -251,10 +251,41 @@ export const UNAVAILABLE_TRIGGER_TYPES: ReadonlySet<TriggerType> = new Set<Trigg
     "email_reply",
 ])
 
-/** Trigger types offered in the picker, plus whichever one is already selected. */
-export function selectableTriggerTypes(current: TriggerType): TriggerType[] {
+/**
+ * PMS ownership of triggers and nodes. Mirrors the backend's
+ * `src/app/services/automation/pms_scope.py` (parity-tested) — a trigger/node
+ * absent from these maps is shared across every practice-management system.
+ *
+ * `appointment_state_changed` only ever fires from the GoTracker webhook
+ * route, so offering it to a NexHealth institution builds a campaign that
+ * silently never enrolls anyone.
+ */
+export const TRIGGER_PMS: Partial<Record<TriggerType, readonly string[]>> = {
+    appointment_state_changed: ["gotracker"],
+}
+
+export const NODE_PMS: Partial<Record<NodeType, readonly string[]>> = {
+    update_gotracker_appointment: ["gotracker"],
+}
+
+export function triggerAllowedForPms(type: TriggerType, pmsType: string | null): boolean {
+    const owners = TRIGGER_PMS[type]
+    // Unknown PMS (context still loading) fails closed for PMS-owned triggers:
+    // better to briefly hide a GoTracker trigger from a GoTracker tenant than
+    // to offer it to everyone else.
+    return !owners || (pmsType !== null && owners.includes(pmsType))
+}
+
+/**
+ * Trigger types offered in the picker, plus whichever one is already selected.
+ * Pass the institution's `pmsType` so PMS-owned triggers only show up for the
+ * PMS they belong to.
+ */
+export function selectableTriggerTypes(current: TriggerType, pmsType: string | null = null): TriggerType[] {
     return (Object.keys(TRIGGER_META) as TriggerType[]).filter(
-        (type) => type === current || !UNAVAILABLE_TRIGGER_TYPES.has(type),
+        (type) =>
+            type === current ||
+            (!UNAVAILABLE_TRIGGER_TYPES.has(type) && triggerAllowedForPms(type, pmsType)),
     )
 }
 

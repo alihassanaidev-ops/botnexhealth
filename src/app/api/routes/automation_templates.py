@@ -25,6 +25,7 @@ from src.app.services.automation.campaign_templates import (
     get_template,
     instantiate_definition,
     list_templates,
+    template_pms_types,
 )
 from src.app.services.automation.definition_service import AutomationWorkflowDefinitionService
 from src.app.services.automation.pms_capability_service import (
@@ -52,6 +53,7 @@ class CampaignTemplateResponse(BaseModel):
     tags: list[str]
     category: str
     metadata: dict[str, Any]
+    pms_types: list[str] = Field(default_factory=list)
 
     @classmethod
     def from_template(
@@ -72,6 +74,7 @@ class CampaignTemplateResponse(BaseModel):
             tags=t.tags,
             category=t.category,
             metadata=metadata,
+            pms_types=sorted(template_pms_types(t)),
         )
 
 
@@ -93,10 +96,15 @@ async def list_campaign_templates(
     current_user: _InstitutionOrLocationAdmin,
     location_id: Annotated[str | None, Query()] = None,
 ) -> list[CampaignTemplateResponse]:
-    """List all available campaign templates."""
+    """List the campaign templates available to this institution's PMS."""
     templates = list_templates()
     if not location_id:
-        return [CampaignTemplateResponse.from_template(t) for t in templates]
+        pms_type = await _institution_pms_type(current_user)
+        return [
+            CampaignTemplateResponse.from_template(t)
+            for t in templates
+            if pms_type in template_pms_types(t)
+        ]
 
     async with get_db_session() as session:
         institution, location = await _resolve_institution_location(
@@ -104,6 +112,9 @@ async def list_campaign_templates(
             session,
             location_id,
         )
+        templates = [
+            t for t in templates if institution.pms_type in template_pms_types(t)
+        ]
         evaluator = PmsCapabilityService(session)
         responses: list[CampaignTemplateResponse] = []
         for template in templates:
@@ -137,6 +148,11 @@ async def get_campaign_template(
     if template is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Template not found")
     if not location_id:
+        pms_type = await _institution_pms_type(current_user)
+        if pms_type not in template_pms_types(template):
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND, detail="Template not found"
+            )
         return CampaignTemplateResponse.from_template(template)
 
     async with get_db_session() as session:
@@ -145,6 +161,10 @@ async def get_campaign_template(
             session,
             location_id,
         )
+        if institution.pms_type not in template_pms_types(template):
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND, detail="Template not found"
+            )
         evaluation = None
         if template.metadata.pms_capability_requirements:
             evaluation = await PmsCapabilityService(session).evaluate_location(
@@ -187,6 +207,19 @@ async def instantiate_template(
     template = get_template(template_id)
     if template is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Template not found")
+
+    pms_type = await _institution_pms_type(current_user)
+    if pms_type not in template_pms_types(template):
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail={
+                "code": "template_unsupported_for_pms",
+                "message": (
+                    "This template is not available for this practice's "
+                    "management software."
+                ),
+            },
+        )
 
     data = data or CampaignTemplateInstantiateRequest()
     try:
@@ -247,6 +280,14 @@ async def instantiate_template(
         )
         await svc.pause_workflow(wf)
         return WorkflowResponse.from_model(wf)
+
+
+async def _institution_pms_type(user: User) -> str:
+    if not user.institution_id:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="No institution context")
+    async with get_db_session() as session:
+        institution = await session.get(Institution, str(user.institution_id))
+    return institution.pms_type if institution else "none"
 
 
 async def _resolve_institution_location(

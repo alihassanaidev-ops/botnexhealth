@@ -850,7 +850,7 @@ export default function WorkflowTemplates() {
                                 )}
                                 {hasSetupField(picked, "appointment_reasons") && (
                                     <div className="space-y-2">
-                                        <Label htmlFor="appointment-reasons">Eligible GoTracker reasons</Label>
+                                        <Label htmlFor="appointment-reasons">Eligible appointment reasons</Label>
                                         <Input
                                             id="appointment-reasons"
                                             value={appointmentReasons}
@@ -864,7 +864,7 @@ export default function WorkflowTemplates() {
                                 )}
                                 {hasSetupField(picked, "post_op_reasons") && (
                                     <div className="space-y-2">
-                                        <Label htmlFor="post-op-reasons">Eligible completed GoTracker reasons</Label>
+                                        <Label htmlFor="post-op-reasons">Eligible completed appointment reasons</Label>
                                         <Input
                                             id="post-op-reasons"
                                             value={postOpReasons}

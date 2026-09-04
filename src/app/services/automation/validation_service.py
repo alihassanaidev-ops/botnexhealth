@@ -181,6 +181,9 @@ class WorkflowValidationService:
         issues += await self._pms_capability_issues(
             definition, institution_id=institution_id, location_id=location_id
         )
+        issues += await self._pms_scope_issues(
+            definition, institution_id=institution_id
+        )
         issues += await self._email_template_issues(
             definition, institution_id=institution_id
         )
@@ -498,6 +501,62 @@ class WorkflowValidationService:
                     code="consent_required",
                 )
             )
+        return issues
+
+    async def _pms_scope_issues(
+        self,
+        definition: WorkflowDefinition,
+        *,
+        institution_id: str,
+    ) -> list[ValidationIssue]:
+        """Refuse triggers/nodes owned by a PMS this institution does not run.
+
+        ``appointment_state_changed`` only fires from the GoTracker webhook
+        route, so publishing it for a NexHealth institution creates a campaign
+        that never enrolls anyone. Unlike ``_pms_capability_issues`` this check
+        needs no location — PMS ownership is an institution-level fact.
+        """
+        from src.app.services.automation import pms_scope
+
+        if self.session is None:
+            return []
+
+        from src.app.models.institution import Institution
+
+        institution = await self.session.get(Institution, institution_id)
+        if institution is None:
+            return []
+        pms_type = institution.pms_type
+
+        issues: list[ValidationIssue] = []
+        trigger_type = definition.trigger.type
+        if not pms_scope.trigger_allowed(trigger_type, pms_type):
+            issues.append(
+                ValidationIssue(
+                    severity="error",
+                    code="trigger_unsupported_for_pms",
+                    message=(
+                        f'The "{trigger_type}" trigger is not available for this '
+                        "practice's software — it would never enroll anyone here."
+                    ),
+                    fix="Choose a trigger supported by this practice's software.",
+                )
+            )
+        for node in definition.nodes:
+            node_type = getattr(node, "type", "")
+            if not pms_scope.node_allowed(node_type, pms_type):
+                issues.append(
+                    ValidationIssue(
+                        severity="error",
+                        code="node_unsupported_for_pms",
+                        node_id=getattr(node, "id", None),
+                        message=(
+                            f'The "{node_type}" step is not available for this '
+                            "practice's software."
+                        ),
+                        fix="Remove the step or replace it with a supported one.",
+                    )
+                )
         return issues
 
     async def _pms_capability_issues(

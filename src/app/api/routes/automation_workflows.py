@@ -23,6 +23,7 @@ from src.app.models.automation_workflow import (
     AutomationWorkflowVersion,
 )
 from src.app.models.contact import Contact
+from src.app.models.institution import Institution
 from src.app.models.institution_location import InstitutionLocation
 from src.app.models.outbound_halt import OutboundEmergencyHalt
 from src.app.models.audit_log import AuditAction, AuditActor
@@ -60,6 +61,7 @@ from src.app.services.automation.node_registry import (
     NODE_REGISTRY_VERSION,
     public_capabilities,
 )
+from src.app.services.automation import pms_scope
 from src.app.services.automation.validation_service import WorkflowValidationService
 from src.app.services.automation.enrollment_service import AutomationWorkflowEnrollmentService
 from src.app.services.automation.step_dispatcher import build_dispatcher
@@ -266,6 +268,11 @@ class NodeCapabilityResponse(BaseModel):
 class NodeCapabilitiesResponse(BaseModel):
     registry_version: str
     nodes: list[NodeCapabilityResponse] = Field(default_factory=list)
+    # PMS-aware builder scope: which triggers/nodes this institution's practice
+    # software supports. The frontend hides everything not listed here.
+    pms_type: str = "none"
+    allowed_trigger_types: list[str] = Field(default_factory=list)
+    allowed_node_types: list[str] = Field(default_factory=list)
 
 
 class PhoneCountryRegionResponse(BaseModel):
@@ -888,10 +895,16 @@ async def list_node_capabilities(
     current_user: _InstitutionAdmin,
 ) -> NodeCapabilitiesResponse:
     """Return the engine's authoritative authoring/runtime support contract."""
-    _institution_id(current_user)
+    inst_id = _institution_id(current_user)
+    async with get_db_session() as session:
+        institution = await session.get(Institution, inst_id)
+    pms_type = institution.pms_type if institution else "none"
     return NodeCapabilitiesResponse(
         registry_version=NODE_REGISTRY_VERSION,
         nodes=[NodeCapabilityResponse(**item) for item in public_capabilities()],
+        pms_type=pms_type,
+        allowed_trigger_types=pms_scope.allowed_trigger_types(pms_type),
+        allowed_node_types=pms_scope.allowed_node_types(pms_type),
     )
 
 
@@ -915,15 +928,22 @@ async def list_phone_country_regions(
 )
 async def list_pms_appointment_statuses(
     current_user: _InstitutionAdmin,
-    pms: Annotated[str, Query()] = "gotracker",
+    pms: Annotated[str | None, Query()] = None,
 ) -> PmsAppointmentStatusCatalogResponse:
     """Return a PMS's appointment disposition catalog for the builder.
+
+    Defaults to the caller institution's own PMS so a NexHealth tenant never
+    receives the GoTracker vocabulary.
 
     NOTE: declared before ``/{workflow_id}`` so this literal path is not captured
     as a workflow id by the parameterised route.
     """
-    _institution_id(current_user)
-    normalized = pms.strip().lower()
+    inst_id = _institution_id(current_user)
+    normalized = (pms or "").strip().lower()
+    if not normalized:
+        async with get_db_session() as session:
+            institution = await session.get(Institution, inst_id)
+        normalized = institution.pms_type if institution else "none"
     if normalized != "gotracker":
         # NexHealth has no comparable fixed disposition vocabulary today; it is
         # introduced with the canonical event model rather than faked here.

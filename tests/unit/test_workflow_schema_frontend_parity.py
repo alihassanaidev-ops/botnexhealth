@@ -151,3 +151,60 @@ def test_voice_node_fields_are_modelled(field_name: str) -> None:
     assert field_name in _ts_source(_TYPES), (
         f"SendVoiceNode.{field_name} is not in the builder's TypeScript model"
     )
+
+
+# ---------------------------------------------------------------------------
+# PMS scope (which PMS owns which trigger/node)
+# ---------------------------------------------------------------------------
+
+
+def _ts_pms_map(source: str, alias: str) -> dict[str, set[str]]:
+    """Entries of ``export const <alias> = { name: ["pms", ...], ... }``."""
+    match = re.search(rf"export const {alias}[^=]*=\s*\{{(.*?)\}}", source, re.DOTALL)
+    assert match, f"could not find `export const {alias}` in catalog.ts"
+    return {
+        name: set(re.findall(r'"([a-z_]+)"', owners))
+        for name, owners in re.findall(r"(\w+):\s*\[([^\]]*)\]", match.group(1))
+    }
+
+
+def test_pms_scope_covers_every_trigger_and_node() -> None:
+    """A new trigger/node added without a PMS classification is a leak waiting
+    to happen — it would be offered to every institution by default."""
+    from src.app.services.automation import pms_scope
+
+    triggers = _union_type_literals(WorkflowTrigger)
+    nodes = _union_type_literals(WorkflowNode)
+    assert triggers == set(pms_scope.TRIGGER_PMS), (
+        f"pms_scope.TRIGGER_PMS is missing {sorted(triggers - set(pms_scope.TRIGGER_PMS))}; "
+        f"stale entries: {sorted(set(pms_scope.TRIGGER_PMS) - triggers)}"
+    )
+    assert nodes == set(pms_scope.NODE_PMS), (
+        f"pms_scope.NODE_PMS is missing {sorted(nodes - set(pms_scope.NODE_PMS))}; "
+        f"stale entries: {sorted(set(pms_scope.NODE_PMS) - nodes)}"
+    )
+
+
+def test_pms_scope_matches_frontend_catalog() -> None:
+    """The builder's TRIGGER_PMS/NODE_PMS must mirror the backend ownership map.
+
+    The frontend maps only list *restricted* entries (absent = shared), so
+    compare against the backend entries that are not ALL_PMS_TYPES.
+    """
+    from src.app.services.automation import pms_scope
+
+    catalog = _ts_source(_CATALOG)
+    fe_triggers = _ts_pms_map(catalog, "TRIGGER_PMS")
+    fe_nodes = _ts_pms_map(catalog, "NODE_PMS")
+    be_triggers = {
+        name: set(owners)
+        for name, owners in pms_scope.TRIGGER_PMS.items()
+        if owners != pms_scope.ALL_PMS_TYPES
+    }
+    be_nodes = {
+        name: set(owners)
+        for name, owners in pms_scope.NODE_PMS.items()
+        if owners != pms_scope.ALL_PMS_TYPES
+    }
+    assert fe_triggers == be_triggers
+    assert fe_nodes == be_nodes

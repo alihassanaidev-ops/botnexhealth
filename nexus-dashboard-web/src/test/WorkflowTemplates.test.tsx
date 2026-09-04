@@ -117,7 +117,7 @@ const POST_OP_TEMPLATE = {
         default_frequency_cap: { max_per_day: 1, max_per_rolling_7_days: 3 },
         setup_fields: [
             { id: "voice_profile_id", label: "Post-op voice profile", type: "voice_profile_select", required: true },
-            { id: "post_op_reasons", label: "Eligible completed GoTracker reasons", type: "string_list", required: true },
+            { id: "post_op_reasons", label: "Eligible completed appointment reasons", type: "string_list", required: true },
             { id: "post_op_delay_hours", label: "Hours after completion before calling", type: "number", required: true, default: 24 },
             { id: "post_op_latest_call_hours", label: "Latest allowed post-op call", type: "number", required: true, default: 72 },
             { id: "patient_voice_cooldown_hours", label: "Patient cooldown", type: "number", required: true, default: 24 },
@@ -263,7 +263,7 @@ describe("WorkflowTemplates page", () => {
         await user.click(screen.getByRole("button", { name: /use template/i }))
         await user.click(await screen.findByRole("combobox", { name: "Voice profile" }))
         await user.click(screen.getByRole("option", { name: "Pre-appointment" }))
-        await user.type(screen.getByLabelText("Eligible GoTracker reasons"), "Bridge Prep, Implant Surgery")
+        await user.type(screen.getByLabelText("Eligible appointment reasons"), "Bridge Prep, Implant Surgery")
         await user.clear(screen.getByLabelText("Initial call hours before appointment"))
         await user.type(screen.getByLabelText("Initial call hours before appointment"), "0")
         await user.clear(screen.getByLabelText("Delay before second attempt (hours)"))
@@ -308,13 +308,13 @@ describe("WorkflowTemplates page", () => {
         await screen.findByText(POST_OP_TEMPLATE.name)
         await user.click(screen.getByRole("button", { name: /use template/i }))
 
-        expect(screen.getByLabelText("Eligible completed GoTracker reasons")).toBeInTheDocument()
+        expect(screen.getByLabelText("Eligible completed appointment reasons")).toBeInTheDocument()
         expect(screen.getByLabelText("Hours after completion before calling")).toHaveValue(24)
         expect(screen.getByLabelText("Latest allowed post-op call (hours after completion)")).toHaveValue(72)
 
         await user.click(await screen.findByRole("combobox", { name: "Voice profile" }))
         await user.click(screen.getByRole("option", { name: "Post Appointment" }))
-        fireEvent.change(screen.getByLabelText("Eligible completed GoTracker reasons"), {
+        fireEvent.change(screen.getByLabelText("Eligible completed appointment reasons"), {
             target: { value: "Extraction, Implant Surgery" },
         })
         fireEvent.change(screen.getByLabelText("Hours after completion before calling"), {

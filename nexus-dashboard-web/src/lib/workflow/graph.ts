@@ -709,7 +709,9 @@ export function createNode(type: NodeType, id: string): WorkflowNode {
                 id,
                 mappings: [
                     {
-                        source_path: "gotracker_payload.appointment.reasons",
+                        // PMS-neutral: `appointment_reason` exists in both the
+                        // GoTracker and NexHealth trigger contexts.
+                        source_path: "appointment_reason",
                         target_field: "appointment_reasons",
                         default_value: null,
                     },

@@ -2144,7 +2144,7 @@ _ALL_TEMPLATES: dict[str, CampaignTemplate] = {
         definition=_SURGERY_PRE_APPOINTMENT_CONFIRMATION,
         metadata=_metadata(
             category="appointment_ops",
-            goal="Confirm major appointments before the visit and write confirmed or cancelled outcomes back to GoTracker.",
+            goal="Confirm major appointments before the visit and write confirmed or cancelled outcomes back to the practice management system.",
             outcome_labels=[
                 "appointment_confirmed",
                 "appointment_cancelled",
@@ -2172,7 +2172,7 @@ _ALL_TEMPLATES: dict[str, CampaignTemplate] = {
                 "appointment_reason",
             ],
             content_class="transactional_care",
-            audience="Appointments whose GoTracker reason is routed by workflow nodes",
+            audience="Appointments whose visit reason is routed by workflow nodes",
             eligibility=[
                 "appointment reason matches the workflow's mapper/condition logic",
                 "future appointment still exists",
@@ -2209,7 +2209,7 @@ _ALL_TEMPLATES: dict[str, CampaignTemplate] = {
                 },
                 {
                     "id": "appointment_reasons",
-                    "label": "Eligible GoTracker reasons",
+                    "label": "Eligible appointment reasons",
                     "type": "string_list",
                     "required": True,
                     "placeholder": "bridge prep, implant surgery",
@@ -2561,3 +2561,24 @@ def get_template(template_id: str) -> CampaignTemplate | None:
 
 def list_templates() -> list[CampaignTemplate]:
     return list(TEMPLATES.values())
+
+
+def template_pms_types(template: CampaignTemplate) -> frozenset[str]:
+    """PMS types this template can run on, derived from its own definition.
+
+    Deriving from the trigger and node types (via the ``pms_scope`` ownership
+    map) instead of hand-tagging means a template can never claim support its
+    own definition would fail publish validation for.
+    """
+    from src.app.services.automation import pms_scope
+
+    allowed = set(pms_scope.ALL_PMS_TYPES)
+    trigger_type = (template.definition.get("trigger") or {}).get(
+        "type"
+    ) or template.trigger_type
+    allowed &= pms_scope.TRIGGER_PMS.get(trigger_type, pms_scope.ALL_PMS_TYPES)
+    for node in template.definition.get("nodes", []):
+        allowed &= pms_scope.NODE_PMS.get(
+            node.get("type", ""), pms_scope.ALL_PMS_TYPES
+        )
+    return frozenset(allowed)

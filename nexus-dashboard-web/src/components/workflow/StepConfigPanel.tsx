@@ -78,8 +78,10 @@ import {
     contextValueAtPath,
     formatContextValue,
     GOTRACKER_APPOINTMENT_WEBHOOK_SAMPLE,
-    SAMPLE_WORKFLOW_CONTEXT,
+    NEXHEALTH_APPOINTMENT_CONTEXT_SAMPLE,
+    sampleWorkflowContext,
 } from "@/lib/workflow/context-fields"
+import { usePmsType } from "@/context/InstitutionContext"
 import type {
     CachedAppointmentType,
     CachedProvider,
@@ -244,6 +246,7 @@ function TriggerForm({
     readOnly?: boolean
 }) {
     const meta = TRIGGER_META[trigger.type]
+    const pmsType = usePmsType()
     return (
         <>
             <SheetHeader>
@@ -261,7 +264,7 @@ function TriggerForm({
                     >
                         <SelectTrigger><SelectValue /></SelectTrigger>
                         <SelectContent>
-                            {selectableTriggerTypes(trigger.type).map((t) => (
+                            {selectableTriggerTypes(trigger.type, pmsType).map((t) => (
                                 <SelectItem key={t} value={t}>{TRIGGER_META[t].label}</SelectItem>
                             ))}
                         </SelectContent>
@@ -2100,8 +2103,8 @@ function BookAppointmentFields({
                 <div>
                     <Label className="text-sm">Outcome branches</Label>
                     <p className="text-xs text-muted-foreground">
-                        Pending is separate because GoTracker may accept a queued write
-                        before the clinic machine confirms it.
+                        Pending is separate because the practice management system may
+                        accept a queued write before the clinic machine confirms it.
                     </p>
                 </div>
                 <NextStepField
@@ -2413,9 +2416,9 @@ function UpdateAppointmentFields({
             )}
 
             <p className="text-xs text-muted-foreground">
-                Writes back through the clinic's PMS, so one workflow works on both
-                NexHealth and GoTracker. Rescheduling on NexHealth books the new slot
-                and cancels the old one, which produces a new appointment id.
+                Writes back through the clinic's practice management system, so one
+                workflow works on any supported PMS. Rescheduling may book the new
+                slot and cancel the old one, which produces a new appointment id.
             </p>
         </>
     )
@@ -2562,13 +2565,17 @@ function JsonMapperFields({
     onChange: (n: WorkflowNode) => void
     readOnly?: boolean
 }) {
+    const pmsType = usePmsType()
+    const sampleContext = sampleWorkflowContext(pmsType)
+    const defaultSourcePath =
+        pmsType === "gotracker" ? "gotracker_payload.appointment.reasons" : "appointment.reason"
     const updateMapping = (i: number, patch: Partial<JsonMapperNode["mappings"][number]>) => {
         const mappings = node.mappings.map((mapping, idx) => (idx === i ? { ...mapping, ...patch } : mapping))
         onChange({ ...node, mappings })
     }
     const addMapping = () => onChange({
         ...node,
-        mappings: [...node.mappings, { source_path: "gotracker_payload.appointment.reasons", target_field: "appointment_reasons", default_value: null }],
+        mappings: [...node.mappings, { source_path: defaultSourcePath, target_field: "appointment_reasons", default_value: null }],
     })
     const removeMapping = (i: number) => onChange({ ...node, mappings: node.mappings.filter((_, idx) => idx !== i) })
 
@@ -2582,7 +2589,7 @@ function JsonMapperFields({
                             <Input
                                 value={mapping.source_path}
                                 disabled={readOnly}
-                                placeholder="gotracker_payload.appointment.reasons"
+                                placeholder={defaultSourcePath}
                                 onChange={(e) => updateMapping(i, { source_path: e.target.value })}
                             />
                         </Field>
@@ -2595,14 +2602,14 @@ function JsonMapperFields({
                             />
                         </Field>
                     </div>
-                    {contextValueAtPath(SAMPLE_WORKFLOW_CONTEXT, mapping.source_path) === undefined && (
+                    {contextValueAtPath(sampleContext, mapping.source_path) === undefined && (
                         <p className="rounded-md border border-amber-500/30 bg-amber-500/10 px-2 py-1 text-xs text-amber-700 dark:text-amber-300">
                             Path not found in sample context.
                         </p>
                     )}
-                    {contextValueAtPath(SAMPLE_WORKFLOW_CONTEXT, mapping.source_path) !== undefined && (
+                    {contextValueAtPath(sampleContext, mapping.source_path) !== undefined && (
                         <p className="rounded-md bg-muted px-2 py-1 font-mono text-xs text-muted-foreground">
-                            {formatContextValue(contextValueAtPath(SAMPLE_WORKFLOW_CONTEXT, mapping.source_path))}
+                            {formatContextValue(contextValueAtPath(sampleContext, mapping.source_path))}
                         </p>
                     )}
                     <Field label="Default value">
@@ -2631,9 +2638,18 @@ function JsonMapperFields({
 
 function ContextPreview({ triggerType }: { triggerType: TriggerType }) {
     const [open, setOpen] = useState(false)
-    const fields = contextFieldsForTrigger(triggerType)
+    const pmsType = usePmsType()
+    const fields = contextFieldsForTrigger(triggerType, pmsType)
     if (fields.length === 0) return null
-    const entries = Object.entries(GOTRACKER_APPOINTMENT_WEBHOOK_SAMPLE.data)
+    const sample =
+        pmsType === "gotracker"
+            ? GOTRACKER_APPOINTMENT_WEBHOOK_SAMPLE
+            : NEXHEALTH_APPOINTMENT_CONTEXT_SAMPLE
+    const sampleLabel =
+        pmsType === "gotracker"
+            ? "Incoming GoTracker appointment webhook."
+            : "Appointment context from your practice software."
+    const entries = Object.entries(sample.data)
     return (
         <div className="rounded-md border border-border">
             <button
@@ -2643,7 +2659,7 @@ function ContextPreview({ triggerType }: { triggerType: TriggerType }) {
             >
                 <div>
                     <Label className="text-sm">Context preview</Label>
-                    <p className="text-xs text-muted-foreground">Incoming GoTracker appointment webhook.</p>
+                    <p className="text-xs text-muted-foreground">{sampleLabel}</p>
                 </div>
                 <ChevronDown className={`h-4 w-4 shrink-0 text-muted-foreground transition-transform ${open ? "rotate-180" : ""}`} />
             </button>
@@ -2676,7 +2692,8 @@ function LlmFields({
     const [defaultModel, setDefaultModel] = useState(node.model ?? "")
     const [modelLoadFailed, setModelLoadFailed] = useState(false)
     const [variableOpen, setVariableOpen] = useState(false)
-    const variables = contextFieldsForTrigger(def.trigger.type)
+    const pmsType = usePmsType()
+    const variables = contextFieldsForTrigger(def.trigger.type, pmsType)
     useEffect(() => {
         let active = true
         listWorkflowLlmModels()
@@ -2946,7 +2963,8 @@ function ConditionFields({
     onChange: (n: WorkflowNode) => void
     readOnly?: boolean
 }) {
-    const contextFields = contextFieldsForTrigger(def.trigger.type)
+    const pmsType = usePmsType()
+    const contextFields = contextFieldsForTrigger(def.trigger.type, pmsType)
     const contextFieldNames = new Set(contextFields.map((field) => field.name))
     const legacyRules = node.rules ?? []
     const updateRule = (i: number, patch: Partial<ConditionRule>) => {
@@ -3040,7 +3058,7 @@ function ConditionFields({
                                     </SelectTrigger>
                                     <SelectContent>
                                         <SelectGroup>
-                                            <SelectLabel>GoTracker appointment payload</SelectLabel>
+                                            <SelectLabel>Trigger context</SelectLabel>
                                             {contextFields.map((field) => (
                                                 <SelectItem key={field.name} value={field.name}>{field.label}</SelectItem>
                                             ))}

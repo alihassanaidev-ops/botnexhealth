@@ -86,6 +86,16 @@ export function InstitutionProvider({ children }: { children: ReactNode }) {
     )
 }
 
+/**
+ * The institution's PMS type, or null when unknown — outside the provider
+ * (tests, super-admin surfaces) or while the profile is loading. Callers gate
+ * PMS-owned UI on an exact match, so null fails closed.
+ */
+// eslint-disable-next-line react-refresh/only-export-components
+export function usePmsType(): string | null {
+    return useContext(InstitutionContext)?.pmsType ?? null
+}
+
 // eslint-disable-next-line react-refresh/only-export-components
 export function useInstitution() {
     const ctx = useContext(InstitutionContext)

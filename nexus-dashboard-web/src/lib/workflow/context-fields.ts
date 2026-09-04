@@ -6,6 +6,13 @@ export interface WorkflowContextField {
     sample: unknown
     group: "payload"
     triggerTypes?: TriggerType[]
+    /**
+     * PMS types whose runtime actually provides this field. Absent = every
+     * PMS. The GoTracker webhook payload fields only exist on GoTracker
+     * locations; NexHealth appointment context is the projection shape built
+     * by `appointment_trigger_service.get_appointment_context`.
+     */
+    pmsTypes?: readonly string[]
 }
 
 export const APPOINTMENT_CONTEXT_TRIGGERS: TriggerType[] = [
@@ -13,6 +20,8 @@ export const APPOINTMENT_CONTEXT_TRIGGERS: TriggerType[] = [
     "appointment_state_changed",
     "patient_status_changed",
 ]
+const GOTRACKER = ["gotracker"] as const
+const NEXHEALTH = ["nexhealth"] as const
 const SMS_REPLY_CONTEXT_TRIGGERS: TriggerType[] = ["sms_reply"]
 const RECALL_CONTEXT_TRIGGERS: TriggerType[] = ["recall_scan"]
 const FORM_CONTEXT_TRIGGERS: TriggerType[] = ["form_submitted"]
@@ -41,51 +50,85 @@ export const WORKFLOW_CONTEXT_FIELDS: WorkflowContextField[] = [
     field("treatment_plan_statuses", "Treatment plan statuses", ["accepted"], "payload", RECALL_CONTEXT_TRIGGERS),
     field("active_treatment_plan_count", "Active treatment plan count", 1, "payload", RECALL_CONTEXT_TRIGGERS),
     field("has_active_treatment_plan", "Has active treatment plan", true, "payload", RECALL_CONTEXT_TRIGGERS),
-    field("gotracker_appointment_id", "AppointmentId", "1343", "payload", APPOINTMENT_CONTEXT_TRIGGERS),
-    field("gotracker_contact_id", "ContactId", "583", "payload", APPOINTMENT_CONTEXT_TRIGGERS),
-    field("gotracker_provider_id", "ProviderId", "2", "payload", APPOINTMENT_CONTEXT_TRIGGERS),
-    field("gotracker_schedule_column_id", "ScheduleColumnId", "1", "payload", APPOINTMENT_CONTEXT_TRIGGERS),
-    field("is_preconfirmed", "IsPreconfirmed", false, "payload", APPOINTMENT_CONTEXT_TRIGGERS),
-    field("is_confirmed", "IsConfirmed", false, "payload", APPOINTMENT_CONTEXT_TRIGGERS),
-    field("master_id", "MasterId", null, "payload", APPOINTMENT_CONTEXT_TRIGGERS),
-    field("appointment_date", "AppointmentDate", "2026-07-30T00:00:00", "payload", APPOINTMENT_CONTEXT_TRIGGERS),
-    field("appointment_time", "AppointmentTime", "16:15:00", "payload", APPOINTMENT_CONTEXT_TRIGGERS),
-    field("appointment_duration", "Duration", "00:15:00", "payload", APPOINTMENT_CONTEXT_TRIGGERS),
-    field("original_date", "OriginalDate", "2026-07-30T00:00:00", "payload", APPOINTMENT_CONTEXT_TRIGGERS),
+    field("gotracker_appointment_id", "AppointmentId", "1343", "payload", APPOINTMENT_CONTEXT_TRIGGERS, GOTRACKER),
+    field("gotracker_contact_id", "ContactId", "583", "payload", APPOINTMENT_CONTEXT_TRIGGERS, GOTRACKER),
+    field("gotracker_provider_id", "ProviderId", "2", "payload", APPOINTMENT_CONTEXT_TRIGGERS, GOTRACKER),
+    field("gotracker_schedule_column_id", "ScheduleColumnId", "1", "payload", APPOINTMENT_CONTEXT_TRIGGERS, GOTRACKER),
+    field("is_preconfirmed", "IsPreconfirmed", false, "payload", APPOINTMENT_CONTEXT_TRIGGERS, GOTRACKER),
+    field("is_confirmed", "IsConfirmed", false, "payload", APPOINTMENT_CONTEXT_TRIGGERS, GOTRACKER),
+    field("master_id", "MasterId", null, "payload", APPOINTMENT_CONTEXT_TRIGGERS, GOTRACKER),
+    field("appointment_date", "AppointmentDate", "2026-07-30T00:00:00", "payload", APPOINTMENT_CONTEXT_TRIGGERS, GOTRACKER),
+    field("appointment_time", "AppointmentTime", "16:15:00", "payload", APPOINTMENT_CONTEXT_TRIGGERS, GOTRACKER),
+    field("appointment_duration", "Duration", "00:15:00", "payload", APPOINTMENT_CONTEXT_TRIGGERS, GOTRACKER),
+    field("original_date", "OriginalDate", "2026-07-30T00:00:00", "payload", APPOINTMENT_CONTEXT_TRIGGERS, GOTRACKER),
     field("appointment_reason", "Reason", "bridge prep", "payload", APPOINTMENT_CONTEXT_TRIGGERS),
-    field("detail", "Detail", null, "payload", APPOINTMENT_CONTEXT_TRIGGERS),
-    field("appointment_amount", "AppointmentAmount", 0, "payload", APPOINTMENT_CONTEXT_TRIGGERS),
-    field("is_recall", "IsRecall", false, "payload", APPOINTMENT_CONTEXT_TRIGGERS),
-    field("is_personal", "IsPersonal", false, "payload", APPOINTMENT_CONTEXT_TRIGGERS),
-    field("is_all_day_appointment", "IsAllDayAppointment", false, "payload", APPOINTMENT_CONTEXT_TRIGGERS),
-    field("has_alarm", "HasAlarm", false, "payload", APPOINTMENT_CONTEXT_TRIGGERS),
-    field("notify_time", "NotifyTime", null, "payload", APPOINTMENT_CONTEXT_TRIGGERS),
-    field("gotracker_status_id", "StatusId", "1", "payload", APPOINTMENT_CONTEXT_TRIGGERS),
-    field("check_in", "CheckIn", null, "payload", APPOINTMENT_CONTEXT_TRIGGERS),
-    field("in_chair", "InChair", null, "payload", APPOINTMENT_CONTEXT_TRIGGERS),
-    field("out_chair", "OutChair", null, "payload", APPOINTMENT_CONTEXT_TRIGGERS),
-    field("check_out", "CheckOut", null, "payload", APPOINTMENT_CONTEXT_TRIGGERS),
-    field("flow_state", "FlowState", null, "payload", APPOINTMENT_CONTEXT_TRIGGERS),
-    field("flow_change", "FlowChange", null, "payload", APPOINTMENT_CONTEXT_TRIGGERS),
-    field("comments", "Comments", null, "payload", APPOINTMENT_CONTEXT_TRIGGERS),
-    field("booked_user_id", "BookedUserId", "Admin", "payload", APPOINTMENT_CONTEXT_TRIGGERS),
-    field("booked_timestamp", "BookedTimeStamp", "2026-07-29T20:32:00.81", "payload", APPOINTMENT_CONTEXT_TRIGGERS),
-    field("booked_machine_name", "BookedMachineName", "EC2AMAZ-QKGJ1Q1", "payload", APPOINTMENT_CONTEXT_TRIGGERS),
-    field("created_user_id", "CreatedUserId", "Admin", "payload", APPOINTMENT_CONTEXT_TRIGGERS),
-    field("created_timestamp", "CreatedTimeStamp", "2026-07-29T20:32:00.807", "payload", APPOINTMENT_CONTEXT_TRIGGERS),
-    field("modified_user_id", "ModifiedUserId", "Admin", "payload", APPOINTMENT_CONTEXT_TRIGGERS),
-    field("modified_timestamp", "ModifiedTimeStamp", "2026-07-29T20:32:00.807", "payload", APPOINTMENT_CONTEXT_TRIGGERS),
-    field("modified_machine_name", "ModifiedMachineName", "EC2AMAZ-QKGJ1Q1", "payload", APPOINTMENT_CONTEXT_TRIGGERS),
-    field("created_machine_name", "CreatedMachineName", "EC2AMAZ-QKGJ1Q1", "payload", APPOINTMENT_CONTEXT_TRIGGERS),
-    field("rebook_info", "RebookInfo", null, "payload", APPOINTMENT_CONTEXT_TRIGGERS),
-    field("confirmed_timestamp", "ConfirmedTimeStamp", null, "payload", APPOINTMENT_CONTEXT_TRIGGERS),
-    field("confirmed_user_id", "ConfirmedUserId", null, "payload", APPOINTMENT_CONTEXT_TRIGGERS),
-    field("confirmed_machine_name", "ConfirmedMachineName", null, "payload", APPOINTMENT_CONTEXT_TRIGGERS),
-    field("rebook_id", "RebookId", null, "payload", APPOINTMENT_CONTEXT_TRIGGERS),
-    field("cancelled_timestamp", "CancelledTimeStamp", null, "payload", APPOINTMENT_CONTEXT_TRIGGERS),
-    field("cancelled_user_id", "CancelledUserId", null, "payload", APPOINTMENT_CONTEXT_TRIGGERS),
-    field("cancelled_machine_name", "CancelledMachineName", null, "payload", APPOINTMENT_CONTEXT_TRIGGERS),
+    field("detail", "Detail", null, "payload", APPOINTMENT_CONTEXT_TRIGGERS, GOTRACKER),
+    field("appointment_amount", "AppointmentAmount", 0, "payload", APPOINTMENT_CONTEXT_TRIGGERS, GOTRACKER),
+    field("is_recall", "IsRecall", false, "payload", APPOINTMENT_CONTEXT_TRIGGERS, GOTRACKER),
+    field("is_personal", "IsPersonal", false, "payload", APPOINTMENT_CONTEXT_TRIGGERS, GOTRACKER),
+    field("is_all_day_appointment", "IsAllDayAppointment", false, "payload", APPOINTMENT_CONTEXT_TRIGGERS, GOTRACKER),
+    field("has_alarm", "HasAlarm", false, "payload", APPOINTMENT_CONTEXT_TRIGGERS, GOTRACKER),
+    field("notify_time", "NotifyTime", null, "payload", APPOINTMENT_CONTEXT_TRIGGERS, GOTRACKER),
+    field("gotracker_status_id", "StatusId", "1", "payload", APPOINTMENT_CONTEXT_TRIGGERS, GOTRACKER),
+    field("check_in", "CheckIn", null, "payload", APPOINTMENT_CONTEXT_TRIGGERS, GOTRACKER),
+    field("in_chair", "InChair", null, "payload", APPOINTMENT_CONTEXT_TRIGGERS, GOTRACKER),
+    field("out_chair", "OutChair", null, "payload", APPOINTMENT_CONTEXT_TRIGGERS, GOTRACKER),
+    field("check_out", "CheckOut", null, "payload", APPOINTMENT_CONTEXT_TRIGGERS, GOTRACKER),
+    field("flow_state", "FlowState", null, "payload", APPOINTMENT_CONTEXT_TRIGGERS, GOTRACKER),
+    field("flow_change", "FlowChange", null, "payload", APPOINTMENT_CONTEXT_TRIGGERS, GOTRACKER),
+    field("comments", "Comments", null, "payload", APPOINTMENT_CONTEXT_TRIGGERS, GOTRACKER),
+    field("booked_user_id", "BookedUserId", "Admin", "payload", APPOINTMENT_CONTEXT_TRIGGERS, GOTRACKER),
+    field("booked_timestamp", "BookedTimeStamp", "2026-07-29T20:32:00.81", "payload", APPOINTMENT_CONTEXT_TRIGGERS, GOTRACKER),
+    field("booked_machine_name", "BookedMachineName", "EC2AMAZ-QKGJ1Q1", "payload", APPOINTMENT_CONTEXT_TRIGGERS, GOTRACKER),
+    field("created_user_id", "CreatedUserId", "Admin", "payload", APPOINTMENT_CONTEXT_TRIGGERS, GOTRACKER),
+    field("created_timestamp", "CreatedTimeStamp", "2026-07-29T20:32:00.807", "payload", APPOINTMENT_CONTEXT_TRIGGERS, GOTRACKER),
+    field("modified_user_id", "ModifiedUserId", "Admin", "payload", APPOINTMENT_CONTEXT_TRIGGERS, GOTRACKER),
+    field("modified_timestamp", "ModifiedTimeStamp", "2026-07-29T20:32:00.807", "payload", APPOINTMENT_CONTEXT_TRIGGERS, GOTRACKER),
+    field("modified_machine_name", "ModifiedMachineName", "EC2AMAZ-QKGJ1Q1", "payload", APPOINTMENT_CONTEXT_TRIGGERS, GOTRACKER),
+    field("created_machine_name", "CreatedMachineName", "EC2AMAZ-QKGJ1Q1", "payload", APPOINTMENT_CONTEXT_TRIGGERS, GOTRACKER),
+    field("rebook_info", "RebookInfo", null, "payload", APPOINTMENT_CONTEXT_TRIGGERS, GOTRACKER),
+    field("confirmed_timestamp", "ConfirmedTimeStamp", null, "payload", APPOINTMENT_CONTEXT_TRIGGERS, GOTRACKER),
+    field("confirmed_user_id", "ConfirmedUserId", null, "payload", APPOINTMENT_CONTEXT_TRIGGERS, GOTRACKER),
+    field("confirmed_machine_name", "ConfirmedMachineName", null, "payload", APPOINTMENT_CONTEXT_TRIGGERS, GOTRACKER),
+    field("rebook_id", "RebookId", null, "payload", APPOINTMENT_CONTEXT_TRIGGERS, GOTRACKER),
+    field("cancelled_timestamp", "CancelledTimeStamp", null, "payload", APPOINTMENT_CONTEXT_TRIGGERS, GOTRACKER),
+    field("cancelled_user_id", "CancelledUserId", null, "payload", APPOINTMENT_CONTEXT_TRIGGERS, GOTRACKER),
+    field("cancelled_machine_name", "CancelledMachineName", null, "payload", APPOINTMENT_CONTEXT_TRIGGERS, GOTRACKER),
+    // NexHealth appointment context — the projection shape produced by the
+    // backend's `appointment_trigger_service.get_appointment_context`.
+    field("appointment_id", "Appointment ID", "987654", "payload", APPOINTMENT_CONTEXT_TRIGGERS, NEXHEALTH),
+    field("appointment_at", "Appointment start", "2026-07-30T16:15:00+00:00", "payload", APPOINTMENT_CONTEXT_TRIGGERS, NEXHEALTH),
+    field("appointment_start_time", "Appointment start time", "2026-07-30T16:15:00+00:00", "payload", APPOINTMENT_CONTEXT_TRIGGERS, NEXHEALTH),
+    field("appointment_status", "Appointment status", "booked", "payload", APPOINTMENT_CONTEXT_TRIGGERS, NEXHEALTH),
+    field("appointment_type_id", "Appointment type ID", "1001", "payload", APPOINTMENT_CONTEXT_TRIGGERS, NEXHEALTH),
+    field("appointment_type", "Appointment type", "Hygiene visit", "payload", APPOINTMENT_CONTEXT_TRIGGERS, NEXHEALTH),
+    field("appointment_type_name", "Appointment type name", "Hygiene visit", "payload", APPOINTMENT_CONTEXT_TRIGGERS, NEXHEALTH),
+    field("provider_id", "Provider ID", "377", "payload", APPOINTMENT_CONTEXT_TRIGGERS, NEXHEALTH),
+    field("patient_id", "Patient ID", "204012", "payload", APPOINTMENT_CONTEXT_TRIGGERS, NEXHEALTH),
+    field("contact_id", "Contact ID", "b7f0…", "payload", APPOINTMENT_CONTEXT_TRIGGERS, NEXHEALTH),
+    field("location_id", "Location ID", "loc-1", "payload", APPOINTMENT_CONTEXT_TRIGGERS, NEXHEALTH),
 ]
+
+/**
+ * Sample NexHealth appointment context, mirroring the backend projection
+ * shape from `appointment_trigger_service.get_appointment_context`.
+ */
+export const NEXHEALTH_APPOINTMENT_CONTEXT_SAMPLE = {
+    data: {
+        appointment_id: "987654",
+        appointment_at: "2026-07-30T16:15:00+00:00",
+        appointment_start_time: "2026-07-30T16:15:00+00:00",
+        appointment_status: "booked",
+        appointment_reason: "Hygiene visit",
+        appointment_type_id: "1001",
+        appointment_type: "Hygiene visit",
+        appointment_type_name: "Hygiene visit",
+        provider_id: "377",
+        patient_id: "204012",
+        contact_id: "b7f04c1e-2d0f-4a57-9d8f-000000000000",
+        location_id: "loc-1",
+    },
+}
 
 export const GOTRACKER_APPOINTMENT_WEBHOOK_SAMPLE = {
     data: {
@@ -262,9 +305,59 @@ export const SAMPLE_WORKFLOW_CONTEXT: Record<string, unknown> = {
     },
 }
 
-export function contextFieldsForTrigger(triggerType: TriggerType): WorkflowContextField[] {
+/**
+ * NexHealth flavor of the sample context used for json_mapper path previews:
+ * the shared (form/SMS/recall) keys plus the NexHealth appointment projection,
+ * with none of the GoTracker webhook payload.
+ */
+export const NEXHEALTH_SAMPLE_WORKFLOW_CONTEXT: Record<string, unknown> = {
+    form_provider: SAMPLE_WORKFLOW_CONTEXT.form_provider,
+    form_name: SAMPLE_WORKFLOW_CONTEXT.form_name,
+    form_id: SAMPLE_WORKFLOW_CONTEXT.form_id,
+    form_external_id: SAMPLE_WORKFLOW_CONTEXT.form_external_id,
+    form_created_contact: SAMPLE_WORKFLOW_CONTEXT.form_created_contact,
+    matched_existing_contact: SAMPLE_WORKFLOW_CONTEXT.matched_existing_contact,
+    form_answers: SAMPLE_WORKFLOW_CONTEXT.form_answers,
+    inbound_sms_message_id: SAMPLE_WORKFLOW_CONTEXT.inbound_sms_message_id,
+    sms_reply_message_sid: SAMPLE_WORKFLOW_CONTEXT.sms_reply_message_sid,
+    sms_reply_body: SAMPLE_WORKFLOW_CONTEXT.sms_reply_body,
+    sms_reply_intent: SAMPLE_WORKFLOW_CONTEXT.sms_reply_intent,
+    recall_due_date: SAMPLE_WORKFLOW_CONTEXT.recall_due_date,
+    recall_type_id: SAMPLE_WORKFLOW_CONTEXT.recall_type_id,
+    recall_type_name: SAMPLE_WORKFLOW_CONTEXT.recall_type_name,
+    recall_type: SAMPLE_WORKFLOW_CONTEXT.recall_type,
+    recall_interval_months: SAMPLE_WORKFLOW_CONTEXT.recall_interval_months,
+    last_visit_date: SAMPLE_WORKFLOW_CONTEXT.last_visit_date,
+    treatment_plan_statuses: SAMPLE_WORKFLOW_CONTEXT.treatment_plan_statuses,
+    active_treatment_plan_count: SAMPLE_WORKFLOW_CONTEXT.active_treatment_plan_count,
+    has_active_treatment_plan: SAMPLE_WORKFLOW_CONTEXT.has_active_treatment_plan,
+    ...NEXHEALTH_APPOINTMENT_CONTEXT_SAMPLE.data,
+    appointment: {
+        id: "987654",
+        start_time: "2026-07-30T16:15:00+00:00",
+        status: "booked",
+        reason: "Hygiene visit",
+        appointment_type_id: "1001",
+        appointment_type_name: "Hygiene visit",
+        provider_id: "377",
+    },
+}
+
+/** The PMS-appropriate sample context for path previews and dry-run seeds. */
+export function sampleWorkflowContext(pmsType: string | null): Record<string, unknown> {
+    return pmsType === "nexhealth" ? NEXHEALTH_SAMPLE_WORKFLOW_CONTEXT : SAMPLE_WORKFLOW_CONTEXT
+}
+
+export function contextFieldsForTrigger(
+    triggerType: TriggerType,
+    pmsType: string | null = null,
+): WorkflowContextField[] {
     return WORKFLOW_CONTEXT_FIELDS.filter(
-        (field) => !field.triggerTypes || field.triggerTypes.includes(triggerType),
+        (field) =>
+            (!field.triggerTypes || field.triggerTypes.includes(triggerType)) &&
+            // Unknown PMS (context loading): keep only PMS-neutral fields for
+            // PMS-owned entries, so a NexHealth tenant never flashes GoTracker.
+            (!field.pmsTypes || (pmsType !== null && field.pmsTypes.includes(pmsType))),
     )
 }
 
@@ -298,8 +391,9 @@ function field(
     sample: unknown,
     group: WorkflowContextField["group"],
     triggerTypes?: TriggerType[],
+    pmsTypes?: readonly string[],
 ): WorkflowContextField {
-    return { name, label, sample, group, triggerTypes }
+    return { name, label, sample, group, triggerTypes, pmsTypes }
 }
 
 function pathParts(path: string): string[] {

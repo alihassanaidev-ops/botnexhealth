@@ -648,9 +648,29 @@ def test_campaign_template_response_from_template() -> None:
 
 
 def test_list_route_returns_all_templates() -> None:
+    import unittest.mock as mock
+
     user = MagicMock()
-    result = asyncio.run(list_campaign_templates(user))
+    with mock.patch(
+        "src.app.api.routes.automation_templates._institution_pms_type",
+        new=AsyncMock(return_value="gotracker"),
+    ):
+        result = asyncio.run(list_campaign_templates(user))
     assert len(result) == 5
+
+
+def test_list_route_hides_gotracker_templates_from_nexhealth() -> None:
+    import unittest.mock as mock
+
+    user = MagicMock()
+    with mock.patch(
+        "src.app.api.routes.automation_templates._institution_pms_type",
+        new=AsyncMock(return_value="nexhealth"),
+    ):
+        result = asyncio.run(list_campaign_templates(user))
+    ids = {t.id for t in result}
+    assert "post-op-followup-after-confirmation" not in ids
+    assert len(result) == 4
 
 
 # ---------------------------------------------------------------------------
@@ -659,11 +679,34 @@ def test_list_route_returns_all_templates() -> None:
 
 
 def test_get_route_returns_template() -> None:
+    import unittest.mock as mock
+
     user = MagicMock()
-    result = asyncio.run(
-        get_campaign_template("surgery-pre-appointment-confirmation", user)
-    )
+    with mock.patch(
+        "src.app.api.routes.automation_templates._institution_pms_type",
+        new=AsyncMock(return_value="nexhealth"),
+    ):
+        result = asyncio.run(
+            get_campaign_template("surgery-pre-appointment-confirmation", user)
+        )
     assert result.id == "surgery-pre-appointment-confirmation"
+
+
+def test_get_route_hides_gotracker_template_from_nexhealth() -> None:
+    import unittest.mock as mock
+
+    from fastapi import HTTPException
+
+    user = MagicMock()
+    with mock.patch(
+        "src.app.api.routes.automation_templates._institution_pms_type",
+        new=AsyncMock(return_value="nexhealth"),
+    ):
+        with pytest.raises(HTTPException) as exc_info:
+            asyncio.run(
+                get_campaign_template("post-op-followup-after-confirmation", user)
+            )
+    assert exc_info.value.status_code == 404
 
 
 def test_get_route_unknown_id_raises_404() -> None:
@@ -731,6 +774,10 @@ def test_instantiate_creates_publishes_and_pauses_workflow() -> None:
         mock.patch(
             "src.app.api.routes.automation_templates.get_db_session",
             return_value=mock_session,
+        ),
+        mock.patch(
+            "src.app.api.routes.automation_templates._institution_pms_type",
+            new=AsyncMock(return_value="gotracker"),
         ),
         mock.patch(
             "src.app.api.routes.automation_templates.AutomationWorkflowDefinitionService",
@@ -811,6 +858,10 @@ def test_instantiate_sales_template_publishes_enquiry_definition() -> None:
             return_value=mock_session,
         ),
         mock.patch(
+            "src.app.api.routes.automation_templates._institution_pms_type",
+            new=AsyncMock(return_value="gotracker"),
+        ),
+        mock.patch(
             "src.app.api.routes.automation_templates.AutomationWorkflowDefinitionService",
             return_value=mock_svc,
         ),
@@ -852,14 +903,44 @@ def test_instantiate_sales_template_publishes_enquiry_definition() -> None:
 def test_instantiate_voice_template_without_agent_raises_422() -> None:
     from fastapi import HTTPException
 
+    import unittest.mock as mock
+
     user = MagicMock()
     user.institution_id = "inst-1"
     user.id = "user-1"
 
-    with pytest.raises(HTTPException) as exc_info:
-        asyncio.run(instantiate_template("post-op-followup-after-confirmation", user))
+    with mock.patch(
+        "src.app.api.routes.automation_templates._institution_pms_type",
+        new=AsyncMock(return_value="gotracker"),
+    ):
+        with pytest.raises(HTTPException) as exc_info:
+            asyncio.run(
+                instantiate_template("post-op-followup-after-confirmation", user)
+            )
 
     assert exc_info.value.status_code == 422
+
+
+def test_instantiate_gotracker_template_rejected_for_nexhealth() -> None:
+    import unittest.mock as mock
+
+    from fastapi import HTTPException
+
+    user = MagicMock()
+    user.institution_id = "inst-1"
+    user.id = "user-1"
+
+    with mock.patch(
+        "src.app.api.routes.automation_templates._institution_pms_type",
+        new=AsyncMock(return_value="nexhealth"),
+    ):
+        with pytest.raises(HTTPException) as exc_info:
+            asyncio.run(
+                instantiate_template("post-op-followup-after-confirmation", user)
+            )
+
+    assert exc_info.value.status_code == 422
+    assert exc_info.value.detail["code"] == "template_unsupported_for_pms"
 
 
 def test_hidden_templates_are_not_instantiable() -> None:
@@ -885,3 +966,61 @@ def test_instantiate_unknown_template_raises_404() -> None:
         asyncio.run(instantiate_template("does-not-exist", user))
 
     assert exc_info.value.status_code == 404
+
+
+# ---------------------------------------------------------------------------
+# PMS scope: template availability is derived from its own definition
+# ---------------------------------------------------------------------------
+
+
+def test_template_pms_types_derivation() -> None:
+    from src.app.services.automation.campaign_templates import (
+        list_templates,
+        template_pms_types,
+    )
+
+    for template in list_templates():
+        pms_types = template_pms_types(template)
+        trigger_type = (template.definition.get("trigger") or {}).get("type")
+        if trigger_type == "appointment_state_changed":
+            assert pms_types == frozenset({"gotracker"}), template.id
+        else:
+            assert "nexhealth" in pms_types, (
+                f"{template.id} unexpectedly excludes nexhealth"
+            )
+
+
+def test_gotracker_only_template_is_hidden_from_nexhealth() -> None:
+    from src.app.services.automation.campaign_templates import (
+        get_template,
+        template_pms_types,
+    )
+
+    template = get_template("post-op-followup-after-confirmation")
+    assert template is not None
+    assert template_pms_types(template) == frozenset({"gotracker"})
+
+
+def test_no_gotracker_wording_in_shared_templates() -> None:
+    """A NexHealth admin must never see the word GoTracker in template copy."""
+    import json
+
+    from src.app.services.automation.campaign_templates import (
+        list_templates,
+        template_pms_types,
+    )
+    from dataclasses import asdict
+
+    for template in list_templates():
+        if "nexhealth" not in template_pms_types(template):
+            continue
+        blob = json.dumps(
+            {
+                "name": template.name,
+                "description": template.description,
+                "metadata": asdict(template.metadata),
+            }
+        ).lower()
+        assert "gotracker" not in blob, (
+            f"shared template {template.id} still mentions GoTracker in its copy"
+        )
