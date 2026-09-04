@@ -5,7 +5,7 @@ COMPOSE := docker compose -f docker-compose.dev.yml
 # BotNexHealth - Development Commands
 # =============================================================================
 
-.PHONY: help setup dev up up-deps up-app down logs api-logs worker-logs web-logs db-logs redis-logs migrate test lint clean build run cdk-synth-staging cdk-deploy-staging cdk-run-migrations-staging cdk-publish-frontend-staging health
+.PHONY: help setup test-rls dev up up-deps up-app down logs api-logs worker-logs web-logs db-logs redis-logs migrate test lint clean build run cdk-synth-staging cdk-deploy-staging cdk-run-migrations-staging cdk-publish-frontend-staging health
 
 help:
 	@echo "BotNexHealth Development Commands"
@@ -74,6 +74,13 @@ db-logs:
 
 redis-logs:
 	$(COMPOSE) logs -f redis
+
+test-rls:
+	@echo "Real Postgres + the full alembic chain + a non-superuser role."
+	@echo "This is what a freshly built production database does. ~15s."
+	TESTCONTAINERS_RYUK_DISABLED=true .venv/bin/python -m pytest \
+		tests/integration/test_rls_postgres.py \
+		tests/integration/test_rls_coverage_sweep.py -q
 
 test:
 	source .venv/bin/activate && pytest -v

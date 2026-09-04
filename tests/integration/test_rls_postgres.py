@@ -463,6 +463,13 @@ async def test_rls_system_contexts_are_narrow(rls_engine) -> None:
 
 
 @pytest.mark.asyncio
+# NOTE: raw INSERTs here must supply every NOT NULL column, including ones the
+# migration declares a DEFAULT for. The consolidated baseline builds the schema
+# with ``Base.metadata.create_all`` (20260510_consolidated_baseline.py:915), so
+# on a fresh database the columns come from the *models* — and a model using a
+# Python-side ``default=`` produces a column with no server default. Later
+# migrations' ``CREATE TABLE IF NOT EXISTS`` are then no-ops. The ORM fills
+# these in; raw SQL does not.
 async def test_enquiry_intake_lookup_sees_only_the_exact_token_hash(rls_engine) -> None:
     source_id = "41000000-0000-0000-0000-000000000001"
     token_hash = "a" * 64
@@ -474,10 +481,10 @@ async def test_enquiry_intake_lookup_sees_only_the_exact_token_hash(rls_engine) 
                 """
                 INSERT INTO enquiry_intake_sources
                   (id, institution_id, location_id, label, token_hash,
-                   source_name, is_active)
+                   source_name, is_active, created_at)
                 VALUES
                   (:id, :institution_id, :location_id, 'Public form',
-                   :token_hash, 'external_form', true)
+                   :token_hash, 'external_form', true, now())
                 """
             ),
             {
