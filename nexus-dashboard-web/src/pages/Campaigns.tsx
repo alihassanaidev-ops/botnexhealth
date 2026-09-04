@@ -13,6 +13,7 @@ import {
     ShieldCheck,
 } from "lucide-react"
 import { Card, CardContent } from "@/components/ui/card"
+import { PageHeader } from "@/components/PageHeader"
 import { Button } from "@/components/ui/button"
 import { Skeleton } from "@/components/ui/skeleton"
 import {
@@ -194,63 +195,59 @@ export default function Campaigns() {
                 <div className="absolute -top-32 -right-32 w-[420px] h-[420px] bg-transparent dark:bg-violet-700/20 rounded-full blur-[100px]" />
             </div>
 
-            <div className="flex items-center justify-between">
-                <div>
-                    <h2 className="text-3xl font-bold tracking-tight flex items-center gap-2">
-                        <Megaphone className="h-7 w-7" />
-                        Campaigns
-                    </h2>
-                    <p className="text-muted-foreground mt-1">
-                        Automated outreach workflows for appointment reminders and patient recall.
-                    </p>
-                </div>
-                <div className="flex items-center gap-2">
-                    <Button
-                        variant={haltStatus?.halted ? "default" : "outline"}
-                        size="sm"
-                        onClick={() => setHaltDialog(haltStatus?.halted ? "release" : "activate")}
-                        disabled={loading || acting === "outbound-halt"}
-                        className="gap-1.5"
-                    >
-                        {haltStatus?.halted ? (
-                            <ShieldAlert className="h-3.5 w-3.5" />
-                        ) : (
-                            <ShieldCheck className="h-3.5 w-3.5" />
-                        )}
-                        {haltStatus?.halted ? "Outbound halted" : "Outbound clear"}
-                    </Button>
-                    <Button size="sm" asChild className="gap-1.5">
-                        <Link to="/institution-admin/campaigns/templates">
-                            <Plus className="h-3.5 w-3.5" />
-                            New from template
-                        </Link>
-                    </Button>
-                    <Button
-                        variant="outline"
-                        size="sm"
-                        onClick={handleCreateFromScratch}
-                        disabled={loading || acting === "create-scratch"}
-                        className="gap-1.5"
-                    >
-                        {acting === "create-scratch" ? (
-                            <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                        ) : (
-                            <Workflow className="h-3.5 w-3.5" />
-                        )}
-                        Create from scratch
-                    </Button>
-                    <Button
-                        variant="outline"
-                        size="sm"
-                        onClick={refresh}
-                        disabled={loading}
-                        className="gap-1.5"
-                    >
-                        <RefreshCcw className={cn("h-3.5 w-3.5", loading && "animate-spin")} />
-                        Refresh
-                    </Button>
-                </div>
-            </div>
+            <PageHeader
+                art="campaigns"
+                title="Campaigns"
+                description="Automated outreach workflows for appointment reminders and patient recall."
+                actions={
+                    <>
+                        <Button
+                            variant={haltStatus?.halted ? "default" : "outline"}
+                            size="sm"
+                            onClick={() => setHaltDialog(haltStatus?.halted ? "release" : "activate")}
+                            disabled={loading || acting === "outbound-halt"}
+                            className="gap-1.5"
+                        >
+                            {haltStatus?.halted ? (
+                                <ShieldAlert className="h-3.5 w-3.5" />
+                            ) : (
+                                <ShieldCheck className="h-3.5 w-3.5" />
+                            )}
+                            {haltStatus?.halted ? "Outbound halted" : "Outbound clear"}
+                        </Button>
+                        <Button size="sm" asChild className="gap-1.5">
+                            <Link to="/institution-admin/campaigns/templates">
+                                <Plus className="h-3.5 w-3.5" />
+                                New from template
+                            </Link>
+                        </Button>
+                        <Button
+                            variant="outline"
+                            size="sm"
+                            onClick={handleCreateFromScratch}
+                            disabled={loading || acting === "create-scratch"}
+                            className="gap-1.5"
+                        >
+                            {acting === "create-scratch" ? (
+                                <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                            ) : (
+                                <Workflow className="h-3.5 w-3.5" />
+                            )}
+                            Create from scratch
+                        </Button>
+                        <Button
+                            variant="outline"
+                            size="sm"
+                            onClick={refresh}
+                            disabled={loading}
+                            className="gap-1.5"
+                        >
+                            <RefreshCcw className={cn("h-3.5 w-3.5", loading && "animate-spin")} />
+                            Refresh
+                        </Button>
+                    </>
+                }
+            />
 
             {haltStatus?.halted && (
                 <div className="rounded-md border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-800 dark:border-red-900/60 dark:bg-red-950/30 dark:text-red-300">

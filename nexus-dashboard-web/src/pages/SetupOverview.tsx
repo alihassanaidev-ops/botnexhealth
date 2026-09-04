@@ -163,6 +163,7 @@ export default function SetupOverview() {
     return (
         <div className="relative flex-1 space-y-6 bg-background p-8 pt-6">
             <PageHeader
+                art="settings"
                 icon={ClipboardList}
                 title="Setup overview"
                 description="Track what's synced and finish setup in order."

@@ -67,6 +67,7 @@ export default function Reasons() {
         <div className="relative flex-1 space-y-4 bg-background p-8 pt-6">
             <div className="fixed inset-0 overflow-hidden pointer-events-none"><div className="absolute -top-32 -right-32 w-[420px] h-[420px] bg-transparent dark:bg-violet-700/20 rounded-full blur-[100px]" /></div>
             <PageHeader
+                art="appointmentTypes"
                 icon={Tag}
                 title="Reasons"
                 description="Tracker-native reasons. They are read from GoTracker; link one to a scheduling appointment type from Appointment Types."

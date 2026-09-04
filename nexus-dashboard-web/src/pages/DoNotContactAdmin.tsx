@@ -259,6 +259,7 @@ export default function DoNotContactAdmin() {
             </div>
 
             <PageHeader
+                art="patients"
                 icon={ShieldOff}
                 title="DNC Patients"
                 description="Review patients who opted out and remove an individual SMS, voice, or email restriction when they ask to opt back in."

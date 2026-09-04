@@ -217,6 +217,7 @@ export default function QuietHoursExceptions() {
     return (
         <div className="space-y-6">
             <PageHeader
+                art="scheduling"
                 title="Quiet-hours exceptions"
                 description="Override a location's usual contact window for a date, a patient, or a kind of message."
             />

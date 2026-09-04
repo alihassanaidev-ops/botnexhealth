@@ -187,6 +187,7 @@ export default function Undeliverables() {
     return (
         <div className="space-y-6">
             <PageHeader
+                art="workflow"
                 icon={AlertTriangle}
                 title="Automation issues"
                 description="Background actions that could not complete automatically and may need attention."
