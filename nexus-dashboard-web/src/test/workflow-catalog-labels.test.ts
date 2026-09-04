@@ -5,9 +5,8 @@ import {
     TRIGGER_META,
     nodeTypeLabel,
     triggerTypeLabel,
-    type NodeType,
-    type TriggerType,
 } from "@/lib/workflow/catalog"
+import type { NodeType, TriggerType } from "@/types/workflow"
 
 // These two helpers are handed values that came off the API. The TypeScript
 // type is an assertion about the payload, not a guarantee from it: a stored
@@ -17,10 +16,10 @@ import {
 // replaced the whole page — which is what took out the campaign templates page.
 describe("workflow catalog labels", () => {
     it("labels every type the catalog knows", () => {
-        for (const type of Object.keys(NODE_META) as NodeType[]) {
+        for (const type of Object.keys(NODE_META) as (keyof typeof NODE_META)[]) {
             expect(nodeTypeLabel(type)).toBe(NODE_META[type].label)
         }
-        for (const type of Object.keys(TRIGGER_META) as TriggerType[]) {
+        for (const type of Object.keys(TRIGGER_META) as (keyof typeof TRIGGER_META)[]) {
             expect(triggerTypeLabel(type)).toBe(TRIGGER_META[type].label)
         }
     })
