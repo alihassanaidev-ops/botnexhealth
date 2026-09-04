@@ -279,7 +279,7 @@ function NavItem({ item, isActive }: { item: NavItemDef; isActive: boolean }) {
                 <Link to={item.url} aria-current={isActive ? "page" : undefined}>
                     <Art
                         name={art}
-                        className="nav-art size-8 shrink-0 group-data-[collapsible=icon]:size-6"
+                        className="nav-art size-9 shrink-0 group-data-[collapsible=icon]:size-7"
                     />
                     <span>{item.title}</span>
                 </Link>

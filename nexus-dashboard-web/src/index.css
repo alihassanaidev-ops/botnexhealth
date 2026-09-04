@@ -135,6 +135,16 @@
     --sidebar-accent-foreground: 210 20% 90%;
     --sidebar-border: 0 0% 10%;
     --sidebar-ring: 265 85% 65%;
+
+    /* Illustration colours stop short of the extremes here, rather than
+       inheriting --foreground and --card like the light theme does.
+       Anti-aliased edges are composited in sRGB, so a near-white line on a
+       near-black ground blends to a value that reads far brighter than half
+       and the edge sparkles. These outlines are only about 1px at sidebar
+       size, which is exactly where that shows. Backing off the contrast
+       costs nothing in legibility and settles the edges down. */
+    --art-ink: hsl(220 14% 84%);
+    --art-surface: hsl(230 12% 13%);
   }
 }
 
