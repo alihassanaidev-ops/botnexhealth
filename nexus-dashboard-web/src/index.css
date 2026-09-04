@@ -52,13 +52,16 @@
     --surface-radius: var(--radius-lg);
     --surface-shadow: 0 1px 2px hsl(230 40% 10% / 0.04), 0 12px 32px hsl(230 40% 10% / 0.05);
 
-    /* Artwork chips hold the illustrated PNG icons. They keep a light
-       surface in both themes — the illustrations are drawn on white and
-       invert badly on a dark ground. */
-    --artwork-surface: #ffffff;
-    --artwork-border: #d7d9df;
-    --artwork-shadow: 0 1px 2px rgb(15 23 42 / 0.08);
-    --artwork-filter: saturate(1.01) contrast(1.03);
+    /* Illustration colours. The traced SVGs resolve every fill to one of
+       these, so the artwork follows the theme instead of needing a light
+       tile propped behind it. They are expressed against the existing
+       theme tokens rather than as fixed hexes, which means dark mode needs
+       no second palette and a brand change reaches the drawings too. */
+    --art-ink: hsl(var(--foreground));
+    --art-surface: hsl(var(--card));
+    --art-muted: hsl(var(--muted-foreground));
+    --art-accent: hsl(var(--primary));
+    --art-accent-soft: hsl(var(--primary) / 0.35);
 
     --background: 0 0% 100%;
     --foreground: 230 40% 10%;
@@ -132,11 +135,6 @@
     --sidebar-accent-foreground: 210 20% 90%;
     --sidebar-border: 0 0% 10%;
     --sidebar-ring: 265 85% 65%;
-
-    --artwork-surface: #ffffff;
-    --artwork-border: #d7d9df;
-    --artwork-shadow: 0 1px 3px rgb(0 0 0 / 0.32);
-    --artwork-filter: saturate(1.01) contrast(1.03);
   }
 }
 
@@ -186,60 +184,31 @@
 }
 
 @layer components {
-  /* Chip that holds an illustrated page icon. The illustrations are drawn on
-     a light ground, so the surface stays light in both themes — inverting it
-     for dark mode turns the artwork into a smudge. */
-  .ui-artwork {
-    position: relative;
-    display: grid;
-    flex: 0 0 auto;
-    place-items: center;
-    overflow: hidden;
-    border: 1px solid var(--artwork-border);
-    border-radius: var(--radius-lg);
-    background: var(--artwork-surface);
-    box-shadow: var(--artwork-shadow);
-    isolation: isolate;
+  /* Wrappers only. The chrome these used to carry — a bordered, shadowed
+     white tile — existed because raster artwork could not follow the theme
+     and needed a light ground under it in dark mode. The SVGs colour
+     themselves, so the tile is gone and the drawing sits on the surface. */
+  .ui-artwork,
+  .nav-art {
+    display: block;
   }
 
-  /* The image needs its own width/height, not just the chip's. Without it a
-     competing `... img` rule of equal specificity can win, and the PNG then
-     renders at intrinsic size inside an overflow:hidden chip — i.e. cropped
-     to its middle. Setting it here makes stylesheet order irrelevant. */
-  .ui-artwork > img {
+  .ui-artwork > svg,
+  .nav-art > svg {
     display: block;
     width: 100%;
     height: 100%;
-    min-width: 0;
-    min-height: 0;
-    object-fit: contain;
-    filter: var(--artwork-filter);
   }
-}
 
-@layer components {
-  /* Illustrated nav icons. The artwork is drawn on a light ground, so in dark
-     mode an inactive icon gets a white chip behind it — without one the dark
-     linework disappears into the sidebar. Active and hovered rows go to full
-     opacity; the rest sit slightly back so the active row still leads. */
-  [data-sidebar="menu-button"] .nav-art > img {
-    width: 100%;
-    height: 100%;
-    min-width: 0;
-    min-height: 0;
-    object-fit: contain;
-    filter: var(--artwork-filter);
-    opacity: 0.9;
+  /* Inactive rows sit slightly back so the active one still leads. */
+  [data-sidebar="menu-button"] .nav-art > svg {
+    opacity: 0.85;
     transition: opacity 140ms ease;
   }
 
-  [data-sidebar="menu-button"][data-active="true"] .nav-art > img,
-  [data-sidebar="menu-button"]:hover .nav-art > img {
+  [data-sidebar="menu-button"][data-active="true"] .nav-art > svg,
+  [data-sidebar="menu-button"]:hover .nav-art > svg {
     opacity: 1;
-  }
-
-  .dark [data-sidebar="menu-button"]:not([data-active="true"]) .nav-art {
-    background: #ffffff;
   }
 }
 

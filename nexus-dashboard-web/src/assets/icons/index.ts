@@ -1,38 +1,42 @@
-// Illustrated page artwork.
+// Illustrated page artwork, traced from the original PNGs to SVG so the
+// drawings take their colours from the theme instead of carrying them baked
+// in. Every fill resolves to one of five CSS variables — --art-ink,
+// --art-surface, --art-muted, --art-accent, --art-accent-soft — which
+// index.css maps onto the existing theme tokens. Dark mode is a genuine
+// recolour rather than a light tile propping up artwork that can't adapt.
 //
-// These are detailed multi-colour illustrations, not line glyphs. They read
-// well from about 40px up and turn to mush in a dense nav row, so they belong
-// in page headers and empty states — lucide stays the icon set for sidebar
-// navigation, buttons and inline affordances.
+// Imported with Vite's built-in `?raw` rather than an SVG plugin: the markup
+// has to be inline in the document for var() to resolve at all. An
+// <img src="....svg"> renders in an isolated context that never sees the
+// page's variables, so every fill would collapse to nothing.
 //
-// Each import becomes its own emitted asset, so listing them all here costs a
-// URL string in the bundle; the browser only fetches the ones a page renders.
-import admin from "./presentation/admin.png"
-import appointmentSync from "./presentation/appointment-sync.png"
-import appointmentTypes from "./presentation/appointment-types.png"
-import audit from "./presentation/audit.png"
-import callbackQueue from "./presentation/callback-queue.png"
-import calls from "./presentation/calls.png"
-import campaignEmails from "./presentation/campaign-emails-v2.png"
-import campaigns from "./presentation/campaigns-outlined.png"
-import contactForms from "./presentation/contact-forms-v2.png"
-import dashboard from "./presentation/dashboard.png"
-import emailPreferences from "./presentation/email-preferences-v2.png"
-import emailTemplates from "./presentation/email-templates-v2.png"
-import groups from "./presentation/groups.png"
-import inbox from "./presentation/inbox.png"
-import insurancePlans from "./presentation/insurance-plans.png"
-import leadForms from "./presentation/lead-forms-v2.png"
-import messaging from "./presentation/messaging.png"
-import operatories from "./presentation/operatories.png"
-import passkey from "./passkey-shield-v2.png"
-import patients from "./presentation/patients-outlined.png"
-import scheduling from "./presentation/scheduling.png"
-import sendingAddress from "./presentation/sending-address-v2.png"
-import settings from "./presentation/settings.png"
-import telephony from "./presentation/telephony.png"
-import users from "./presentation/users-outlined.png"
-import workflow from "./presentation/workflow.png"
+// Render these with <Art> from "@/components/Art".
+import admin from "./svg/admin.svg?raw"
+import appointmentSync from "./svg/appointment-sync.svg?raw"
+import appointmentTypes from "./svg/appointment-types.svg?raw"
+import audit from "./svg/audit.svg?raw"
+import callbackQueue from "./svg/callback-queue.svg?raw"
+import calls from "./svg/calls.svg?raw"
+import campaignEmails from "./svg/campaign-emails-v2.svg?raw"
+import campaigns from "./svg/campaigns-outlined.svg?raw"
+import contactForms from "./svg/contact-forms-v2.svg?raw"
+import dashboard from "./svg/dashboard.svg?raw"
+import emailPreferences from "./svg/email-preferences-v2.svg?raw"
+import emailTemplates from "./svg/email-templates-v2.svg?raw"
+import groups from "./svg/groups.svg?raw"
+import inbox from "./svg/inbox.svg?raw"
+import insurancePlans from "./svg/insurance-plans.svg?raw"
+import leadForms from "./svg/lead-forms-v2.svg?raw"
+import messaging from "./svg/messaging.svg?raw"
+import operatories from "./svg/operatories.svg?raw"
+import passkey from "./svg/passkey-shield-v2.svg?raw"
+import patients from "./svg/patients-outlined.svg?raw"
+import scheduling from "./svg/scheduling.svg?raw"
+import sendingAddress from "./svg/sending-address-v2.svg?raw"
+import settings from "./svg/settings.svg?raw"
+import telephony from "./svg/telephony.svg?raw"
+import users from "./svg/users-outlined.svg?raw"
+import workflow from "./svg/workflow.svg?raw"
 
 export const pageArt = {
     admin,

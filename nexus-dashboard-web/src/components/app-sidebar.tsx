@@ -10,7 +10,8 @@ import {
     SidebarRail,
 } from "@/components/ui/sidebar"
 import { LocationSelector } from "@/components/location-selector"
-import { pageArt, type PageArtName } from "@/assets/icons"
+import { type PageArtName } from "@/assets/icons"
+import { Art } from "@/components/Art"
 import { Link, useLocation } from "react-router-dom"
 import { useAuth } from "@/context/AuthContext"
 import { useInstitution } from "@/context/InstitutionContext"
@@ -276,12 +277,10 @@ function NavItem({ item, isActive }: { item: NavItemDef; isActive: boolean }) {
                 `}
             >
                 <Link to={item.url} aria-current={isActive ? "page" : undefined}>
-                    <span
-                        className="nav-art grid size-9 shrink-0 place-items-center overflow-hidden rounded-md p-1 group-data-[collapsible=icon]:size-6 group-data-[collapsible=icon]:p-0.5"
-                        aria-hidden="true"
-                    >
-                        <img src={pageArt[art]} alt="" />
-                    </span>
+                    <Art
+                        name={art}
+                        className="nav-art size-8 shrink-0 group-data-[collapsible=icon]:size-6"
+                    />
                     <span>{item.title}</span>
                 </Link>
             </SidebarMenuButton>

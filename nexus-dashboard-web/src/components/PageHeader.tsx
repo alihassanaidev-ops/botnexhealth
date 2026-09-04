@@ -1,6 +1,7 @@
 import type { LucideIcon } from "lucide-react"
 import type { ReactNode } from "react"
-import { pageArt, type PageArtName } from "@/assets/icons"
+import { type PageArtName } from "@/assets/icons"
+import { Art } from "@/components/Art"
 import { cn } from "@/lib/utils"
 
 // One consistent page heading for every page: an icon, the title, an optional
@@ -31,9 +32,7 @@ export function PageHeader({
         <div className={cn("flex flex-wrap items-start justify-between gap-4", className)}>
             <div className="flex items-start gap-3">
                 {art ? (
-                    <span className="ui-artwork size-11 p-1.5">
-                        <img src={pageArt[art]} alt="" aria-hidden="true" />
-                    </span>
+                    <Art name={art} className="ui-artwork size-11 shrink-0" />
                 ) : (
                     Icon && (
                         <span className="grid size-10 shrink-0 place-items-center rounded-xl bg-neutral-900 text-white ring-1 ring-black/5 dark:bg-neutral-800 dark:ring-white/10">
