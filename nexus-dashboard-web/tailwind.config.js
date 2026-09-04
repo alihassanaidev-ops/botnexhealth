@@ -7,11 +7,20 @@ export default {
   ],
   theme: {
 	extend: {
-		// One step below Tailwind's `xs`, for micro-labels: table meta rows,
-		// counts, badge text. In rem so it tracks the root clamp — a hardcoded
-		// px size would stay frozen while the rest of the UI scales.
+		// The small end of the type scale, with a floor.
+		//
+		// These stay in rem so they grow on a large display, but max() stops
+		// them collapsing on a laptop: against a ~14.5px root, a bare 0.75rem
+		// `text-xs` lands at 10.9px and `2xs` at 9.9px, which is where the
+		// "some text is genuinely tiny" complaint came from. The floors bite
+		// below roughly a 16px root and fall away above it, so nothing is
+		// capped on the screens that can afford the size.
+		//
+		// Line heights are unitless so they follow whichever value wins.
 		fontSize: {
-			'2xs': ['0.68rem', { lineHeight: '1.35' }],
+			'2xs': ['max(0.68rem, 11px)', { lineHeight: '1.35' }],
+			xs: ['max(0.75rem, 12px)', { lineHeight: '1.35' }],
+			sm: ['max(0.875rem, 13px)', { lineHeight: '1.45' }],
 		},
 		colors: {
 			border: 'hsl(var(--border))',

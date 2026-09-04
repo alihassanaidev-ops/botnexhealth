@@ -10,45 +10,18 @@ import {
     SidebarRail,
 } from "@/components/ui/sidebar"
 import { LocationSelector } from "@/components/location-selector"
-import {
-    Home,
-    Users,
-    Building2,
-    CalendarCheck,
-    CalendarOff,
-    CalendarClock,
-    UserCog,
-    Armchair,
-    LayoutDashboard,
-    Megaphone,
-    Phone,
-    PhoneForwarded,
-    Shield,
-    ShieldCheck,
-    ShieldOff,
-    MessageSquare,
-    Mail,
-    MailCheck,
-    Inbox as InboxIcon,
-    FormInput as FormInputIcon,
-    Settings,
-    ClipboardList,
-    Layers,
-    Tag,
-    TriangleAlert,
-} from "lucide-react"
 import { pageArt, type PageArtName } from "@/assets/icons"
 import { Link, useLocation } from "react-router-dom"
 import { useAuth } from "@/context/AuthContext"
 import { useInstitution } from "@/context/InstitutionContext"
 
-type NavItemDef = { title: string; url: string; icon: React.ElementType; exact?: boolean }
+type NavItemDef = { title: string; url: string; exact?: boolean }
 
 // Illustrated artwork for the nav, keyed by route rather than by nav title:
 // the same route appears in several role-specific nav lists and must always
-// carry the same icon, and a route is the thing that doesn't change when a
-// label is reworded. Routes absent here keep their lucide glyph.
-const NAV_ART: Partial<Record<string, PageArtName>> = {
+// carry the same icon. Every route is intentionally required here so a new
+// sidebar item cannot silently fall back to an inconsistent glyph.
+const NAV_ART: Record<string, PageArtName> = {
     "/admin": "dashboard",
     "/admin/audit-logs": "audit",
     "/admin/twilio": "telephony",
@@ -69,6 +42,8 @@ const NAV_ART: Partial<Record<string, PageArtName>> = {
     "/institution-admin/email-inbox": "inbox",
     "/institution-admin/email-sending-address": "sendingAddress",
     "/institution-admin/email-templates": "emailTemplates",
+    "/institution-admin/enquiry-forms": "contactForms",
+    "/institution-admin/lead-forms": "leadForms",
     "/institution-admin/quiet-hours-exceptions": "scheduling",
     "/institution-admin/settings": "settings",
     "/institution-admin/sms-templates": "messaging",
@@ -94,61 +69,50 @@ const adminNav: NavItemDef[] = [
     {
         title: "Admin Dashboard",
         url: "/admin",
-        icon: LayoutDashboard,
         exact: true,
     },
     {
         title: "Institutions",
         url: "/institutions",
-        icon: Users,
     },
     {
         title: "Groups",
         url: "/groups",
-        icon: Layers,
     },
     {
         title: "Users",
         url: "/admin/users",
-        icon: UserCog,
     },
     {
         // Platform-wide patient conversations. The page filters by practice
         // and location; the API is what actually enforces the span.
         title: "Inbox",
         url: "/inbox",
-        icon: InboxIcon,
     },
     {
         // Both email admin surfaces ask which practice first.
         title: "Campaign Emails",
         url: "/institution-admin/campaign-email-templates",
-        icon: Mail,
     },
     {
         title: "Sending Addresses",
         url: "/institution-admin/email-sending-address",
-        icon: MailCheck,
     },
     {
         title: "Inbound Email",
         url: "/institution-admin/email-inbox",
-        icon: InboxIcon,
     },
     {
         title: "Phone Numbers",
         url: "/admin/twilio",
-        icon: MessageSquare,
     },
     {
         title: "Audit Logs",
         url: "/admin/audit-logs",
-        icon: ShieldCheck,
     },
     {
         title: "Automation issues",
         url: "/undeliverables",
-        icon: TriangleAlert,
     },
 ]
 
@@ -156,58 +120,47 @@ const institutionAdminNav: NavItemDef[] = [
     {
         title: "Institution Admin",
         url: "/institution-admin",
-        icon: Building2,
         exact: true,
     },
     {
         title: "User Management",
         url: "/institution-admin/users",
-        icon: Users,
     },
     {
         title: "Dashboard",
         url: "/dashboard",
-        icon: Home,
     },
     {
         title: "Calls",
         url: "/calls",
-        icon: Phone,
     },
     {
         title: "Callback Queue",
         url: "/callbacks",
-        icon: PhoneForwarded,
     },
     {
         title: "Call Statuses",
         url: "/institution-admin/call-statuses",
-        icon: Tag,
     },
     {
         title: "Campaigns",
         url: "/institution-admin/campaigns",
-        icon: Megaphone,
     },
     {
         title: "Appointment Sync",
         url: "/institution-admin/appointment-sync",
-        icon: CalendarClock,
     },
     {
         title: "DNC Patients",
         url: "/institution-admin/do-not-contact",
-        icon: ShieldOff,
     },
     {
         title: "Quiet Hours",
         url: "/institution-admin/quiet-hours-exceptions",
-        icon: CalendarOff,
     },
     {
         title: "Automation issues",
         url: "/undeliverables",
-        icon: TriangleAlert,
     },
 ]
 
@@ -215,38 +168,31 @@ const locationAdminNav: NavItemDef[] = [
     {
         title: "Management",
         url: "/location-admin",
-        icon: Building2,
         exact: true,
     },
     {
         title: "Dashboard",
         url: "/dashboard",
-        icon: Home,
     },
     {
         title: "Calls",
         url: "/calls",
-        icon: Phone,
     },
     {
         title: "Callback Queue",
         url: "/callbacks",
-        icon: PhoneForwarded,
     },
     {
         title: "Call Statuses",
         url: "/institution-admin/call-statuses",
-        icon: Tag,
     },
     {
         title: "Appointment Sync",
         url: "/institution-admin/appointment-sync",
-        icon: CalendarClock,
     },
     {
         title: "Automation issues",
         url: "/undeliverables",
-        icon: TriangleAlert,
     },
 ]
 
@@ -254,17 +200,14 @@ const staffNav: NavItemDef[] = [
     {
         title: "Dashboard",
         url: "/dashboard",
-        icon: Home,
     },
     {
         title: "Calls",
         url: "/calls",
-        icon: Phone,
     },
     {
         title: "Callback Queue",
         url: "/callbacks",
-        icon: PhoneForwarded,
     },
 ]
 
@@ -273,7 +216,6 @@ const groupNav: NavItemDef[] = [
     {
         title: "Group Dashboard",
         url: "/group",
-        icon: Layers,
         exact: true,
     },
     {
@@ -281,7 +223,6 @@ const groupNav: NavItemDef[] = [
         // content, so the page renders volumes and response times.
         title: "Conversations",
         url: "/inbox",
-        icon: InboxIcon,
     },
 ]
 
@@ -290,42 +231,37 @@ const navSetup: NavItemDef[] = [
     {
         title: "Setup Overview",
         url: "/setup",
-        icon: ClipboardList,
         exact: true,
     },
     {
         title: "Appointment Types",
         url: "/setup/appointment-types",
-        icon: CalendarCheck,
     },
     {
         title: "Reasons",
         url: "/setup/reasons",
-        icon: Tag,
     },
     {
         title: "Providers & Scheduling",
         url: "/setup/providers",
-        icon: UserCog,
     },
     {
         title: "Operatories",
         url: "/setup/operatories",
-        icon: Armchair,
     },
     {
         title: "Insurance Plans",
         url: "/setup/insurance-plans",
-        icon: Shield,
     },
     {
         title: "Audit Logs",
         url: "/setup/audit-logs",
-        icon: ShieldCheck,
     },
 ]
 
 function NavItem({ item, isActive }: { item: NavItemDef; isActive: boolean }) {
+    const art = NAV_ART[item.url]
+
     return (
         <SidebarMenuItem>
             <SidebarMenuButton
@@ -340,16 +276,12 @@ function NavItem({ item, isActive }: { item: NavItemDef; isActive: boolean }) {
                 `}
             >
                 <Link to={item.url} aria-current={isActive ? "page" : undefined}>
-                    {NAV_ART[item.url] ? (
-                        <span
-                            className="nav-art grid size-9 shrink-0 place-items-center overflow-hidden rounded-md p-1 group-data-[collapsible=icon]:size-6 group-data-[collapsible=icon]:p-0.5"
-                            aria-hidden="true"
-                        >
-                            <img src={pageArt[NAV_ART[item.url]!]} alt="" />
-                        </span>
-                    ) : (
-                        <item.icon className={`transition-colors ${isActive ? "text-sidebar-primary" : ""}`} />
-                    )}
+                    <span
+                        className="nav-art grid size-9 shrink-0 place-items-center overflow-hidden rounded-md p-1 group-data-[collapsible=icon]:size-6 group-data-[collapsible=icon]:p-0.5"
+                        aria-hidden="true"
+                    >
+                        <img src={pageArt[art]} alt="" />
+                    </span>
                     <span>{item.title}</span>
                 </Link>
             </SidebarMenuButton>
@@ -423,13 +355,13 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
                             ))}
                             {isInstitution && (
                                 <NavItem
-                                    item={{ title: "Contacts", url: "/contacts", icon: Users }}
+                                    item={{ title: "Contacts", url: "/contacts" }}
                                     isActive={location.pathname === "/contacts" || location.pathname.startsWith("/contacts/") || location.pathname === "/enquiries"}
                                 />
                             )}
                             {isInstitution && hasPms && (
                                 <NavItem
-                                    item={{ title: "Patients", url: "/patients", icon: ClipboardList }}
+                                    item={{ title: "Patients", url: "/patients" }}
                                     isActive={location.pathname === "/patients" || location.pathname.startsWith("/patients/")}
                                 />
                             )}
@@ -470,7 +402,6 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
                                         item={{
                                             title: "Email Templates",
                                             url: "/institution-admin/email-templates",
-                                            icon: Mail,
                                         }}
                                         isActive={location.pathname === "/institution-admin/email-templates"}
                                     />
@@ -480,7 +411,6 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
                                         item={{
                                             title: "Inbound Email",
                                             url: "/institution-admin/email-inbox",
-                                            icon: InboxIcon,
                                         }}
                                         isActive={location.pathname.startsWith("/institution-admin/email-inbox")}
                                     />
@@ -490,7 +420,6 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
                                         item={{
                                             title: "Contact Forms",
                                             url: "/institution-admin/enquiry-forms",
-                                            icon: InboxIcon,
                                         }}
                                         isActive={location.pathname === "/institution-admin/enquiry-forms"}
                                     />
@@ -500,7 +429,6 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
                                         item={{
                                             title: "Lead Forms",
                                             url: "/institution-admin/lead-forms",
-                                            icon: FormInputIcon,
                                         }}
                                         isActive={location.pathname.startsWith(
                                             "/institution-admin/lead-forms",
@@ -512,7 +440,6 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
                                         item={{
                                             title: "SMS Templates",
                                             url: "/institution-admin/sms-templates",
-                                            icon: MessageSquare,
                                         }}
                                         isActive={location.pathname === "/institution-admin/sms-templates"}
                                     />
@@ -522,7 +449,6 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
                                         item={{
                                             title: "Inbox",
                                             url: "/inbox",
-                                            icon: InboxIcon,
                                         }}
                                         isActive={location.pathname.startsWith("/inbox")}
                                     />
@@ -532,7 +458,6 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
                                         item={{
                                             title: "Campaign Emails",
                                             url: "/institution-admin/campaign-email-templates",
-                                            icon: Mail,
                                         }}
                                         isActive={location.pathname.startsWith("/institution-admin/campaign-email-templates")}
                                     />
@@ -542,7 +467,6 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
                                         item={{
                                             title: "Sending Address",
                                             url: "/institution-admin/email-sending-address",
-                                            icon: Mail,
                                         }}
                                         isActive={location.pathname.startsWith("/institution-admin/email-sending-address")}
                                     />
@@ -551,7 +475,6 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
                                     item={{
                                         title: "Email Preferences",
                                         url: "/notification-preferences",
-                                        icon: MailCheck,
                                     }}
                                     isActive={location.pathname === "/notification-preferences"}
                                 />
@@ -560,7 +483,6 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
                                         item={{
                                             title: "SMS Preferences",
                                             url: "/sms-preferences",
-                                            icon: MessageSquare,
                                         }}
                                         isActive={location.pathname === "/sms-preferences"}
                                     />
@@ -570,7 +492,6 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
                                         item={{
                                             title: "Settings",
                                             url: "/institution-admin/settings",
-                                            icon: Settings,
                                         }}
                                         isActive={location.pathname === "/institution-admin/settings" || location.pathname.startsWith("/institution-admin/settings")}
                                     />

@@ -22,8 +22,8 @@
     --space-8: 2rem;
 
     --font-sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Inter, ui-sans-serif, system-ui, sans-serif;
-    --text-xs: 0.75rem;
-    --text-sm: 0.875rem;
+    --text-xs: max(0.75rem, 12px);
+    --text-sm: max(0.875rem, 13px);
     --text-base: 1rem;
     --text-lg: 1.125rem;
     --text-xl: 1.375rem;
@@ -137,11 +137,15 @@
 
   /* The whole interface is sized off this one value. A flat 14px kept the
      UI dense on a laptop but left it stranded at the same physical size on
-     a 4K panel, where it reads as a postage stamp in the corner. Clamping
-     against the viewport lets every rem-based size — text, padding, control
-     heights — grow together and stay proportionate at both ends. */
+     a 4K panel, where it reads as a postage stamp in the corner.
+     
+     The slope is deliberately shallow: ~14.5px on a 1440px laptop, so density
+     stays close to the old flat 14px, rising to 17.5px at 4K. An earlier,
+     steeper curve hit 15.5px on the same laptop and read as though the whole
+     page had been zoomed. Small text is not fixed by scaling everything up —
+     that is what the floors on the small sizes in tailwind.config.js are for. */
   html {
-    font-size: clamp(15px, calc(12.6px + 0.2vw), 20px);
+    font-size: clamp(14px, calc(12.7px + 0.125vw), 17.5px);
   }
 
   body {

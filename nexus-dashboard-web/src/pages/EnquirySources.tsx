@@ -105,6 +105,7 @@ export default function EnquirySources() {
     return (
         <div className="space-y-6">
             <PageHeader
+                art="contactForms"
                 title="Contact forms"
                 description="Give each website or marketing form its own secure address for adding contacts."
             />

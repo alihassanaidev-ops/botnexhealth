@@ -221,6 +221,7 @@ export default function FormIntegrations() {
     return (
         <div className="space-y-6">
             <PageHeader
+                art="leadForms"
                 title="Lead forms"
                 description="Connect Meta and Typeform, choose which forms bring people in, and map their questions onto your contact fields."
             />

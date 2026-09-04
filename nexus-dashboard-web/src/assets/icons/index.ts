@@ -15,12 +15,14 @@ import callbackQueue from "./presentation/callback-queue.png"
 import calls from "./presentation/calls.png"
 import campaignEmails from "./presentation/campaign-emails-v2.png"
 import campaigns from "./presentation/campaigns-outlined.png"
+import contactForms from "./presentation/contact-forms.png"
 import dashboard from "./presentation/dashboard.png"
 import emailPreferences from "./presentation/email-preferences-v2.png"
 import emailTemplates from "./presentation/email-templates-v2.png"
 import groups from "./presentation/groups.png"
 import inbox from "./presentation/inbox.png"
 import insurancePlans from "./presentation/insurance-plans.png"
+import leadForms from "./presentation/lead-forms.png"
 import messaging from "./presentation/messaging.png"
 import operatories from "./presentation/operatories.png"
 import passkey from "./passkey-shield-v2.png"
@@ -41,12 +43,14 @@ export const pageArt = {
     calls,
     campaignEmails,
     campaigns,
+    contactForms,
     dashboard,
     emailPreferences,
     emailTemplates,
     groups,
     inbox,
     insurancePlans,
+    leadForms,
     messaging,
     operatories,
     passkey,
