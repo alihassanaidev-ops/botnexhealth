@@ -84,7 +84,7 @@ export default {
 			md: 'var(--radius-md)',
 			lg: 'var(--radius-lg)',
 			xl: 'var(--radius-xl)',
-			'2xl': 'var(--radius-xl)'
+			'2xl': 'var(--radius-2xl)'
 		},
 		keyframes: {
 			'accordion-down': {

@@ -32,11 +32,21 @@
     --control-sm: 2rem;
     --control-md: 2.5rem;
 
-    --radius-xs: 0.3rem;
-    --radius-sm: 0.45rem;
-    --radius-md: 0.625rem;
-    --radius-lg: 0.8rem;
-    --radius-xl: 1rem;
+    /* Calibrated to what staging had before the refactor: --radius was
+       0.5rem, giving lg 8px / md 6px / sm 4px. The refactor branch ran
+       ~45% rounder than that, which lost the squarer, more technical feel.
+       Keeping the named steps is the part worth having — it is only the
+       values that come back down. xl and 2xl match Tailwind's defaults so
+       existing rounded-xl / rounded-2xl usages are unchanged.
+
+       In rem rather than staging's calc(var(--radius) - 2px): subtracting
+       fixed pixels meant the steps converged as the root scaled. */
+    --radius-xs: 0.1875rem;
+    --radius-sm: 0.25rem;
+    --radius-md: 0.375rem;
+    --radius-lg: 0.5rem;
+    --radius-xl: 0.75rem;
+    --radius-2xl: 1rem;
     --radius-pill: 999px;
 
     --surface-radius: var(--radius-lg);
