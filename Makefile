@@ -5,7 +5,7 @@ COMPOSE := docker compose -f docker-compose.dev.yml
 # BotNexHealth - Development Commands
 # =============================================================================
 
-.PHONY: help setup test-rls dev up up-deps up-app down logs api-logs worker-logs web-logs db-logs redis-logs migrate test lint clean build run cdk-synth-staging cdk-deploy-staging cdk-run-migrations-staging cdk-publish-frontend-staging health
+.PHONY: help setup test-rls dev up up-deps up-app down logs api-logs worker-logs web-logs db-logs redis-logs migrate test lint clean build run cdk-synth-staging cdk-deploy-staging cdk-run-migrations-staging cdk-publish-frontend-staging publish-frontend-ref health
 
 help:
 	@echo "BotNexHealth Development Commands"
@@ -113,6 +113,13 @@ cdk-run-migrations-staging:
 
 cdk-publish-frontend-staging:
 	AWS_PROFILE=$${AWS_PROFILE:-deployer} CDK_STACK_NAME=$${CDK_STACK_NAME:-nex-health-staging} bash scripts/publish_frontend_from_cdk.sh
+
+# Put a different frontend build live without touching the API. REF is any git
+# ref — used to roll the UI back to a tagged baseline in about two minutes.
+#   make publish-frontend-ref REF=ui-baseline-2026-09-05
+publish-frontend-ref:
+	@test -n "$(REF)" || (echo "usage: make publish-frontend-ref REF=<git-ref>" && exit 64)
+	bash scripts/publish_frontend_ref.sh "$(REF)"
 
 # =============================================================================
 # Maintenance
