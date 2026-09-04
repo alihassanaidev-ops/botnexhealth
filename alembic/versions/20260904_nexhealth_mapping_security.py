@@ -48,6 +48,10 @@ def upgrade() -> None:
         """
         DROP TRIGGER IF EXISTS institution_locations_nexhealth_subdomain_guard
         ON institution_locations;
+        """
+    )
+    op.execute(
+        """
         CREATE TRIGGER institution_locations_nexhealth_subdomain_guard
         BEFORE INSERT OR UPDATE OF institution_id, nexhealth_subdomain
         ON institution_locations
@@ -71,7 +75,15 @@ def downgrade() -> None:
         """
         DROP TRIGGER IF EXISTS institution_locations_nexhealth_subdomain_guard
         ON institution_locations;
+        """
+    )
+    op.execute(
+        """
         DROP FUNCTION IF EXISTS enforce_nexhealth_subdomain_institution();
+        """
+    )
+    op.execute(
+        """
         DROP INDEX IF EXISTS uq_institution_locations_nexhealth_mapping;
         """
     )
