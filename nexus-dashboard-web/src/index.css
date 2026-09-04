@@ -100,51 +100,62 @@
   }
 
   .dark {
-    --background: 0 0% 2%;
-    --foreground: 210 20% 92%;
-    --card: 0 0% 5%;
-    --card-foreground: 210 20% 92%;
-    --popover: 0 0% 6%;
-    --popover-foreground: 210 20% 92%;
-    --primary: 265 85% 65%;
-    --primary-2: 220 90% 68%;
+    /* Not a inversion of the light theme, and deliberately not near-black.
+       Three things this fixes: pure black leaves nothing to cast a shadow
+       onto, so elevation has to be carried by lighter surfaces instead;
+       neutrals with no hue read as dead next to tinted text (the light theme
+       already tints its foreground, dark used to drop it); and text on
+       near-black ran at 16.9:1, more than double what AAA asks and harsh
+       enough to make one-pixel light strokes sparkle at the edges.
+
+       Surfaces are tinted toward the brand's cool end and stepped widely
+       enough that a card reads as raised rather than as a slightly different
+       black. Text lands at 13.6:1 — still well past AAA. */
+    --background: 230 16% 9%;
+    --foreground: 220 18% 88%;
+    --card: 230 14% 13%;
+    --card-foreground: 220 18% 88%;
+    --popover: 230 14% 15%;
+    --popover-foreground: 220 18% 88%;
+    --primary: 265 85% 68%;
+    --primary-2: 220 90% 70%;
     --primary-foreground: 0 0% 100%;
-    --secondary: 0 0% 9%;
-    --secondary-foreground: 210 20% 92%;
-    --muted: 0 0% 8%;
-    --muted-foreground: 220 15% 58%;
-    --accent: 265 20% 12%;
-    --accent-foreground: 210 20% 92%;
-    --destructive: 0 62.8% 30.6%;
-    --destructive-foreground: 210 20% 92%;
-    --border: 0 0% 12%;
-    --input: 0 0% 14%;
-    --ring: 265 85% 65%;
+    --secondary: 230 12% 20%;
+    --secondary-foreground: 220 18% 88%;
+    --muted: 230 12% 17%;
+    --muted-foreground: 220 14% 63%;
+    --accent: 265 24% 24%;
+    --accent-foreground: 220 18% 92%;
+    /* Lifted off the old 30%, which was tuned to sit on near-black and turns
+       muddy against these surfaces. 58% is the crossover between the two ways
+       this token gets used: white-on-destructive as a button reads 4.05:1,
+       and destructive-as-text on a card reads 4.10:1. Both beat the light
+       theme's own 3.76:1 for the button case. */
+    --destructive: 0 70% 58%;
+    --destructive-foreground: 0 0% 100%;
+    --border: 230 12% 26%;
+    --input: 230 12% 30%;
+    --ring: 265 85% 68%;
 
-    --chart-1: 265 85% 65%;
-    --chart-2: 150 70% 50%;
-    --chart-3: 180 65% 45%;
-    --chart-4: 220 60% 60%;
-    --chart-5: 340 75% 55%;
+    --chart-1: 265 85% 68%;
+    --chart-2: 150 65% 55%;
+    --chart-3: 180 60% 52%;
+    --chart-4: 220 70% 66%;
+    --chart-5: 340 70% 62%;
 
-    --sidebar-background: 0 0% 3%;
-    --sidebar-foreground: 210 20% 90%;
-    --sidebar-primary: 265 85% 65%;
+    --sidebar-background: 230 16% 11%;
+    --sidebar-foreground: 220 16% 85%;
+    --sidebar-primary: 265 85% 68%;
     --sidebar-primary-foreground: 0 0% 100%;
-    --sidebar-accent: 265 20% 10%;
-    --sidebar-accent-foreground: 210 20% 90%;
-    --sidebar-border: 0 0% 10%;
-    --sidebar-ring: 265 85% 65%;
+    --sidebar-accent: 265 24% 22%;
+    --sidebar-accent-foreground: 220 18% 92%;
+    --sidebar-border: 230 12% 22%;
+    --sidebar-ring: 265 85% 68%;
 
-    /* Illustration colours stop short of the extremes here, rather than
-       inheriting --foreground and --card like the light theme does.
-       Anti-aliased edges are composited in sRGB, so a near-white line on a
-       near-black ground blends to a value that reads far brighter than half
-       and the edge sparkles. These outlines are only about 1px at sidebar
-       size, which is exactly where that shows. Backing off the contrast
-       costs nothing in legibility and settles the edges down. */
-    --art-ink: hsl(220 14% 84%);
-    --art-surface: hsl(230 12% 13%);
+    /* The artwork goes back to inheriting the theme. It needed pulling off
+       the extremes only while the ground was near-black; these surfaces are
+       gentle enough that the illustrations can follow --foreground and
+       --card like they do in light mode. */
   }
 }
 
