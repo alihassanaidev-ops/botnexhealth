@@ -80,6 +80,12 @@
     --accent-foreground: 0 0% 20%;
     --destructive: 0 84.2% 60.2%;
     --destructive-foreground: 0 0% 100%;
+    /* Between neutral and destructive: a number somebody has to deal with, but
+       nothing has gone wrong. There was no token for this, so every amber in
+       the app was a literal — the KPI artwork tint, the blank-merge-field
+       warnings — each one a value nobody could find to change. */
+    --warning: 32 94% 44%;
+    --warning-foreground: 0 0% 100%;
     --border: 0 0% 90%;
     --input: 0 0% 90%;
     --ring: 265 85% 55%;
@@ -133,6 +139,10 @@
        theme's own 3.76:1 for the button case. */
     --destructive: 0 70% 58%;
     --destructive-foreground: 0 0% 100%;
+    /* Lifted and desaturated like the rest of the dark ramp: the light theme's
+       amber goes muddy on these surfaces. */
+    --warning: 43 96% 62%;
+    --warning-foreground: 0 0% 10%;
     --border: 230 12% 26%;
     --input: 230 12% 30%;
     --ring: 265 85% 68%;

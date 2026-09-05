@@ -17,6 +17,8 @@ import admin from "./svg/admin.svg?raw"
 import appointmentSync from "./svg/appointment-sync.svg?raw"
 import appointmentTypes from "./svg/appointment-types.svg?raw"
 import audit from "./svg/audit.svg?raw"
+import awaitingCallback from "./svg/awaiting-callback.svg?raw"
+import bookingRate from "./svg/booking-rate.svg?raw"
 import callbackQueue from "./svg/callback-queue.svg?raw"
 import calls from "./svg/calls.svg?raw"
 import campaignEmails from "./svg/campaign-emails-v2.svg?raw"
@@ -25,10 +27,12 @@ import contactForms from "./svg/contact-forms-v2.svg?raw"
 import dashboard from "./svg/dashboard.svg?raw"
 import emailPreferences from "./svg/email-preferences-v2.svg?raw"
 import emailTemplates from "./svg/email-templates-v2.svg?raw"
+import emergencyCalls from "./svg/emergency-calls.svg?raw"
 import groups from "./svg/groups.svg?raw"
 import inbox from "./svg/inbox.svg?raw"
 import insurancePlans from "./svg/insurance-plans.svg?raw"
 import leadForms from "./svg/lead-forms-v2.svg?raw"
+import manualBooking from "./svg/manual-booking.svg?raw"
 import messaging from "./svg/messaging.svg?raw"
 import operatories from "./svg/operatories.svg?raw"
 import passkey from "./svg/passkey-shield-v2.svg?raw"
@@ -45,6 +49,8 @@ export const pageArt = {
     appointmentSync,
     appointmentTypes,
     audit,
+    awaitingCallback,
+    bookingRate,
     callbackQueue,
     calls,
     campaignEmails,
@@ -53,10 +59,12 @@ export const pageArt = {
     dashboard,
     emailPreferences,
     emailTemplates,
+    emergencyCalls,
     groups,
     inbox,
     insurancePlans,
     leadForms,
+    manualBooking,
     messaging,
     operatories,
     passkey,

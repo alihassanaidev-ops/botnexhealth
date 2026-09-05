@@ -120,3 +120,8 @@ git
 
 # Playwright MCP session artifacts (console logs, page snapshots)
 .playwright-mcp/
+
+# Source rasters the icon SVGs were drawn from. Build inputs, not runtime
+# assets — nothing imports them and the SVGs they produce are a fiftieth the
+# size, so committing them would put megabytes of binaries in the history.
+nexus-dashboard-web/src/assets/icons/generated/

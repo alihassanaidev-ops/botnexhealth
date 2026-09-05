@@ -1,12 +1,7 @@
 import { Link } from "react-router-dom"
-import {
-    AlertTriangle,
-    CalendarPlus,
-    PhoneMissed,
-    Target,
-    type LucideIcon,
-} from "lucide-react"
 
+import type { PageArtName } from "@/assets/icons"
+import { Art } from "@/components/Art"
 import { Card, CardContent } from "@/components/ui/card"
 import { Skeleton } from "@/components/ui/skeleton"
 import { cn } from "@/lib/utils"
@@ -16,7 +11,7 @@ interface Kpi {
     value: string
     /** What the number means, or what to do about it. */
     hint: string
-    icon: LucideIcon
+    art: PageArtName
     /** The list this number came from. A count you cannot open is a dead end. */
     to?: string
     /** Draw attention only when the number is one somebody must act on. */
@@ -54,13 +49,13 @@ export function AdminKpiRow({
             label: "Booking rate",
             value: `${Math.round(bookingRate ?? 0)}%`,
             hint: "Calls this month that ended in a booking",
-            icon: Target,
+            art: "bookingRate",
         },
         {
             label: "Emergency calls",
             value: String(emergencyCalls ?? 0),
             hint: "Flagged urgent this month",
-            icon: AlertTriangle,
+            art: "emergencyCalls",
             to: "/calls",
             attention: (emergencyCalls ?? 0) > 0,
         },
@@ -68,7 +63,7 @@ export function AdminKpiRow({
             label: "Awaiting callback",
             value: String(needsCallback ?? 0),
             hint: "Callers who asked to be rung back",
-            icon: PhoneMissed,
+            art: "awaitingCallback",
             to: "/callbacks",
             attention: (needsCallback ?? 0) > 0,
         },
@@ -79,7 +74,7 @@ export function AdminKpiRow({
             label: "To book manually",
             value: String(needsBooking ?? 0),
             hint: "Appointment requests still to enter",
-            icon: CalendarPlus,
+            art: "manualBooking",
             to: "/calls",
             attention: (needsBooking ?? 0) > 0,
         })
@@ -104,19 +99,21 @@ export function AdminKpiRow({
     return (
         <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
             {kpis.map((kpi) => {
-                const Icon = kpi.icon
                 const body = (
                     <CardContent className="p-4">
                         <div className="flex items-center justify-between gap-2">
                             <span className="text-xs font-medium text-muted-foreground">
                                 {kpi.label}
                             </span>
-                            <Icon
+                            <Art
+                                name={kpi.art}
                                 className={cn(
-                                    "h-4 w-4 shrink-0",
-                                    kpi.attention
-                                        ? "text-amber-600 dark:text-amber-400"
-                                        : "text-muted-foreground/50",
+                                    "ui-artwork size-10 shrink-0 xl:size-11 2xl:size-12",
+                                    // Repoint only the accent: the drawing keeps its
+                                    // ink and surface and picks up the warning hue
+                                    // where it was coloured, rather than turning into
+                                    // a flat amber silhouette.
+                                    kpi.attention && "[--art-accent:hsl(var(--warning))]",
                                 )}
                             />
                         </div>
