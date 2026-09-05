@@ -56,15 +56,38 @@ describe("TestRunDialog — server-side dry-run", () => {
         expect(screen.getByText("Server: exit")).toBeInTheDocument()
     })
 
-    it("falls back to the client-side walker when the request fails", async () => {
+    it("shows a failure instead of simulating locally when the request fails", async () => {
         post.mockRejectedValue(new Error("network"))
 
         render(<TestRunDialog open onOpenChange={() => {}} def={DEF} />)
 
         await waitFor(() => expect(post).toHaveBeenCalled())
-        // Offline walker labels the SMS step "Send SMS" and shows the fallback notice.
-        expect(await screen.findByText("Send SMS")).toBeInTheDocument()
-        expect(screen.getByText(/simulated locally/i)).toBeInTheDocument()
+        expect(
+            await screen.findByText(/simulation could not be run/i),
+        ).toBeInTheDocument()
+        // No approximate preview stands in: the steps must not render at all,
+        // or an outage reads as a working workflow.
+        expect(screen.queryByText("Send SMS")).not.toBeInTheDocument()
+        expect(screen.queryByText(/final outcome/i)).not.toBeInTheDocument()
+    })
+
+    it("retries the dry-run when asked", async () => {
+        const user = userEvent.setup()
+        post.mockRejectedValueOnce(new Error("network"))
+        render(<TestRunDialog open onOpenChange={() => {}} def={DEF} />)
+        await screen.findByText(/simulation could not be run/i)
+
+        post.mockResolvedValueOnce({
+            data: {
+                steps: [{ node_id: "sms-1", node_type: "send_sms", summary: "Send welcome SMS" }],
+                outcome: "sent",
+                truncated: false,
+            },
+        })
+        await user.click(screen.getByRole("button", { name: /try again/i }))
+
+        expect(await screen.findByText("Send welcome SMS")).toBeInTheDocument()
+        expect(screen.queryByText(/simulation could not be run/i)).not.toBeInTheDocument()
     })
 })
 

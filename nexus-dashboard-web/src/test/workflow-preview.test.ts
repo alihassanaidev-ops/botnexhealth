@@ -1,6 +1,44 @@
-import { describe, it, expect } from "vitest"
+import { describe, it, expect, beforeEach, vi } from "vitest"
 import { renderTemplate, smsSegments } from "@/lib/workflow/preview"
-import { extractTokens, unknownTokens } from "@/lib/workflow/merge-fields"
+import { listMergeFields } from "@/lib/workflow-api"
+import {
+    extractTokens,
+    loadMergeFields,
+    unknownTokens,
+    _resetMergeFieldsCache,
+} from "@/lib/workflow/merge-fields"
+
+// Sample data comes from the backend catalog and nowhere else — there is no
+// static fallback to render against, so these tests load one explicitly.
+vi.mock("@/lib/workflow-api", () => ({ listMergeFields: vi.fn() }))
+
+const mockList = listMergeFields as ReturnType<typeof vi.fn>
+
+function item(name: string, sample: string) {
+    return {
+        name,
+        token: `{{${name}}}`,
+        label: name,
+        description: "",
+        sample,
+        group: "location",
+        availability: "derived" as const,
+        requires: [],
+        phi_level: "none" as const,
+        channels: ["sms", "email", "voice"],
+        trigger_types: ["event", "manual"],
+    }
+}
+
+beforeEach(async () => {
+    mockList.mockReset()
+    _resetMergeFieldsCache()
+    mockList.mockResolvedValue([
+        item("patient_first_name", "Jordan"),
+        item("clinic_name", "Riverside Dental"),
+    ])
+    await loadMergeFields()
+})
 
 describe("message preview", () => {
     it("substitutes known merge fields with sample data", () => {
