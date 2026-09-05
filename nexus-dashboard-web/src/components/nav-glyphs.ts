@@ -48,7 +48,6 @@ export const NAV_GLYPH: Record<string, LucideIcon> = {
     "/institution-admin": Building2,
     "/institution-admin/appointment-sync": CalendarClock,
     "/institution-admin/call-statuses": Tag,
-    "/institution-admin/campaign-email-templates": Mail,
     "/institution-admin/campaigns": Megaphone,
     "/institution-admin/do-not-contact": ShieldOff,
     "/institution-admin/email-inbox": InboxIcon,

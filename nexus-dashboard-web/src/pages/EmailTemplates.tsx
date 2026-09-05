@@ -14,9 +14,7 @@ import {
     Copy,
     Check,
 } from "lucide-react"
-import { PageHeader } from "@/components/PageHeader"
 import { toast } from "sonner"
-import { Link } from "react-router-dom"
 
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
@@ -87,7 +85,8 @@ const TEMPLATE_ORDER = [
     "patient_appointment_confirmation",
 ]
 
-export default function EmailTemplates() {
+/** Staff notification templates. A tab of the Email templates page. */
+export default function StaffEmailTemplatesPanel() {
     // No-PMS institutions can't truly book, so they configure the PHI-free
     // "Appointment Request" template instead of "Appointment Confirmation".
     // Show exactly one of the two per institution.
@@ -249,24 +248,6 @@ export default function EmailTemplates() {
 
         return (
             <div className="space-y-6">
-                <div>
-                    <div className="flex items-center gap-2 mb-1">
-                        <Link
-                            to="/institution-admin/settings"
-                            className="text-sm text-muted-foreground hover:text-foreground transition-colors"
-                        >
-                            Settings
-                        </Link>
-                        <span className="text-muted-foreground/50">/</span>
-                        <span className="text-sm font-medium">Email Templates</span>
-                    </div>
-                    <PageHeader
-                        art="emailTemplates"
-                        icon={Mail}
-                        title="Email Templates"
-                        description="Customize the notification emails sent to your team. Each template is linked to a specific notification type."
-                    />
-                </div>
 
                 <div className="grid gap-4">
                     {sorted.map((t) => {

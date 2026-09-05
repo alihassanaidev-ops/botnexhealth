@@ -520,6 +520,11 @@ ROUTES_BY_BOUNDARY: dict[str, tuple[str, ...]] = {
         "POST /api/institution/email-sending-identities/{identity_id}/deactivate-inbound",
     ),
     INSTITUTION_OR_SUPER_ADMIN: (
+        # The practice-wide switch for automatic staff alerts. Deciding that
+        # nobody is emailed is an institution-level choice, unlike the per-user
+        # preferences beside it, which any authenticated user sets for
+        # themselves.
+        "PUT /api/institution/notification-preferences/institution",
         # Clinic-authored campaign email templates. Institution-scoped content
         # a clinic admin owns for their own institution, and a platform admin
         # administers for any institution they name explicitly.

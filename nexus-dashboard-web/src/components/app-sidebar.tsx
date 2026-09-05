@@ -42,7 +42,6 @@ const NAV_ART: Record<string, PageArtName> = {
     "/institution-admin": "admin",
     "/institution-admin/appointment-sync": "appointmentSync",
     "/institution-admin/call-statuses": "workflow",
-    "/institution-admin/campaign-email-templates": "campaignEmails",
     "/institution-admin/campaigns": "campaigns",
     "/institution-admin/do-not-contact": "patients",
     "/institution-admin/email-inbox": "inbox",
@@ -97,7 +96,7 @@ const adminNav: NavItemDef[] = [
     {
         // Both email admin surfaces ask which practice first.
         title: "Campaign Emails",
-        url: "/institution-admin/campaign-email-templates",
+        url: "/institution-admin/email-templates",
     },
     {
         title: "Sending Addresses",
@@ -418,7 +417,7 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
                                             title: "Email Templates",
                                             url: "/institution-admin/email-templates",
                                         }}
-                                        isActive={location.pathname === "/institution-admin/email-templates"}
+                                        isActive={location.pathname.startsWith("/institution-admin/email-templates")}
                                     />
                                 )}
                                 {user?.role === "INSTITUTION_ADMIN" && (
@@ -457,15 +456,6 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
                                             url: "/inbox",
                                         }}
                                         isActive={location.pathname.startsWith("/inbox")}
-                                    />
-                                )}
-                                {user?.role === "INSTITUTION_ADMIN" && (
-                                    <NavItem
-                                        item={{
-                                            title: "Campaign Emails",
-                                            url: "/institution-admin/campaign-email-templates",
-                                        }}
-                                        isActive={location.pathname.startsWith("/institution-admin/campaign-email-templates")}
                                     />
                                 )}
                                 {(user?.role === "INSTITUTION_ADMIN" || user?.role === "LOCATION_ADMIN") && (

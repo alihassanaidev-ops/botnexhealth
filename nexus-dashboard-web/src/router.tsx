@@ -45,8 +45,7 @@ const WorkflowStatuses = lazy(() => import("./pages/WorkflowStatuses"));
 const DoNotContactAdmin = lazy(() => import("./pages/DoNotContactAdmin"));
 const QuietHoursExceptions = lazy(() => import("@/pages/QuietHoursExceptions"))
 const InsurancePlans = lazy(() => import("./pages/InsurancePlans"));
-const EmailTemplates = lazy(() => import("./pages/EmailTemplates"));
-const CampaignEmailTemplates = lazy(() => import("./pages/CampaignEmailTemplates"));
+const EmailTemplatesPage = lazy(() => import("./pages/EmailTemplatesPage"));
 const EmailSendingIdentity = lazy(() => import("./pages/EmailSendingIdentity"));
 const EmailInboxSettings = lazy(() => import("./pages/EmailInboxSettings"));
 const Inbox = lazy(() => import("./pages/Inbox"));
@@ -171,10 +170,13 @@ export const router = createBrowserRouter([
                         ),
                     },
                     {
+                        // Staff and campaign templates share this page. The
+                        // guard admits both roles; the page itself shows a super
+                        // admin only the campaign half, which is all they had.
                         path: "institution-admin/email-templates",
                         element: (
-                            <RoleGuard allowed={["INSTITUTION_ADMIN"]}>
-                                <S><EmailTemplates /></S>
+                            <RoleGuard allowed={["INSTITUTION_ADMIN", "SUPER_ADMIN"]}>
+                                <S><EmailTemplatesPage /></S>
                             </RoleGuard>
                         ),
                     },
@@ -238,9 +240,10 @@ export const router = createBrowserRouter([
                         // API refuses the request if one is not named.
                         path: "institution-admin/campaign-email-templates",
                         element: (
-                            <RoleGuard allowed={["INSTITUTION_ADMIN", "SUPER_ADMIN"]}>
-                                <S><CampaignEmailTemplates /></S>
-                            </RoleGuard>
+                            <Navigate
+                                to="/institution-admin/email-templates?tab=campaign"
+                                replace
+                            />
                         ),
                     },
                     {

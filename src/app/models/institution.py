@@ -239,6 +239,13 @@ class Institution(Base):
     twilio_auth_token_encrypted: Mapped[str | None] = mapped_column(Text, nullable=True)
 
     # Email sending identity — per-institution from-address for outbound email
+    #: Master switch for the automatic staff notification emails (call summary,
+    #: urgent alert, appointment alert). Off means the practice manages these
+    #: through the dashboard instead of the inbox. Patient-facing mail is a
+    #: separate promise to the patient and is never gated by this.
+    staff_notification_emails_enabled: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, server_default="true", default=True,
+    )
     email_from_address: Mapped[str | None] = mapped_column(String(320), nullable=True)
     email_from_name: Mapped[str | None] = mapped_column(String(255), nullable=True)
 

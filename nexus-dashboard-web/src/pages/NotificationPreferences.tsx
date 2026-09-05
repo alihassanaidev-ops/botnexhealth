@@ -16,6 +16,10 @@ import {
 import { Phone, AlertTriangle, CalendarCheck, Loader2, Plus, Trash2, Bell, MailCheck } from "lucide-react"
 import { PageHeader } from "@/components/PageHeader"
 import { useAuth } from "@/context/AuthContext"
+import {
+    getInstitutionNotificationEmailsEnabled,
+    setInstitutionNotificationEmailsEnabled,
+} from "@/lib/notification-settings-api"
 import { useInstitution } from "@/context/InstitutionContext"
 import { Input } from "@/components/ui/input"
 import { Checkbox } from "@/components/ui/checkbox"
@@ -59,6 +63,9 @@ export default function NotificationPreferences() {
     // their CRUD to INSTITUTION_ADMIN, so only show/fetch that section for them.
     // (Per-user toggles below remain available to every role.)
     const isAdmin = user?.role === "INSTITUTION_ADMIN"
+    const [instEmailsEnabled, setInstEmailsEnabled] = useState(true)
+    const [instSaving, setInstSaving] = useState(false)
+    const [instError, setInstError] = useState<string | null>(null)
 
     const [prefs, setPrefs] = useState<NotificationPreference[]>([])
     const [loading, setLoading] = useState(true)
@@ -105,6 +112,27 @@ export default function NotificationPreferences() {
             void loadExtRecipients()
         }
     }, [loadPrefs, loadExtRecipients, isAdmin])
+
+    useEffect(() => {
+        void getInstitutionNotificationEmailsEnabled()
+            .then(setInstEmailsEnabled)
+            .catch(() => setInstError("Could not load the practice-wide setting."))
+    }, [])
+
+    async function toggleInstitutionEmails(next: boolean) {
+        setInstSaving(true)
+        setInstError(null)
+        const previous = instEmailsEnabled
+        setInstEmailsEnabled(next)
+        try {
+            setInstEmailsEnabled(await setInstitutionNotificationEmailsEnabled(next))
+        } catch {
+            setInstEmailsEnabled(previous)
+            setInstError("Could not save. The setting is unchanged.")
+        } finally {
+            setInstSaving(false)
+        }
+    }
 
     async function handleToggle(templateType: string, enabled: boolean) {
         setSaving(templateType)
@@ -194,6 +222,41 @@ export default function NotificationPreferences() {
                 description="Manage how you and others receive email notifications."
             />
 
+            {isAdmin && (
+                <Card>
+                    <CardHeader>
+                        <CardTitle className="text-base">Automatic staff emails</CardTitle>
+                        <CardDescription>
+                            Applies to everyone at this practice. Turn this off to work from the
+                            dashboard instead of the inbox — call summaries, urgent alerts and
+                            appointment alerts stop being emailed to anyone.
+                        </CardDescription>
+                    </CardHeader>
+                    <CardContent className="space-y-3">
+                        <div className="flex items-center justify-between gap-4">
+                            <Label htmlFor="institution-emails" className="text-sm font-medium">
+                                Send automatic staff notification emails
+                            </Label>
+                            <Switch
+                                id="institution-emails"
+                                checked={instEmailsEnabled}
+                                disabled={instSaving}
+                                onCheckedChange={(v) => void toggleInstitutionEmails(v)}
+                            />
+                        </div>
+                        {!instEmailsEnabled && (
+                            <p className="rounded-md border border-amber-500/40 bg-amber-500/5 px-3 py-2 text-xs text-amber-700 dark:text-amber-400">
+                                Nobody is being emailed these alerts. Calls still appear in the
+                                dashboard, and emails to patients are unaffected.
+                            </p>
+                        )}
+                        {instError && (
+                            <p className="text-xs text-destructive">{instError}</p>
+                        )}
+                    </CardContent>
+                </Card>
+            )}
+
             <div className="grid gap-6 md:grid-cols-2">
                 {/* Personal Preferences */}
                 <Card>
@@ -201,6 +264,7 @@ export default function NotificationPreferences() {
                         <CardTitle className="text-base">Personal Notifications</CardTitle>
                         <CardDescription>
                             Choose which notifications you receive on your account ({user?.email}).
+                            {!instEmailsEnabled && " These have no effect while automatic staff emails are off."}
                         </CardDescription>
                     </CardHeader>
                     <CardContent className="space-y-0 divide-y divide-border">
