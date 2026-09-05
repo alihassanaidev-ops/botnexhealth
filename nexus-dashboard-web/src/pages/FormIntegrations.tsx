@@ -1,6 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from "react"
 
-import { PageHeader } from "@/components/PageHeader"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
@@ -95,7 +94,8 @@ function toUpsert(sourceKey: string, value: string): MappingUpsert {
     return { source_key: sourceKey, target_kind: "ignore" }
 }
 
-export default function FormIntegrations() {
+/** Meta / Typeform connections. Rendered as a tab of the Lead capture page. */
+export default function FormIntegrationsPanel() {
     const { locations } = useLocationContext()
     const [providers, setProviders] = useState<ProviderStatus[]>([])
     const [connections, setConnections] = useState<FormConnection[]>([])
@@ -220,12 +220,6 @@ export default function FormIntegrations() {
 
     return (
         <div className="space-y-6">
-            <PageHeader
-                art="leadForms"
-                title="Lead forms"
-                description="Connect Meta and Typeform, choose which forms bring people in, and map their questions onto your contact fields."
-            />
-
             {error && (
                 <p className="rounded-md border border-destructive/40 bg-destructive/5 p-3 text-sm text-destructive">
                     {error}

@@ -48,7 +48,6 @@ const NAV_ART: Record<string, PageArtName> = {
     "/institution-admin/email-inbox": "inbox",
     "/institution-admin/email-sending-address": "sendingAddress",
     "/institution-admin/email-templates": "emailTemplates",
-    "/institution-admin/enquiry-forms": "contactForms",
     "/institution-admin/lead-forms": "leadForms",
     "/institution-admin/quiet-hours-exceptions": "scheduling",
     "/institution-admin/settings": "settings",
@@ -105,7 +104,7 @@ const adminNav: NavItemDef[] = [
         url: "/institution-admin/email-sending-address",
     },
     {
-        title: "Inbound Email",
+        title: "Email Settings",
         url: "/institution-admin/email-inbox",
     },
     {
@@ -425,7 +424,7 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
                                 {user?.role === "INSTITUTION_ADMIN" && (
                                     <NavItem
                                         item={{
-                                            title: "Inbound Email",
+                                            title: "Email Settings",
                                             url: "/institution-admin/email-inbox",
                                         }}
                                         isActive={location.pathname.startsWith("/institution-admin/email-inbox")}
@@ -434,16 +433,7 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
                                 {user?.role === "INSTITUTION_ADMIN" && (
                                     <NavItem
                                         item={{
-                                            title: "Contact Forms",
-                                            url: "/institution-admin/enquiry-forms",
-                                        }}
-                                        isActive={location.pathname === "/institution-admin/enquiry-forms"}
-                                    />
-                                )}
-                                {user?.role === "INSTITUTION_ADMIN" && (
-                                    <NavItem
-                                        item={{
-                                            title: "Lead Forms",
+                                            title: "Lead Capture",
                                             url: "/institution-admin/lead-forms",
                                         }}
                                         isActive={location.pathname.startsWith(

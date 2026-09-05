@@ -1,6 +1,5 @@
 import { useEffect, useState } from "react"
 
-import { PageHeader } from "@/components/PageHeader"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Input } from "@/components/ui/input"
@@ -40,7 +39,8 @@ function formatWhen(value: string | null): string {
     return Number.isNaN(date.getTime()) ? "never" : date.toLocaleString()
 }
 
-export default function EnquirySources() {
+/** Token-endpoint sources. Rendered as a tab of the Lead capture page. */
+export default function EnquirySourcesPanel() {
     const { locations } = useLocationContext()
     const [sources, setSources] = useState<EnquirySource[]>([])
     const [loading, setLoading] = useState(true)
@@ -104,12 +104,6 @@ export default function EnquirySources() {
 
     return (
         <div className="space-y-6">
-            <PageHeader
-                art="contactForms"
-                title="Contact forms"
-                description="Give each website or marketing form its own secure address for adding contacts."
-            />
-
             {revealed && (
                 <Card className="border-primary">
                     <CardHeader>

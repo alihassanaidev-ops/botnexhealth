@@ -127,8 +127,8 @@ export default function EmailInboxSettingsPage() {
             <PageHeader
                 art="inbox"
                 icon={Inbox}
-                title="Inbound Email"
-                description="Receive patient email in the shared inbox and reply without leaving ScaleNexus."
+                title="Email settings"
+                description="Connect the address patient email arrives at, so replies land in the shared inbox."
                 actions={scope.picker}
             />
             {scope.ready && locations.length > 0 && !isLocationAdmin && (
