@@ -41,3 +41,37 @@ export async function getAggregateDashboard(
     const { data } = await api.get<AggregateDashboardResponse>(`/institution/dashboard/aggregate${q}`);
     return data;
 }
+
+/** One month of headline metrics, oldest first. */
+export interface MonthlyMetricPoint {
+    month: string;
+    month_label: string;
+    total_calls_month: number;
+    appointments_booked_month: number;
+    new_patients_month: number;
+    booking_rate_month: number;
+    avg_call_duration_seconds: number;
+}
+
+export interface DashboardMonthlyMetrics {
+    points: MonthlyMetricPoint[];
+    as_of: string;
+}
+
+/**
+ * Month-by-month history behind the headline numbers.
+ *
+ * A count on its own does not say whether it is good; the same count next to the
+ * five months before it does.
+ */
+export async function getMonthlyMetrics(
+    months = 6,
+    locationSlug?: string,
+): Promise<DashboardMonthlyMetrics> {
+    const params = new URLSearchParams({ months: String(months) });
+    if (locationSlug) params.set("location_slug", locationSlug);
+    const { data } = await api.get<DashboardMonthlyMetrics>(
+        `/institution/dashboard/monthly-metrics?${params.toString()}`,
+    );
+    return data;
+}
