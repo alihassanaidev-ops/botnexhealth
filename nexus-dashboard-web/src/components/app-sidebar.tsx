@@ -257,10 +257,6 @@ const navSetup: NavItemDef[] = [
         title: "Insurance Plans",
         url: "/setup/insurance-plans",
     },
-    {
-        title: "Audit Logs",
-        url: "/setup/audit-logs",
-    },
 ]
 
 function NavItem({ item, isActive }: { item: NavItemDef; isActive: boolean }) {
@@ -330,7 +326,7 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
         ? navSetup
         : navSetup.filter((item) => item.url !== "/setup/reasons")
     const setupNav = user?.role === "STAFF"
-        ? pmsSetupNav.filter((item) => item.url !== "/setup" && item.url !== "/setup/audit-logs")
+        ? pmsSetupNav.filter((item) => item.url !== "/setup")
         : pmsSetupNav;
 
     return (
@@ -490,6 +486,15 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
                                             url: "/institution-admin/settings",
                                         }}
                                         isActive={location.pathname === "/institution-admin/settings" || location.pathname.startsWith("/institution-admin/settings")}
+                                    />
+                                )}
+                                {user?.role !== "STAFF" && (
+                                    <NavItem
+                                        item={{
+                                            title: "Audit Logs",
+                                            url: "/setup/audit-logs",
+                                        }}
+                                        isActive={location.pathname === "/setup/audit-logs"}
                                     />
                                 )}
                             </SidebarMenu>
