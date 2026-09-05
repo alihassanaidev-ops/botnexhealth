@@ -3805,7 +3805,7 @@ function MessageField({
     channel: "sms" | "email" | "voice"
     readOnly?: boolean
 }) {
-    const mergeFields = useMergeFields({ triggerType, channel })
+    const { fields: mergeFields, status: mergeStatus } = useMergeFields({ triggerType, channel })
     const grouped = mergeFields.reduce<Record<string, typeof mergeFields>>((acc, field) => {
         const group = field.group ?? "other"
         acc[group] = acc[group] ?? []
@@ -3816,10 +3816,17 @@ function MessageField({
         <div className="space-y-1.5">
             <div className="flex items-center justify-between">
                 <Label className="text-sm">{label}</Label>
-                {!readOnly && (
+                {!readOnly && mergeStatus === "error" && (
+                    // No list rather than a stale one: a field offered here that
+                    // the backend does not have renders blank to the patient.
+                    <span className="text-xs text-destructive">Fields unavailable</span>
+                )}
+                {!readOnly && mergeStatus !== "error" && (
                     <Select value="" onValueChange={(token) => onChange(`${value}${token}`)}>
                         <SelectTrigger className="h-7 w-[150px] text-xs">
-                            <SelectValue placeholder="Insert field" />
+                            <SelectValue
+                                placeholder={mergeStatus === "loading" ? "Loading…" : "Insert field"}
+                            />
                         </SelectTrigger>
                         <SelectContent>
                             {Object.entries(grouped).map(([group, fields]) => (

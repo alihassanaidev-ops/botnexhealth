@@ -870,7 +870,7 @@ export default function WorkflowBuilder() {
                 supportedNodeTypes={supportedNodeTypes}
                 portLabel={addFrom?.label}
             />
-            <TestRunDialog open={testOpen} onOpenChange={setTestOpen} def={def} />
+            <TestRunDialog open={testOpen} onOpenChange={setTestOpen} def={def} locationId={locationId} />
         </div>
     )
 }

@@ -33,6 +33,7 @@ from src.app.services.automation.definition_schema import WorkflowDefinition
 from src.app.services.automation.definition_service import AutomationWorkflowDefinitionService
 from src.app.services.automation.channel_readiness import ChannelReadinessService
 from src.app.services.automation.dry_run import simulate_run
+from src.app.services.automation.template_renderer import build_merge_vars
 from src.app.services.automation.launch_checklist_service import (
     CampaignLaunchChecklist,
     CampaignLaunchChecklistService,
@@ -364,6 +365,12 @@ class ChannelReadinessResponse(BaseModel):
 class DryRunRequest(BaseModel):
     definition: dict[str, Any]
     context: dict[str, Any] | None = None
+    #: Preview against a real person instead of sample data. The contact's own
+    #: record resolves the merge fields, so a field the record cannot fill
+    #: renders blank and is reported rather than being papered over by a sample.
+    contact_id: str | None = None
+    #: Location supplying the clinic-side merge fields (name, phone, address).
+    location_id: str | None = None
     condition_choices: dict[str, bool] | None = None
     # node_id -> case label. Names the switch branch a preview should walk;
     # an unset or unknown label previews the default branch.
@@ -377,10 +384,23 @@ class DryRunStepResponse(BaseModel):
     detail: str | None = None
 
 
+class EmptyMergeFieldResponse(BaseModel):
+    name: str
+    nodes: list[str] = Field(default_factory=list)
+
+
 class DryRunResultResponse(BaseModel):
     steps: list[DryRunStepResponse] = Field(default_factory=list)
     outcome: str | None = None
     truncated: bool = False
+    #: "sample" when previewing against catalog samples, "contact" when a real
+    #: record supplied the merge values.
+    context_source: Literal["sample", "contact"] = "sample"
+    #: Display name of the previewed contact, when one was used.
+    contact_name: str | None = None
+    #: Merge fields a message references that rendered blank. Only meaningful
+    #: for a contact preview — samples populate every field by construction.
+    empty_fields: list[EmptyMergeFieldResponse] = Field(default_factory=list)
 
 
 class LaunchChecklistPreviewRequest(BaseModel):
@@ -1039,11 +1059,45 @@ async def dry_run_definition(
             detail=f"Invalid workflow definition: {exc.error_count()} error(s)",
         ) from exc
 
+    context = data.context
+    contact_name: str | None = None
+    context_source: Literal["sample", "contact"] = "sample"
+
+    if data.contact_id:
+        inst_id = _institution_id(current_user)
+        async with get_db_session() as session:
+            contact = await session.get(Contact, data.contact_id)
+            if contact is None or contact.institution_id != inst_id:
+                raise HTTPException(
+                    status_code=status.HTTP_404_NOT_FOUND, detail="Contact not found"
+                )
+            location = None
+            if data.location_id:
+                location = await session.get(InstitutionLocation, data.location_id)
+                if location is not None and location.institution_id != inst_id:
+                    raise HTTPException(
+                        status_code=status.HTTP_404_NOT_FOUND, detail="Location not found"
+                    )
+            # Resolve through the same builder the sender uses, so the preview
+            # cannot disagree with what a real send would put on the wire.
+            context = build_merge_vars(contact, location, dict(data.context or {}))
+            contact_name = (
+                contact.full_name
+                or " ".join(
+                    part for part in (contact.first_name, contact.last_name) if part
+                ).strip()
+                or None
+            )
+        context_source = "contact"
+
     result = simulate_run(
         definition,
-        context=data.context,
+        context=context,
         condition_choices=data.condition_choices,
         switch_case_choices=data.switch_case_choices,
+        # A contact preview must not borrow sample values for what the record
+        # cannot supply — the blanks are the point.
+        prefill_samples=context_source != "contact",
     )
     return DryRunResultResponse(
         steps=[
@@ -1054,6 +1108,12 @@ async def dry_run_definition(
         ],
         outcome=result.outcome,
         truncated=result.truncated,
+        context_source=context_source,
+        contact_name=contact_name,
+        empty_fields=[
+            EmptyMergeFieldResponse(name=f.name, nodes=f.nodes)
+            for f in result.empty_fields
+        ],
     )
 
 

@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react"
 import { formatDistanceToNow } from "date-fns"
-import { AlertCircle, CheckCircle2, ChevronDown, Clock3, Copy, Loader2, RefreshCw, XCircle } from "lucide-react"
+import { AlertCircle, AlertTriangle, CheckCircle2, ChevronDown, Clock3, Copy, Loader2, RefreshCw, XCircle } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import WorkflowCanvas from "@/components/workflow/WorkflowCanvas"
 import { getRunTimeline, listCampaignRuns } from "@/lib/automation-api"
@@ -70,6 +70,20 @@ function formatDuration(milliseconds: number | null): string {
 function isInternalField(key: string): boolean {
     return /(^|_)(id|ids|sid|token|tokens|ref)(_|$)/i.test(key)
         || ["source", "current_step_id", "trigger_ref_type", "trigger_type"].includes(key)
+        // Rendered as its own warning section rather than a detail row.
+        || key === "blank_merge_fields"
+}
+
+/** Merge fields this step sent as empty text, when it recorded any. */
+function blankMergeFields(attempt: RunTimelineItem | null): string[] {
+    const raw = (attempt?.metadata as Record<string, unknown> | undefined)?.blank_merge_fields
+        ?? (attempt?.output as Record<string, unknown> | undefined)?.result_metadata
+    const value = typeof raw === "string"
+        ? raw
+        : (raw as Record<string, unknown> | undefined)?.blank_merge_fields
+    return typeof value === "string" && value.trim()
+        ? value.split(",").map((name) => name.trim()).filter(Boolean)
+        : []
 }
 
 function collectSummaryFields(
@@ -237,6 +251,8 @@ export default function WorkflowExecutionsView({
         )
     }, [selectedAttempt])
 
+    const blankFields = useMemo(() => blankMergeFields(selectedAttempt), [selectedAttempt])
+
     function selectNode(nodeId: string | null) {
         if (!nodeId || nodeId === TRIGGER_NODE_ID) return
         setSelectedNodeId(nodeId)
@@ -384,6 +400,30 @@ export default function WorkflowExecutionsView({
                                             <h4 className="text-xs font-semibold text-red-700 dark:text-red-400">Why it failed</h4>
                                             <p className="mt-1 text-xs leading-5 text-foreground">{selectedAttempt.error_message}</p>
                                             <p className="mt-2 text-xs leading-5 text-muted-foreground">Review this step&apos;s configuration and provider response before retrying.</p>
+                                        </div>
+                                    </div>
+                                </section>
+                            )}
+
+                            {blankFields.length > 0 && (
+                                <section className="rounded-md border border-amber-500/40 bg-amber-500/5 p-3">
+                                    <div className="flex items-start gap-2">
+                                        <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-amber-600 dark:text-amber-400" />
+                                        <div className="min-w-0">
+                                            <h4 className="text-xs font-semibold text-amber-700 dark:text-amber-400">
+                                                Sent with {blankFields.length} blank merge field{blankFields.length === 1 ? "" : "s"}
+                                            </h4>
+                                            <ul className="mt-1 space-y-0.5 text-xs leading-5">
+                                                {blankFields.map((name) => (
+                                                    <li key={name}>
+                                                        <code className="font-mono">{`{{${name}}}`}</code>
+                                                    </li>
+                                                ))}
+                                            </ul>
+                                            <p className="mt-2 text-xs leading-5 text-muted-foreground">
+                                                The patient received empty text where these should have been.
+                                                This trigger does not carry them for this contact.
+                                            </p>
                                         </div>
                                     </div>
                                 </section>

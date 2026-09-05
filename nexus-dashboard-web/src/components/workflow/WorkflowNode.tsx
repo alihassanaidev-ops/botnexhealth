@@ -8,7 +8,7 @@ import { Handle, Position, type NodeProps } from "@xyflow/react"
 import { CheckCircle2, CircleDashed, Clock3, Plus, XCircle } from "lucide-react"
 import { cn } from "@/lib/utils"
 import { NODE_META, TRIGGER_META } from "@/lib/workflow/catalog"
-import { humanizeSeconds } from "@/lib/workflow/test-run"
+import { humanizeSeconds } from "@/lib/workflow/format"
 import {
     outgoing,
     SWITCH_DEFAULT_HANDLE,

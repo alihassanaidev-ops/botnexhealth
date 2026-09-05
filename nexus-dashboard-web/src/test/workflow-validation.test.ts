@@ -1,11 +1,52 @@
-import { describe, it, expect } from "vitest"
+import { describe, it, expect, beforeAll, vi } from "vitest"
 import {
     isPublishable,
     reachableCycleNodes,
     unreachableNodes,
     validateDefinition,
 } from "@/lib/workflow/validation"
+import { listMergeFields } from "@/lib/workflow-api"
+import { loadMergeFields, _resetMergeFieldsCache } from "@/lib/workflow/merge-fields"
 import type { WorkflowDefinition } from "@/types/workflow"
+
+// Merge-field checks compare against the fetched catalog and stay silent
+// without one, so these tests load the fields they assert on.
+vi.mock("@/lib/workflow-api", () => ({ listMergeFields: vi.fn() }))
+
+function catalogField(name: string, triggerTypes: string[], channels: string[]) {
+    return {
+        name,
+        token: `{{${name}}}`,
+        label: name,
+        description: "",
+        sample: "sample",
+        group: "general",
+        availability: "derived" as const,
+        requires: [],
+        phi_level: "none" as const,
+        channels,
+        trigger_types: triggerTypes,
+    }
+}
+
+const ALL_TRIGGERS = [
+    "event",
+    "manual",
+    "form_submitted",
+    "internal_status",
+    "schedule",
+    "inbound_message",
+]
+
+beforeAll(async () => {
+    _resetMergeFieldsCache()
+    ;(listMergeFields as ReturnType<typeof vi.fn>).mockResolvedValue([
+        catalogField("patient_first_name", ALL_TRIGGERS, ["sms", "email", "voice"]),
+        catalogField("appointment_date", ["event", "internal_status"], ["sms", "email", "voice"]),
+        catalogField("location_address", ALL_TRIGGERS, ["email", "voice"]),
+    ])
+    await loadMergeFields()
+})
 
 function base(): WorkflowDefinition {
     return {

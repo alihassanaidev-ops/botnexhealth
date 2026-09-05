@@ -303,6 +303,10 @@ export async function dryRun(
     opts?: {
         context?: Record<string, unknown>
         conditionChoices?: Record<string, boolean>
+        /** Preview against a real person instead of sample merge data. */
+        contactId?: string
+        /** Location supplying the clinic-side merge fields. */
+        locationId?: string
     },
 ): Promise<TestRunResult> {
     const body: Record<string, unknown> = {
@@ -310,6 +314,8 @@ export async function dryRun(
         condition_choices: opts?.conditionChoices ?? {},
     }
     if (opts?.context) body.context = opts.context
+    if (opts?.contactId) body.contact_id = opts.contactId
+    if (opts?.locationId) body.location_id = opts.locationId
     const { data } = await api.post<TestRunResult>("/automation/workflows/dry-run", body)
     return data
 }

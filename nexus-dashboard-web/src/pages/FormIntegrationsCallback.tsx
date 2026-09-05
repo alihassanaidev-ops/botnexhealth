@@ -48,7 +48,7 @@ export default function FormIntegrationsCallback() {
         completeOAuth(code, state)
             .then(() => {
                 setStatus("done")
-                navigate("/institution-admin/lead-forms", { replace: true })
+                navigate("/institution-admin/lead-forms?tab=connected", { replace: true })
             })
             .catch((err: unknown) => {
                 const detail = (err as { response?: { data?: { detail?: unknown } } })
@@ -78,7 +78,7 @@ export default function FormIntegrationsCallback() {
                             <p className="text-sm text-destructive">{error}</p>
                             <Button
                                 size="sm"
-                                onClick={() => navigate("/institution-admin/lead-forms")}
+                                onClick={() => navigate("/institution-admin/lead-forms?tab=connected")}
                             >
                                 Back to lead forms
                             </Button>

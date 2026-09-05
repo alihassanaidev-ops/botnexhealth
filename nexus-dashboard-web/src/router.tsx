@@ -15,8 +15,7 @@ import BrandLoader from "@/components/BrandLoader";
 import Login from "./pages/Login";
 import BookingLink from "./pages/BookingLink";
 import CancelLink from "./pages/CancelLink";
-import EnquirySources from "./pages/EnquirySources";
-import FormIntegrations from "./pages/FormIntegrations";
+import LeadCapture from "./pages/LeadCapture";
 import FormIntegrationsCallback from "./pages/FormIntegrationsCallback";
 import IdentifyPatient from "./pages/IdentifyPatient";
 import RegisterPatient from "./pages/RegisterPatient";
@@ -199,18 +198,17 @@ export const router = createBrowserRouter([
                         ),
                     },
                     {
+                        // Both intake routes now live on one page. The old path
+                        // is kept as a redirect: it was linked from the sidebar
+                        // and is in people's bookmarks.
                         path: "institution-admin/enquiry-forms",
-                        element: (
-                            <RoleGuard allowed={["INSTITUTION_ADMIN"]}>
-                                <S><EnquirySources /></S>
-                            </RoleGuard>
-                        ),
+                        element: <Navigate to="/institution-admin/lead-forms?tab=direct" replace />,
                     },
                     {
                         path: "institution-admin/lead-forms",
                         element: (
                             <RoleGuard allowed={["INSTITUTION_ADMIN"]}>
-                                <S><FormIntegrations /></S>
+                                <S><LeadCapture /></S>
                             </RoleGuard>
                         ),
                     },

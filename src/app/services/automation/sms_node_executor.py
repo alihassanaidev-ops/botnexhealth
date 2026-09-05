@@ -14,7 +14,9 @@ from src.app.models.sms_history_log import SmsHistoryLog, SmsStatus
 from src.app.services.automation.definition_schema import SendSmsNode
 from src.app.services.automation.campaign_conversation_service import CampaignConversationService
 from src.app.services.automation.runtime_service import AutomationWorkflowRuntimeService
-from src.app.services.automation.template_renderer import render_sms_body
+from src.app.services.automation.template_renderer import (
+    render_sms_body_reporting_blanks,
+)
 from src.app.services.circuit_breaker import (
     BreakerService,
     NoOpCircuitBreaker,
@@ -122,7 +124,18 @@ class SmsNodeExecutor:
         thread = await CampaignConversationService(self.session).open_sms_thread(run)
 
         # --- Render body ---
-        body = render_sms_body(node.body_template, contact, location, context)
+        # Blank merge fields are recorded on the step rather than blocking the
+        # send: the message is already the best one available, and holding it
+        # back helps nobody. Naming them is what lets someone find the campaign
+        # that has been going out with a gap in it.
+        body, blank_merge_fields = render_sms_body_reporting_blanks(
+            node.body_template, contact, location, context
+        )
+        if blank_merge_fields:
+            logger.warning(
+                "send_sms rendered blank merge fields: institution=%s run=%s node=%s fields=%s",
+                run.institution_id, run.id, node.id, ",".join(blank_merge_fields),
+            )
 
         # --- Send ---
         # SmsService does not raise on a provider failure: it records the
@@ -166,14 +179,18 @@ class SmsNodeExecutor:
                 await CampaignConversationService(self.session).mark_message_seen(thread)
                 # Carry the provider's message id so the delivery receipt, which
                 # arrives minutes later on a webhook, can find this attempt.
+                sent_metadata: dict[str, object] = {}
+                if sms_log.message_sid:
+                    sent_metadata["message_sid"] = sms_log.message_sid
+                if blank_merge_fields:
+                    # Joined rather than listed: the execution panel renders a
+                    # scalar directly, and this is a sentence a human reads, not
+                    # a structure anything branches on.
+                    sent_metadata["blank_merge_fields"] = ", ".join(blank_merge_fields)
                 await self.runtime.complete_step(
                     step,
                     result_code="sent",
-                    result_metadata=(
-                        {"message_sid": sms_log.message_sid}
-                        if sms_log.message_sid
-                        else None
-                    ),
+                    result_metadata=sent_metadata or None,
                 )
                 return node.next_node_id
 

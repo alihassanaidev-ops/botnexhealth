@@ -39,7 +39,7 @@ from src.app.services.automation.step_dispatcher import (
     _context_value,
     _metadata_value,
 )
-from src.app.services.automation.template_renderer import render_sms_body
+from src.app.services.automation.template_renderer import extract_tokens, render_sms_body
 
 _MAX_STEPS = 50
 
@@ -53,19 +53,80 @@ class DryRunStep:
 
 
 @dataclass
+class EmptyMergeField:
+    """A merge field a message references that resolved to nothing."""
+
+    name: str
+    #: Ids of the send nodes whose templates reference it.
+    nodes: list[str] = field(default_factory=list)
+
+
+@dataclass
 class DryRunResult:
     steps: list[DryRunStep] = field(default_factory=list)
     outcome: str | None = None
     truncated: bool = False
+    #: Merge fields referenced by a send node that rendered blank under this
+    #: context. Empty when previewing against samples, which populate everything.
+    empty_fields: list[EmptyMergeField] = field(default_factory=list)
 
 
-def _sample_context(extra: dict | None) -> dict:
+def _sample_context(extra: dict | None, *, prefill_samples: bool = True) -> dict:
     """Sample merge values so previews render realistic copy. Caller-supplied
-    context overrides the defaults."""
-    ctx = {spec.name: spec.sample for spec in MERGE_FIELD_CATALOG}
+    context overrides the defaults.
+
+    ``prefill_samples=False`` skips the sample layer entirely, so a field the
+    caller's context does not carry stays blank instead of borrowing a plausible
+    one. That is the difference between previewing a workflow and previewing a
+    *patient*: samples make every message look finished, which is exactly what
+    hides a merge field the real record cannot fill.
+    """
+    ctx: dict = {}
+    if prefill_samples:
+        ctx.update({spec.name: spec.sample for spec in MERGE_FIELD_CATALOG})
     if extra:
         ctx.update(extra)
     return ctx
+
+
+def _node_templates(node: object) -> list[str]:
+    """Message templates authored on a send node."""
+    if isinstance(node, SendSmsNode):
+        return [node.body_template]
+    if isinstance(node, SendEmailNode):
+        return [
+            node.subject_template,
+            node.body_template,
+            node.html_template or "",
+        ]
+    return []
+
+
+def _empty_merge_fields(
+    definition: WorkflowDefinition, ctx: dict
+) -> list[EmptyMergeField]:
+    """Merge fields a send node references that resolve to nothing under ``ctx``.
+
+    Every send node is inspected, not just the ones this simulation walked: a
+    blank field on the branch the author did not preview is still a blank field,
+    and finding it should not depend on which way the condition toggles were set.
+    """
+    by_name: dict[str, EmptyMergeField] = {}
+    for node in definition.nodes:
+        for template in _node_templates(node):
+            if not template:
+                continue
+            for token in extract_tokens(template):
+                value = ctx.get(token)
+                if value is not None and str(value).strip():
+                    continue
+                entry = by_name.get(token)
+                if entry is None:
+                    entry = EmptyMergeField(name=token)
+                    by_name[token] = entry
+                if node.id not in entry.nodes:
+                    entry.nodes.append(node.id)
+    return [by_name[name] for name in sorted(by_name)]
 
 
 def _describe_wait(node: WaitNode) -> str:
@@ -92,14 +153,19 @@ def simulate_run(
     context: dict | None = None,
     condition_choices: dict[str, bool] | None = None,
     switch_case_choices: dict[str, str] | None = None,
+    prefill_samples: bool = True,
 ) -> DryRunResult:
     """Walk the definition from the entry node, describing each step.
 
     Conditions follow ``condition_choices[node_id]`` (default True) and switches
     follow ``switch_case_choices[node_id]``, naming the case label to take
     (default: the fallback branch). Bounded by _MAX_STEPS.
+
+    ``prefill_samples=False`` previews against ``context`` alone, so merge fields
+    the caller could not resolve render blank and are reported on
+    ``DryRunResult.empty_fields``.
     """
-    ctx = _sample_context(context)
+    ctx = _sample_context(context, prefill_samples=prefill_samples)
     choices = condition_choices or {}
     case_choices = switch_case_choices or {}
     node_map = {n.id: n for n in definition.nodes}
@@ -329,4 +395,5 @@ def simulate_run(
             result.outcome = "error"
             break
 
+    result.empty_fields = _empty_merge_fields(definition, ctx)
     return result

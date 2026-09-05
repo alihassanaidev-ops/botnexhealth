@@ -109,4 +109,74 @@ describe("WorkflowExecutionsView", () => {
         await userEvent.click(screen.getByRole("button", { name: /input/i }))
         expect(screen.getByText(/"appointment_id": "appt-1"/)).toBeInTheDocument()
     })
+
+    it("warns when a delivered SMS rendered merge fields blank", async () => {
+        const run = {
+            id: "run-2",
+            workflow_id: "wf-1",
+            workflow_version_id: "version-3",
+            status: "completed",
+            current_step_id: "sms-1",
+            current_step_type: "send_sms",
+            outcome: "sent",
+            blocked_reason: null,
+            contact_id: "contact-1",
+            contact_name: "Sarah Chen",
+            next_due_at: null,
+            latest_event_at: "2026-08-25T10:00:02Z",
+            started_at: "2026-08-25T10:00:00Z",
+            completed_at: "2026-08-25T10:00:02Z",
+            created_at: "2026-08-25T10:00:00Z",
+        }
+        vi.mocked(listCampaignRuns).mockResolvedValue({ items: [run], limit: 50, next_cursor: null })
+        vi.mocked(getRunTimeline).mockResolvedValue({
+            run,
+            contact: { id: "contact-1", display_name: "Sarah Chen", phone_masked: null },
+            workflow_version: {
+                id: "version-3",
+                version_number: 3,
+                published_at: "2026-08-24T00:00:00Z",
+                definition: {
+                    schema_version: "1.0",
+                    trigger: { type: "manual" },
+                    entry_node_id: "sms-1",
+                    nodes: [
+                        { type: "send_sms", id: "sms-1", body_template: "redacted", next_node_id: "exit-1" },
+                        { type: "exit", id: "exit-1", outcome: "done" },
+                    ],
+                },
+            },
+            items: [{
+                id: "attempt-1",
+                kind: "step_execution",
+                occurred_at: "2026-08-25T10:00:01Z",
+                title: "SMS step",
+                status: "completed",
+                step_id: "sms-1",
+                channel: "sms",
+                summary: "Result: sent",
+                metadata: { attempt_number: 1, result_code: "sent" },
+                input: {},
+                // Shape the runtime actually persists: result_metadata nested on
+                // the output snapshot, not flattened onto metadata.
+                output: {
+                    context: {},
+                    result_code: "sent",
+                    result_metadata: { blank_merge_fields: "appointment_date, appointment_time" },
+                },
+                node: { type: "send_sms" },
+                duration_ms: 900,
+                error_message: null,
+            }],
+        })
+
+        render(<WorkflowExecutionsView workflowId="wf-1" initialRunId="run-2" />)
+
+        expect(await screen.findByText("Sent with 2 blank merge fields")).toBeInTheDocument()
+        expect(screen.getByText("{{appointment_date}}")).toBeInTheDocument()
+        expect(screen.getByText("{{appointment_time}}")).toBeInTheDocument()
+        // The raw joined value must not also leak into the generic detail rows.
+        expect(screen.queryByText("appointment_date, appointment_time")).not.toBeInTheDocument()
+    })
 })
+
