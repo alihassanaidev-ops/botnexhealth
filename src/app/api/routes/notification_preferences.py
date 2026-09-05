@@ -15,10 +15,16 @@ from fastapi import APIRouter, Depends, HTTPException, Request, status
 from pydantic import BaseModel
 from sqlalchemy import select
 
-from src.app.api.deps import get_current_active_user
+from src.app.api.deps import (
+    get_current_active_user,
+    get_current_institution_or_super_admin,
+)
 from src.app.api.rate_limit import RATE_READ, RATE_WRITE, limiter
 from src.app.database import get_db_session
+from src.app.models.audit_log import AuditAction, AuditActor, AuditOutcome
+from src.app.services.audit import log_audit
 from src.app.models.email_template import EmailTemplateType
+from src.app.models.institution import Institution
 from src.app.models.user import User
 from src.app.models.user_email_notification_preference import UserEmailNotificationPreference
 
@@ -45,6 +51,13 @@ class PreferenceItem(BaseModel):
 
 class PreferencesResponse(BaseModel):
     preferences: list[PreferenceItem]
+    #: Institution-wide switch. False means nobody receives the automatic staff
+    #: alerts regardless of their personal preferences above.
+    institution_emails_enabled: bool = True
+
+
+class UpdateInstitutionEmailsRequest(BaseModel):
+    is_enabled: bool
 
 
 class UpdatePreferencesRequest(BaseModel):
@@ -75,6 +88,10 @@ async def get_notification_preferences(
             )
         )
         prefs_by_type = {p.template_type: p.is_enabled for p in result.scalars().all()}
+        institution = await session.get(Institution, current_user.institution_id)
+        institution_enabled = (
+            bool(institution.staff_notification_emails_enabled) if institution else True
+        )
 
     # Return all types, defaulting to enabled if no row exists
     items = [
@@ -84,7 +101,9 @@ async def get_notification_preferences(
         )
         for tt in _ALL_TYPES
     ]
-    return PreferencesResponse(preferences=items)
+    return PreferencesResponse(
+        preferences=items, institution_emails_enabled=institution_enabled
+    )
 
 
 # -- Update preferences ------------------------------------------------------
@@ -136,6 +155,12 @@ async def update_notification_preferences(
                 existing[pref.template_type] = new_pref
 
         await session.flush()
+        institution = await session.get(Institution, current_user.institution_id)
+        # Read rather than defaulted: returning True here would tell a page whose
+        # institution has alerts switched off that they are on.
+        institution_enabled = (
+            bool(institution.staff_notification_emails_enabled) if institution else True
+        )
 
     # Return the full preference state
     items = [
@@ -145,4 +170,75 @@ async def update_notification_preferences(
         )
         for tt in _ALL_TYPES
     ]
-    return PreferencesResponse(preferences=items)
+    return PreferencesResponse(
+        preferences=items, institution_emails_enabled=institution_enabled
+    )
+
+
+# -- Institution-wide switch -------------------------------------------------
+
+
+@router.put("/institution", response_model=PreferencesResponse)
+@limiter.limit(RATE_WRITE)
+async def update_institution_notification_emails(
+    request: Request,
+    body: UpdateInstitutionEmailsRequest,
+    current_user: Annotated[User, Depends(get_current_institution_or_super_admin)],
+) -> PreferencesResponse:
+    """Turn the automatic staff notification emails on or off for the practice.
+
+    Admin-only, and deliberately separate from the per-user preferences above:
+    this one decides whether anybody is emailed at all. Patient-facing mail is
+    unaffected — that is a promise to the patient, not an internal alert.
+    """
+    if not current_user.institution_id:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="No institution")
+
+    async with get_db_session() as session:
+        institution = await session.get(Institution, current_user.institution_id)
+        if institution is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND, detail="Institution not found"
+            )
+        previous = bool(institution.staff_notification_emails_enabled)
+        institution.staff_notification_emails_enabled = body.is_enabled
+        session.add(institution)
+        await session.flush()
+
+        # Switching this off stops every staff alert for the practice, including
+        # urgent ones. Who silenced them, and when, is exactly the question asked
+        # after an urgent call goes unnoticed.
+        await log_audit(
+            actor=AuditActor.ADMIN,
+            action=AuditAction.INSTITUTION_UPDATE,
+            target_resource=f"institution:{institution.id}",
+            outcome=AuditOutcome.SUCCESS,
+            metadata={
+                "actor_role": current_user.role,
+                "field": "staff_notification_emails_enabled",
+                "previous": previous,
+                "current": body.is_enabled,
+            },
+            institution_id=str(institution.id),
+            user_id=str(current_user.id),
+        )
+
+        result = await session.execute(
+            select(UserEmailNotificationPreference).where(
+                UserEmailNotificationPreference.user_id == current_user.id,
+            )
+        )
+        prefs_by_type = {p.template_type: p.is_enabled for p in result.scalars().all()}
+
+    logger.info(
+        "Institution staff notification emails set: enabled=%s user=%s",
+        body.is_enabled,
+        current_user.id,
+    )
+    items = [
+        PreferenceItem(template_type=tt, is_enabled=prefs_by_type.get(tt, True))
+        for tt in _ALL_TYPES
+    ]
+    return PreferencesResponse(
+        preferences=items, institution_emails_enabled=body.is_enabled
+    )

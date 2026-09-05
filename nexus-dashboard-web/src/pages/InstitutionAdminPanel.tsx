@@ -19,6 +19,11 @@ import {
 import { PageHeader } from "@/components/PageHeader"
 import { DateRangePicker } from "@/components/dashboard/DateRangePicker"
 import { ComparisonChart } from "@/components/dashboard/ComparisonChart"
+import { getDashboardSummary, getMonthlyMetrics, type MonthlyMetricPoint } from "@/lib/dashboard-api"
+import { AdminKpiRow } from "@/components/dashboard/AdminKpiRow"
+import type { DashboardSummary } from "@/types"
+import { useInstitution } from "@/context/InstitutionContext"
+import { TrendChart } from "@/components/dashboard/TrendChart"
 import { lastNDaysRange, type DateRangeValue } from "@/lib/date-range"
 
 import { toast } from "sonner"
@@ -377,6 +382,9 @@ export default function InstitutionAdminPanel() {
     const [loading, setLoading] = useState(true)
     const [locations, setLocations] = useState<InstitutionPortalLocation[]>([])
     const [aggregate, setAggregate] = useState<AggregateDashboardResponse | null>(null)
+    const [monthly, setMonthly] = useState<MonthlyMetricPoint[]>([])
+    const [summary, setSummary] = useState<DashboardSummary | null>(null)
+    const { hasPms } = useInstitution()
     const [selectedLocation, setSelectedLocation] = useState<InstitutionPortalLocation | null>(null)
 
     const [timezoneDraftBySlug, setTimezoneDraftBySlug] = useState<Record<string, string>>({})
@@ -391,13 +399,20 @@ export default function InstitutionAdminPanel() {
     const loadData = useCallback(async () => {
         setLoading(true)
         try {
-            const [locationRows, aggregateData] = await Promise.all([
+            const [locationRows, aggregateData, monthlyData, summaryData] = await Promise.all([
                 listInstitutionPortalLocations(),
                 getAggregateDashboard(range),
+                // Fixed six-month window on purpose: this answers "are we
+                // improving", which the page's date range has no bearing on.
+                getMonthlyMetrics(6).catch(() => ({ points: [], as_of: "" })),
+                // No location slug: institution-wide, matching the rest of the page.
+                getDashboardSummary(undefined, range).catch(() => null),
             ])
 
             setLocations(locationRows)
             setAggregate(aggregateData)
+            setMonthly(monthlyData.points)
+            setSummary(summaryData)
         } catch (err: unknown) {
             const error = err as { response?: { data?: { detail?: string } } };
             toast.error(error?.response?.data?.detail || "Failed to load institution admin panel")
@@ -489,11 +504,23 @@ export default function InstitutionAdminPanel() {
             />
 
 
-            {/* Chart + ROI side by side (chart goes full-width when ROI has no data) */}
-            <div className={`grid gap-6 items-stretch ${roiConfig && roiCalculation ? "lg:grid-cols-[2fr_3fr]" : ""}`}>
-                {/* Clinic Comparison Chart */}
-                <ClinicComparisonChart rows={comparisonRows} loading={loading} />
+            <AdminKpiRow
+                loading={loading}
+                bookingRate={summary?.booking_rate_month}
+                emergencyCalls={summary?.emergency_month}
+                needsCallback={summary?.needs_callback_month}
+                needsBooking={summary?.needs_booking_month}
+                showNeedsBooking={!hasPms}
+            />
 
+            {/* How each clinic compares, and whether the whole practice is moving. */}
+            <div className="grid gap-6 items-stretch lg:grid-cols-2">
+                <ClinicComparisonChart rows={comparisonRows} loading={loading} />
+                <TrendChart points={monthly} loading={loading} />
+            </div>
+
+            {/* ROI */}
+            <div className="grid gap-6 items-stretch">
                 {/* ROI Summary — only render card when config exists */}
                 {roiConfig && (
                     <Card className="border-border shadow-sm">

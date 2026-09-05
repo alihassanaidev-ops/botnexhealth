@@ -12,14 +12,12 @@ import {
     Copy,
     Eye,
     Loader2,
-    Mail,
     Plus,
     Save,
     Trash2,
 } from "lucide-react"
 import { toast } from "sonner"
 
-import { PageHeader } from "@/components/PageHeader"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
@@ -66,7 +64,8 @@ function errorMessage(err: unknown, fallback: string): string {
     return typeof detail === "string" ? detail : fallback
 }
 
-export default function CampaignEmailTemplates() {
+/** Patient-facing campaign templates. A tab of the Email templates page. */
+export default function CampaignEmailTemplatesPanel() {
     const [templates, setTemplates] = useState<CampaignEmailTemplate[]>([])
     const [mergeFields, setMergeFields] = useState<CampaignMergeField[]>([])
     const [loading, setLoading] = useState(true)
@@ -238,20 +237,16 @@ export default function CampaignEmailTemplates() {
 
     return (
         <div className="space-y-6">
-            <PageHeader
-                art="campaignEmails"
-                icon={Mail}
-                title="Campaign Email Templates"
-                description="Reusable emails you can select from any Send Email step in a campaign."
-                actions={
-                    !editing && ready ? (
-                        <Button onClick={startCreate}>
-                            <Plus className="mr-2 h-4 w-4" />
-                            New template
-                        </Button>
-                    ) : undefined
-                }
-            />
+            {/* The header moved to the tabbed page; the action it carried has
+                to stay with the list it acts on. */}
+            {!editing && ready && (
+                <div className="flex justify-end">
+                    <Button onClick={startCreate}>
+                        <Plus className="mr-2 h-4 w-4" />
+                        New template
+                    </Button>
+                </div>
+            )}
 
             {picker}
 
