@@ -191,10 +191,6 @@ const locationAdminNav: NavItemDef[] = [
         url: "/institution-admin/call-statuses",
     },
     {
-        title: "Appointment Sync",
-        url: "/institution-admin/appointment-sync",
-    },
-    {
         title: "Automation issues",
         url: "/undeliverables",
     },
@@ -319,9 +315,11 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
                 : user?.role === "LOCATION_ADMIN"
                     ? locationAdminNav
                     : staffNav;
-    const mainNav = isNoPmsLocationAdmin
-        ? roleMainNav.filter((item) => item.url !== "/institution-admin/appointment-sync")
-        : roleMainNav;
+    // Appointment Sync is a support screen — it traces why a PMS appointment
+    // changed and when we last heard from the practice software. That is an
+    // institution-level question, so it stays on the institution rail and is no
+    // longer offered per-location, where it mostly showed an empty table.
+    const mainNav = roleMainNav;
     const pmsSetupNav = pmsType === "gotracker"
         ? navSetup
         : navSetup.filter((item) => item.url !== "/setup/reasons")
