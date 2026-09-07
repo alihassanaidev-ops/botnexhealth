@@ -49,6 +49,7 @@ from src.app.services.forms.mapping_service import (
     load_mappings,
 )
 from src.app.services.forms.providers.base import NormalizedSubmission
+from src.app.services.automation.canonical_context import merge_canonical_context
 from src.app.services.retention_policy import (
     default_form_submission_raw_retain_until,
 )
@@ -399,4 +400,9 @@ def submission_trigger_context(
     if patient_id:
         context["patient_id"] = patient_id
         context["nexhealth_patient_id"] = patient_id
-    return {key: value for key, value in context.items() if value is not None}
+    return merge_canonical_context(
+        {key: value for key, value in context.items() if value is not None},
+        # A connected form is the narrow case of a lead landing, so it shares
+        # the enquiry vocabulary rather than inventing a parallel one.
+        event_key="enquiry.received",
+    )

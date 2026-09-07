@@ -64,7 +64,16 @@ _LOCATION_REQUIRED_NODE_LABELS = {
     "retell_sms_conversation": "Retell SMS Conversation",
     "send_voice": "Voice",
 }
-_TOKEN_RE = re.compile(r"\{\{\s*([a-zA-Z0-9_]+)\s*\}\}")
+# Mirrors `template_renderer._VAR_RE`: flat names, dotted canonical paths, and
+# an optional quoted fallback. The old pattern matched only flat names, so a
+# canonical token was neither validated nor even seen.
+_TOKEN_RE = re.compile(
+    r"""\{\{\s*
+        (?P<name>[A-Za-z0-9_]+(?:\.[A-Za-z0-9_]+)*)
+        (?:\s*\|\s*(?P<q>["\'])(?P<default>.*?)(?P=q))?
+    \s*\}\}""",
+    re.VERBOSE,
+)
 _CATALOG_BY_NAME: dict[str, MergeFieldSpec] = {
     field.name: field for field in MERGE_FIELD_CATALOG
 }
@@ -176,6 +185,7 @@ class WorkflowValidationService:
         # them in this workflow builder validation path.
         # issues += self._consent_and_content(definition)
         issues += self._merge_field_issues(definition)
+        issues += self._condition_field_issues(definition)
         issues += self._action_link_issues(definition)
         issues += self._registration_link_issues(definition)
         issues += await self._pms_capability_issues(
@@ -701,10 +711,92 @@ class WorkflowValidationService:
                 )
         return issues
 
+
+    @staticmethod
+    def _condition_field_issues(
+        definition: WorkflowDefinition,
+    ) -> list[ValidationIssue]:
+        """Flag branch conditions that read a field the trigger never supplies.
+
+        This check did not exist. A mistyped or trigger-inappropriate field path
+        resolves to ``None`` at runtime and the branch silently takes its false
+        exit — forever, with no error and nothing in the logs. It is the single
+        most confusing failure in the builder, because the campaign looks like
+        it ran correctly.
+
+        Raw PMS payload paths are allowed through: they are the documented
+        escape hatch for values the canonical vocabulary does not cover.
+        """
+        from src.app.services.automation.event_catalog import fields_for_events
+
+        issues: list[ValidationIssue] = []
+        known = {spec.path for spec in fields_for_events(_definition_event_keys(definition))}
+        if not known:
+            # Nothing declared for this trigger yet; do not invent errors.
+            return issues
+
+        def _check(field: str, node_id: str, path: list[str]) -> None:
+            name = (field or "").strip()
+            if not name or name in known:
+                return
+            # Legacy flat keys and native payload access stay valid.
+            if "." not in name or name.startswith(("raw.", "gotracker_", "nexhealth_")):
+                return
+            root = name.split(".", 1)[0]
+            if not any(candidate.startswith(f"{root}.") for candidate in known):
+                return
+            issues.append(
+                ValidationIssue(
+                    severity="warning",
+                    message=(
+                        f"'{name}' is not provided by this trigger, so this "
+                        f"condition will always take its 'no' branch."
+                    ),
+                    node_id=node_id,
+                    field_path=path,
+                    code="condition_field_unavailable",
+                )
+            )
+
+        def _walk(expression: object, node_id: str, path: list[str]) -> None:
+            if expression is None:
+                return
+            children = getattr(expression, "children", None)
+            if children:
+                for child in children:
+                    _walk(child, node_id, path)
+                return
+            field = getattr(expression, "field", None)
+            if isinstance(field, str):
+                _check(field, node_id, path)
+
+        for trigger in definition.triggers:
+            _walk(
+                getattr(trigger, "filter", None),
+                definition.entry_node_id,
+                ["trigger", "filter"],
+            )
+
+        for node in definition.nodes:
+            _walk(getattr(node, "filter", None), node.id, ["filter"])
+            for rule in getattr(node, "rules", None) or []:
+                _check(getattr(rule, "field", ""), node.id, ["rules"])
+            for index, case in enumerate(getattr(node, "cases", None) or []):
+                _walk(getattr(case, "filter", None), node.id, ["cases", str(index)])
+
+        return issues
+
     @staticmethod
     def _merge_field_issues(definition: WorkflowDefinition) -> list[ValidationIssue]:
         issues: list[ValidationIssue] = []
         trigger_type = definition.trigger.type
+
+        from src.app.services.automation.event_catalog import fields_for_events
+
+        event_keys = _definition_event_keys(definition)
+        canonical = {
+            spec.path: spec for spec in fields_for_events(event_keys)
+        }
 
         for node in definition.nodes:
             channel = _node_channel(node)
@@ -712,14 +804,54 @@ class WorkflowValidationService:
                 continue
 
             for field_path, template in _node_templates(node):
+                guarded = _guarded_token_names(template)
                 for token in _extract_token_names(template):
+                    spec = canonical.get(token)
+                    if spec is not None:
+                        # A canonical field the trigger carries. Only the channel
+                        # and PHI checks apply.
+                        if channel not in spec.channels:
+                            issues.append(
+                                ValidationIssue(
+                                    severity="error",
+                                    message=(
+                                        f"'{{{{{token}}}}}' cannot be used in a "
+                                        f"{channel} message."
+                                    ),
+                                    node_id=node.id,
+                                    field_path=[field_path],
+                                    code="merge_field_unavailable_for_channel",
+                                )
+                            )
+                        if spec.phi_level == "high" and channel in {"sms", "voice"}:
+                            issues.append(
+                                ValidationIssue(
+                                    severity="warning",
+                                    message=(
+                                        f"'{{{{{token}}}}}' may expose sensitive "
+                                        f"clinical context on {channel}."
+                                    ),
+                                    node_id=node.id,
+                                    field_path=[field_path],
+                                    code="merge_field_phi_warning",
+                                )
+                            )
+                        continue
+
                     field = _CATALOG_BY_NAME.get(token)
                     if field is None:
+                        if token in guarded:
+                            # A fallback makes an unrecognised token safe: the
+                            # author has said what to write when it is missing.
+                            continue
                         issues.append(
                             ValidationIssue(
-                                severity="warning",
+                                severity="error",
                                 message=(
-                                    f"Unknown merge field '{{{{{token}}}}}' will render blank."
+                                    f"'{{{{{token}}}}}' is not provided by this "
+                                    f"trigger and would send blank. Pick a listed "
+                                    f"field, or give it a fallback like "
+                                    f"{{{{{token} | \"...\"}}}}."
                                 ),
                                 node_id=node.id,
                                 field_path=[field_path],
@@ -728,10 +860,10 @@ class WorkflowValidationService:
                         )
                         continue
 
-                    if trigger_type not in field.triggers:
+                    if trigger_type not in field.triggers and token not in guarded:
                         issues.append(
                             ValidationIssue(
-                                severity="warning",
+                                severity="error",
                                 message=(
                                     f"Merge field '{field.token}' is not available for "
                                     f"{trigger_type} workflows."
@@ -773,8 +905,35 @@ class WorkflowValidationService:
         return issues
 
 
+
+def _guarded_token_names(template: str) -> set[str]:
+    """Tokens that declare a fallback, so an empty value cannot leave a gap."""
+    return {
+        match.group("name")
+        for match in _TOKEN_RE.finditer(template or "")
+        if match.group("default") is not None
+    }
+
+
+def _definition_event_keys(definition: WorkflowDefinition) -> list[str]:
+    """Canonical events this definition can start from."""
+    from src.app.services.automation.trigger_lookup import TRIGGER_EVENT_KEYS
+
+    keys: list[str] = []
+    for trigger in definition.triggers:
+        for key in getattr(trigger, "event_keys", None) or ():
+            if key not in keys:
+                keys.append(key)
+        for key in TRIGGER_EVENT_KEYS.get(trigger.type, ()):
+            if key not in keys:
+                keys.append(key)
+    return keys
+
+
 def _extract_token_names(template: str) -> list[str]:
-    return list(dict.fromkeys(match.group(1) for match in _TOKEN_RE.finditer(template)))
+    return list(
+        dict.fromkeys(match.group("name") for match in _TOKEN_RE.finditer(template))
+    )
 
 
 def _node_channel(node: object) -> str | None:

@@ -289,6 +289,9 @@ async def inbound_sms(request: Request) -> Response:
             and _inbound_msg.workflow_run_id is None
             and _inbound_msg.contact_id
         ):
+            from src.app.services.automation.canonical_context import (
+                merge_canonical_context,
+            )
             from src.app.services.automation.sms_reply_trigger_service import (
                 SmsReplyTriggerService,
                 sms_reply_idempotency_key,
@@ -320,12 +323,19 @@ async def inbound_sms(request: Request) -> Response:
                         str(workflow.current_version_id),
                         str(_inbound_msg.id),
                     ),
-                    trigger_metadata={
-                        "inbound_sms_message_id": str(_inbound_msg.id),
-                        "sms_reply_message_sid": _field(form, "MessageSid"),
-                        "sms_reply_body": body,
-                        "sms_reply_intent": parsed_reply.intent,
-                    },
+                    trigger_metadata=merge_canonical_context(
+                        {
+                            "inbound_sms_message_id": str(_inbound_msg.id),
+                            "sms_reply_message_sid": _field(form, "MessageSid"),
+                            "sms_reply_body": body,
+                            "sms_reply_intent": parsed_reply.intent,
+                            # The contact reaches the run as a task argument, but
+                            # a campaign branching on who replied needs it here.
+                            "contact_id": _inbound_msg.contact_id,
+                            "location_id": str(location.id),
+                        },
+                        event_key="message.sms.inbound",
+                    ),
                 )
                 scheduled_sms_reply_triggers += 1
 
