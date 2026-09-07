@@ -30,6 +30,7 @@ from src.app.models.nexhealth_webhook_subscription import (
 )
 from src.app.models.nexhealth_sync_status import NexHealthSyncStatus
 from src.app.pms.nexhealth import backing_systems
+from src.app.services.location_timezone import is_timezone_unset
 from src.app.services.automation.channel_readiness import ChannelReadinessService
 from src.app.services.automation.definition_schema import (
     ConditionNode,
@@ -192,6 +193,9 @@ class CampaignLaunchChecklistService:
 
         send_nodes = [n for n in definition.nodes if isinstance(n, _SEND_NODE_TYPES)]
         items += self._merge_field_items(warnings)
+        items += await self._timezone_items(
+            definition, location_id=location_id_text
+        )
         items += await self._channel_items(
             definition,
             institution_id=institution_id,
@@ -618,6 +622,48 @@ class CampaignLaunchChecklistService:
                 message=evaluation.message,
                 fix_href="/institution-admin/settings",
                 metadata=evaluation.as_dict(),
+            )
+        ]
+
+
+    async def _timezone_items(
+        self,
+        definition: WorkflowDefinition,
+        *,
+        location_id: str | None,
+    ) -> list[CampaignLaunchChecklistItem]:
+        """Warn when a location has never had its timezone confirmed.
+
+        Everything time-sensitive reads it: quiet hours, calendar waits, and the
+        cron a scheduled campaign fires on. The column defaults to "UTC" and a
+        genuinely-UTC clinic is indistinguishable from one nobody configured, so
+        the failure is silent — a call held until a window that looked open, and
+        no error anywhere. This is the one place an author would see it.
+        """
+        if not location_id:
+            return []
+        location = await self.session.get(InstitutionLocation, location_id)
+        if location is None or not is_timezone_unset(location):
+            return []
+
+        # Only worth raising on a campaign that actually sends something; a
+        # definition with no send steps is unaffected by the clinic's clock.
+        if not any(isinstance(node, _SEND_NODE_TYPES) for node in definition.nodes):
+            return []
+
+        return [
+            CampaignLaunchChecklistItem(
+                id="location_timezone",
+                section="compliance",
+                label="Location timezone",
+                status="warning",
+                message=(
+                    "This location is still on the default UTC timezone. Quiet "
+                    "hours and any scheduled send will be judged against UTC "
+                    "rather than the clinic's local time — a 2pm call can be "
+                    "held as if it were the evening."
+                ),
+                fix_href="/institution-admin/settings",
             )
         ]
 

@@ -22,6 +22,10 @@ from src.app.models.gotracker_webhook_event import (
 )
 from src.app.models.institution import Institution
 from src.app.models.institution_location import InstitutionLocation
+from src.app.services.location_timezone import (
+    extract_timezone,
+    is_timezone_unset,
+)
 from src.app.pms.gotracker.mappers import pid as gotracker_id
 from src.app.pms.gotracker.statuses import is_non_attending_status, status_label
 from src.app.services.dead_letter import capture_dead_letter
@@ -415,20 +419,40 @@ async def _process_appointment_event(
     institution_id = str(location.institution_id)
     location_id = str(location.id)
 
+    # GoTracker reports the clinic's timezone on every appointment payload and
+    # we dropped it, so a location kept the "UTC" column default — quiet hours
+    # then judged 2:40pm local as 6:40pm and held outbound calls until a window
+    # it thought was open. Learned here, inside the session this path already
+    # opens, so no extra transaction is introduced.
+    learned_timezone = extract_timezone(appointment) or extract_timezone(payload)
+
     contact_id: str | None = None
-    if patient_id:
+    if patient_id or learned_timezone:
         async with get_system_db_session(
             "gotracker_lookup", institution_id=institution_id, external_id=patient_id
         ) as session:
-            result = await session.execute(
-                select(Contact).where(
-                    Contact.institution_id == institution_id,
-                    Contact.nexhealth_patient_id == patient_id,
+            if learned_timezone:
+                row = await session.get(InstitutionLocation, location_id)
+                # Re-checked inside the transaction: an administrator setting it
+                # by hand, or a concurrent delivery, must win over this.
+                if row is not None and is_timezone_unset(row):
+                    row.timezone = learned_timezone
+                    await session.commit()
+                    logger.info(
+                        "gotracker_webhook: location=%s timezone learned as %s",
+                        location_id,
+                        learned_timezone,
+                    )
+            if patient_id:
+                result = await session.execute(
+                    select(Contact).where(
+                        Contact.institution_id == institution_id,
+                        Contact.nexhealth_patient_id == patient_id,
+                    )
                 )
-            )
-            contact = result.scalar_one_or_none()
-            if contact:
-                contact_id = str(contact.id)
+                contact = result.scalar_one_or_none()
+                if contact:
+                    contact_id = str(contact.id)
 
     dedup_basis = (
         "cancelled"
