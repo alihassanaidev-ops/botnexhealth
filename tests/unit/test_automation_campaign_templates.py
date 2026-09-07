@@ -924,6 +924,32 @@ def test_instantiate_creates_publishes_and_pauses_workflow() -> None:
     mock_svc.pause_workflow.assert_awaited_once_with(wf)
 
 
+def test_location_admin_cannot_instantiate_template_for_another_location() -> None:
+    from fastapi import HTTPException
+    from unittest.mock import patch
+
+    user = MagicMock()
+    user.institution_id = "inst-1"
+    user.location_id = "loc-1"
+    user.role = "LOCATION_ADMIN"
+
+    with patch(
+        "src.app.api.routes.automation_templates._institution_pms_type",
+        new=AsyncMock(return_value="nexhealth"),
+    ):
+        with pytest.raises(HTTPException) as exc_info:
+            asyncio.run(
+                instantiate_template(
+                    "appointment-reminder-24h",
+                    user,
+                    data=CampaignTemplateInstantiateRequest(location_id="loc-2"),
+                )
+            )
+
+    assert exc_info.value.status_code == 403
+    assert exc_info.value.detail == "Cannot manage campaigns for another location"
+
+
 def test_instantiate_sales_template_publishes_enquiry_definition() -> None:
     user = MagicMock()
     user.institution_id = "inst-1"

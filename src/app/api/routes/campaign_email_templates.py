@@ -1,8 +1,9 @@
 """Campaign email template routes — clinic-authored, reusable across campaigns.
 
-Accessible to INSTITUTION_ADMIN users for their own institution, and to
-SUPER_ADMIN for any institution named by ``institution_id``. Templates are
-scoped per institution and isolated by RLS. Separate from
+Location admins may read active templates while building their clinic's
+campaigns. Template management remains available only to INSTITUTION_ADMIN
+users for their own institution, and SUPER_ADMIN for any institution named by
+``institution_id``. Templates are scoped per institution and isolated by RLS. Separate from
 ``/institution/email-templates``, which manages the five fixed system
 notification templates.
 """
@@ -16,6 +17,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request, status
 from pydantic import BaseModel, Field
 
 from src.app.api.deps import (
+    get_current_institution_location_or_super_admin,
     get_current_institution_or_super_admin,
     resolve_target_institution,
 )
@@ -113,7 +115,9 @@ def _bad_request(exc: CampaignEmailTemplateError) -> HTTPException:
 @limiter.limit(RATE_READ)
 async def list_campaign_email_templates(
     request: Request,
-    current_user: Annotated[User, Depends(get_current_institution_or_super_admin)],
+    current_user: Annotated[
+        User, Depends(get_current_institution_location_or_super_admin)
+    ],
     institution_id: str | None = None,
     active_only: bool = False,
 ) -> CampaignEmailTemplateListResponse:

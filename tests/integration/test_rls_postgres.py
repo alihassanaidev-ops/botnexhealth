@@ -796,6 +796,66 @@ async def test_rls_institution_locations_branches(rls_engine) -> None:
 
 
 @pytest.mark.asyncio
+async def test_location_admin_campaign_rls_is_exact_location_only(rls_engine) -> None:
+    """Location admins cannot see or mutate global/other-clinic campaigns."""
+    workflow_ids = {
+        "own": "90000000-0000-0000-0000-000000000001",
+        "other": "90000000-0000-0000-0000-000000000002",
+        "global": "90000000-0000-0000-0000-000000000003",
+    }
+    async with rls_engine.begin() as conn:
+        await _set_context(conn, role="SUPER_ADMIN", user_id=USER_SUPER)
+        await conn.execute(
+            text(
+                """
+                INSERT INTO automation_workflows
+                  (id, institution_id, location_id, name, status, is_template)
+                VALUES
+                  (:own, :inst, :loc_a1, 'Own clinic', 'draft', false),
+                  (:other, :inst, :loc_a2, 'Other clinic', 'draft', false),
+                  (:global, :inst, NULL, 'Institution wide', 'draft', false)
+                """
+            ),
+            {
+                **workflow_ids,
+                "inst": INST_A,
+                "loc_a1": LOC_A1,
+                "loc_a2": LOC_A2,
+            },
+        )
+
+    async with rls_engine.begin() as conn:
+        await _set_context(
+            conn,
+            user_id=USER_STAFF_A1,
+            role="LOCATION_ADMIN",
+            institution_id=INST_A,
+            location_id=LOC_A1,
+        )
+        visible = (
+            await conn.execute(
+                text(
+                    "SELECT id::text FROM automation_workflows "
+                    "WHERE id IN (:own, :other, :global)"
+                ),
+                workflow_ids,
+            )
+        ).scalars().all()
+        assert visible == [workflow_ids["own"]]
+
+        updated = (
+            await conn.execute(
+                text(
+                    "UPDATE automation_workflows SET name = 'Scoped update' "
+                    "WHERE id IN (:own, :other, :global) RETURNING id::text"
+                ),
+                workflow_ids,
+            )
+        ).scalars().all()
+        assert updated == [workflow_ids["own"]]
+
+
+@pytest.mark.asyncio
 async def test_retell_lookup_resolves_outbound_voice_profile_agent(rls_engine) -> None:
     """Outbound campaign agents must resolve through the same fail-closed
     Retell lookup used by scheduling function calls.

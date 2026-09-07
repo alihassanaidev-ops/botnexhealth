@@ -22,13 +22,13 @@ from typing import Annotated
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, Field
 
-from src.app.api.deps import get_current_institution_user
+from src.app.api.deps import get_current_institution_or_location_admin
 from src.app.api.permissions import Permission, require_permission
 from src.app.database import get_db_session
 from src.app.models.audit_log import AuditAction, AuditActor
 from src.app.models.institution_location import InstitutionLocation
 from src.app.models.quiet_hours_exception import QuietHoursException
-from src.app.models.user import User
+from src.app.models.user import User, UserRole
 from src.app.services.audit_decorator import audit
 from src.app.services.automation.quiet_hours_exception_service import (
     QuietHoursExceptionError,
@@ -41,7 +41,9 @@ router = APIRouter(
     prefix="/compliance/quiet-hours/exceptions", tags=["Compliance Settings"]
 )
 
-_InstitutionUser = Annotated[User, Depends(get_current_institution_user)]
+_InstitutionOrLocationAdmin = Annotated[
+    User, Depends(get_current_institution_or_location_admin)
+]
 
 
 def _institution_id(user: User) -> str:
@@ -112,9 +114,38 @@ async def _owned_location_or_404(session, location_id: str, institution_id: str)
     return location
 
 
-async def _owned_exception_or_404(session, exception_id: str, institution_id: str):
+def _location_id_for_user(user: User, location_id: str) -> str:
+    if user.role != UserRole.LOCATION_ADMIN.value:
+        return location_id
+    if not user.location_id:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Location-scoped account is missing location assignment",
+        )
+    own_location_id = str(user.location_id)
+    if str(location_id) != own_location_id:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Cannot manage quiet hours for another location",
+        )
+    return own_location_id
+
+
+async def _owned_exception_or_404(
+    session,
+    exception_id: str,
+    institution_id: str,
+    current_user: User,
+):
     row = await session.get(QuietHoursException, exception_id)
-    if row is None or str(row.institution_id) != institution_id:
+    wrong_location = (
+        row is not None
+        and current_user.role == UserRole.LOCATION_ADMIN.value
+        and str(row.location_id) != _location_id_for_user(
+            current_user, str(current_user.location_id or "")
+        )
+    )
+    if row is None or str(row.institution_id) != institution_id or wrong_location:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND, detail="Exception not found"
         )
@@ -124,9 +155,10 @@ async def _owned_exception_or_404(session, exception_id: str, institution_id: st
 @router.get("", response_model=list[QuietHoursExceptionResponse])
 async def list_exceptions(
     location_id: str,
-    current_user: _InstitutionUser,
+    current_user: _InstitutionOrLocationAdmin,
 ) -> list[QuietHoursExceptionResponse]:
     inst_id = _institution_id(current_user)
+    location_id = _location_id_for_user(current_user, location_id)
     async with get_db_session() as session:
         await _owned_location_or_404(session, location_id, inst_id)
         rows = await QuietHoursExceptionService(session).list_for_location(
@@ -151,15 +183,16 @@ async def list_exceptions(
 )
 async def create_exception(
     data: QuietHoursExceptionRequest,
-    current_user: _InstitutionUser,
+    current_user: _InstitutionOrLocationAdmin,
 ) -> QuietHoursExceptionResponse:
     inst_id = _institution_id(current_user)
+    location_id = _location_id_for_user(current_user, data.location_id)
     async with get_db_session() as session:
-        await _owned_location_or_404(session, data.location_id, inst_id)
+        await _owned_location_or_404(session, location_id, inst_id)
         try:
             row = await QuietHoursExceptionService(session).create(
                 institution_id=inst_id,
-                location_id=data.location_id,
+                location_id=location_id,
                 contact_id=data.contact_id,
                 exception_date=data.exception_date,
                 content_class=data.content_class,
@@ -193,11 +226,13 @@ async def create_exception(
 async def update_exception(
     exception_id: str,
     data: QuietHoursExceptionUpdate,
-    current_user: _InstitutionUser,
+    current_user: _InstitutionOrLocationAdmin,
 ) -> QuietHoursExceptionResponse:
     inst_id = _institution_id(current_user)
     async with get_db_session() as session:
-        row = await _owned_exception_or_404(session, exception_id, inst_id)
+        row = await _owned_exception_or_404(
+            session, exception_id, inst_id, current_user
+        )
         fields = data.model_dump(exclude_unset=True)
         try:
             await QuietHoursExceptionService(session).update(row, **fields)
@@ -222,9 +257,11 @@ async def update_exception(
 )
 async def delete_exception(
     exception_id: str,
-    current_user: _InstitutionUser,
+    current_user: _InstitutionOrLocationAdmin,
 ) -> None:
     inst_id = _institution_id(current_user)
     async with get_db_session() as session:
-        row = await _owned_exception_or_404(session, exception_id, inst_id)
+        row = await _owned_exception_or_404(
+            session, exception_id, inst_id, current_user
+        )
         await QuietHoursExceptionService(session).delete(row)

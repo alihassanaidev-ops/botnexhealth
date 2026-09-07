@@ -790,10 +790,13 @@ def _segment_from_definition(row: CampaignAudienceDefinition | None) -> Audience
 def _effective_location_ids(
     segment: AudienceSegment, workflow: AutomationWorkflow
 ) -> list[str]:
-    if segment.filters.location_id_in:
-        return segment.filters.location_id_in
+    # A location-owned campaign can never widen its audience by supplying a
+    # different segment filter. API validation gives authors a clear error;
+    # this ordering is the service-layer backstop for persisted/legacy data.
     if workflow.location_id:
         return [str(workflow.location_id)]
+    if segment.filters.location_id_in:
+        return segment.filters.location_id_in
     return []
 
 

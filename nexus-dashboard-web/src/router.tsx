@@ -432,7 +432,7 @@ export const router = createBrowserRouter([
                     {
                         path: "institution-admin/quiet-hours-exceptions",
                         element: (
-                            <RoleGuard allowed={["INSTITUTION_ADMIN"]}>
+                            <RoleGuard allowed={["INSTITUTION_ADMIN", "LOCATION_ADMIN"]}>
                                 <S><QuietHoursExceptions /></S>
                             </RoleGuard>
                         ),
@@ -448,7 +448,7 @@ export const router = createBrowserRouter([
                     {
                         path: "institution-admin/campaigns",
                         element: (
-                            <RoleGuard allowed={["INSTITUTION_ADMIN"]}>
+                            <RoleGuard allowed={["INSTITUTION_ADMIN", "LOCATION_ADMIN"]}>
                                 <S><Campaigns /></S>
                             </RoleGuard>
                         ),
@@ -456,7 +456,7 @@ export const router = createBrowserRouter([
                     {
                         path: "institution-admin/campaigns/templates",
                         element: (
-                            <RoleGuard allowed={["INSTITUTION_ADMIN"]}>
+                            <RoleGuard allowed={["INSTITUTION_ADMIN", "LOCATION_ADMIN"]}>
                                 <S><WorkflowTemplates /></S>
                             </RoleGuard>
                         ),
@@ -464,7 +464,7 @@ export const router = createBrowserRouter([
                     {
                         path: "institution-admin/campaigns/:id",
                         element: (
-                            <RoleGuard allowed={["INSTITUTION_ADMIN"]}>
+                            <RoleGuard allowed={["INSTITUTION_ADMIN", "LOCATION_ADMIN"]}>
                                 <S><CampaignDetail /></S>
                             </RoleGuard>
                         ),
@@ -472,7 +472,7 @@ export const router = createBrowserRouter([
                     {
                         path: "institution-admin/campaigns/:id/builder",
                         element: (
-                            <RoleGuard allowed={["INSTITUTION_ADMIN"]}>
+                            <RoleGuard allowed={["INSTITUTION_ADMIN", "LOCATION_ADMIN"]}>
                                 <S><WorkflowBuilder /></S>
                             </RoleGuard>
                         ),
@@ -480,7 +480,7 @@ export const router = createBrowserRouter([
                     {
                         path: "institution-admin/campaigns/:id/versions",
                         element: (
-                            <RoleGuard allowed={["INSTITUTION_ADMIN"]}>
+                            <RoleGuard allowed={["INSTITUTION_ADMIN", "LOCATION_ADMIN"]}>
                                 <S><WorkflowVersions /></S>
                             </RoleGuard>
                         ),
