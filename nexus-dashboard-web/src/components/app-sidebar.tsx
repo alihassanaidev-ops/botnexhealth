@@ -61,7 +61,7 @@ const NAV_ART: Record<string, PageArtName> = {
     "/setup/audit-logs": "audit",
     "/setup/insurance-plans": "insurancePlans",
     "/setup/operatories": "operatories",
-    "/setup/providers": "scheduling",
+    "/setup/providers": "providers",
     "/setup/reasons": "appointmentTypes",
     "/sms-preferences": "messaging",
     "/undeliverables": "workflow",

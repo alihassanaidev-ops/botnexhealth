@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 768 768" fill="none">
+  <circle cx="514" cy="206" r="92" fill="var(--art-ink)" stroke="var(--art-surface)" stroke-width="28"/>
+  <path d="M368 464c0-112 64-188 146-188s146 76 146 188v52H368v-52Z" fill="var(--art-ink)" stroke="var(--art-surface)" stroke-width="28" stroke-linejoin="round"/>
+  <circle cx="278" cy="236" r="122" fill="var(--art-ink)" stroke="var(--art-surface)" stroke-width="30"/>
+  <path d="M70 590v-38c0-138 92-232 208-232s208 94 208 232v76H108c-21 0-38-17-38-38Z" fill="var(--art-ink)" stroke="var(--art-surface)" stroke-width="30" stroke-linejoin="round"/>
+  <path d="M526 374c49 34 95 51 146 64v107c0 88-51 153-146 191-95-38-146-103-146-191V438c51-13 97-30 146-64Z" fill="var(--art-accent)" stroke="var(--art-surface)" stroke-width="28" stroke-linejoin="round"/>
+  <path d="m444 548 51 51 111-116" stroke="var(--art-surface)" stroke-width="34" stroke-linecap="round" stroke-linejoin="round"/>
+</svg>

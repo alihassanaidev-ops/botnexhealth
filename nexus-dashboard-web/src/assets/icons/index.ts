@@ -42,7 +42,8 @@ import scheduling from "./svg/scheduling.svg?raw"
 import sendingAddress from "./svg/sending-address-v2.svg?raw"
 import settings from "./svg/settings.svg?raw"
 import telephony from "./svg/telephony.svg?raw"
-import users from "./svg/users-outlined.svg?raw"
+import providers from "./svg/providers.svg?raw"
+import users from "./svg/users.svg?raw"
 import workflow from "./svg/workflow.svg?raw"
 
 export const pageArt = {
@@ -75,6 +76,7 @@ export const pageArt = {
     sendingAddress,
     settings,
     telephony,
+    providers,
     users,
     workflow,
 } as const
