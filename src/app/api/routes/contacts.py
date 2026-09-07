@@ -9,8 +9,9 @@ identity remains authoritative in NexHealth/GoTracker and the underlying PMS.
 
 Merge is non-destructive: an absorbed contact becomes an *alias*
 (``merged_into_id`` points at the primary) and its Calls are never reassigned,
-so unmerge is lossless. Phone numbers are masked; the full value is served only
-via the audited reveal endpoint, mirroring the calls API.
+so unmerge is lossless. Contact details follow the one shared policy in
+``services.phi_visibility``: clinic administrators read them inline, everyone
+else gets last-four and the audited reveal endpoint, mirroring the calls API.
 """
 
 from __future__ import annotations
@@ -46,6 +47,7 @@ from src.app.models.user import User, UserRole
 from src.app.services.audit_decorator import audit
 from src.app.services.automation.enquiry_intake_service import intake_enquiry
 from src.app.services.audit import log_audit_background, phi_reveal_audit
+from src.app.services.phi_visibility import serves_phi_inline
 from src.app.services.sms_privacy import hash_email, hash_phone, mask_phone
 
 logger = logging.getLogger(__name__)
@@ -76,6 +78,7 @@ class ContactAlias(BaseModel):
     full_name: str | None
     phone_masked: str | None
     phone_reveal_available: bool = False
+    phone_revealed: bool = False
 
 
 class ContactListItem(BaseModel):
@@ -90,10 +93,12 @@ class ContactListItem(BaseModel):
     email_masked: str | None = None
     has_notes: bool = False
     pms_last_synced_at: str | None = None
-    # Callback number, masked to the last 4 digits. Full value via the audited
-    # POST /{contact_id}/reveal/phone endpoint.
+    # Callback number. Masked to the last 4 digits for roles that do not read
+    # inline; those use the audited POST /{contact_id}/reveal/phone endpoint.
     phone_masked: str | None = None
     phone_reveal_available: bool = False
+    #: True when phone_masked already holds the whole number.
+    phone_revealed: bool = False
     call_count: int = 0
     last_call_at: str | None = None
     alias_count: int = 0
@@ -121,6 +126,7 @@ class ContactDetail(BaseModel):
     pms_last_synced_at: str | None = None
     phone_masked: str | None = None
     phone_reveal_available: bool = False
+    phone_revealed: bool = False
     created_at: str
     aliases: list[ContactAlias] = []
     calls: list[ContactCallSummary] = []
@@ -169,16 +175,29 @@ class PhoneRevealResponse(BaseModel):
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
 
-def _phone_fields(contact: Contact) -> tuple[str | None, bool]:
-    """(masked phone, reveal_available) for a contact."""
+def _phone_fields(
+    contact: Contact, *, inline: bool
+) -> tuple[str | None, bool, bool]:
+    """(phone, reveal_available, revealed) for a contact.
+
+    Follows the convention ``calls.py`` already uses: ``reveal_available`` means
+    *a number exists at all* and stays true either way, so a caller guarding its
+    markup on it keeps rendering; ``revealed`` is what tells the client the value
+    is already whole and no Reveal link belongs beside it.
+    """
     available = contact.phone_encrypted is not None
-    masked = mask_phone(contact.phone) if available else None
-    return masked, available
+    if not available:
+        return None, False, False
+    if inline:
+        return contact.phone, True, True
+    return mask_phone(contact.phone), True, False
 
 
-def _mask_email(email: str | None) -> str | None:
+def _mask_email(email: str | None, *, inline: bool = False) -> str | None:
     if not email or "@" not in email:
         return None
+    if inline:
+        return email
     local, _, domain = email.partition("@")
     head = local[0] if local else ""
     return f"{head}{'*' * max(len(local) - 1, 1)}@{domain}"
@@ -199,8 +218,9 @@ def _item(
     last_call_at=None,
     alias_count: int = 0,
     pms_last_synced_at=None,
+    inline: bool = False,
 ) -> ContactListItem:
-    masked, available = _phone_fields(contact)
+    masked, available, revealed = _phone_fields(contact, inline=inline)
     return ContactListItem(
         id=contact.id,
         full_name=contact.full_name,
@@ -210,13 +230,14 @@ def _item(
         lifecycle=_lifecycle(contact),
         lead_status=contact.lead_status,
         source=contact.lead_source,
-        email_masked=_mask_email(contact.email),
+        email_masked=_mask_email(contact.email, inline=inline),
         has_notes=bool(contact.notes_encrypted),
         pms_last_synced_at=(
             pms_last_synced_at.isoformat() if pms_last_synced_at else None
         ),
         phone_masked=masked,
         phone_reveal_available=available,
+        phone_revealed=revealed,
         call_count=int(call_count or 0),
         last_call_at=last_call_at.isoformat() if last_call_at else None,
         alias_count=int(alias_count or 0),
@@ -403,6 +424,7 @@ async def list_contacts(
             )
         ).all()
 
+        inline = serves_phi_inline(current_user)
         items = [
             _item(
                 contact,
@@ -410,6 +432,7 @@ async def list_contacts(
                 last_call_at=last_call_at,
                 alias_count=alias_count,
                 pms_last_synced_at=pms_last_synced_at,
+                inline=inline,
             )
             for contact, call_count, last_call_at, alias_count, pms_last_synced_at in rows
         ]
@@ -463,16 +486,18 @@ async def _load_contact_detail(contact_id: str, current_user: User) -> ContactDe
             )
         ).scalar_one_or_none()
 
-        masked, available = _phone_fields(contact)
+        inline = serves_phi_inline(current_user)
+        masked, available, revealed = _phone_fields(contact, inline=inline)
         alias_out: list[ContactAlias] = []
         for a in aliases:
-            a_masked, a_available = _phone_fields(a)
+            a_masked, a_available, a_revealed = _phone_fields(a, inline=inline)
             alias_out.append(
                 ContactAlias(
                     id=a.id,
                     full_name=a.full_name,
                     phone_masked=a_masked,
                     phone_reveal_available=a_available,
+                    phone_revealed=a_revealed,
                 )
             )
 
@@ -500,13 +525,14 @@ async def _load_contact_detail(contact_id: str, current_user: User) -> ContactDe
             lifecycle=_lifecycle(contact),
             lead_status=contact.lead_status,
             source=contact.lead_source,
-            email_masked=_mask_email(contact.email),
+            email_masked=_mask_email(contact.email, inline=inline),
             notes=contact.notes,
             pms_last_synced_at=(
                 pms_last_synced_at.isoformat() if pms_last_synced_at else None
             ),
             phone_masked=masked,
             phone_reveal_available=available,
+            phone_revealed=revealed,
             created_at=contact.created_at.isoformat(),
             aliases=alias_out,
             calls=call_out,

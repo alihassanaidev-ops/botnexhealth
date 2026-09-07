@@ -19,6 +19,8 @@ export interface ContactAlias {
     full_name: string | null
     phone_masked: string | null
     phone_reveal_available: boolean
+    /** True when phone_masked already holds the full number. */
+    phone_revealed?: boolean
 }
 
 export interface ContactListItem {
@@ -35,6 +37,8 @@ export interface ContactListItem {
     pms_last_synced_at: string | null
     phone_masked: string | null
     phone_reveal_available: boolean
+    /** True when phone_masked already holds the full number. */
+    phone_revealed?: boolean
     call_count: number
     last_call_at: string | null
     alias_count: number
@@ -62,6 +66,8 @@ export interface ContactDetail {
     pms_last_synced_at: string | null
     phone_masked: string | null
     phone_reveal_available: boolean
+    /** True when phone_masked already holds the full number. */
+    phone_revealed?: boolean
     created_at: string
     aliases: ContactAlias[]
     calls: ContactCallSummary[]

@@ -158,6 +158,12 @@ def _value(
 
 @pytest.mark.asyncio
 async def test_call_detail_hides_full_phi_until_audited_reveal(monkeypatch):
+    """STAFF keeps the reveal step.
+
+    Front-desk screens sit in waiting rooms, which is the one place the
+    reveal-on-click pattern is buying something. Clinic administrators no
+    longer go through it — see the companion test below.
+    """
     monkeypatch.setattr(calls_routes, "log_audit_background", lambda **_kwargs: None)
     protected_field = _field("diagnosis_note", is_phi=True)
     plain_field = _field("referral_source", is_phi=False, display_order=1)
@@ -176,7 +182,10 @@ async def test_call_detail_hides_full_phi_until_audited_reveal(monkeypatch):
     response = await _route_target(calls_routes.get_call)(
         request=object(),
         call_id="33333333-3333-3333-3333-333333333333",
-        current_user=_user(),
+        current_user=_user(
+            UserRole.STAFF.value,
+            location_id="bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb",
+        ),
     )
 
     # The detail endpoint never returns transcript or recording bodies —
@@ -443,3 +452,80 @@ async def test_phi_reveal_rbac_matrix_blocks_super_admin_without_break_glass(end
         await _invoke_reveal_endpoint(endpoint, _user(UserRole.SUPER_ADMIN.value))
 
     assert exc.value.status_code == 403
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "role",
+    [UserRole.INSTITUTION_ADMIN.value, UserRole.LOCATION_ADMIN.value],
+)
+async def test_clinic_admins_read_call_content_inline(monkeypatch, role):
+    """A clinic administrator reads their own patients' calls without a click.
+
+    They clicked Reveal every single time it was offered, which makes it a
+    speed bump rather than a control. What replaces it is the audit row: the
+    detail response is still attributable, and ``inline_phi`` records that the
+    content was served without an explicit reveal.
+    """
+    audits: list[dict] = []
+    monkeypatch.setattr(
+        calls_routes, "log_audit_background", lambda **kwargs: audits.append(kwargs)
+    )
+    monkeypatch.setattr(
+        "src.app.tasks.recordings.generate_presigned_url",
+        lambda _url: "https://s3.example/presigned",
+    )
+    _install_session(monkeypatch, _call(), [])
+
+    response = await _route_target(calls_routes.get_call)(
+        request=object(),
+        call_id="33333333-3333-3333-3333-333333333333",
+        current_user=_user(
+            role, location_id="bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"
+        ),
+    )
+
+    # The name is whole, not S***h L****r.
+    assert response.contact is not None
+    assert response.contact.full_name == "Sarah Loomer"
+    # The number is whole, and the client is told so rather than being left to
+    # draw a Reveal link beside a complete value.
+    assert response.phone_masked == "+15125550199"
+    assert response.phone_revealed is True
+    # The raw transcript, not Retell's scrubbed preview with ***** holes.
+    assert response.transcript_redacted is False
+    assert response.scrubbed_transcript == [
+        {"role": "user", "content": "My DOB is [REDACTED]"}
+    ]
+    assert response.recording_url == "https://s3.example/presigned"
+
+    # Access is still attributable — that is what makes dropping the click safe.
+    detail_audit = next(
+        a for a in audits if a["action"] == AuditAction.VIEW_CALL_DETAIL
+    )
+    assert detail_audit["metadata"]["inline_phi"] is True
+    assert detail_audit["metadata"]["actor_role"] == role
+
+
+@pytest.mark.asyncio
+async def test_super_admin_still_reads_masked_call_detail(monkeypatch):
+    """Platform staff are outside the circle of care, and stay outside it.
+
+    This exclusion is what makes serving every clinic role inline defensible,
+    so it is asserted separately rather than left implied.
+    """
+    monkeypatch.setattr(calls_routes, "log_audit_background", lambda **_kwargs: None)
+    _install_session(monkeypatch, _call(), [])
+
+    response = await _route_target(calls_routes.get_call)(
+        request=object(),
+        call_id="33333333-3333-3333-3333-333333333333",
+        current_user=_user(UserRole.SUPER_ADMIN.value),
+    )
+
+    assert response.contact is not None
+    assert response.contact.full_name == "S***h L****r"
+    assert response.phone_masked != "+15125550199"
+    assert response.phone_revealed is False
+    assert response.transcript_redacted is True
+    assert response.recording_url is None

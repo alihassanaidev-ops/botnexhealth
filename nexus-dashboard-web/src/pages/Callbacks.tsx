@@ -238,6 +238,7 @@ function CallbackRow({ item, onResolve, onClick }: CallbackRowProps) {
                     callId={item.call_id}
                     masked={item.phone_masked}
                     available={item.phone_reveal_available}
+                    revealed={item.phone_revealed}
                 />
             </TableCell>
 

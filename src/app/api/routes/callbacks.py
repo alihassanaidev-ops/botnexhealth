@@ -19,6 +19,7 @@ from sqlalchemy.orm import selectinload
 from src.app.api.deps import get_current_active_user
 from src.app.api.rate_limit import RATE_READ, limiter
 from src.app.api.routes.calls import ContactSummary, WorkflowStatusOut, _location_agent_filter
+from src.app.services.phi_visibility import serves_phi_inline
 from src.app.services.sms_privacy import mask_phone
 from src.app.database import get_db_session
 from src.app.models.audit_log import AuditAction, AuditActor, AuditOutcome
@@ -54,6 +55,8 @@ class CallbackItem(BaseModel):
     # Masked callback number; full value via POST /institution/calls/{id}/reveal/phone.
     phone_masked: str | None = None
     phone_reveal_available: bool = False
+    #: True when phone_masked already holds the whole number.
+    phone_revealed: bool = False
 
 
 class CallbacksListResponse(BaseModel):
@@ -66,10 +69,11 @@ class CallbacksListResponse(BaseModel):
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
 
-def _call_to_callback_item(call: Call) -> CallbackItem:
+def _call_to_callback_item(call: Call, *, inline: bool = False) -> CallbackItem:
     contact_out: ContactSummary | None = None
     phone_masked: str | None = None
     phone_reveal_available = False
+    phone_revealed = False
     if call.contact:
         contact_out = ContactSummary(
             id=call.contact.id,
@@ -79,7 +83,12 @@ def _call_to_callback_item(call: Call) -> CallbackItem:
         )
         phone_reveal_available = call.contact.phone_encrypted is not None
         if phone_reveal_available:
-            phone_masked = mask_phone(call.contact.phone)
+            # The number is the whole point of a callback queue, so an admin
+            # gets it outright rather than a last-4 and a click.
+            phone_masked = (
+                call.contact.phone if inline else mask_phone(call.contact.phone)
+            )
+            phone_revealed = inline
     return CallbackItem(
         call_id=call.id,
         contact_name=call.contact.full_name if call.contact else None,
@@ -102,6 +111,7 @@ def _call_to_callback_item(call: Call) -> CallbackItem:
         ),
         phone_masked=phone_masked,
         phone_reveal_available=phone_reveal_available,
+        phone_revealed=phone_revealed,
     )
 
 
@@ -190,7 +200,10 @@ async def list_callbacks(
             total=total,
             limit=limit,
             offset=offset,
-            items=[_call_to_callback_item(c) for c in rows],
+            items=[
+                _call_to_callback_item(c, inline=serves_phi_inline(current_user))
+                for c in rows
+            ],
         )
 
         log_audit_background(

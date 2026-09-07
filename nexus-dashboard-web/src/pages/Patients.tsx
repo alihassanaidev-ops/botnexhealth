@@ -445,6 +445,7 @@ function PersonDetail({ contactId, mode, onClose, onChanged }: PersonDetailProps
                                     callId={detail.id}
                                     masked={detail.phone_masked}
                                     available={detail.phone_reveal_available}
+                                    revealed={detail.phone_revealed}
                                     revealFn={revealContactPhone}
                                 />
                                 <span className="text-muted-foreground">·</span>
@@ -1082,6 +1083,7 @@ function LocalPeopleDirectory({ mode }: { mode: DirectoryMode }) {
                                                     callId={c.id}
                                                     masked={c.phone_masked}
                                                     available={c.phone_reveal_available}
+                                                    revealed={c.phone_revealed}
                                                     revealFn={revealContactPhone}
                                                 />
                                             </TableCell>

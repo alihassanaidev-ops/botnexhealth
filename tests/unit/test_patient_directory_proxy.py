@@ -114,14 +114,26 @@ async def test_location_admin_patient_page_shows_contact_fields_and_links_contac
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    ("reveal_patient_id", "expected_email", "masked", "can_reveal"),
+    ("role", "reveal_patient_id", "expected_email", "masked", "can_reveal"),
     [
-        (None, None, True, True),
-        ("nh-42", "dana@example.com", False, False),
+        # Clinic administrators read inline now, so a reveal id changes nothing
+        # for them. This screen used to invert the rule — INSTITUTION_ADMIN was
+        # the only clinic role that had to reveal each row, while STAFF got the
+        # same fields outright.
+        ("INSTITUTION_ADMIN", None, "dana@example.com", False, False),
+        ("INSTITUTION_ADMIN", "nh-42", "dana@example.com", False, False),
+        ("LOCATION_ADMIN", None, "dana@example.com", False, False),
+        # STAFF is unchanged by that: inline here, as before.
+        ("STAFF", None, "dana@example.com", False, False),
+        # A role outside the circle of care still reveals one row at a time,
+        # which is what keeps the bounded per-row audit resource meaningful.
+        ("SUPER_ADMIN", None, None, True, True),
+        ("SUPER_ADMIN", "nh-42", "dana@example.com", False, False),
     ],
 )
-async def test_institution_admin_masks_until_one_patient_is_revealed(
+async def test_contact_details_follow_the_shared_phi_policy(
     monkeypatch,
+    role,
     reveal_patient_id,
     expected_email,
     masked,
@@ -145,7 +157,7 @@ async def test_institution_admin_masks_until_one_patient_is_revealed(
 
     response = await _unwrap(route.browse_patients)(
         request=_request(),
-        current_user=_user("INSTITUTION_ADMIN"),
+        current_user=_user(role),
         cursor=None,
         page_size=25,
         search=None,

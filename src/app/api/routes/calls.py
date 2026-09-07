@@ -26,11 +26,11 @@ from src.app.models.call import Call
 from src.app.models.call_note import MAX_NOTE_LENGTH, CallNote
 from src.app.models.contact import Contact
 from src.app.models.custom_field import EntityType
-from src.app.models.institution import Institution
 from src.app.models.user import User, UserRole
 from src.app.services.audit import log_audit_background, phi_reveal_audit
 from src.app.services.custom_field_service import CustomFieldService
 from src.app.services.pii_masking import mask_brackets, mask_transcript
+from src.app.services.phi_visibility import serves_phi_inline
 from src.app.services.workflow_status_service import WorkflowStatusService
 from src.app.services.event_bus import publish_event
 from src.app.services.sms_privacy import hash_for_logging, mask_phone, safe_error_summary
@@ -216,7 +216,7 @@ def _call_to_record(
             ``redact_phi=False`` for authorised roles.
         expose_contact: When True, the caller's full phone number is served
             inline instead of the masked form. Reserved for no-PMS location
-            admins — see ``_nopms_unredacted``.
+            admins — see ``_reads_phi_inline``.
     """
     contact_out: ContactSummary | None = None
     phone_masked: str | None = None
@@ -310,28 +310,22 @@ async def _location_agent_filter(session, current_user: User) -> str | None:  # 
     return _location_scope_id(current_user)
 
 
-async def _nopms_unredacted(session, current_user: User) -> bool:
+def _reads_phi_inline(current_user: User) -> bool:
     """Whether this user reads call content unmasked, inline.
 
-    No-PMS tenants have no practice-management system holding the chart, so
-    the dashboard *is* the record and the clinic's own LOCATION_ADMIN is its
-    primary operator. For them we skip name masking and serve the raw
-    transcript directly instead of the scrubbed preview.
+    Delegates to the one shared policy in ``services.phi_visibility`` — see that
+    module for why clinic administrators no longer click through a reveal step.
 
-    PMS tenants (NexHealth / GoTracker) are unaffected and keep the audited
-    reveal flow, as do every other role — STAFF, INSTITUTION_ADMIN and the
-    platform-level SUPER_ADMIN.
+    This replaced a narrower rule that served content inline only to the
+    LOCATION_ADMIN of a *no-PMS* tenant. The PMS distinction turned out to be
+    the wrong axis: whether a clinic happens to run NexHealth says nothing about
+    whether its own administrator may read its own patients' phone numbers, and
+    it made Kadri's admins click through a gate that Olive Tree's did not.
+    Dropping it also drops a per-request ``SELECT`` on ``institutions``.
+
+    STAFF and SUPER_ADMIN keep the audited reveal flow.
     """
-    if current_user.role != UserRole.LOCATION_ADMIN.value:
-        return False
-    if not current_user.institution_id:
-        return False
-    institution = (
-        await session.execute(
-            select(Institution).where(Institution.id == current_user.institution_id)
-        )
-    ).scalar_one_or_none()
-    return institution is not None and not institution.has_pms
+    return serves_phi_inline(current_user)
 
 
 async def _get_scoped_call(
@@ -597,7 +591,7 @@ async def list_calls(
             .all()
         )
 
-        unredacted = await _nopms_unredacted(session, current_user)
+        unredacted = _reads_phi_inline(current_user)
         items = [
             _call_to_record(c, redact_phi=not unredacted, expose_contact=unredacted)
             for c in rows
@@ -665,7 +659,7 @@ async def get_call(
 
         # SUPER_ADMIN is platform-level and not in the circle of care — redact PHI.
         # All other institution-scoped roles may view patient names for care operations.
-        unredacted = await _nopms_unredacted(session, current_user)
+        unredacted = _reads_phi_inline(current_user)
         redact = current_user.role == UserRole.SUPER_ADMIN.value
         base = _call_to_record(call, redact_phi=redact, expose_contact=unredacted)
 

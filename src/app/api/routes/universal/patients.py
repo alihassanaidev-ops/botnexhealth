@@ -24,6 +24,7 @@ from src.app.pms.models import (
 )
 from src.app.services.audit_decorator import audit
 from src.app.services.patient_communication import fetch_patient_communication
+from src.app.services.phi_visibility import serves_phi_inline
 from src.app.services.sms_privacy import mask_phone, safe_error_summary
 
 router = APIRouter(prefix="/patients", tags=["Patients"])
@@ -121,9 +122,9 @@ async def browse_patients(
 ) -> PatientDirectoryPage:
     """Read one current patient page from NexHealth or GoTracker.
 
-    Location-scoped clinic users receive contact fields directly. Institution
-    admins receive masked contact fields unless they explicitly reveal one row;
-    that second bounded read is separately identifiable in the audit resource.
+    Clinic administrators receive contact fields directly. Roles that are still
+    masked may reveal one row at a time via ``reveal_patient_id``; that second
+    bounded read is separately identifiable in the audit resource.
     """
     try:
         page = await pms.browse_patients(
@@ -136,11 +137,30 @@ async def browse_patients(
             current_user=current_user,
             pms_patient_ids=[patient.id for patient in page.items],
         )
-        institution_admin = current_user.role == UserRole.INSTITUTION_ADMIN.value
+        # One policy across every PHI surface — see services.phi_visibility.
+        # This used to single out INSTITUTION_ADMIN as the *only* clinic role
+        # that had to reveal each row, while serving the same fields inline to
+        # STAFF: the practice owner was trusted less than the front desk.
+        #
+        # STAFF is carried through unchanged rather than folded into the shared
+        # policy. They read this directory inline today and taking that away
+        # would stop the front desk ringing patients back, which is not what
+        # the admin change was asked to do. It does leave one inconsistency
+        # standing — STAFF sees whole numbers here and last-4 on the call pages,
+        # so the call-page mask is already defeated by this screen — and that is
+        # a decision to take deliberately, not a side effect to smuggle in here.
+        show_contact_details = (
+            serves_phi_inline(current_user)
+            or current_user.role == UserRole.STAFF.value
+        )
+        # The per-row `reveal_patient_id` read stays wired for any role that is
+        # still masked, so its separately-audited resource keeps working.
         items = []
         for patient in page.items:
-            reveal_this_patient = institution_admin and reveal_patient_id == patient.id
-            show_contact_details = not institution_admin or reveal_this_patient
+            reveal_this_patient = (
+                not show_contact_details and reveal_patient_id == patient.id
+            )
+            show_this_patient = show_contact_details or reveal_this_patient
             items.append(
                 PatientDirectoryItem(
                     pms_patient_id=patient.id,
@@ -156,14 +176,12 @@ async def browse_patients(
                         or "Unknown patient"
                     ),
                     inactive=bool(patient.extra.get("inactive", False)),
-                    email=patient.email if show_contact_details else None,
-                    phone=patient.phone if show_contact_details else None,
+                    email=patient.email if show_this_patient else None,
+                    phone=patient.phone if show_this_patient else None,
                     email_masked=_mask_email(patient.email),
                     phone_masked=mask_phone(patient.phone),
-                    contact_details_masked=not show_contact_details,
-                    can_reveal_contact_details=(
-                        institution_admin and not reveal_this_patient
-                    ),
+                    contact_details_masked=not show_this_patient,
+                    can_reveal_contact_details=not show_this_patient,
                     pms_updated_at=_string_or_none(patient.extra.get("updated_at")),
                     pms_last_sync_time=_string_or_none(
                         patient.extra.get("last_sync_time")

@@ -651,6 +651,8 @@ export interface CallbackQueueItem {
     booked_appointment_type_name?: string | null;
     phone_masked: string | null;
     phone_reveal_available: boolean;
+    /** True when phone_masked already holds the full number — render it plainly. */
+    phone_revealed?: boolean;
 }
 
 /** Metrics scoped to a caller-selected date range (present when start/end passed). */
@@ -702,6 +704,8 @@ export interface CallbackListItem {
     workflow_status?: WorkflowStatusRef | null;
     phone_masked: string | null;
     phone_reveal_available: boolean;
+    /** True when phone_masked already holds the full number — render it plainly. */
+    phone_revealed?: boolean;
 }
 
 export interface AutomationWorkflow {

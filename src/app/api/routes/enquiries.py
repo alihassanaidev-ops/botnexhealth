@@ -11,11 +11,12 @@ practice-software id — so the stage shown here cannot drift from reality the w
 a hand-maintained property does. ``status`` remains what the campaign sets as it
 works the lead; the stage is what the clinic sees.
 
-**PII is masked**, exactly as it is on the patients list: a lead's phone and
-email belong to somebody who is not a patient and has consented to little, so
-they are shown last-four and domain-only until someone asks for them. Notes are
-the exception and are returned in full to the staff working the lead, because a
-note nobody can read is not a note.
+**Contact details follow one policy**, the same one the patients list and the
+call surfaces use — ``services.phi_visibility``. Clinic administrators, who are
+the only role this router admits, read a lead's phone and email in full: the
+point of the screen is to ring the person back, and a number you must click to
+see is not a control when nobody ever declines to click. Notes are returned in
+full for the same reason — a note nobody can read is not a note.
 """
 
 from __future__ import annotations
@@ -42,6 +43,7 @@ from src.app.services.automation.enquiry_trigger_service import (
     EnquiryTriggerService,
     enqueue_enquiry_workflow_dispatches,
 )
+from src.app.services.phi_visibility import serves_phi_inline
 from src.app.services.sms_privacy import hash_email, hash_phone, mask_phone
 
 logger = logging.getLogger(__name__)
@@ -55,10 +57,15 @@ _Session = Annotated[AsyncSession, Depends(get_db_session_dep)]
 Stage = Literal["lead", "contacted", "registered", "booked"]
 
 
-def _mask_email(email: str | None) -> str | None:
-    """Enough to recognise a person, not enough to contact them."""
+def _mask_email(email: str | None, *, inline: bool = False) -> str | None:
+    """Enough to recognise a person, not enough to contact them.
+
+    ``inline`` returns the address whole — see ``services.phi_visibility``.
+    """
     if not email or "@" not in email:
         return None
+    if inline:
+        return email
     local, _, domain = email.partition("@")
     head = local[0] if local else ""
     return f"{head}{'*' * max(len(local) - 1, 1)}@{domain}"
@@ -165,13 +172,15 @@ def _institution_id(user: User) -> str:
     return str(user.institution_id)
 
 
-def _item(row: Contact) -> EnquiryListItem:
+def _item(row: Contact, *, inline: bool = False) -> EnquiryListItem:
     return EnquiryListItem(
         id=str(row.id),
         first_name=row.first_name,
         last_name=row.last_name,
-        phone_masked=mask_phone(row.phone) if row.phone else None,
-        email_masked=_mask_email(row.email),
+        phone_masked=(
+            (row.phone if inline else mask_phone(row.phone)) if row.phone else None
+        ),
+        email_masked=_mask_email(row.email, inline=inline),
         status=row.lead_status or LeadStatus.NEW.value,
         stage=_stage(row),
         source=row.lead_source or "unknown",
@@ -248,7 +257,7 @@ async def list_enquiries(
         .all()
     )
 
-    items = [_item(row) for row in rows]
+    items = [_item(row, inline=serves_phi_inline(current_user)) for row in rows]
     if stage:
         # Derived, so it is filtered after mapping rather than in SQL. The page
         # size bounds the cost, and keeping one definition of stage is worth
@@ -324,7 +333,7 @@ async def create_enquiry(
     )
     await session.flush()
     response = EnquiryCreated(
-        enquiry=_detail(result.enquiry),
+        enquiry=_detail(result.enquiry, inline=serves_phi_inline(current_user)),
         created=result.created,
         matched_existing_contact=result.matched_existing_contact,
     )
@@ -413,7 +422,7 @@ async def enrol_enquiry(
     await session.flush()
 
     return EnquiryEnrolled(
-        enquiry=_detail(row),
+        enquiry=_detail(row, inline=serves_phi_inline(current_user)),
         run_id=str(run.id),
         contact_id=contact_id,
         created=created,
@@ -429,7 +438,7 @@ async def get_enquiry(
     session: _Session,
 ) -> EnquiryDetail:
     row = await _load(session, enquiry_id, _institution_id(current_user))
-    return _detail(row)
+    return _detail(row, inline=serves_phi_inline(current_user))
 
 
 @router.patch("/{enquiry_id}", response_model=EnquiryDetail)
@@ -457,12 +466,12 @@ async def update_enquiry(
         # update cannot silently wipe somebody's notes.
         row.notes = data.notes or None
     await session.flush()
-    return _detail(row)
+    return _detail(row, inline=serves_phi_inline(current_user))
 
 
-def _detail(row: Contact) -> EnquiryDetail:
+def _detail(row: Contact, *, inline: bool = False) -> EnquiryDetail:
     return EnquiryDetail(
-        **_item(row).model_dump(),
+        **_item(row, inline=inline).model_dump(),
         notes=row.notes,
         attribution=row.attribution,
         external_ref=row.external_ref,

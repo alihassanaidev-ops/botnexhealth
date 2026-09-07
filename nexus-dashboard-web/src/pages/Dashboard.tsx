@@ -393,6 +393,7 @@ function QueueItem({ item, onResolved }: QueueItemProps) {
                                 callId={item.call_id}
                                 masked={item.phone_masked}
                                 available={item.phone_reveal_available}
+                                revealed={item.phone_revealed}
                                 className="mt-1 text-xs"
                             />
                         )}
