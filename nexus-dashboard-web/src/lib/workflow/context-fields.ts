@@ -19,99 +19,23 @@ export const APPOINTMENT_CONTEXT_TRIGGERS: TriggerType[] = [
     "event",
     "internal_status",
 ]
-const GOTRACKER = ["gotracker"] as const
-const NEXHEALTH = ["nexhealth"] as const
-const SMS_REPLY_CONTEXT_TRIGGERS: TriggerType[] = ["inbound_message"]
-const RECALL_CONTEXT_TRIGGERS: TriggerType[] = ["schedule"]
-const FORM_CONTEXT_TRIGGERS: TriggerType[] = ["form_submitted"]
 
-export const WORKFLOW_CONTEXT_FIELDS: WorkflowContextField[] = [
-    // The fixed part of a form submission's context. The answers themselves are
-    // per-form, so they are offered from the trigger panel (which knows which
-    // forms are selected) rather than listed here; the editor's "Custom field…"
-    // entry accepts `form_answers.<key>` directly.
-    field("form_provider", "Form provider", "typeform", "payload", FORM_CONTEXT_TRIGGERS),
-    field("form_name", "Form name", "New Patient Enquiry", "payload", FORM_CONTEXT_TRIGGERS),
-    field("form_id", "Form ID", "0b0c2f5e-1f2a-4c3d-9a1b-2c3d4e5f6a7b", "payload", FORM_CONTEXT_TRIGGERS),
-    field("form_external_id", "Provider form ID", "AbC123", "payload", FORM_CONTEXT_TRIGGERS),
-    field("form_created_contact", "Created a new contact", true, "payload", FORM_CONTEXT_TRIGGERS),
-    field("matched_existing_contact", "Matched an existing patient", false, "payload", FORM_CONTEXT_TRIGGERS),
-    field("sms_reply_body", "SMS reply body", "I need to reschedule", "payload", SMS_REPLY_CONTEXT_TRIGGERS),
-    field("sms_reply_intent", "SMS reply intent", "free_text", "payload", SMS_REPLY_CONTEXT_TRIGGERS),
-    field("sms_reply_message_sid", "SMS message SID", "SM123", "payload", SMS_REPLY_CONTEXT_TRIGGERS),
-    field("inbound_sms_message_id", "Inbound SMS message ID", "inbound-1", "payload", SMS_REPLY_CONTEXT_TRIGGERS),
-    field("recall_due_date", "Recall due date", "2026-08-15", "payload", RECALL_CONTEXT_TRIGGERS),
-    field("recall_type_id", "Recall type ID", "nh-7", "payload", RECALL_CONTEXT_TRIGGERS),
-    field("recall_type_name", "Recall type name", "Hygiene", "payload", RECALL_CONTEXT_TRIGGERS),
-    field("recall_type", "Recall type", "Hygiene", "payload", RECALL_CONTEXT_TRIGGERS),
-    field("recall_interval_months", "Recall interval months", 6, "payload", RECALL_CONTEXT_TRIGGERS),
-    field("last_visit_date", "Last visit date", "2026-02-12", "payload", RECALL_CONTEXT_TRIGGERS),
-    field("treatment_plan_statuses", "Treatment plan statuses", ["accepted"], "payload", RECALL_CONTEXT_TRIGGERS),
-    field("active_treatment_plan_count", "Active treatment plan count", 1, "payload", RECALL_CONTEXT_TRIGGERS),
-    field("has_active_treatment_plan", "Has active treatment plan", true, "payload", RECALL_CONTEXT_TRIGGERS),
-    field("gotracker_appointment_id", "AppointmentId", "1343", "payload", APPOINTMENT_CONTEXT_TRIGGERS, GOTRACKER),
-    field("gotracker_contact_id", "ContactId", "583", "payload", APPOINTMENT_CONTEXT_TRIGGERS, GOTRACKER),
-    field("gotracker_provider_id", "ProviderId", "2", "payload", APPOINTMENT_CONTEXT_TRIGGERS, GOTRACKER),
-    field("gotracker_schedule_column_id", "ScheduleColumnId", "1", "payload", APPOINTMENT_CONTEXT_TRIGGERS, GOTRACKER),
-    field("is_preconfirmed", "IsPreconfirmed", false, "payload", APPOINTMENT_CONTEXT_TRIGGERS, GOTRACKER),
-    field("is_confirmed", "IsConfirmed", false, "payload", APPOINTMENT_CONTEXT_TRIGGERS, GOTRACKER),
-    field("master_id", "MasterId", null, "payload", APPOINTMENT_CONTEXT_TRIGGERS, GOTRACKER),
-    field("appointment_date", "AppointmentDate", "2026-07-30T00:00:00", "payload", APPOINTMENT_CONTEXT_TRIGGERS, GOTRACKER),
-    field("appointment_time", "AppointmentTime", "16:15:00", "payload", APPOINTMENT_CONTEXT_TRIGGERS, GOTRACKER),
-    field("appointment_duration", "Duration", "00:15:00", "payload", APPOINTMENT_CONTEXT_TRIGGERS, GOTRACKER),
-    field("original_date", "OriginalDate", "2026-07-30T00:00:00", "payload", APPOINTMENT_CONTEXT_TRIGGERS, GOTRACKER),
-    field("appointment_reason", "Reason", "bridge prep", "payload", APPOINTMENT_CONTEXT_TRIGGERS),
-    field("detail", "Detail", null, "payload", APPOINTMENT_CONTEXT_TRIGGERS, GOTRACKER),
-    field("appointment_amount", "AppointmentAmount", 0, "payload", APPOINTMENT_CONTEXT_TRIGGERS, GOTRACKER),
-    field("is_recall", "IsRecall", false, "payload", APPOINTMENT_CONTEXT_TRIGGERS, GOTRACKER),
-    field("is_personal", "IsPersonal", false, "payload", APPOINTMENT_CONTEXT_TRIGGERS, GOTRACKER),
-    field("is_all_day_appointment", "IsAllDayAppointment", false, "payload", APPOINTMENT_CONTEXT_TRIGGERS, GOTRACKER),
-    field("has_alarm", "HasAlarm", false, "payload", APPOINTMENT_CONTEXT_TRIGGERS, GOTRACKER),
-    field("notify_time", "NotifyTime", null, "payload", APPOINTMENT_CONTEXT_TRIGGERS, GOTRACKER),
-    field("gotracker_status_id", "StatusId", "1", "payload", APPOINTMENT_CONTEXT_TRIGGERS, GOTRACKER),
-    field("check_in", "CheckIn", null, "payload", APPOINTMENT_CONTEXT_TRIGGERS, GOTRACKER),
-    field("in_chair", "InChair", null, "payload", APPOINTMENT_CONTEXT_TRIGGERS, GOTRACKER),
-    field("out_chair", "OutChair", null, "payload", APPOINTMENT_CONTEXT_TRIGGERS, GOTRACKER),
-    field("check_out", "CheckOut", null, "payload", APPOINTMENT_CONTEXT_TRIGGERS, GOTRACKER),
-    field("flow_state", "FlowState", null, "payload", APPOINTMENT_CONTEXT_TRIGGERS, GOTRACKER),
-    field("flow_change", "FlowChange", null, "payload", APPOINTMENT_CONTEXT_TRIGGERS, GOTRACKER),
-    field("comments", "Comments", null, "payload", APPOINTMENT_CONTEXT_TRIGGERS, GOTRACKER),
-    field("booked_user_id", "BookedUserId", "Admin", "payload", APPOINTMENT_CONTEXT_TRIGGERS, GOTRACKER),
-    field("booked_timestamp", "BookedTimeStamp", "2026-07-29T20:32:00.81", "payload", APPOINTMENT_CONTEXT_TRIGGERS, GOTRACKER),
-    field("booked_machine_name", "BookedMachineName", "EC2AMAZ-QKGJ1Q1", "payload", APPOINTMENT_CONTEXT_TRIGGERS, GOTRACKER),
-    field("created_user_id", "CreatedUserId", "Admin", "payload", APPOINTMENT_CONTEXT_TRIGGERS, GOTRACKER),
-    field("created_timestamp", "CreatedTimeStamp", "2026-07-29T20:32:00.807", "payload", APPOINTMENT_CONTEXT_TRIGGERS, GOTRACKER),
-    field("modified_user_id", "ModifiedUserId", "Admin", "payload", APPOINTMENT_CONTEXT_TRIGGERS, GOTRACKER),
-    field("modified_timestamp", "ModifiedTimeStamp", "2026-07-29T20:32:00.807", "payload", APPOINTMENT_CONTEXT_TRIGGERS, GOTRACKER),
-    field("modified_machine_name", "ModifiedMachineName", "EC2AMAZ-QKGJ1Q1", "payload", APPOINTMENT_CONTEXT_TRIGGERS, GOTRACKER),
-    field("created_machine_name", "CreatedMachineName", "EC2AMAZ-QKGJ1Q1", "payload", APPOINTMENT_CONTEXT_TRIGGERS, GOTRACKER),
-    field("rebook_info", "RebookInfo", null, "payload", APPOINTMENT_CONTEXT_TRIGGERS, GOTRACKER),
-    field("confirmed_timestamp", "ConfirmedTimeStamp", null, "payload", APPOINTMENT_CONTEXT_TRIGGERS, GOTRACKER),
-    field("confirmed_user_id", "ConfirmedUserId", null, "payload", APPOINTMENT_CONTEXT_TRIGGERS, GOTRACKER),
-    field("confirmed_machine_name", "ConfirmedMachineName", null, "payload", APPOINTMENT_CONTEXT_TRIGGERS, GOTRACKER),
-    field("rebook_id", "RebookId", null, "payload", APPOINTMENT_CONTEXT_TRIGGERS, GOTRACKER),
-    field("cancelled_timestamp", "CancelledTimeStamp", null, "payload", APPOINTMENT_CONTEXT_TRIGGERS, GOTRACKER),
-    field("cancelled_user_id", "CancelledUserId", null, "payload", APPOINTMENT_CONTEXT_TRIGGERS, GOTRACKER),
-    field("cancelled_machine_name", "CancelledMachineName", null, "payload", APPOINTMENT_CONTEXT_TRIGGERS, GOTRACKER),
-    // NexHealth appointment context — the projection shape produced by the
-    // backend's `appointment_trigger_service.get_appointment_context`.
-    field("appointment_id", "Appointment ID", "987654", "payload", APPOINTMENT_CONTEXT_TRIGGERS, NEXHEALTH),
-    field("appointment_at", "Appointment start", "2026-07-30T16:15:00+00:00", "payload", APPOINTMENT_CONTEXT_TRIGGERS, NEXHEALTH),
-    field("appointment_start_time", "Appointment start time", "2026-07-30T16:15:00+00:00", "payload", APPOINTMENT_CONTEXT_TRIGGERS, NEXHEALTH),
-    field("appointment_status", "Appointment status", "booked", "payload", APPOINTMENT_CONTEXT_TRIGGERS, NEXHEALTH),
-    field("appointment_type_id", "Appointment type ID", "1001", "payload", APPOINTMENT_CONTEXT_TRIGGERS, NEXHEALTH),
-    field("appointment_type", "Appointment type", "Hygiene visit", "payload", APPOINTMENT_CONTEXT_TRIGGERS, NEXHEALTH),
-    field("appointment_type_name", "Appointment type name", "Hygiene visit", "payload", APPOINTMENT_CONTEXT_TRIGGERS, NEXHEALTH),
-    field("provider_id", "Provider ID", "377", "payload", APPOINTMENT_CONTEXT_TRIGGERS, NEXHEALTH),
-    field("patient_id", "Patient ID", "204012", "payload", APPOINTMENT_CONTEXT_TRIGGERS, NEXHEALTH),
-    field("contact_id", "Contact ID", "b7f0…", "payload", APPOINTMENT_CONTEXT_TRIGGERS, NEXHEALTH),
-    field("location_id", "Location ID", "loc-1", "payload", APPOINTMENT_CONTEXT_TRIGGERS, NEXHEALTH),
-]
-
-/**
- * Sample NexHealth appointment context, mirroring the backend projection
- * shape from `appointment_trigger_service.get_appointment_context`.
+/*
+ * The per-trigger field list that used to live here is gone.
+ *
+ * It was one of six competing vocabularies: it offered `appointment_at` while
+ * the message editor offered `{{appointment_datetime}}` and the trigger picker
+ * offered `appointment.start_at`, and nothing kept the three honest. Field
+ * discovery now comes from the served event catalog — see
+ * `lib/workflow/event-catalog.ts` — so every panel names a field the same way
+ * and the backend decides what a given practice software can actually supply.
+ *
+ * What remains below is the raw incoming-payload preview and its formatters.
+ * That is a genuinely different thing: it shows the author what the practice
+ * software really sent, which is the escape hatch for values the canonical
+ * vocabulary does not cover.
  */
+
 export const NEXHEALTH_APPOINTMENT_CONTEXT_SAMPLE = {
     data: {
         appointment_id: "987654",
@@ -347,19 +271,6 @@ export function sampleWorkflowContext(pmsType: string | null): Record<string, un
     return pmsType === "nexhealth" ? NEXHEALTH_SAMPLE_WORKFLOW_CONTEXT : SAMPLE_WORKFLOW_CONTEXT
 }
 
-export function contextFieldsForTrigger(
-    triggerType: TriggerType,
-    pmsType: string | null = null,
-): WorkflowContextField[] {
-    return WORKFLOW_CONTEXT_FIELDS.filter(
-        (field) =>
-            (!field.triggerTypes || field.triggerTypes.includes(triggerType)) &&
-            // Unknown PMS (context loading): keep only PMS-neutral fields for
-            // PMS-owned entries, so a NexHealth tenant never flashes GoTracker.
-            (!field.pmsTypes || (pmsType !== null && field.pmsTypes.includes(pmsType))),
-    )
-}
-
 export function contextValueAtPath(context: Record<string, unknown>, path: string): unknown {
     if (path in context) return context[path]
 
@@ -384,16 +295,6 @@ export function formatContextValue(value: unknown): string {
     return JSON.stringify(value)
 }
 
-function field(
-    name: string,
-    label: string,
-    sample: unknown,
-    group: WorkflowContextField["group"],
-    triggerTypes?: TriggerType[],
-    pmsTypes?: readonly string[],
-): WorkflowContextField {
-    return { name, label, sample, group, triggerTypes, pmsTypes }
-}
 
 function pathParts(path: string): string[] {
     return path

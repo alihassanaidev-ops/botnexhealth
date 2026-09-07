@@ -81,6 +81,10 @@ from src.app.pms.models import (
 from src.app.services.automation.gotracker_recall_readiness import (
     assess_gotracker_recall_history,
 )
+from src.app.services.automation.canonical_context import (
+    appointment_event_key,
+    merge_canonical_context,
+)
 from src.app.services.automation.revalidation import PmsLiveRevalidationService
 from src.app.services.automation.scheduler_service import (
     AutomationWorkflowSchedulerService,
@@ -1405,6 +1409,16 @@ async def _trigger_appointment_async(
         "appointment_id": appointment_id,
         "appointment_at": appointment_at_iso,
     }
+    # Project onto the canonical vocabulary the builder authors against. Purely
+    # additive — every flat legacy key survives, so published definitions branch
+    # on exactly what they branched on before. Without this the picker offers
+    # `appointment.start_at` and the run never contains it.
+    enriched_metadata = merge_canonical_context(
+        enriched_metadata,
+        event_key=appointment_event_key(enriched_metadata),
+        source_pms=enriched_metadata.get("pms_source")
+        or enriched_metadata.get("source"),
+    )
     effective_contact_id = contact_id or appointment_context.get("contact_id")
     effective_location_id = location_id or appointment_context.get("location_id")
     for wf in workflows:
@@ -1575,6 +1589,14 @@ async def _trigger_appointment_state_async(
         "appointment_flow_changed_at": flow_changed_at,
         "flow_changed_at": flow_changed_at,
     }
+    # Same canonical projection as the reminder path, so a campaign branching on
+    # `appointment.status` works whichever appointment event started it.
+    enriched_metadata = merge_canonical_context(
+        enriched_metadata,
+        event_key=appointment_event_key(enriched_metadata),
+        source_pms=enriched_metadata.get("pms_source")
+        or enriched_metadata.get("source"),
+    )
     effective_contact_id = contact_id or appointment_context.get("contact_id")
     effective_location_id = location_id or appointment_context.get("location_id")
     scheduled = 0
@@ -2141,11 +2163,16 @@ async def _trigger_callback_async(
                 "trigger_ref_type": "call",
                 "trigger_ref_id": call_id,
                 "idempotency_key": idempotency_key,
-                "trigger_metadata": {
-                    **trigger_metadata,
-                    "call_id": call_id,
-                    "preferred_callback_at": preferred_callback_at_iso,
-                },
+                "trigger_metadata": merge_canonical_context(
+                    {
+                        **trigger_metadata,
+                        "call_id": call_id,
+                        "call_direction": "inbound",
+                        "call_outcome": "needs_callback",
+                        "preferred_callback_at": preferred_callback_at_iso,
+                    },
+                    event_key="call.inbound.completed",
+                ),
             },
             eta=eta,  # None → runs immediately
             queue="workflow",
@@ -2278,6 +2305,9 @@ async def _trigger_internal_status_async(
         "status_subject_type": payload["subject_type"],
         "status_subject_id": payload["subject_id"],
     }
+    trigger_metadata = merge_canonical_context(
+        trigger_metadata, event_key="patient.status_changed"
+    )
     for workflow_id, workflow_version_id in payload["version_ids"]:
         enroll_and_start_workflow_run.apply_async(
             kwargs={
@@ -3511,6 +3541,27 @@ def scan_recall_workflows(self) -> dict:
 _RECALL_PACING_MIN_SECONDS = 0.5
 _RECALL_PACING_MAX_SECONDS = 2.0
 _RECALL_DEFAULT_COOLDOWN_DAYS = 90
+
+
+def _pms_recall_source(definition: "WorkflowDefinition"):
+    """The PMS-recall source on this definition's schedule trigger, if any.
+
+    Recall settings moved from the trigger onto its source when `recall_scan`
+    became `schedule`. Reading them through here keeps every caller off the
+    retired attribute names, which silently fell back to defaults.
+    """
+    from src.app.services.automation.definition_schema import (
+        PmsRecallSource,
+        ScheduleTrigger,
+    )
+
+    for trigger in definition.triggers:
+        if isinstance(trigger, ScheduleTrigger) and isinstance(
+            trigger.source, PmsRecallSource
+        ):
+            return trigger.source
+    return None
+
 _FUTURE_APPOINTMENT_STATUSES = ("scheduled", "booked", "booked_waiting", "pending")
 _RECALL_SCAN_COUNT_KEYS = (
     "enrolled",
@@ -3586,16 +3637,10 @@ def _recall_cooldown_days(candidate: dict) -> int:
         definition = WorkflowDefinition.model_validate(workflow.definition)
     except Exception:
         return _RECALL_DEFAULT_COOLDOWN_DAYS
-    if definition.trigger.type != "recall_scan":
+    source = _pms_recall_source(definition)
+    if source is None:
         return _RECALL_DEFAULT_COOLDOWN_DAYS
-    return int(
-        getattr(
-            definition.trigger,
-            "recall_reenrollment_cooldown_days",
-            _RECALL_DEFAULT_COOLDOWN_DAYS,
-        )
-        or _RECALL_DEFAULT_COOLDOWN_DAYS
-    )
+    return int(source.reenrollment_cooldown_days or _RECALL_DEFAULT_COOLDOWN_DAYS)
 
 
 async def _has_recent_recall_enrollment(
@@ -3699,9 +3744,10 @@ def _workflow_recall_interval_months(candidate: dict) -> int:
         definition = WorkflowDefinition.model_validate(workflow.definition)
     except Exception:
         return 6
-    if definition.trigger.type != "recall_scan":
+    source = _pms_recall_source(definition)
+    if source is None:
         return 6
-    return max(1, int(definition.trigger.recall_interval_months or 6))
+    return max(1, int(source.recall_interval_months or 6))
 
 
 def _months_before(value: datetime, months: int) -> datetime:
@@ -4159,10 +4205,14 @@ async def _enroll_recalls_for_institution(
 
                     for wf, trigger_metadata in matched_workflows:
                         cooldown_days = _recall_cooldown_days(wf)
-                        trigger_metadata = {
-                            **trigger_metadata,
-                            "recall_reenrollment_cooldown_days": cooldown_days,
-                        }
+                        trigger_metadata = merge_canonical_context(
+                            {
+                                **trigger_metadata,
+                                "recall_reenrollment_cooldown_days": cooldown_days,
+                            },
+                            event_key="patient.recall_due",
+                            source_pms=adapter_source,
+                        )
                         key = make_recall_idempotency_key(
                             wf["version_id"], patient_id, period
                         )
@@ -4244,7 +4294,14 @@ def _workflow_pms_context_fields(candidate: dict) -> list[str]:
     fields = list(definition.pms_context_fields)
     # The recall scanner has always supplied the due date; keep that intrinsic
     # trigger field available while Item 25's extra PMS facts remain explicit.
-    if definition.trigger.type == "recall_scan" and "recall_due_date" not in fields:
+    # Keyed on the recall *source* rather than a trigger name, so a campaign
+    # authored as a schedule still gets its due date — without this, every
+    # recall merge field renders empty.
+    from src.app.services.automation.launch_checklist_service import (
+        uses_pms_recall_source,
+    )
+
+    if uses_pms_recall_source(definition) and "recall_due_date" not in fields:
         fields.append("recall_due_date")
     return fields
 

@@ -29,6 +29,7 @@ from src.app.models.nexhealth_webhook_subscription import (
     NexHealthWebhookSubscriptionStatus,
 )
 from src.app.models.nexhealth_sync_status import NexHealthSyncStatus
+from src.app.pms.nexhealth import backing_systems
 from src.app.services.automation.channel_readiness import ChannelReadinessService
 from src.app.services.automation.definition_schema import (
     ConditionNode,
@@ -620,6 +621,68 @@ class CampaignLaunchChecklistService:
             )
         ]
 
+    async def _backing_system_items(
+        self,
+        definition: WorkflowDefinition,
+        *,
+        institution_id: str,
+        location_id: str | None,
+    ) -> list[CampaignLaunchChecklistItem]:
+        """Block a recall campaign on a system that cannot report recalls.
+
+        "NexHealth" is a façade over seventeen practice systems, and five of
+        them expose no recall data at all. Without this the campaign publishes
+        cleanly, scans nightly and enrols nobody — indistinguishable from a
+        clinic that simply has no overdue patients.
+        """
+        if not uses_pms_recall_source(definition) or not location_id:
+            return []
+
+        sync = await self._sync_status(institution_id, location_id)
+        source_name = getattr(sync, "sync_source_name", None)
+
+        if source_name is None:
+            return [
+                CampaignLaunchChecklistItem(
+                    id="pms_backing_system",
+                    section="data",
+                    label="Practice software capability",
+                    status="warning",
+                    message=(
+                        "We have not yet learned which practice software backs "
+                        "this location, so we cannot confirm it reports recalls."
+                    ),
+                )
+            ]
+
+        reason = backing_systems.unavailable_reason("patient_recalls", source_name)
+        if reason:
+            return [
+                CampaignLaunchChecklistItem(
+                    id="pms_backing_system",
+                    section="data",
+                    label="Practice software capability",
+                    status="blocked",
+                    message=(
+                        f"{reason} A recall campaign here would never enrol "
+                        "anyone; use a different trigger for this location."
+                    ),
+                )
+            ]
+
+        return [
+            CampaignLaunchChecklistItem(
+                id="pms_backing_system",
+                section="data",
+                label="Practice software capability",
+                status="pass",
+                message=(
+                    f"{backing_systems.display_name(source_name)} reports "
+                    "patient recalls."
+                ),
+            )
+        ]
+
     async def _nexhealth_items(
         self,
         definition: WorkflowDefinition,
@@ -672,6 +735,17 @@ class CampaignLaunchChecklistService:
                 location_id=location_id,
                 location=location,
             )
+
+        # Only meaningful once we know this is a configured NexHealth location:
+        # the capability matrix describes the systems sitting behind NexHealth.
+        if location is not None and location.nexhealth_subdomain:
+            backing = await self._backing_system_items(
+                definition, institution_id=institution_id, location_id=location_id
+            )
+            if any(item.status == "blocked" for item in backing):
+                # A system that cannot report recalls makes every downstream
+                # data check moot; report the cause rather than its symptoms.
+                return backing
         if (
             not location
             or not location.nexhealth_subdomain

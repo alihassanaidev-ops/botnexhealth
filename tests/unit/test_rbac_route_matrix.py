@@ -359,6 +359,9 @@ ROUTES_BY_BOUNDARY: dict[str, tuple[str, ...]] = {
         # boundary as the other builder catalogs: it describes the engine's
         # capabilities and carries no tenant data.
         "GET /api/automation/workflows/event-catalog",
+        # Bulk enrollment from a file. Institution-admin only, same boundary as
+        # the audience enroll route it shares its caps and gates with.
+        "POST /api/automation/workflows/{workflow_id}/enroll/csv",
         "POST /api/automation/workflows",
         "POST /api/automation/workflows/draft",
         "GET /api/automation/workflows",

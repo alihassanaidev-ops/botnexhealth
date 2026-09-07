@@ -20,6 +20,9 @@ from src.app.services.automation.definition_schema import (
     EventTrigger,
     WorkflowDefinition,
 )
+from src.app.services.automation.canonical_context import (
+    merge_canonical_context,
+)
 from src.app.services.automation.trigger_filter import trigger_filter_matches
 from src.app.services.automation.trigger_lookup import find_active_workflows
 
@@ -171,7 +174,11 @@ def enquiry_trigger_context(
             "location_id": effective_location_id,
         },
     }
-    return _strip_none(context)
+    # Canonical projection, so the enquiry trigger offers the same field names
+    # in the condition editor that a run actually carries.
+    return merge_canonical_context(
+        _strip_none(context), event_key="enquiry.received"
+    )
 
 
 def workflow_matches_enquiry(
