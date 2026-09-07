@@ -89,3 +89,34 @@ def test_the_menu_is_scoped_to_the_channel() -> None:
     voice = {f.path for f in fields_for_events(["appointment.completed"], channel="voice")}
     sms = {f.path for f in fields_for_events(["appointment.completed"], channel="sms")}
     assert voice and sms
+
+
+def test_a_canonical_token_works_in_email_too() -> None:
+    """Email renders through Jinja, which raises rather than blanking.
+
+    Without the nested context in scope, `{{appointment.status}}` in an email
+    body throws `UndefinedError` and the send fails outright — a harder failure
+    than SMS, where the same token merely rendered empty.
+    """
+    from src.app.services.automation.template_renderer import build_render_vars
+    from src.app.services.template_engine import render_text
+
+    variables = build_render_vars(None, None, CONTEXT)
+
+    assert render_text("Your appt is {{appointment.status}}", variables) == (
+        "Your appt is cancelled"
+    )
+    assert render_text("Hi {{patient_first_name}}", variables) == "Hi Jordan"
+
+
+def test_a_flat_field_still_wins_over_a_context_branch_in_email() -> None:
+    variables = build_render_vars_for_test()
+    from src.app.services.template_engine import render_text
+
+    assert render_text("On {{appointment_date}}", variables) == "On September 4, 2026"
+
+
+def build_render_vars_for_test() -> dict:
+    from src.app.services.automation.template_renderer import build_render_vars
+
+    return build_render_vars(None, None, CONTEXT)

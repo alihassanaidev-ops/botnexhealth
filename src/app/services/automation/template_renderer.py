@@ -81,6 +81,30 @@ def build_merge_vars(
     )
 
 
+def build_render_vars(
+    contact: "Contact | None",
+    location: "InstitutionLocation | None",
+    context: dict,
+) -> dict[str, Any]:
+    """Merge variables for the Jinja-rendered channels.
+
+    Email renders through Jinja, which resolves ``{{appointment.status}}`` by
+    attribute access — so the nested context objects have to be in scope or the
+    template raises ``UndefinedError`` and the send fails outright. SMS resolves
+    dotted paths itself and does not need this.
+
+    Flat merge fields are layered on top, so a name collision keeps the
+    catalog's formatted value rather than the raw context branch.
+    """
+    flat = build_merge_vars(contact, location, context)
+    nested = {
+        key: value
+        for key, value in (context or {}).items()
+        if isinstance(value, dict) and key not in flat
+    }
+    return {**nested, **flat}
+
+
 def render_sms_body_reporting_blanks(
     template: str,
     contact: "Contact | None",
@@ -147,6 +171,7 @@ __all__ = [
     "MergeContextBuilder",
     "MergeFieldSpec",
     "build_merge_vars",
+    "build_render_vars",
     "extract_tokens",
     "render_sms_body",
     "render_sms_body_reporting_blanks",
