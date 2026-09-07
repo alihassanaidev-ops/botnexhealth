@@ -365,11 +365,22 @@ export async function listMergeFields(opts?: {
     triggerType?: string
     channel?: "sms" | "email" | "voice"
     includeUnavailable?: boolean
+    /**
+     * Events the campaign starts from. Without these the backend has no way to
+     * know which canonical fields a run will carry, so it returns only the flat
+     * derived fields and the insert menu silently omits everything the trigger
+     * actually provides.
+     */
+    eventKeys?: string[]
+    /** Drops fields the caller's practice software cannot supply. */
+    pms?: string | null
 }): Promise<MergeFieldCatalogItem[]> {
     const params = new URLSearchParams()
     if (opts?.triggerType) params.set("trigger_type", opts.triggerType)
     if (opts?.channel) params.set("channel", opts.channel)
     if (opts?.includeUnavailable) params.set("include_unavailable", "true")
+    for (const key of opts?.eventKeys ?? []) params.append("event_keys", key)
+    if (opts?.pms) params.set("pms", opts.pms)
     const query = params.toString()
     const { data } = await api.get<MergeFieldCatalogItem[]>(
         `/automation/workflows/merge-fields${query ? `?${query}` : ""}`,

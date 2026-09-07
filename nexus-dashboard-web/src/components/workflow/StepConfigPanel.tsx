@@ -3804,6 +3804,7 @@ function MessageField({
     value,
     onChange,
     triggerType,
+    eventKeys,
     channel,
     readOnly,
 }: {
@@ -3811,10 +3812,21 @@ function MessageField({
     value: string
     onChange: (v: string) => void
     triggerType: TriggerType
+    eventKeys?: string[]
     channel: "sms" | "email" | "voice"
     readOnly?: boolean
 }) {
-    const { fields: mergeFields, status: mergeStatus } = useMergeFields({ triggerType, channel })
+    // Scoped on what the campaign actually starts from. Without the events the
+    // backend cannot know which canonical fields a run will carry, so the menu
+    // showed only the flat derived fields and omitted everything the trigger
+    // provides — the field an author had just picked in the Condition step.
+    const pmsType = usePmsType()
+    const { fields: mergeFields, status: mergeStatus } = useMergeFields({
+        triggerType,
+        channel,
+        eventKeys,
+        pms: pmsType,
+    })
     const grouped = mergeFields.reduce<Record<string, typeof mergeFields>>((acc, field) => {
         const group = field.group ?? "other"
         acc[group] = acc[group] ?? []

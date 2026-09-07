@@ -17,6 +17,14 @@ import { listMergeFields } from "@/lib/workflow-api"
 
 type MergeChannel = "sms" | "email" | "voice"
 
+/** What the field list is scoped to. */
+export interface MergeFieldScope {
+    triggerType?: TriggerType
+    channel?: MergeChannel
+    eventKeys?: string[]
+    pms?: string | null
+}
+
 let catalog: MergeField[] = []
 let loaded = false
 const scopedCatalog = new Map<string, MergeField[]>()
@@ -28,10 +36,7 @@ export function catalogLoaded(): boolean {
 }
 
 /** The fetched merge-field catalog; empty until it loads. */
-export function getMergeFields(opts?: {
-    triggerType?: TriggerType
-    channel?: MergeChannel
-}): MergeField[] {
+export function getMergeFields(opts?: MergeFieldScope): MergeField[] {
     const key = cacheKey(opts)
     return scopedCatalog.get(key) ?? filterFields(catalog, opts)
 }
@@ -40,10 +45,7 @@ export function getMergeFields(opts?: {
  * Fetch the backend catalog once and cache it. Idempotent; a failed fetch is
  * not cached, so a later call retries rather than settling on an empty list.
  */
-export async function loadMergeFields(opts?: {
-    triggerType?: TriggerType
-    channel?: MergeChannel
-}): Promise<MergeField[]> {
+export async function loadMergeFields(opts?: MergeFieldScope): Promise<MergeField[]> {
     const key = cacheKey(opts)
     let fetchPromise = fetchPromises.get(key)
     if (!fetchPromise) {
@@ -62,7 +64,11 @@ export async function loadMergeFields(opts?: {
                     channels: f.channels,
                     trigger_types: f.trigger_types,
                 }))
-                if (key === "all:all") catalog = fetched
+                // The unscoped fetch is the catalog everything else falls back
+                // to. Compared against the key builder rather than a literal, so
+                // adding a scope dimension cannot silently orphan it — which it
+                // did once, leaving every token looking unknown.
+                if (key === cacheKey()) catalog = fetched
                 loaded = true
                 scopedCatalog.set(key, fetched)
                 return fetched
@@ -94,10 +100,7 @@ export type MergeFieldsStatus = "loading" | "ready" | "error"
  * invented list of insertable fields is how someone picks a token the backend
  * will not resolve.
  */
-export function useMergeFields(opts?: {
-    triggerType?: TriggerType
-    channel?: MergeChannel
-}): { fields: MergeField[]; status: MergeFieldsStatus } {
+export function useMergeFields(opts?: MergeFieldScope): { fields: MergeField[]; status: MergeFieldsStatus } {
     const triggerType = opts?.triggerType
     const channel = opts?.channel
     const [fields, setFields] = useState<MergeField[]>(
@@ -178,13 +181,16 @@ export function unavailableTokens(
     })
 }
 
-function cacheKey(opts?: { triggerType?: TriggerType; channel?: MergeChannel }): string {
-    return `${opts?.triggerType ?? "all"}:${opts?.channel ?? "all"}`
+function cacheKey(opts?: MergeFieldScope): string {
+    // Event keys and PMS are part of the identity: the same trigger type on a
+    // different set of events returns a different field list.
+    const events = [...(opts?.eventKeys ?? [])].sort().join(",") || "all"
+    return `${opts?.triggerType ?? "all"}:${opts?.channel ?? "all"}:${events}:${opts?.pms ?? "all"}`
 }
 
 function filterFields(
     fields: MergeField[],
-    opts?: { triggerType?: TriggerType; channel?: MergeChannel },
+    opts?: MergeFieldScope,
 ): MergeField[] {
     return fields.filter((f) => {
         const triggerOk = !opts?.triggerType || !f.trigger_types || f.trigger_types.includes(opts.triggerType)
