@@ -935,7 +935,7 @@ function LocalPeopleDirectory({ mode }: { mode: DirectoryMode }) {
     return (
         <div className="relative flex-1 space-y-6 bg-background p-8 pt-6">
             <PageHeader
-                art={mode === "patients" ? "patients" : "users"}
+                art={mode === "patients" ? "patients" : "contacts"}
                 icon={Users}
                 title={mode === "patients" ? "Patients" : "Contacts"}
                 description={mode === "patients"
