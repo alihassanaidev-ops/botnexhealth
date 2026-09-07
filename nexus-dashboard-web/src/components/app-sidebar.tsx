@@ -335,7 +335,7 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
         >
             <SidebarContent className="pt-2">
                 {user?.role === "INSTITUTION_ADMIN" && (
-                    <SidebarGroup className="pt-2">
+                    <SidebarGroup className="pt-2 group-data-[collapsible=icon]:hidden">
                         <SidebarGroupLabel className="text-[10px] font-semibold uppercase tracking-widest text-sidebar-foreground/40 px-2 mb-1">
                             Active Location
                         </SidebarGroupLabel>
