@@ -34,7 +34,7 @@ const NAV_ART: Record<string, PageArtName> = {
     "/admin/users": "users",
     "/callbacks": "callbackQueue",
     "/calls": "calls",
-    "/contacts": "users",
+    "/contacts": "contacts",
     "/dashboard": "dashboard",
     "/group": "groups",
     "/groups": "groups",
