@@ -59,7 +59,10 @@ def _make_run(contact_id="c-1", location_id="l-1", institution_id="inst-1"):
     return run
 
 
-def _make_node(subject="Hi {{patient_first_name}}", body="Reminder from {{clinic_name}}", next_id="node-2"):
+# `clinic_name` deliberately absent from the default body: these fixtures pass no
+# location, so it would resolve empty and the executor would skip the send —
+# testing the skip path rather than the send mechanics each case is about.
+def _make_node(subject="Hi {{patient_first_name}}", body="Reminder from your clinic", next_id="node-2"):
     return SendEmailNode(
         id="node-1",
         subject_template=subject,

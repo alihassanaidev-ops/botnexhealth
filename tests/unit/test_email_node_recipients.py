@@ -104,7 +104,7 @@ def test_unknown_recipient_kind_is_rejected():
 
 def _node(**kw):
     base = dict(
-        id="n1", subject_template="s", body_template="b {{clinic_name}}", next_node_id="n2"
+        id="n1", subject_template="s", body_template="b your clinic", next_node_id="n2"
     )
     base.update(kw)
     return SendEmailNode(**base)

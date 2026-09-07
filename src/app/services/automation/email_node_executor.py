@@ -33,7 +33,10 @@ from src.app.services.circuit_breaker import (
     NoOpCircuitBreaker,
     ServiceBreaker,
 )
-from src.app.services.automation.template_renderer import build_merge_vars
+from src.app.services.automation.template_renderer import (
+    build_merge_vars,
+    unresolved_tokens,
+)
 from src.app.services.email.identity_service import EmailIdentityService
 from src.app.services.email.reply_address import make_reply_address
 from src.app.services.email.sender import (
@@ -223,6 +226,29 @@ class EmailNodeExecutor:
         # Text and subject render unescaped; the HTML part escapes rendered
         # patient data so a name cannot inject markup.
         merge_vars = build_merge_vars(contact, location, context)
+
+        # Fail closed, as SMS does. Email renders through Jinja, so the gap is
+        # checked against the same resolver the SMS path uses rather than
+        # inferred from Jinja's output — otherwise the check and the render
+        # could disagree about what "empty" means. The run continues so later
+        # steps still get their turn.
+        missing = unresolved_tokens(
+            [subject_tpl, text_tpl, html_tpl], contact, location, context
+        )
+        if missing:
+            logger.warning(
+                "send_email: skipping run=%s node=%s, unresolved merge fields %s",
+                run.id,
+                node.id,
+                missing,
+            )
+            await self.runtime.complete_step(
+                step,
+                result_code="skipped_incomplete_merge",
+                result_metadata={"unresolved_fields": missing},
+            )
+            return node.next_node_id
+
         subject = render_text(subject_tpl, merge_vars)
         body = render_text(text_tpl, merge_vars)
         html = render_html(html_tpl, merge_vars) if html_tpl else None

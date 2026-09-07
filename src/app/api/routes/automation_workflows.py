@@ -3,11 +3,21 @@
 from __future__ import annotations
 
 from datetime import date, datetime, timezone
+import hashlib
 from typing import Annotated, Any, Literal
 
 import httpx
 import phonenumbers
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import (
+    APIRouter,
+    Depends,
+    File,
+    Form,
+    HTTPException,
+    Query,
+    UploadFile,
+    status,
+)
 from pydantic import BaseModel, Field, ValidationError
 
 from src.app.config import settings
@@ -56,6 +66,11 @@ from src.app.services.automation.campaign_analytics_service import (
     resolve_window,
 )
 from src.app.pms.gotracker.statuses import public_statuses
+from src.app.services.automation.csv_enrollment_service import (
+    CsvEnrollmentService,
+    csv_idempotency_key,
+    parse_csv,
+)
 from src.app.services.automation.event_catalog import (
     fields_for_events,
     public_events,
@@ -70,6 +85,9 @@ from src.app.services.automation.validation_service import WorkflowValidationSer
 from src.app.services.automation.enrollment_service import AutomationWorkflowEnrollmentService
 from src.app.services.automation.step_dispatcher import build_dispatcher
 from src.app.services.sms_compliance import SmsComplianceService
+
+#: Uploads are bounded well below the row cap; a larger file is a mistake.
+_CSV_MAX_BYTES = 512 * 1024
 
 router = APIRouter(prefix="/automation/workflows", tags=["Automation Workflows"])
 _OPENAI_MODELS_CACHE: tuple[datetime, list["WorkflowLlmModelResponse"]] | None = None
@@ -349,6 +367,32 @@ class MergeFieldResponse(BaseModel):
     phi_level: str
     channels: list[str] = Field(default_factory=list)
     trigger_types: list[str] = Field(default_factory=list)
+
+
+class CsvEnrollRowResponse(BaseModel):
+    line: int
+    first_name: str | None = None
+    last_name: str | None = None
+    #: Masked. A preview is shown on screen and often screenshotted, so it
+    #: identifies a row without reprinting a full contact detail.
+    contact_hint: str | None = None
+    contact_id: str | None = None
+    will_create_contact: bool = False
+    excluded_reason: str | None = None
+
+
+class CsvEnrollPreviewResponse(BaseModel):
+    upload_id: str
+    total_rows: int
+    eligible_count: int
+    excluded_count: int
+    new_contact_count: int
+    truncated: bool = False
+    parse_errors: list[str] = Field(default_factory=list)
+    rows: list[CsvEnrollRowResponse] = Field(default_factory=list)
+    #: False on a preview; true once contacts were created and runs enqueued.
+    committed: bool = False
+    enrolled_count: int = 0
 
 
 class ChannelReadinessDetail(BaseModel):
@@ -1809,6 +1853,141 @@ async def resume_workflow(
             )
         await svc.resume_workflow(wf)
         return WorkflowResponse.from_model(wf)
+
+
+
+@router.post(
+    "/{workflow_id}/enroll/csv",
+    response_model=CsvEnrollPreviewResponse,
+)
+@audit(
+    AuditAction.CAMPAIGN_ENROLL,
+    resource=lambda *args, **kwargs: f"campaign:{kwargs.get('workflow_id')}:enroll-csv",
+    actor=AuditActor.ADMIN,
+)
+async def enroll_from_csv(
+    workflow_id: str,
+    current_user: _InstitutionAdmin,
+    file: Annotated[UploadFile, File()],
+    commit: Annotated[bool, Form()] = False,
+) -> CsvEnrollPreviewResponse:
+    """Enroll a list of people from a CSV.
+
+    Defaults to a preview: nothing is written and the caller sees who would be
+    contacted, who would be created, and who is excluded and why. A CSV is the
+    one route where a mistake reaches hundreds of people at once, so committing
+    is a deliberate second call rather than a side effect of uploading.
+
+    Excluded rows are reported, never silently dropped — a quiet skip is how an
+    import looks successful while half the list was never contacted.
+    """
+    inst_id = _institution_id(current_user)
+    raw = await file.read()
+    if len(raw) > _CSV_MAX_BYTES:
+        raise HTTPException(
+            status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+            detail=f"CSV is larger than {_CSV_MAX_BYTES // 1024}KB.",
+        )
+
+    preview = parse_csv(raw)
+    upload_id = hashlib.sha256(raw).hexdigest()[:16]
+
+    async with get_db_session() as session:
+        def_svc = AutomationWorkflowDefinitionService(session)
+        wf = await _get_workflow_or_404(def_svc, workflow_id, inst_id)
+        if wf.status != "active" or not wf.current_version_id:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="Workflow must be active with a published version to enroll.",
+            )
+        location_id = str(wf.location_id) if wf.location_id else None
+
+        svc = CsvEnrollmentService(session)
+        await svc.resolve(preview, institution_id=inst_id)
+
+        # Same gate as every other enrollment route: a CSV is not a way around
+        # a patient's opt-out.
+        compliance = SmsComplianceService(session)
+        for row in preview.rows:
+            if row.excluded_reason is not None or not row.contact_id:
+                continue
+            contact = await session.get(Contact, row.contact_id)
+            if contact is None:
+                continue
+            if await compliance.is_do_not_contact(
+                institution_id=inst_id,
+                location_id=location_id,
+                phone_hash=contact.phone_hash,
+                contact_id=str(contact.id),
+            ):
+                row.excluded_reason = "Patient has an all-channel do-not-contact restriction"
+
+        enrolled = 0
+        if commit and not preview.parse_errors:
+            await svc.create_missing_contacts(preview, institution_id=inst_id)
+            enroll_svc = AutomationWorkflowEnrollmentService(session)
+            for row in preview.eligible:
+                if not row.contact_id:
+                    continue
+                await enroll_svc.enroll(
+                    institution_id=inst_id,
+                    workflow_id=workflow_id,
+                    workflow_version_id=str(wf.current_version_id),
+                    contact_id=row.contact_id,
+                    location_id=location_id,
+                    trigger_type="manual",
+                    trigger_ref_type="csv_import",
+                    trigger_ref_id=upload_id,
+                    trigger_metadata={
+                        "event": "manual.csv_import",
+                        "trigger_type": "manual",
+                        "contact_id": row.contact_id,
+                        "location_id": location_id,
+                        "csv_upload_id": upload_id,
+                        "csv_line": row.line,
+                    },
+                    idempotency_key=csv_idempotency_key(
+                        str(wf.current_version_id), upload_id, row.contact_id
+                    ),
+                )
+                enrolled += 1
+            await session.commit()
+
+        return CsvEnrollPreviewResponse(
+            upload_id=upload_id,
+            total_rows=len(preview.rows),
+            eligible_count=len(preview.eligible),
+            excluded_count=len(preview.excluded),
+            new_contact_count=sum(
+                1 for row in preview.rows if row.would_create_contact
+            ),
+            truncated=preview.truncated,
+            parse_errors=preview.parse_errors,
+            committed=bool(commit and not preview.parse_errors),
+            enrolled_count=enrolled,
+            rows=[
+                CsvEnrollRowResponse(
+                    line=row.line,
+                    first_name=row.first_name,
+                    last_name=row.last_name,
+                    contact_hint=_mask_contact_hint(row.phone, row.email),
+                    contact_id=row.contact_id,
+                    will_create_contact=row.would_create_contact,
+                    excluded_reason=row.excluded_reason,
+                )
+                for row in preview.rows
+            ],
+        )
+
+
+def _mask_contact_hint(phone: str | None, email: str | None) -> str | None:
+    """Enough to recognise a row, not enough to be a contact list."""
+    if phone:
+        return f"•••{phone[-4:]}"
+    if email and "@" in email:
+        name, domain = email.split("@", 1)
+        return f"{name[:2]}…@{domain}"
+    return None
 
 
 @router.post("/{workflow_id}/archive", response_model=WorkflowResponse)

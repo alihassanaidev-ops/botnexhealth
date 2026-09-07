@@ -125,6 +125,30 @@ def render_body(
     return RenderResult(text=_VAR_RE.sub(_replace, template or ""), unresolved=unresolved)
 
 
+
+def unresolved_tokens(
+    templates: "list[str | None]",
+    contact: "Contact | None",
+    location: "InstitutionLocation | None",
+    context: dict,
+) -> list[str]:
+    """Tokens across several templates that would render as nothing.
+
+    For callers that render through a different engine — email goes through
+    Jinja so an authored template behaves the same here as in the editor — but
+    still must not deliver a message with a gap in it. Resolution matches
+    :func:`render_body` exactly, so the check and the render cannot disagree.
+    """
+    missing: list[str] = []
+    for template in templates:
+        if not template:
+            continue
+        for name in render_body(template, contact, location, context).unresolved:
+            if name not in missing:
+                missing.append(name)
+    return missing
+
+
 def render_sms_body(
     template: str,
     contact: "Contact | None",
@@ -154,4 +178,5 @@ __all__ = [
     "extract_tokens",
     "render_body",
     "render_sms_body",
+    "unresolved_tokens",
 ]
