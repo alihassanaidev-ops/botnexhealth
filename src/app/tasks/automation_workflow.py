@@ -3416,7 +3416,7 @@ def tick_workflow_schedules(self) -> dict:
 
 async def _tick_workflow_schedules_async() -> dict:
     from src.app.models.automation_workflow import AutomationWorkflow
-    from src.app.services.automation.audience_service import AudienceService
+    from src.app.services.automation.audience_service import CampaignAudienceService
     from src.app.services.automation.definition_schema import (
         PmsRecallSource,
         ScheduleTrigger,
@@ -3481,7 +3481,7 @@ async def _tick_workflow_schedules_async() -> dict:
                     }
                 )
             else:
-                result = await AudienceService(session).enqueue_enrollment(
+                result = await CampaignAudienceService(session).enqueue_enrollment(
                     workflow,
                     institution_id=entry["institution_id"],
                     segment=None,
@@ -3492,7 +3492,9 @@ async def _tick_workflow_schedules_async() -> dict:
                 audience_jobs.append(
                     {
                         "workflow_id": entry["workflow_id"],
-                        "enrolled": getattr(result, "enrolled", 0),
+                        # `enqueued`, not `enrolled` — reading the wrong name
+                        # reported every scheduled run as zero.
+                        "enrolled": result.enqueued,
                     }
                 )
 
