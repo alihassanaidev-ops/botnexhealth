@@ -26,6 +26,10 @@ vi.mock("sonner", () => ({
 vi.mock("@/context/LocationContext", () => ({
     useSelectedLocationId: () => "loc-1",
 }))
+const { auth } = vi.hoisted(() => ({ auth: vi.fn() }))
+vi.mock("@/context/AuthContext", () => ({
+    useAuth: () => auth(),
+}))
 
 const list = listCampaigns as ReturnType<typeof vi.fn>
 const halt = getOutboundHaltStatus as ReturnType<typeof vi.fn>
@@ -33,6 +37,7 @@ const create = createDraftCampaign as ReturnType<typeof vi.fn>
 const remove = deleteCampaign as ReturnType<typeof vi.fn>
 
 beforeEach(() => {
+    auth.mockReturnValue({ user: { role: "INSTITUTION_ADMIN" } })
     list.mockReset()
     halt.mockReset()
     create.mockReset()
@@ -42,6 +47,22 @@ beforeEach(() => {
 })
 
 describe("Campaigns page", () => {
+    it("loads for a location admin without requesting institution halt controls", async () => {
+        auth.mockReturnValue({ user: { role: "LOCATION_ADMIN", location_id: "loc-1" } })
+
+        render(
+            <MemoryRouter initialEntries={["/institution-admin/campaigns"]}>
+                <Routes>
+                    <Route path="/institution-admin/campaigns" element={<Campaigns />} />
+                </Routes>
+            </MemoryRouter>,
+        )
+
+        expect(await screen.findByText("No campaigns yet")).toBeInTheDocument()
+        expect(halt).not.toHaveBeenCalled()
+        expect(screen.queryByRole("button", { name: /outbound/i })).not.toBeInTheDocument()
+    })
+
     it("creates a scratch campaign draft and opens the builder", async () => {
         create.mockResolvedValue({ id: "wf-scratch", status: "draft" })
 

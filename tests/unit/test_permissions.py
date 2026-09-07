@@ -143,6 +143,43 @@ EXPECTED_PERMISSION_ROUTES: dict[str, Permission] = {
     "DELETE /api/compliance/quiet-hours/exceptions/{exception_id}": (
         Permission.CAMPAIGN_CONFIGURE
     ),
+    "GET /api/automation/workflows/node-capabilities": Permission.CAMPAIGN_CONFIGURE,
+    "GET /api/automation/workflows/phone-country-regions": Permission.CAMPAIGN_CONFIGURE,
+    "GET /api/automation/workflows/pms-appointment-statuses": Permission.CAMPAIGN_CONFIGURE,
+    "GET /api/automation/workflows/event-catalog": Permission.CAMPAIGN_CONFIGURE,
+    "POST /api/automation/workflows/validate": Permission.CAMPAIGN_CONFIGURE,
+    "POST /api/automation/workflows/dry-run": Permission.CAMPAIGN_CONFIGURE,
+    "GET /api/automation/workflows/channel-readiness": Permission.CAMPAIGN_CONFIGURE,
+    "GET /api/automation/workflows": Permission.CAMPAIGN_CONFIGURE,
+    "POST /api/automation/workflows": Permission.CAMPAIGN_CONFIGURE,
+    "POST /api/automation/workflows/draft": Permission.CAMPAIGN_CONFIGURE,
+    "PATCH /api/automation/workflows/{workflow_id}": Permission.CAMPAIGN_CONFIGURE,
+    "POST /api/automation/workflows/{workflow_id}/publish": Permission.CAMPAIGN_CONFIGURE,
+    "POST /api/automation/workflows/{workflow_id}/pause": Permission.CAMPAIGN_CONFIGURE,
+    "POST /api/automation/workflows/{workflow_id}/resume": Permission.CAMPAIGN_CONFIGURE,
+    "POST /api/automation/workflows/{workflow_id}/archive": Permission.CAMPAIGN_CONFIGURE,
+    "DELETE /api/automation/workflows/{workflow_id}": Permission.CAMPAIGN_CONFIGURE,
+    "POST /api/automation/workflows/{workflow_id}/launch-checklist/preview": (
+        Permission.CAMPAIGN_CONFIGURE
+    ),
+    "PUT /api/automation/workflows/{workflow_id}/audience": (
+        Permission.CAMPAIGN_CONFIGURE
+    ),
+    "POST /api/automation/workflows/{workflow_id}/audience/enroll": (
+        Permission.CAMPAIGN_CONFIGURE
+    ),
+    "POST /api/automation/workflows/{workflow_id}/enroll/csv": (
+        Permission.CAMPAIGN_CONFIGURE
+    ),
+    "POST /api/automation/workflows/{workflow_id}/bulk-enroll": (
+        Permission.CAMPAIGN_CONFIGURE
+    ),
+    "POST /api/automation/workflows/{workflow_id}/emergency-halt": (
+        Permission.CAMPAIGN_CONFIGURE
+    ),
+    "POST /api/automation/templates/{template_id}/instantiate": (
+        Permission.CAMPAIGN_CONFIGURE
+    ),
 }
 
 

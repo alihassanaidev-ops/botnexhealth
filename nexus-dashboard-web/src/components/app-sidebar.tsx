@@ -34,7 +34,7 @@ const NAV_ART: Record<string, PageArtName> = {
     "/admin/users": "users",
     "/callbacks": "callbackQueue",
     "/calls": "calls",
-    "/contacts": "users",
+    "/contacts": "contacts",
     "/dashboard": "dashboard",
     "/group": "groups",
     "/groups": "groups",
@@ -61,7 +61,7 @@ const NAV_ART: Record<string, PageArtName> = {
     "/setup/audit-logs": "audit",
     "/setup/insurance-plans": "insurancePlans",
     "/setup/operatories": "operatories",
-    "/setup/providers": "scheduling",
+    "/setup/providers": "providers",
     "/setup/reasons": "appointmentTypes",
     "/sms-preferences": "messaging",
     "/undeliverables": "workflow",
@@ -189,6 +189,14 @@ const locationAdminNav: NavItemDef[] = [
     {
         title: "Call Statuses",
         url: "/institution-admin/call-statuses",
+    },
+    {
+        title: "Campaigns",
+        url: "/institution-admin/campaigns",
+    },
+    {
+        title: "Quiet Hours",
+        url: "/institution-admin/quiet-hours-exceptions",
     },
     {
         title: "Automation issues",

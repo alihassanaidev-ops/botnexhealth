@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react"
+import { useCallback, useEffect, useState } from "react"
 import { Link, useNavigate } from "react-router-dom"
 import {
     Megaphone,
@@ -27,6 +27,7 @@ import {
 import { toast } from "sonner"
 import { cn } from "@/lib/utils"
 import { useSelectedLocationId } from "@/context/LocationContext"
+import { useAuth } from "@/context/AuthContext"
 import {
     activateOutboundHalt,
     createDraftCampaign,
@@ -71,7 +72,9 @@ function TriggerLabel({ triggerType }: { triggerType: string | null }) {
 
 export default function Campaigns() {
     const navigate = useNavigate()
+    const { user } = useAuth()
     const locationId = useSelectedLocationId()
+    const canControlInstitutionHalt = user?.role === "INSTITUTION_ADMIN"
     const [campaigns, setCampaigns] = useState<AutomationWorkflow[]>([])
     const [haltStatus, setHaltStatus] = useState<OutboundHaltStatus | null>(null)
     const [loading, setLoading] = useState(true)
@@ -79,12 +82,14 @@ export default function Campaigns() {
     const [deleteTarget, setDeleteTarget] = useState<AutomationWorkflow | null>(null)
     const [haltDialog, setHaltDialog] = useState<"activate" | "release" | null>(null)
 
-    async function refresh() {
+    const refresh = useCallback(async () => {
         setLoading(true)
         try {
             const [nextCampaigns, nextHalt] = await Promise.all([
                 listCampaigns(),
-                getOutboundHaltStatus(),
+                canControlInstitutionHalt
+                    ? getOutboundHaltStatus()
+                    : Promise.resolve(null),
             ])
             setCampaigns(nextCampaigns)
             setHaltStatus(nextHalt)
@@ -93,9 +98,9 @@ export default function Campaigns() {
         } finally {
             setLoading(false)
         }
-    }
+    }, [canControlInstitutionHalt])
 
-    useEffect(() => { refresh() }, [])
+    useEffect(() => { void refresh() }, [refresh])
 
     async function handlePause(wf: AutomationWorkflow) {
         setActing(wf.id)
@@ -194,20 +199,22 @@ export default function Campaigns() {
                 description="Automated outreach workflows for appointment reminders and patient recall."
                 actions={
                     <>
-                        <Button
-                            variant={haltStatus?.halted ? "default" : "outline"}
-                            size="sm"
-                            onClick={() => setHaltDialog(haltStatus?.halted ? "release" : "activate")}
-                            disabled={loading || acting === "outbound-halt"}
-                            className="gap-1.5"
-                        >
-                            {haltStatus?.halted ? (
-                                <ShieldAlert className="h-3.5 w-3.5" />
-                            ) : (
-                                <ShieldCheck className="h-3.5 w-3.5" />
-                            )}
-                            {haltStatus?.halted ? "Outbound halted" : "Outbound clear"}
-                        </Button>
+                        {canControlInstitutionHalt && (
+                            <Button
+                                variant={haltStatus?.halted ? "default" : "outline"}
+                                size="sm"
+                                onClick={() => setHaltDialog(haltStatus?.halted ? "release" : "activate")}
+                                disabled={loading || acting === "outbound-halt"}
+                                className="gap-1.5"
+                            >
+                                {haltStatus?.halted ? (
+                                    <ShieldAlert className="h-3.5 w-3.5" />
+                                ) : (
+                                    <ShieldCheck className="h-3.5 w-3.5" />
+                                )}
+                                {haltStatus?.halted ? "Outbound halted" : "Outbound clear"}
+                            </Button>
+                        )}
                         <Button size="sm" asChild className="gap-1.5">
                             <Link to="/institution-admin/campaigns/templates">
                                 <Plus className="h-3.5 w-3.5" />

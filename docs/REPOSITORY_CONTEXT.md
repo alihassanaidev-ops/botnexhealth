@@ -180,6 +180,9 @@ contact in the institution. Visibility is granted per-contact via the
 |---|---|
 | `/admin/*` (institutions, users, groups, twilio, sms, platform dead-letter view) | **SUPER_ADMIN only** |
 | `/institution/undeliverables` (Automation issues page) | INSTITUTION_ADMIN, LOCATION_ADMIN (retry additionally requires `write:replay`) |
+| `/automation/workflows`, `/automation/templates`, campaign builder/detail | INSTITUTION_ADMIN, LOCATION_ADMIN (`campaign:configure`; location admin pinned to one clinic) |
+| `/automation/workflows/outbound-halt` | **INSTITUTION_ADMIN only** (institution-wide kill switch) |
+| `/compliance/quiet-hours/exceptions` | INSTITUTION_ADMIN, LOCATION_ADMIN (location admin pinned to one clinic) |
 | `/group/*` | **GROUP_ADMIN only** |
 | `/institution/setup`, `/institution/statuses` | INSTITUTION_ADMIN, LOCATION_ADMIN |
 | `/institution/email-templates`, `/custom-fields`, `/notification-recipients`, dashboard mutations | **INSTITUTION_ADMIN only** |
@@ -376,8 +379,22 @@ and executed as tenant/location-scoped runs with step executions, durable timers
 events, and drip state. The dashboard surfaces this through the workflow builder
 and campaign detail pages under `nexus-dashboard-web/`.
 Drafts created from the Campaigns page inherit the institution admin's currently
-selected location so channel readiness, enrollment, and inbound reply routing all
-use the same location-level Twilio number.
+selected location. A location admin also has the named `campaign:configure`
+permission, but every create, template clone, builder validation, lifecycle,
+audience, CSV/bulk enrollment, and campaign-halt path pins the request to the
+admin's assigned `location_id`. Location admins cannot read or mutate
+institution-wide or another clinic's workflows; object lookups return 404 so
+their existence is not disclosed. The institution-wide outbound kill switch
+remains institution-admin-only. These rules keep channel readiness, enrollment,
+quiet hours, and inbound reply routing on the same location-level Twilio number.
+
+Postgres is the second enforcement layer. Restrictive policies require exact
+`location_id = app_rls_location_id()` matches for location-admin sessions across
+workflow definitions, immutable versions, runs, steps, drip/split state, timers,
+events, channel attempts, response/handoff/conversation records, analytics,
+campaign audiences, and quiet-hours exceptions. `workflow_schedules` is also
+protected by FORCE RLS. Institution-admin and tenant-scoped worker behavior is
+unchanged.
 
 Every step attempt records a PHI-safe input snapshot when execution starts and an
 output snapshot when it completes, fails, waits, or resumes. These snapshots are

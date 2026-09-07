@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 768 768" fill="none">
+  <path d="M194 54h354c64 0 116 52 116 116v428c0 64-52 116-116 116H194c-64 0-116-52-116-116V170c0-64 52-116 116-116Z" fill="var(--art-ink)"/>
+  <path d="M78 166h122c22 0 40 18 40 40s-18 40-40 40H78c-22 0-40-18-40-40s18-40 40-40ZM78 290h122c22 0 40 18 40 40s-18 40-40 40H78c-22 0-40-18-40-40s18-40 40-40ZM78 414h122c22 0 40 18 40 40s-18 40-40 40H78c-22 0-40-18-40-40s18-40 40-40ZM78 538h122c22 0 40 18 40 40s-18 40-40 40H78c-22 0-40-18-40-40s18-40 40-40Z" fill="var(--art-accent)"/>
+  <path d="M238 118h300c38 0 68 30 68 68v392c0 38-30 68-68 68H238c-38 0-68-30-68-68V186c0-38 30-68 68-68Z" fill="var(--art-surface)"/>
+  <circle cx="388" cy="265" r="67" fill="var(--art-ink)"/>
+  <path d="M278 433c0-67 49-116 110-116s110 49 110 116v26c0 12-10 22-22 22H300c-12 0-22-10-22-22v-26Z" fill="var(--art-ink)"/>
+  <path d="M250 534h168" stroke="var(--art-accent)" stroke-width="28" stroke-linecap="round"/>
+  <path d="M250 590h168" stroke="var(--art-muted)" stroke-width="28" stroke-linecap="round"/>
+  <circle cx="555" cy="558" r="122" fill="var(--art-accent)" stroke="var(--art-surface)" stroke-width="24"/>
+  <path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07 19.5 19.5 0 0 1-6-6 19.79 19.79 0 0 1-3.07-8.67A2 2 0 0 1 4.11 2h3a2 2 0 0 1 2 1.72c.13.96.36 1.9.68 2.8a2 2 0 0 1-.45 2.11L8.07 9.91a16 16 0 0 0 6 6l1.27-1.27a2 2 0 0 1 2.11-.45c.91.32 1.85.55 2.81.68A2 2 0 0 1 22 16.92Z" transform="translate(480 483) scale(6.1)" stroke="var(--art-surface)" stroke-width="2.8" stroke-linecap="round" stroke-linejoin="round"/>
+</svg>

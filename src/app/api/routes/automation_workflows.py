@@ -25,6 +25,7 @@ from src.app.api.deps import (
     get_current_institution_or_location_admin,
     get_current_institution_user,
 )
+from src.app.api.permissions import Permission, require_permission
 from src.app.database import get_db_session
 from sqlalchemy import select as sa_select
 from src.app.models.automation_workflow import (
@@ -37,7 +38,7 @@ from src.app.models.institution import Institution
 from src.app.models.institution_location import InstitutionLocation
 from src.app.models.outbound_halt import OutboundEmergencyHalt
 from src.app.models.audit_log import AuditAction, AuditActor
-from src.app.models.user import User
+from src.app.models.user import User, UserRole
 from src.app.services.audit_decorator import audit
 from src.app.services.automation.definition_schema import WorkflowDefinition
 from src.app.services.automation.definition_service import AutomationWorkflowDefinitionService
@@ -106,13 +107,32 @@ _MODEL_EXCLUDE_MARKERS = (
     "whisper",
 )
 
-# Workflow configuration (create/update/lifecycle) is institution-scoped;
-# location admins should not reconfigure institution-level workflows.
+# Institution-wide safety controls remain institution-admin only.
 _InstitutionAdmin = Annotated[User, Depends(get_current_institution_user)]
 
-# Enrollment and run reads are also scoped to the institution via RLS but
-# location admins may trigger enrollments for patients at their clinic.
+# Reads and run operations are available to institution and location admins.
 _InstitutionOrLocationAdmin = Annotated[User, Depends(get_current_institution_or_location_admin)]
+
+
+async def get_current_campaign_manager(
+    current_user: Annotated[User, Depends(get_current_institution_or_location_admin)],
+    _permission_user: Annotated[
+        User, Depends(require_permission(Permission.CAMPAIGN_CONFIGURE))
+    ],
+) -> User:
+    """Authorize campaign authors without widening institution-wide controls."""
+    if (
+        current_user.role == UserRole.LOCATION_ADMIN.value
+        and not current_user.location_id
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Location-scoped account is missing location assignment",
+        )
+    return current_user
+
+
+_CampaignManager = Annotated[User, Depends(get_current_campaign_manager)]
 
 
 # ---------------------------------------------------------------------------
@@ -848,13 +868,77 @@ def _institution_id(user: User) -> str:
     return str(user.institution_id)
 
 
+def _campaign_location_id(
+    user: User,
+    requested_location_id: str | None,
+) -> str | None:
+    """Pin a location admin to their assigned clinic before any DB access."""
+    if user.role != UserRole.LOCATION_ADMIN.value:
+        return requested_location_id
+    if not user.location_id:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Location-scoped account is missing location assignment",
+        )
+    own_location_id = str(user.location_id)
+    if requested_location_id and str(requested_location_id) != own_location_id:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Cannot manage campaigns for another location",
+        )
+    return own_location_id
+
+
 async def _get_workflow_or_404(
-    svc: AutomationWorkflowDefinitionService, workflow_id: str, institution_id: str
+    svc: AutomationWorkflowDefinitionService,
+    workflow_id: str,
+    current_user: User,
 ) -> Any:
+    institution_id = _institution_id(current_user)
     wf = await svc.get_workflow(institution_id, workflow_id)
+    if current_user.role == UserRole.LOCATION_ADMIN.value:
+        own_location_id = _campaign_location_id(current_user, None)
+        if wf is not None and str(wf.location_id or "") != own_location_id:
+            wf = None
     if wf is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Workflow not found")
     return wf
+
+
+def _workflow_location_id(
+    current_user: User,
+    workflow: Any,
+    requested_location_id: str | None = None,
+) -> str | None:
+    """Resolve enrollment/preview scope without allowing a workflow to widen it."""
+    actor_location_id = _campaign_location_id(current_user, requested_location_id)
+    workflow_location_id = str(workflow.location_id) if workflow.location_id else None
+    if workflow_location_id:
+        if requested_location_id and str(requested_location_id) != workflow_location_id:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Campaign belongs to a different location",
+            )
+        return workflow_location_id
+    return actor_location_id
+
+
+def _scope_audience_to_workflow(
+    workflow: Any,
+    segment: AudienceSegment | None,
+) -> AudienceSegment | None:
+    """Prevent a location-owned campaign from selecting another clinic."""
+    if segment is None or not workflow.location_id:
+        return segment
+    workflow_location_id = str(workflow.location_id)
+    requested = {str(value) for value in segment.filters.location_id_in}
+    if requested and requested != {workflow_location_id}:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Campaign audience cannot include another location",
+        )
+    segment.filters.location_id_in = [workflow_location_id]
+    return segment
 
 
 def _node_id_for_loc(loc: tuple, definition: dict[str, Any]) -> str | None:
@@ -902,12 +986,17 @@ def _issue_from_pydantic_error(
 )
 async def create_workflow(
     data: WorkflowCreateRequest,
-    current_user: _InstitutionAdmin,
+    current_user: _CampaignManager,
 ) -> WorkflowResponse:
     inst_id = _institution_id(current_user)
+    location_id = _campaign_location_id(current_user, None)
     async with get_db_session() as session:
         svc = AutomationWorkflowDefinitionService(session)
-        wf = await svc.create_draft(institution_id=inst_id, name=data.name)
+        wf = await svc.create_draft(
+            institution_id=inst_id,
+            name=data.name,
+            location_id=location_id,
+        )
         await svc.publish_version(wf, data.definition)
         return WorkflowResponse.from_model(wf)
 
@@ -920,15 +1009,16 @@ async def create_workflow(
 )
 async def create_draft_workflow(
     data: WorkflowDraftCreateRequest,
-    current_user: _InstitutionAdmin,
+    current_user: _CampaignManager,
 ) -> WorkflowResponse:
     inst_id = _institution_id(current_user)
+    requested_location_id = _campaign_location_id(current_user, data.location_id)
     async with get_db_session() as session:
-        if data.location_id:
+        if requested_location_id:
             location_id = (
                 await session.execute(
                     sa_select(InstitutionLocation.id).where(
-                        InstitutionLocation.id == data.location_id,
+                        InstitutionLocation.id == requested_location_id,
                         InstitutionLocation.institution_id == inst_id,
                         InstitutionLocation.is_active.is_(True),
                     )
@@ -943,7 +1033,7 @@ async def create_draft_workflow(
         wf = await svc.create_draft(
             institution_id=inst_id,
             name=data.name,
-            location_id=data.location_id,
+            location_id=requested_location_id,
         )
         return WorkflowResponse.from_model(wf)
 
@@ -951,7 +1041,7 @@ async def create_draft_workflow(
 @router.post("/validate", response_model=ValidateDefinitionResponse)
 async def validate_definition(
     data: ValidateDefinitionRequest,
-    current_user: _InstitutionAdmin,
+    current_user: _CampaignManager,
 ) -> ValidateDefinitionResponse:
     """Validate a workflow definition against the authoritative backend schema
     without persisting anything.
@@ -962,6 +1052,7 @@ async def validate_definition(
     block/annotate before the user commits to publishing.
     """
     inst_id = _institution_id(current_user)
+    location_id = _campaign_location_id(current_user, data.location_id)
     # Pure validation — no persistence. The builder supplies its workflow location
     # so null-location runtime failures are node-linked before publish. Readiness
     # needs a DB session to see the location's sender number and tenant creds —
@@ -973,7 +1064,7 @@ async def validate_definition(
         ).validate(
             data.definition,
             institution_id=inst_id,
-            location_id=data.location_id,
+            location_id=location_id,
         )
     responses = [
         ValidationIssueResponse(
@@ -992,7 +1083,7 @@ async def validate_definition(
 
 @router.get("/node-capabilities", response_model=NodeCapabilitiesResponse)
 async def list_node_capabilities(
-    current_user: _InstitutionAdmin,
+    current_user: _CampaignManager,
 ) -> NodeCapabilitiesResponse:
     """Return the engine's authoritative authoring/runtime support contract."""
     inst_id = _institution_id(current_user)
@@ -1010,7 +1101,7 @@ async def list_node_capabilities(
 
 @router.get("/phone-country-regions", response_model=list[PhoneCountryRegionResponse])
 async def list_phone_country_regions(
-    current_user: _InstitutionAdmin,
+    current_user: _CampaignManager,
 ) -> list[PhoneCountryRegionResponse]:
     _institution_id(current_user)
     return [
@@ -1027,7 +1118,7 @@ async def list_phone_country_regions(
     response_model=PmsAppointmentStatusCatalogResponse,
 )
 async def list_pms_appointment_statuses(
-    current_user: _InstitutionAdmin,
+    current_user: _CampaignManager,
     pms: Annotated[str | None, Query()] = None,
 ) -> PmsAppointmentStatusCatalogResponse:
     """Return a PMS's appointment disposition catalog for the builder.
@@ -1058,7 +1149,7 @@ async def list_pms_appointment_statuses(
 
 @router.get("/event-catalog", response_model=EventCatalogResponse)
 async def get_event_catalog(
-    current_user: _InstitutionAdmin,
+    current_user: _CampaignManager,
     pms: Annotated[str | None, Query()] = None,
 ) -> EventCatalogResponse:
     """Return the canonical event vocabulary the builder authors against.
@@ -1092,12 +1183,13 @@ async def get_event_catalog(
 @router.post("/dry-run", response_model=DryRunResultResponse)
 async def dry_run_definition(
     data: DryRunRequest,
-    current_user: _InstitutionAdmin,
+    current_user: _CampaignManager,
 ) -> DryRunResultResponse:
     """Simulate a run against the authoritative backend definition + merge renderer
     without persisting or sending. Powers the builder's test-run preview so it can't
     drift from real engine semantics. Structurally-invalid definitions return 422."""
     _institution_id(current_user)  # authz / institution context
+    location_id = _campaign_location_id(current_user, data.location_id)
     try:
         definition = WorkflowDefinition.model_validate(data.definition)
     except ValidationError as exc:
@@ -1119,8 +1211,8 @@ async def dry_run_definition(
                     status_code=status.HTTP_404_NOT_FOUND, detail="Contact not found"
                 )
             location = None
-            if data.location_id:
-                location = await session.get(InstitutionLocation, data.location_id)
+            if location_id:
+                location = await session.get(InstitutionLocation, location_id)
                 if location is not None and location.institution_id != inst_id:
                     raise HTTPException(
                         status_code=status.HTTP_404_NOT_FOUND, detail="Location not found"
@@ -1165,11 +1257,15 @@ async def dry_run_definition(
 
 
 @router.get("", response_model=list[WorkflowResponse])
-async def list_workflows(current_user: _InstitutionAdmin) -> list[WorkflowResponse]:
+async def list_workflows(current_user: _CampaignManager) -> list[WorkflowResponse]:
     inst_id = _institution_id(current_user)
+    location_id = _campaign_location_id(current_user, None)
     async with get_db_session() as session:
         svc = AutomationWorkflowDefinitionService(session)
-        workflows = await svc.list_workflows(institution_id=inst_id)
+        workflows = await svc.list_workflows(
+            institution_id=inst_id,
+            location_id=location_id,
+        )
         return [WorkflowResponse.from_model(wf) for wf in workflows]
 
 
@@ -1319,7 +1415,7 @@ def _is_workflow_llm_model(model_id: str) -> bool:
 
 @router.get("/channel-readiness", response_model=ChannelReadinessResponse)
 async def get_channel_readiness(
-    current_user: _InstitutionAdmin,
+    current_user: _CampaignManager,
     location_id: str = Query(..., description="Location to check channel readiness for"),
 ) -> ChannelReadinessResponse:
     """Report whether SMS / email / voice are provisioned for a location so the
@@ -1334,6 +1430,7 @@ async def get_channel_readiness(
     as a workflow id by the parameterised route.
     """
     inst_id = _institution_id(current_user)
+    location_id = _campaign_location_id(current_user, location_id) or location_id
     async with get_db_session() as session:
         report = await ChannelReadinessService(session).readiness_for_location(
             institution_id=inst_id, location_id=location_id
@@ -1513,7 +1610,8 @@ async def get_launch_checklist(
     inst_id = _institution_id(current_user)
     async with get_db_session() as session:
         svc = AutomationWorkflowDefinitionService(session)
-        wf = await _get_workflow_or_404(svc, workflow_id, inst_id)
+        wf = await _get_workflow_or_404(svc, workflow_id, current_user)
+        location_id = _workflow_location_id(current_user, wf, location_id)
         checklist = await CampaignLaunchChecklistService(session).build(
             wf,
             institution_id=inst_id,
@@ -1532,7 +1630,7 @@ async def get_campaign_overview(
     inst_id = _institution_id(current_user)
     async with get_db_session() as session:
         svc = AutomationWorkflowDefinitionService(session)
-        wf = await _get_workflow_or_404(svc, workflow_id, inst_id)
+        wf = await _get_workflow_or_404(svc, workflow_id, current_user)
         overview = await CampaignOperationsService(session).overview(
             wf,
             institution_id=inst_id,
@@ -1555,7 +1653,7 @@ async def get_campaign_analytics(
         raise HTTPException(status.HTTP_400_BAD_REQUEST, str(exc)) from exc
     async with get_db_session() as session:
         svc = AutomationWorkflowDefinitionService(session)
-        wf = await _get_workflow_or_404(svc, workflow_id, inst_id)
+        wf = await _get_workflow_or_404(svc, workflow_id, current_user)
         analytics = await CampaignAnalyticsService(session).workflow_analytics(
             wf,
             institution_id=inst_id,
@@ -1583,7 +1681,7 @@ async def get_campaign_split_analytics(
         raise HTTPException(status.HTTP_400_BAD_REQUEST, str(exc)) from exc
     async with get_db_session() as session:
         svc = AutomationWorkflowDefinitionService(session)
-        wf = await _get_workflow_or_404(svc, workflow_id, inst_id)
+        wf = await _get_workflow_or_404(svc, workflow_id, current_user)
         analytics = await CampaignAnalyticsService(session).split_analytics(
             wf,
             institution_id=inst_id,
@@ -1597,18 +1695,19 @@ async def get_campaign_split_analytics(
 async def preview_launch_checklist(
     workflow_id: str,
     data: LaunchChecklistPreviewRequest,
-    current_user: _InstitutionAdmin,
+    current_user: _CampaignManager,
 ) -> LaunchChecklistResponse:
     """Return launch readiness for an unsaved builder draft without persisting it."""
     inst_id = _institution_id(current_user)
     async with get_db_session() as session:
         svc = AutomationWorkflowDefinitionService(session)
-        wf = await _get_workflow_or_404(svc, workflow_id, inst_id)
+        wf = await _get_workflow_or_404(svc, workflow_id, current_user)
+        location_id = _workflow_location_id(current_user, wf, data.location_id)
         checklist = await CampaignLaunchChecklistService(session).build(
             wf,
             institution_id=inst_id,
             definition_dict=data.definition,
-            location_id=data.location_id,
+            location_id=location_id,
         )
         return LaunchChecklistResponse.from_service(checklist)
 
@@ -1621,7 +1720,7 @@ async def get_audience_definition(
     inst_id = _institution_id(current_user)
     async with get_db_session() as session:
         svc = AutomationWorkflowDefinitionService(session)
-        wf = await _get_workflow_or_404(svc, workflow_id, inst_id)
+        wf = await _get_workflow_or_404(svc, workflow_id, current_user)
         row = await CampaignAudienceService(session).get_definition(
             institution_id=inst_id,
             workflow_id=workflow_id,
@@ -1655,7 +1754,7 @@ async def get_audience_definition(
 async def put_audience_definition(
     workflow_id: str,
     data: AudienceDefinitionRequest,
-    current_user: _InstitutionAdmin,
+    current_user: _CampaignManager,
 ) -> AudienceDefinitionResponse:
     inst_id = _institution_id(current_user)
     try:
@@ -1664,7 +1763,9 @@ async def put_audience_definition(
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, str(exc)) from exc
     async with get_db_session() as session:
         svc = AutomationWorkflowDefinitionService(session)
-        wf = await _get_workflow_or_404(svc, workflow_id, inst_id)
+        wf = await _get_workflow_or_404(svc, workflow_id, current_user)
+        segment = _scope_audience_to_workflow(wf, segment)
+        assert segment is not None
         row = await CampaignAudienceService(session).upsert_definition(
             wf,
             institution_id=inst_id,
@@ -1700,7 +1801,9 @@ async def preview_audience(
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, str(exc)) from exc
     async with get_db_session() as session:
         svc = AutomationWorkflowDefinitionService(session)
-        wf = await _get_workflow_or_404(svc, workflow_id, inst_id)
+        wf = await _get_workflow_or_404(svc, workflow_id, current_user)
+        segment = _scope_audience_to_workflow(wf, segment)
+        assert segment is not None
         preview = await CampaignAudienceService(session).preview(
             wf,
             institution_id=inst_id,
@@ -1725,7 +1828,7 @@ async def preview_audience(
 async def enroll_audience(
     workflow_id: str,
     data: AudienceEnrollRequest,
-    current_user: _InstitutionAdmin,
+    current_user: _CampaignManager,
 ) -> AudienceEnrollResponse:
     inst_id = _institution_id(current_user)
     try:
@@ -1734,7 +1837,8 @@ async def enroll_audience(
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, str(exc)) from exc
     async with get_db_session() as session:
         svc = AutomationWorkflowDefinitionService(session)
-        wf = await _get_workflow_or_404(svc, workflow_id, inst_id)
+        wf = await _get_workflow_or_404(svc, workflow_id, current_user)
+        segment = _scope_audience_to_workflow(wf, segment)
         if wf.status != AutomationWorkflowStatus.ACTIVE.value:
             raise HTTPException(
                 status_code=status.HTTP_409_CONFLICT,
@@ -1778,10 +1882,9 @@ async def get_workflow(
     workflow_id: str,
     current_user: _InstitutionOrLocationAdmin,
 ) -> WorkflowResponse:
-    inst_id = _institution_id(current_user)
     async with get_db_session() as session:
         svc = AutomationWorkflowDefinitionService(session)
-        wf = await _get_workflow_or_404(svc, workflow_id, inst_id)
+        wf = await _get_workflow_or_404(svc, workflow_id, current_user)
         return WorkflowResponse.from_model(wf)
 
 
@@ -1796,10 +1899,9 @@ async def list_workflow_versions(
     snapshots; this exposes the full history the model already records (only
     ``current_version_id`` was previously reachable via the API).
     """
-    inst_id = _institution_id(current_user)
     async with get_db_session() as session:
         svc = AutomationWorkflowDefinitionService(session)
-        wf = await _get_workflow_or_404(svc, workflow_id, inst_id)
+        wf = await _get_workflow_or_404(svc, workflow_id, current_user)
         result = await session.execute(
             sa_select(AutomationWorkflowVersion)
             .where(AutomationWorkflowVersion.workflow_id == wf.id)
@@ -1821,12 +1923,11 @@ async def list_workflow_versions(
 async def update_workflow(
     workflow_id: str,
     data: WorkflowUpdateRequest,
-    current_user: _InstitutionAdmin,
+    current_user: _CampaignManager,
 ) -> WorkflowResponse:
-    inst_id = _institution_id(current_user)
     async with get_db_session() as session:
         svc = AutomationWorkflowDefinitionService(session)
-        wf = await _get_workflow_or_404(svc, workflow_id, inst_id)
+        wf = await _get_workflow_or_404(svc, workflow_id, current_user)
         if data.name is not None:
             wf.name = data.name
             await session.flush()
@@ -1849,13 +1950,12 @@ async def update_workflow(
 )
 async def publish_workflow(
     workflow_id: str,
-    current_user: _InstitutionAdmin,
+    current_user: _CampaignManager,
     data: WorkflowUpdateRequest | None = None,
 ) -> WorkflowResponse:
-    inst_id = _institution_id(current_user)
     async with get_db_session() as session:
         svc = AutomationWorkflowDefinitionService(session)
-        wf = await _get_workflow_or_404(svc, workflow_id, inst_id)
+        wf = await _get_workflow_or_404(svc, workflow_id, current_user)
         if data is not None and data.name is not None:
             wf.name = data.name
             await session.flush()
@@ -1874,12 +1974,11 @@ async def publish_workflow(
 )
 async def pause_workflow(
     workflow_id: str,
-    current_user: _InstitutionAdmin,
+    current_user: _CampaignManager,
 ) -> WorkflowResponse:
-    inst_id = _institution_id(current_user)
     async with get_db_session() as session:
         svc = AutomationWorkflowDefinitionService(session)
-        wf = await _get_workflow_or_404(svc, workflow_id, inst_id)
+        wf = await _get_workflow_or_404(svc, workflow_id, current_user)
         await svc.pause_workflow(wf)
         return WorkflowResponse.from_model(wf)
 
@@ -1892,12 +1991,12 @@ async def pause_workflow(
 )
 async def resume_workflow(
     workflow_id: str,
-    current_user: _InstitutionAdmin,
+    current_user: _CampaignManager,
 ) -> WorkflowResponse:
     inst_id = _institution_id(current_user)
     async with get_db_session() as session:
         svc = AutomationWorkflowDefinitionService(session)
-        wf = await _get_workflow_or_404(svc, workflow_id, inst_id)
+        wf = await _get_workflow_or_404(svc, workflow_id, current_user)
         checklist = await CampaignLaunchChecklistService(session).build(
             wf,
             institution_id=inst_id,
@@ -1927,7 +2026,7 @@ async def resume_workflow(
 )
 async def enroll_from_csv(
     workflow_id: str,
-    current_user: _InstitutionAdmin,
+    current_user: _CampaignManager,
     file: Annotated[UploadFile, File()],
     commit: Annotated[bool, Form()] = False,
 ) -> CsvEnrollPreviewResponse:
@@ -1954,7 +2053,7 @@ async def enroll_from_csv(
 
     async with get_db_session() as session:
         def_svc = AutomationWorkflowDefinitionService(session)
-        wf = await _get_workflow_or_404(def_svc, workflow_id, inst_id)
+        wf = await _get_workflow_or_404(def_svc, workflow_id, current_user)
         if wf.status != "active" or not wf.current_version_id:
             raise HTTPException(
                 status_code=status.HTTP_409_CONFLICT,
@@ -2058,12 +2157,11 @@ def _mask_contact_hint(phone: str | None, email: str | None) -> str | None:
 )
 async def archive_workflow(
     workflow_id: str,
-    current_user: _InstitutionAdmin,
+    current_user: _CampaignManager,
 ) -> WorkflowResponse:
-    inst_id = _institution_id(current_user)
     async with get_db_session() as session:
         svc = AutomationWorkflowDefinitionService(session)
-        wf = await _get_workflow_or_404(svc, workflow_id, inst_id)
+        wf = await _get_workflow_or_404(svc, workflow_id, current_user)
         await svc.archive_workflow(wf)
         return WorkflowResponse.from_model(wf)
 
@@ -2076,12 +2174,11 @@ async def archive_workflow(
 )
 async def delete_workflow(
     workflow_id: str,
-    current_user: _InstitutionAdmin,
+    current_user: _CampaignManager,
 ) -> None:
-    inst_id = _institution_id(current_user)
     async with get_db_session() as session:
         svc = AutomationWorkflowDefinitionService(session)
-        wf = await _get_workflow_or_404(svc, workflow_id, inst_id)
+        wf = await _get_workflow_or_404(svc, workflow_id, current_user)
         await svc.delete_workflow(wf)
 
 
@@ -2109,12 +2206,8 @@ async def enroll_in_workflow(
 
     async with get_db_session() as session:
         def_svc = AutomationWorkflowDefinitionService(session)
-        wf = await _get_workflow_or_404(def_svc, workflow_id, inst_id)
-        location_id = (
-            data.location_id
-            or (str(current_user.location_id) if getattr(current_user, "location_id", None) else None)
-            or (str(wf.location_id) if getattr(wf, "location_id", None) else None)
-        )
+        wf = await _get_workflow_or_404(def_svc, workflow_id, current_user)
+        location_id = _workflow_location_id(current_user, wf, data.location_id)
 
         if wf.status != "active":
             raise HTTPException(
@@ -2232,7 +2325,7 @@ async def list_runs(
     inst_id = _institution_id(current_user)
     async with get_db_session() as session:
         svc = AutomationWorkflowDefinitionService(session)
-        await _get_workflow_or_404(svc, workflow_id, inst_id)
+        await _get_workflow_or_404(svc, workflow_id, current_user)
         runs = await CampaignOperationsService(session).list_runs(
             workflow_id,
             institution_id=inst_id,
@@ -2266,7 +2359,7 @@ async def get_campaign_operations(
     inst_id = _institution_id(current_user)
     async with get_db_session() as session:
         svc = AutomationWorkflowDefinitionService(session)
-        await _get_workflow_or_404(svc, workflow_id, inst_id)
+        await _get_workflow_or_404(svc, workflow_id, current_user)
         operations = await CampaignOperationsService(session).operations(
             workflow_id,
             institution_id=inst_id,
@@ -2299,6 +2392,8 @@ async def get_run_status(
 ) -> WorkflowRunResponse:
     inst_id = _institution_id(current_user)
     async with get_db_session() as session:
+        svc = AutomationWorkflowDefinitionService(session)
+        await _get_workflow_or_404(svc, workflow_id, current_user)
         run = await session.get(AutomationWorkflowRun, run_id)
         if (
             run is None
@@ -2318,6 +2413,8 @@ async def get_run_timeline(
     """Return a PHI-light timeline for one campaign run."""
     inst_id = _institution_id(current_user)
     async with get_db_session() as session:
+        svc = AutomationWorkflowDefinitionService(session)
+        await _get_workflow_or_404(svc, workflow_id, current_user)
         timeline = await CampaignOperationsService(session).timeline(
             workflow_id,
             run_id,
@@ -2346,6 +2443,8 @@ async def cancel_run(
 ) -> WorkflowRunResponse:
     inst_id = _institution_id(current_user)
     async with get_db_session() as session:
+        svc = AutomationWorkflowDefinitionService(session)
+        await _get_workflow_or_404(svc, workflow_id, current_user)
         run = await session.get(AutomationWorkflowRun, run_id)
         if (
             run is None
@@ -2395,7 +2494,7 @@ class BulkEnrollResponse(BaseModel):
 async def bulk_enroll(
     workflow_id: str,
     data: BulkEnrollRequest,
-    current_user: _InstitutionAdmin,
+    current_user: _CampaignManager,
 ) -> BulkEnrollResponse:
     """Enqueue workflow enrollment for a list of contacts (up to 500 per request).
 
@@ -2408,7 +2507,7 @@ async def bulk_enroll(
 
     async with get_db_session() as session:
         svc = AutomationWorkflowDefinitionService(session)
-        wf = await _get_workflow_or_404(svc, workflow_id, inst_id)
+        wf = await _get_workflow_or_404(svc, workflow_id, current_user)
 
         if wf.status != "active":
             raise HTTPException(
@@ -2423,15 +2522,19 @@ async def bulk_enroll(
 
         version_id = str(wf.current_version_id)
         trigger_type = wf.trigger_type
+        item_location_ids = [
+            _workflow_location_id(current_user, wf, item.location_id)
+            for item in data.items
+        ]
 
-    for item in data.items:
+    for item, location_id in zip(data.items, item_location_ids, strict=True):
         enroll_and_start_workflow_run.apply_async(
             kwargs={
                 "institution_id": inst_id,
                 "workflow_id": workflow_id,
                 "workflow_version_id": version_id,
                 "contact_id": item.contact_id,
-                "location_id": item.location_id,
+                "location_id": location_id,
                 "trigger_type": trigger_type,
                 "trigger_ref_type": item.trigger_ref_type,
                 "trigger_ref_id": item.trigger_ref_id,
@@ -2462,7 +2565,7 @@ class WorkflowHaltResponse(BaseModel):
 )
 async def emergency_halt_workflow(
     workflow_id: str,
-    current_user: _InstitutionAdmin,
+    current_user: _CampaignManager,
     data: OutboundHaltRequest | None = None,
 ) -> WorkflowHaltResponse:
     """Emergency-halt a single workflow: terminate all in-flight runs on its
@@ -2472,7 +2575,7 @@ async def emergency_halt_workflow(
     reason = (data.reason if data else None) or "emergency_halt"
     async with get_db_session() as session:
         svc = AutomationWorkflowDefinitionService(session)
-        wf = await _get_workflow_or_404(svc, workflow_id, inst_id)
+        wf = await _get_workflow_or_404(svc, workflow_id, current_user)
         halted = 0
         if wf.current_version_id:
             halted = await svc.emergency_halt_version(

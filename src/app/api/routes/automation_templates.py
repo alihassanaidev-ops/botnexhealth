@@ -11,9 +11,11 @@ from sqlalchemy import select
 
 from src.app.api.deps import (
     get_current_institution_or_location_admin,
-    get_current_institution_user,
 )
-from src.app.api.routes.automation_workflows import WorkflowResponse
+from src.app.api.routes.automation_workflows import (
+    WorkflowResponse,
+    get_current_campaign_manager,
+)
 from src.app.database import get_db_session
 from src.app.models.institution import Institution
 from src.app.models.institution_location import InstitutionLocation
@@ -35,8 +37,8 @@ from src.app.services.automation.pms_capability_service import (
 
 router = APIRouter(prefix="/automation/templates", tags=["Automation Templates"])
 
-_InstitutionAdmin = Annotated[User, Depends(get_current_institution_user)]
 _InstitutionOrLocationAdmin = Annotated[User, Depends(get_current_institution_or_location_admin)]
+_CampaignManager = Annotated[User, Depends(get_current_campaign_manager)]
 
 
 # ---------------------------------------------------------------------------
@@ -97,6 +99,7 @@ async def list_campaign_templates(
     location_id: Annotated[str | None, Query()] = None,
 ) -> list[CampaignTemplateResponse]:
     """List the campaign templates available to this institution's PMS."""
+    location_id = _location_id_for_user(current_user, location_id)
     templates = list_templates()
     if not location_id:
         pms_type = await _institution_pms_type(current_user)
@@ -144,6 +147,7 @@ async def get_campaign_template(
     location_id: Annotated[str | None, Query()] = None,
 ) -> CampaignTemplateResponse:
     """Get a single campaign template by ID."""
+    location_id = _location_id_for_user(current_user, location_id)
     template = get_template(template_id)
     if template is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Template not found")
@@ -190,7 +194,7 @@ async def get_campaign_template(
 )
 async def instantiate_template(
     template_id: str,
-    current_user: _InstitutionAdmin,
+    current_user: _CampaignManager,
     data: CampaignTemplateInstantiateRequest | None = None,
 ) -> WorkflowResponse:
     """Instantiate a campaign template as a new workflow.
@@ -222,6 +226,7 @@ async def instantiate_template(
         )
 
     data = data or CampaignTemplateInstantiateRequest()
+    location_id = _location_id_for_user(current_user, data.location_id)
     try:
         definition = instantiate_definition(
             template,
@@ -236,17 +241,24 @@ async def instantiate_template(
         ) from exc
 
     async with get_db_session() as session:
+        resolved_location: tuple[Institution, InstitutionLocation] | None = None
+        if location_id and (
+            current_user.role == UserRole.LOCATION_ADMIN.value
+            or bool(template.metadata.pms_capability_requirements)
+        ):
+            resolved_location = await _resolve_institution_location(
+                current_user,
+                session,
+                location_id,
+            )
         if template.metadata.pms_capability_requirements:
-            if not data.location_id:
+            if not location_id:
                 raise HTTPException(
                     status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
                     detail="location_id is required to verify PMS capability for this template",
                 )
-            institution, location = await _resolve_institution_location(
-                current_user,
-                session,
-                data.location_id,
-            )
+            assert resolved_location is not None
+            institution, location = resolved_location
             evaluation = await PmsCapabilityService(session).evaluate_location(
                 institution=institution,
                 location=location,
@@ -267,7 +279,7 @@ async def instantiate_template(
         wf = await svc.create_draft(
             institution_id=str(current_user.institution_id),
             name=(data.name.strip() if data.name else template.name),
-            location_id=data.location_id,
+            location_id=location_id,
             description=template.description,
             category=template.category,
             created_by_user_id=user_id,
@@ -288,6 +300,24 @@ async def _institution_pms_type(user: User) -> str:
     async with get_db_session() as session:
         institution = await session.get(Institution, str(user.institution_id))
     return institution.pms_type if institution else "none"
+
+
+def _location_id_for_user(user: User, location_id: str | None) -> str | None:
+    """Pin location admins to their assigned clinic for every template path."""
+    if user.role != UserRole.LOCATION_ADMIN.value:
+        return location_id
+    if not user.location_id:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Location-scoped account is missing location assignment",
+        )
+    own_location_id = str(user.location_id)
+    if location_id and str(location_id) != own_location_id:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Cannot manage campaigns for another location",
+        )
+    return own_location_id
 
 
 async def _resolve_institution_location(

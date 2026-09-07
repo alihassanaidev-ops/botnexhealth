@@ -199,6 +199,7 @@ ROUTES_BY_BOUNDARY: dict[str, tuple[str, ...]] = {
         "GET /api/institution/email-inbox-settings",
         "PUT /api/institution/email-inbox-settings",
         "GET /api/institution/email-sending-identities",
+        "GET /api/institution/campaign-email-templates",
     ),
     SUPER_ADMIN: (
         "GET /api/v1/nexhealth/institutions",
@@ -346,18 +347,27 @@ ROUTES_BY_BOUNDARY: dict[str, tuple[str, ...]] = {
         "DELETE /api/institution/notification-recipients/{recipient_id}",
     ),
     INSTITUTION_USER: (
-        # Compliance settings: quiet-hours exceptions (Item 20). Same boundary
-        # as the campaign routes they govern — an institution user who can
-        # publish a campaign can set the window it sends in.
+        # Institution-wide kill switch. Location admins can stop their own
+        # campaign, but cannot stop or release outbound sends for every clinic.
+        "GET /api/automation/workflows/outbound-halt",
+        "POST /api/automation/workflows/outbound-halt",
+        "DELETE /api/automation/workflows/outbound-halt",
+    ),
+    LOCATION_ADMIN: (
+        "GET /api/institution/location/users",
+        "POST /api/institution/location/users/{user_id}/deactivate",
+        "POST /api/institution/locations/{loc_slug}/invite-staff",
+        "GET /api/institution/location/audit-logs",
+    ),
+    INSTITUTION_OR_LOCATION_ADMIN: (
+        # Campaign managers share one named campaign:configure permission.
+        # Handlers and RLS additionally pin location admins to their clinic.
         "GET /api/compliance/quiet-hours/exceptions",
         "POST /api/compliance/quiet-hours/exceptions",
         "PATCH /api/compliance/quiet-hours/exceptions/{exception_id}",
         "DELETE /api/compliance/quiet-hours/exceptions/{exception_id}",
         "GET /api/automation/workflows/node-capabilities",
         "GET /api/automation/workflows/pms-appointment-statuses",
-        # The canonical event vocabulary the builder authors against. Same
-        # boundary as the other builder catalogs: it describes the engine's
-        # capabilities and carries no tenant data.
         "GET /api/automation/workflows/event-catalog",
         # Bulk enrollment from a file. Institution-admin only, same boundary as
         # the audience enroll route it shares its caps and gates with.
@@ -380,18 +390,8 @@ ROUTES_BY_BOUNDARY: dict[str, tuple[str, ...]] = {
         "POST /api/automation/workflows/{workflow_id}/launch-checklist/preview",
         "PUT /api/automation/workflows/{workflow_id}/audience",
         "POST /api/automation/workflows/{workflow_id}/audience/enroll",
+        "POST /api/automation/workflows/{workflow_id}/enroll/csv",
         "POST /api/automation/workflows/{workflow_id}/emergency-halt",
-        "GET /api/automation/workflows/outbound-halt",
-        "POST /api/automation/workflows/outbound-halt",
-        "DELETE /api/automation/workflows/outbound-halt",
-    ),
-    LOCATION_ADMIN: (
-        "GET /api/institution/location/users",
-        "POST /api/institution/location/users/{user_id}/deactivate",
-        "POST /api/institution/locations/{loc_slug}/invite-staff",
-        "GET /api/institution/location/audit-logs",
-    ),
-    INSTITUTION_OR_LOCATION_ADMIN: (
         # Narrowed from any institution-scoped role by Item 33: a practice's
         # integration state is operational detail, and STAFF could read it until
         # then. Also carries the sync:read permission.
@@ -531,7 +531,6 @@ ROUTES_BY_BOUNDARY: dict[str, tuple[str, ...]] = {
         # Clinic-authored campaign email templates. Institution-scoped content
         # a clinic admin owns for their own institution, and a platform admin
         # administers for any institution they name explicitly.
-        "GET /api/institution/campaign-email-templates",
         "POST /api/institution/campaign-email-templates",
         "GET /api/institution/campaign-email-templates/merge-fields",
         "POST /api/institution/campaign-email-templates/preview/live",

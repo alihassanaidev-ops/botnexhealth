@@ -5,8 +5,9 @@ import { describe, expect, it, vi } from "vitest"
 import { AppSidebar } from "@/components/app-sidebar"
 import { SidebarProvider } from "@/components/ui/sidebar"
 
+const { auth } = vi.hoisted(() => ({ auth: vi.fn() }))
 vi.mock("@/context/AuthContext", () => ({
-    useAuth: () => ({ user: { role: "INSTITUTION_ADMIN" } }),
+    useAuth: () => auth(),
 }))
 
 vi.mock("@/context/InstitutionContext", () => ({
@@ -20,7 +21,29 @@ vi.mock("@/components/location-selector", () => ({
 }))
 
 describe("AppSidebar collapsed layout", () => {
+    it("offers clinic-scoped campaign controls to location admins", () => {
+        auth.mockReturnValue({ user: { role: "LOCATION_ADMIN" } })
+
+        render(
+            <MemoryRouter>
+                <SidebarProvider>
+                    <AppSidebar />
+                </SidebarProvider>
+            </MemoryRouter>,
+        )
+
+        expect(screen.getByRole("link", { name: /campaigns/i })).toHaveAttribute(
+            "href",
+            "/institution-admin/campaigns",
+        )
+        expect(screen.getByRole("link", { name: /quiet hours/i })).toHaveAttribute(
+            "href",
+            "/institution-admin/quiet-hours-exceptions",
+        )
+    })
+
     it("hides the location selector instead of clipping its name", () => {
+        auth.mockReturnValue({ user: { role: "INSTITUTION_ADMIN" } })
         render(
             <MemoryRouter>
                 <SidebarProvider defaultOpen={false}>
@@ -34,6 +57,7 @@ describe("AppSidebar collapsed layout", () => {
     })
 
     it("reserves a small right gutter beside collapsed navigation icons", () => {
+        auth.mockReturnValue({ user: { role: "INSTITUTION_ADMIN" } })
         const { container } = render(
             <MemoryRouter>
                 <SidebarProvider defaultOpen={false}>
