@@ -325,6 +325,30 @@ const RETIRED_TRIGGER_LABELS: Record<string, string> = {
     email_reply: "Email reply",
 }
 
+/**
+ * Renderable metadata for any trigger type, including retired ones.
+ *
+ * Definitions published before the trigger rearchitecture still store their
+ * original type — the backend converts them on read, but the stored JSON is
+ * what reaches the builder. `TRIGGER_META` only has the six current types, so
+ * indexing it directly returns undefined for those, and the two places that
+ * immediately read `.icon` off the result blanked the whole canvas.
+ *
+ * Retired types get their old label and a neutral icon rather than a raw key,
+ * so an old campaign still opens and reads correctly.
+ */
+export function triggerMetaFor(type: string): TriggerMeta {
+    if (type in TRIGGER_META) return TRIGGER_META[type as TriggerType]
+    const label = RETIRED_TRIGGER_LABELS[type]
+    return {
+        label: label ?? humanizeCatalogKey(type),
+        description: label
+            ? "Retired trigger kept so this campaign still opens. Re-pick a trigger to republish."
+            : "Unrecognised trigger.",
+        icon: Stethoscope,
+    }
+}
+
 export function triggerTypeLabelFor(type: string | null | undefined): string {
     if (!type) return "—"
     if (type in TRIGGER_META) return TRIGGER_META[type as TriggerType].label
