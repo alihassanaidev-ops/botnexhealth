@@ -128,6 +128,36 @@ def _appointment_is_cancelled(event: str, appt: dict) -> bool:
     return bool(appt.get("cancelled", False) or appt.get("canceled", False))
 
 
+def _nexhealth_lookup_external_id(
+    *,
+    subdomain: str | None = None,
+    location_id: str | None = None,
+    location_ids: list[str] | None = None,
+) -> str:
+    """Build the RLS lookup key for webhook tenant resolution.
+
+    NexHealth webhooks arrive before we know the local tenant UUID, so the
+    initial DB session cannot be scoped by ``institution_id``. RLS instead
+    admits a narrow lookup by provider identity: subdomain, location id, or the
+    exact subdomain/location pair when both are present.
+    """
+    clean_subdomain = str(subdomain or "").strip()
+    clean_location = str(location_id or "").strip()
+    clean_locations = [str(item).strip() for item in location_ids or [] if str(item).strip()]
+
+    if clean_subdomain and clean_location:
+        return f"mapping:{clean_subdomain}:{clean_location}"
+    if clean_subdomain:
+        return f"subdomain:{clean_subdomain}"
+    if clean_location:
+        return f"location:{clean_location}"
+    if len(clean_locations) == 1:
+        return f"location:{clean_locations[0]}"
+    if clean_locations:
+        return f"locations:{','.join(sorted(set(clean_locations)))}"
+    return ""
+
+
 async def _resolve_appointment_reason(
     session: AsyncSession,
     *,
@@ -695,7 +725,8 @@ async def _process_sync_status_webhook_payload(
     )
 
     async with get_system_db_session(
-        "nexhealth_lookup", external_id=f"sync_status:{subdomain}"
+        "nexhealth_lookup",
+        external_id=_nexhealth_lookup_external_id(subdomain=subdomain),
     ) as session:
         sync_svc = NexHealthSyncStatusService(session)
         locations = await sync_svc.resolve_locations_for_payload(
@@ -896,7 +927,11 @@ async def _process_patient_event(
         }
 
     async with get_system_db_session(
-        "nexhealth_lookup", external_id=patient_id
+        "nexhealth_lookup",
+        external_id=_nexhealth_lookup_external_id(
+            subdomain=subdomain,
+            location_ids=nexhealth_location_ids,
+        ),
     ) as session:
         stmt = (
             select(InstitutionLocation)
@@ -1062,8 +1097,13 @@ async def _process_appointment_event(
             detail="Appointment payload missing required field: start_time",
         )
 
+    subdomain = str(payload.get("subdomain") or "")
     async with get_system_db_session(
-        "nexhealth_lookup", external_id=appointment_id
+        "nexhealth_lookup",
+        external_id=_nexhealth_lookup_external_id(
+            subdomain=subdomain,
+            location_id=nexhealth_location_id,
+        ),
     ) as session:
         location_stmt = (
             select(InstitutionLocation)
@@ -1073,7 +1113,6 @@ async def _process_appointment_event(
                 InstitutionLocation.nexhealth_location_id == nexhealth_location_id,
             )
         )
-        subdomain = str(payload.get("subdomain") or "")
         if subdomain:
             location_stmt = location_stmt.where(
                 InstitutionLocation.nexhealth_subdomain == subdomain

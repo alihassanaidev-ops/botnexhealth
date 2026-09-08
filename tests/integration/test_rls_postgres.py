@@ -46,6 +46,10 @@ SMS_A1 = "20000000-0000-0000-0000-000000000001"
 SMS_A2 = "20000000-0000-0000-0000-000000000002"
 VOICE_PROFILE_A1 = "21000000-0000-0000-0000-000000000001"
 VOICE_PROFILE_B1 = "21000000-0000-0000-0000-000000000002"
+NH_TYPE_A1 = "22000000-0000-0000-0000-000000000001"
+NH_TYPE_A2 = "22000000-0000-0000-0000-000000000002"
+NH_WEBHOOK_CONTACT = "23000000-0000-0000-0000-000000000001"
+NH_WEBHOOK_ACCESS = "23000000-0000-0000-0000-000000000002"
 
 
 @pytest.fixture(scope="module")
@@ -208,14 +212,15 @@ async def _seed(conn) -> None:
             """
             INSERT INTO institution_locations
               (id, institution_id, name, slug, is_active, retell_agent_id,
-               twilio_from_number, timezone)
+               twilio_from_number, timezone, nexhealth_subdomain,
+               nexhealth_location_id)
             VALUES
               (:loc_a1, :inst_a, 'Clinic A One', 'a-one', true, 'agent-a1',
-               '+15550000001', 'UTC'),
+               '+15550000001', 'UTC', 'clinic-a-nh', '340582'),
               (:loc_a2, :inst_a, 'Clinic A Two', 'a-two', true, 'agent-a2',
-               '+15550000002', 'UTC'),
+               '+15550000002', 'UTC', 'clinic-a-nh', '348511'),
               (:loc_b1, :inst_b, 'Clinic B One', 'b-one', true, 'agent-b1',
-               '+15550000003', 'UTC')
+               '+15550000003', 'UTC', 'clinic-b-nh', '340582')
             """
         ),
         {
@@ -278,11 +283,12 @@ async def _seed(conn) -> None:
     await conn.execute(
         text(
             """
-            INSERT INTO contacts (id, institution_id, full_name, is_new_patient)
+            INSERT INTO contacts
+              (id, institution_id, full_name, is_new_patient, nexhealth_patient_id)
             VALUES
-              (:contact_a1, :inst_a, 'Patient A1', false),
-              (:contact_a2, :inst_a, 'Patient A2', false),
-              (:contact_b1, :inst_b, 'Patient B1', false)
+              (:contact_a1, :inst_a, 'Patient A1', false, 'nh-patient-a1'),
+              (:contact_a2, :inst_a, 'Patient A2', false, 'nh-patient-a2'),
+              (:contact_b1, :inst_b, 'Patient B1', false, 'nh-patient-b1')
             """
         ),
         {
@@ -291,6 +297,27 @@ async def _seed(conn) -> None:
             "contact_b1": CONTACT_B1,
             "inst_a": INST_A,
             "inst_b": INST_B,
+        },
+    )
+    await conn.execute(
+        text(
+            """
+            INSERT INTO institution_appointment_types
+              (id, institution_id, location_id, source, source_id, name,
+               duration_minutes, is_active)
+            VALUES
+              (:type_a1, :inst_a, :loc_a1, 'nexhealth', '1253096',
+               'Surgery', 30, true),
+              (:type_a2, :inst_a, :loc_a2, 'nexhealth', '1197997',
+               'Checkup / Cleaning', 60, true)
+            """
+        ),
+        {
+            "type_a1": NH_TYPE_A1,
+            "type_a2": NH_TYPE_A2,
+            "inst_a": INST_A,
+            "loc_a1": LOC_A1,
+            "loc_a2": LOC_A2,
         },
     )
     for contact_id, location_id in ((CONTACT_A1, LOC_A1), (CONTACT_A2, LOC_A2)):
@@ -853,6 +880,151 @@ async def test_location_admin_campaign_rls_is_exact_location_only(rls_engine) ->
             )
         ).scalars().all()
         assert updated == [workflow_ids["own"]]
+
+
+@pytest.mark.asyncio
+async def test_nexhealth_lookup_resolves_provider_mapping_without_tenant_context(
+    rls_engine,
+) -> None:
+    """NexHealth webhook lookup starts before the local tenant UUID is known.
+
+    The external mapping key should expose only the matching tenant/location
+    rows, plus tenant-local data needed to finish webhook projection.
+    """
+    async with rls_engine.begin() as conn:
+        await _set_context(
+            conn,
+            context_type="nexhealth_lookup",
+            external_id="mapping:clinic-a-nh:340582",
+        )
+        assert await conn.scalar(text("SELECT count(*) FROM institutions")) == 1
+        assert await conn.scalar(
+            text(
+                """
+                SELECT count(*)
+                FROM institution_locations il
+                JOIN institutions i ON i.id = il.institution_id
+                WHERE i.pms_type = 'nexhealth'
+                  AND il.nexhealth_subdomain = 'clinic-a-nh'
+                  AND il.nexhealth_location_id = '340582'
+                """
+            )
+        ) == 1
+        assert await conn.scalar(
+            text(
+                """
+                SELECT count(*)
+                FROM contacts
+                WHERE institution_id = :inst_a
+                  AND nexhealth_patient_id = 'nh-patient-a1'
+                """
+            ),
+            {"inst_a": INST_A},
+        ) == 1
+        assert await conn.scalar(
+            text(
+                """
+                SELECT name
+                FROM institution_appointment_types
+                WHERE institution_id = :inst_a
+                  AND location_id = :loc_a1
+                  AND source = 'nexhealth'
+                  AND source_id = '1253096'
+                """
+            ),
+            {"inst_a": INST_A, "loc_a1": LOC_A1},
+        ) == "Surgery"
+
+    async with rls_engine.begin() as conn:
+        await _set_context(
+            conn,
+            context_type="nexhealth_lookup",
+            external_id="subdomain:clinic-a-nh",
+        )
+        assert (
+            await conn.scalar(text("SELECT count(*) FROM institution_locations"))
+        ) == 2
+        assert await conn.scalar(text("SELECT count(*) FROM institutions")) == 1
+
+    async with rls_engine.begin() as conn:
+        await _set_context(
+            conn,
+            context_type="nexhealth_lookup",
+            external_id="location:348511",
+        )
+        assert (
+            await conn.scalar(text("SELECT count(*) FROM institution_locations"))
+        ) == 1
+
+    async with rls_engine.begin() as conn:
+        await _set_context(
+            conn,
+            context_type="nexhealth_lookup",
+            external_id="location:340582",
+        )
+        assert (
+            await conn.scalar(text("SELECT count(*) FROM institution_locations"))
+        ) == 0
+        assert await conn.scalar(text("SELECT count(*) FROM institutions")) == 0
+
+
+@pytest.mark.asyncio
+async def test_nexhealth_webhook_context_can_write_projected_contact_access(
+    rls_engine,
+) -> None:
+    async with rls_engine.begin() as conn:
+        await _set_context(
+            conn,
+            context_type="nexhealth_webhooks",
+            institution_id=INST_A,
+            location_id=LOC_A1,
+            external_id="appointment:1681062130",
+        )
+        await conn.execute(
+            text(
+                """
+                INSERT INTO contacts
+                  (id, institution_id, full_name, is_new_patient,
+                   nexhealth_patient_id)
+                VALUES
+                  (:contact_id, :inst_a, 'Webhook Patient', false,
+                   'nh-webhook-patient')
+                """
+            ),
+            {"contact_id": NH_WEBHOOK_CONTACT, "inst_a": INST_A},
+        )
+        await conn.execute(
+            text(
+                """
+                INSERT INTO contact_location_accesses
+                  (id, institution_id, contact_id, location_id)
+                VALUES (:access_id, :inst_a, :contact_id, :loc_a1)
+                """
+            ),
+            {
+                "access_id": NH_WEBHOOK_ACCESS,
+                "contact_id": NH_WEBHOOK_CONTACT,
+                "inst_a": INST_A,
+                "loc_a1": LOC_A1,
+            },
+        )
+        assert await conn.scalar(text("SELECT count(*) FROM contacts")) == 3
+        assert (
+            await conn.scalar(text("SELECT count(*) FROM contact_location_accesses"))
+        ) == 3
+
+    async with rls_engine.begin() as conn:
+        await _set_context(
+            conn,
+            context_type="nexhealth_webhooks",
+            institution_id=INST_B,
+            location_id=LOC_B1,
+            external_id="appointment:1681062130",
+        )
+        assert await conn.scalar(text("SELECT count(*) FROM contacts")) == 1
+        assert (
+            await conn.scalar(text("SELECT count(*) FROM contact_location_accesses"))
+        ) == 0
 
 
 @pytest.mark.asyncio
