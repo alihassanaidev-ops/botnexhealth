@@ -369,9 +369,6 @@ ROUTES_BY_BOUNDARY: dict[str, tuple[str, ...]] = {
         "GET /api/automation/workflows/node-capabilities",
         "GET /api/automation/workflows/pms-appointment-statuses",
         "GET /api/automation/workflows/event-catalog",
-        # Bulk enrollment from a file. Institution-admin only, same boundary as
-        # the audience enroll route it shares its caps and gates with.
-        "POST /api/automation/workflows/{workflow_id}/enroll/csv",
         "POST /api/automation/workflows",
         "POST /api/automation/workflows/draft",
         "GET /api/automation/workflows",
@@ -390,6 +387,10 @@ ROUTES_BY_BOUNDARY: dict[str, tuple[str, ...]] = {
         "POST /api/automation/workflows/{workflow_id}/launch-checklist/preview",
         "PUT /api/automation/workflows/{workflow_id}/audience",
         "POST /api/automation/workflows/{workflow_id}/audience/enroll",
+        # Bulk enrollment from a file, same boundary as the audience enroll
+        # route it shares its caps and gates with: a location admin reaches it
+        # only for a campaign _get_workflow_or_404 has already pinned to their
+        # own clinic.
         "POST /api/automation/workflows/{workflow_id}/enroll/csv",
         "POST /api/automation/workflows/{workflow_id}/emergency-halt",
         # Narrowed from any institution-scoped role by Item 33: a practice's
