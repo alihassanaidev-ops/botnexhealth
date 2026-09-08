@@ -14,7 +14,7 @@ from src.app.database import get_db_session
 from src.app.models.audit_log import AuditAction, AuditActor
 from src.app.models.contact import Contact
 from src.app.models.contact_location_access import ContactLocationAccess
-from src.app.models.user import User, UserRole
+from src.app.models.user import User
 from src.app.pms.base import PMSAdapter
 from src.app.pms.factory import get_institution_pms
 from src.app.pms.models import (
@@ -142,19 +142,9 @@ async def browse_patients(
         # that had to reveal each row, while serving the same fields inline to
         # STAFF: the practice owner was trusted less than the front desk.
         #
-        # STAFF is carried through unchanged rather than folded into the shared
-        # policy. They read this directory inline today and taking that away
-        # would stop the front desk ringing patients back, which is not what
-        # the admin change was asked to do. It does leave one inconsistency
-        # standing — STAFF sees whole numbers here and last-4 on the call pages,
-        # so the call-page mask is already defeated by this screen — and that is
-        # a decision to take deliberately, not a side effect to smuggle in here.
-        show_contact_details = (
-            serves_phi_inline(current_user)
-            or current_user.role == UserRole.STAFF.value
-        )
         # The per-row `reveal_patient_id` read stays wired for any role that is
         # still masked, so its separately-audited resource keeps working.
+        show_contact_details = serves_phi_inline(current_user)
         items = []
         for patient in page.items:
             reveal_this_patient = (

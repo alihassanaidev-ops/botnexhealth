@@ -12,20 +12,34 @@ patient, opposite rules depending on which page they opened.
 
 The rule now:
 
-* **Clinic administrators read inline.** INSTITUTION_ADMIN and LOCATION_ADMIN
-  run the practice whose patients these are. They are in the circle of care and
-  they clicked "Reveal" every single time it was offered, which makes it a
-  speed bump rather than a control. They keep an audit row per view — see the
-  ``inline_phi`` flag written by the call routes — so access stays attributable;
-  what is gone is the pretence that the extra click was a decision.
-* **STAFF keeps the reveal step** on call surfaces. Front-desk screens sit in
-  waiting rooms, which is the one place the reveal-on-click pattern earns its
-  keep.
+* **Every clinic role reads inline.** INSTITUTION_ADMIN, LOCATION_ADMIN and
+  STAFF all work the practice whose patients these are. They are in the circle
+  of care and they clicked "Reveal" every single time it was offered, which
+  makes it a speed bump rather than a control. They keep an audit row per view —
+  see the ``inline_phi`` flag written by the call routes — so access stays
+  attributable; what is gone is the pretence that the extra click was a
+  decision.
+
+  STAFF was the last holdout, on the argument that front-desk screens sit in
+  waiting rooms. It was dropped because the mask it bought was already gone:
+  STAFF has always read whole phone numbers and email addresses off the patient
+  directory, so anyone minded to read a number simply opened the other screen
+  and searched the name. A control one navigation step defeats is not
+  protecting against shoulder-surfing; it is only slowing down the front desk
+  ringing patients back. Shoulder-surfing is a workstation problem — screen
+  lock, monitor placement, session timeout — and those are where it should be
+  answered.
 * **SUPER_ADMIN never reads inline.** Platform-level, outside the circle of
   care, and reveal itself is gated behind break-glass. That exclusion is the
-  thing that makes serving everyone else inline defensible, so it stays.
+  thing that makes serving every clinic role inline defensible, so it stays.
 * **GROUP_ADMIN never reaches these routes** (rollup endpoints only) and is
   excluded here for completeness rather than because it could get this far.
+
+One consequence worth naming: with every clinic role inline and SUPER_ADMIN
+behind break-glass, the phone/transcript/recording reveal endpoints no longer
+have a routine caller. They are left in place — they are the audited path, and
+break-glass still needs them — but they are now a fallback rather than part of
+anybody's daily flow.
 
 This governs *presentation of data we hold in full*. It has nothing to do with
 the masking applied at write time — ``sms_history_log.to_number_masked`` and the
@@ -42,6 +56,7 @@ _INLINE_PHI_ROLES = frozenset(
     {
         UserRole.INSTITUTION_ADMIN.value,
         UserRole.LOCATION_ADMIN.value,
+        UserRole.STAFF.value,
     }
 )
 

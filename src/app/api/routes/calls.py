@@ -92,8 +92,8 @@ class CallRecord(BaseModel):
     # only via the audited POST /{call_id}/reveal/phone endpoint.
     phone_masked: str | None = None
     phone_reveal_available: bool = False
-    # True when phone_masked already holds the full number (no-PMS location
-    # admins), so the UI renders it plainly instead of offering a reveal.
+    # True when phone_masked already holds the full number, so the UI renders
+    # it plainly instead of offering a reveal beside a complete value.
     phone_revealed: bool = False
 
 
@@ -123,11 +123,11 @@ class CallDetail(CallRecord):
     # audited reveal endpoints. NULL/absent when Retell redaction is off.
     scrubbed_transcript: list[dict] | None = None
     scrubbed_recording_url: str | None = None
-    # False when the served transcript is the raw, unmasked one (no-PMS
-    # location admins). The UI drops its "Redacted view" banner on False.
+    # False when the served transcript is the raw, unmasked one. The UI drops
+    # its "Redacted view" banner on False.
     transcript_redacted: bool = True
-    # Playable recording URL served inline for no-PMS location admins. Every
-    # other caller still goes through POST /{id}/reveal/recording.
+    # Playable recording URL served inline to clinic roles. SUPER_ADMIN still
+    # goes through POST /{id}/reveal/recording, behind break-glass.
     recording_url: str | None = None
     custom_fields: list[CustomFieldValueOut] = []
 
@@ -215,8 +215,7 @@ def _call_to_record(
             never exposes full PHI. The detail endpoint passes
             ``redact_phi=False`` for authorised roles.
         expose_contact: When True, the caller's full phone number is served
-            inline instead of the masked form. Reserved for no-PMS location
-            admins — see ``_reads_phi_inline``.
+            inline instead of the masked form — see ``_reads_phi_inline``.
     """
     contact_out: ContactSummary | None = None
     phone_masked: str | None = None

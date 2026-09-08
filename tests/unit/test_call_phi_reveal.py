@@ -157,14 +157,35 @@ def _value(
 
 
 @pytest.mark.asyncio
-async def test_call_detail_hides_full_phi_until_audited_reveal(monkeypatch):
-    """STAFF keeps the reveal step.
+@pytest.mark.parametrize(
+    "role",
+    [
+        UserRole.INSTITUTION_ADMIN.value,
+        UserRole.LOCATION_ADMIN.value,
+        UserRole.STAFF.value,
+    ],
+)
+async def test_a_phi_custom_field_stays_masked_for_roles_that_read_inline(
+    monkeypatch, role
+):
+    """The per-field PHI flag survives the role policy.
 
-    Front-desk screens sit in waiting rooms, which is the one place the
-    reveal-on-click pattern is buying something. Clinic administrators no
-    longer go through it — see the companion test below.
+    Every clinic role now reads names, phone, transcript and recording inline.
+    A custom field an institution deliberately marked PHI is a different kind
+    of decision — a per-field opt-in somebody made on purpose, not a blanket
+    rule about who is in the circle of care — so it keeps its reveal step for
+    everyone. This is asserted across all three roles because it would be easy
+    to widen the inline policy and take this with it by accident.
+
+    It does leave a seam: the same user reads the raw transcript without a
+    click and still clicks for a field marked PHI. That is defensible only
+    because the field flag is opt-in, and it is worth revisiting deliberately.
     """
     monkeypatch.setattr(calls_routes, "log_audit_background", lambda **_kwargs: None)
+    monkeypatch.setattr(
+        "src.app.tasks.recordings.generate_presigned_url",
+        lambda _url: "https://s3.example/presigned",
+    )
     protected_field = _field("diagnosis_note", is_phi=True)
     plain_field = _field("referral_source", is_phi=False, display_order=1)
     _install_session(
@@ -183,26 +204,14 @@ async def test_call_detail_hides_full_phi_until_audited_reveal(monkeypatch):
         request=object(),
         call_id="33333333-3333-3333-3333-333333333333",
         current_user=_user(
-            UserRole.STAFF.value,
-            location_id="bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb",
+            role, location_id="bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"
         ),
     )
 
-    # The detail endpoint never returns transcript or recording bodies —
-    # only availability flags and metadata.
-    assert response.transcript_available is True
-    assert response.recording_available is True
-    assert not hasattr(response, "transcript")
-    assert not hasattr(response, "transcript_with_tool_calls")
-    assert not hasattr(response, "recording_url") or response.recording_url is None
-
-    # The non-PHI scrubbed variants ARE served inline, with Retell's bracket
-    # placeholders masked to ***** (never the raw PII).
-    assert response.scrubbed_summary == "Summary for ***** re *****"
-    assert response.scrubbed_transcript == [
-        {"role": "agent", "content": "Hi *****, how can I help?"}
-    ]
-    assert response.scrubbed_recording_url == "s3://bucket/redacted-recording.wav"
+    # The rest of the call is inline for this role, which is the point: the
+    # field below is masked despite that, not because of a blanket redaction.
+    assert response.transcript_redacted is False
+    assert response.recording_url == "https://s3.example/presigned"
 
     protected = next(f for f in response.custom_fields if f.field_key == "diagnosis_note")
     assert protected.value is None
@@ -213,6 +222,34 @@ async def test_call_detail_hides_full_phi_until_audited_reveal(monkeypatch):
     assert plain.value == "Google"
     assert plain.value_masked is False
     assert plain.reveal_available is False
+
+
+@pytest.mark.asyncio
+async def test_super_admin_gets_the_scrubbed_preview_not_the_raw_bodies(monkeypatch):
+    """The masked path still exists, and SUPER_ADMIN is who walks it.
+
+    Retell's bracket placeholders collapse to ***** so the platform role can
+    tell a call happened without reading who it was about.
+    """
+    monkeypatch.setattr(calls_routes, "log_audit_background", lambda **_kwargs: None)
+    _install_session(monkeypatch, _call(), [])
+
+    response = await _route_target(calls_routes.get_call)(
+        request=object(),
+        call_id="33333333-3333-3333-3333-333333333333",
+        current_user=_user(UserRole.SUPER_ADMIN.value),
+    )
+
+    # Availability flags only — never the transcript or recording body.
+    assert response.transcript_available is True
+    assert response.recording_available is True
+    assert response.recording_url is None
+
+    assert response.scrubbed_summary == "Summary for ***** re *****"
+    assert response.scrubbed_transcript == [
+        {"role": "agent", "content": "Hi *****, how can I help?"}
+    ]
+    assert response.scrubbed_recording_url == "s3://bucket/redacted-recording.wav"
 
 
 @pytest.mark.asyncio
@@ -457,10 +494,14 @@ async def test_phi_reveal_rbac_matrix_blocks_super_admin_without_break_glass(end
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     "role",
-    [UserRole.INSTITUTION_ADMIN.value, UserRole.LOCATION_ADMIN.value],
+    [
+        UserRole.INSTITUTION_ADMIN.value,
+        UserRole.LOCATION_ADMIN.value,
+        UserRole.STAFF.value,
+    ],
 )
-async def test_clinic_admins_read_call_content_inline(monkeypatch, role):
-    """A clinic administrator reads their own patients' calls without a click.
+async def test_clinic_roles_read_call_content_inline(monkeypatch, role):
+    """Every clinic role reads their own patients' calls without a click.
 
     They clicked Reveal every single time it was offered, which makes it a
     speed bump rather than a control. What replaces it is the audit row: the
