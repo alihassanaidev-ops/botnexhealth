@@ -647,24 +647,33 @@ async def get_call(
     async with get_db_session() as session:
         call = await _get_scoped_call(session, call_id, current_user)
 
-        # Load custom field values
+        # SUPER_ADMIN is platform-level and not in the circle of care — redact PHI.
+        # All other institution-scoped roles may view patient names for care operations.
+        unredacted = _reads_phi_inline(current_user)
+        redact = current_user.role == UserRole.SUPER_ADMIN.value
+
+        # Load custom field values. A field an institution marked PHI follows the
+        # same policy as everything else on this response: a clinic role that is
+        # already reading the raw transcript inline should not then click Reveal
+        # for one field off the same call. Keeping the two rules apart left a
+        # seam with nothing behind it — the click was not protecting information
+        # the same response had already served.
         cf_svc = CustomFieldService(session)
         cf_pairs = await cf_svc.get_values_for_entity(
             current_user.institution_id,
             "call",
             call.id,
         )
-        custom_fields = [_custom_field_response(defn, val) for defn, val in cf_pairs]
+        custom_fields = [
+            _custom_field_response(defn, val, reveal=unredacted)
+            for defn, val in cf_pairs
+        ]
 
-        # SUPER_ADMIN is platform-level and not in the circle of care — redact PHI.
-        # All other institution-scoped roles may view patient names for care operations.
-        unredacted = _reads_phi_inline(current_user)
-        redact = current_user.role == UserRole.SUPER_ADMIN.value
         base = _call_to_record(call, redact_phi=redact, expose_contact=unredacted)
 
-        # Masked scrubbed preview by default. No-PMS location admins get the
-        # decrypted raw turns inline — the reveal endpoint stays available and
-        # audited for everyone, this only changes what renders without it.
+        # Masked scrubbed preview by default; clinic roles get the decrypted raw
+        # turns inline. The reveal endpoint stays available and audited for
+        # everyone — this only changes what renders without it.
         if unredacted:
             transcript_turns = call.transcript_with_tool_calls
         else:

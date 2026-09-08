@@ -165,21 +165,19 @@ def _value(
         UserRole.STAFF.value,
     ],
 )
-async def test_a_phi_custom_field_stays_masked_for_roles_that_read_inline(
+async def test_a_phi_custom_field_is_inline_for_roles_that_read_inline(
     monkeypatch, role
 ):
-    """The per-field PHI flag survives the role policy.
+    """A PHI custom field follows the same policy as the rest of the response.
 
-    Every clinic role now reads names, phone, transcript and recording inline.
-    A custom field an institution deliberately marked PHI is a different kind
-    of decision — a per-field opt-in somebody made on purpose, not a blanket
-    rule about who is in the circle of care — so it keeps its reveal step for
-    everyone. This is asserted across all three roles because it would be easy
-    to widen the inline policy and take this with it by accident.
+    This briefly went the other way: the per-field ``is_phi`` flag was kept as
+    its own gate on the grounds that an institution set it deliberately. That
+    left a seam with nothing behind it — the same response was already serving
+    the raw transcript, so clicking Reveal for one field off that call was not
+    protecting information the caller did not already have.
 
-    It does leave a seam: the same user reads the raw transcript without a
-    click and still clicks for a field marked PHI. That is defensible only
-    because the field flag is opt-in, and it is worth revisiting deliberately.
+    SUPER_ADMIN is unaffected and still gets the masked form; the reveal
+    endpoint and its audit row stay for that path.
     """
     monkeypatch.setattr(calls_routes, "log_audit_background", lambda **_kwargs: None)
     monkeypatch.setattr(
@@ -192,10 +190,7 @@ async def test_a_phi_custom_field_stays_masked_for_roles_that_read_inline(
         monkeypatch,
         _call(),
         [
-            (
-                protected_field,
-                _value("Sensitive diagnosis", value_encrypted="ciphertext", fail_if_called=True),
-            ),
+            (protected_field, _value("Sensitive diagnosis", value_encrypted="ciphertext")),
             (plain_field, _value("Google")),
         ],
     )
@@ -208,20 +203,48 @@ async def test_a_phi_custom_field_stays_masked_for_roles_that_read_inline(
         ),
     )
 
-    # The rest of the call is inline for this role, which is the point: the
-    # field below is masked despite that, not because of a blanket redaction.
     assert response.transcript_redacted is False
-    assert response.recording_url == "https://s3.example/presigned"
+
+    protected = next(f for f in response.custom_fields if f.field_key == "diagnosis_note")
+    assert protected.value == "Sensitive diagnosis"
+    assert protected.value_masked is False
+    assert protected.reveal_available is False
+
+    plain = next(f for f in response.custom_fields if f.field_key == "referral_source")
+    assert plain.value == "Google"
+    assert plain.value_masked is False
+
+
+@pytest.mark.asyncio
+async def test_a_phi_custom_field_stays_masked_for_super_admin(monkeypatch):
+    """The masked path survives for the role outside the circle of care."""
+    monkeypatch.setattr(calls_routes, "log_audit_background", lambda **_kwargs: None)
+    protected_field = _field("diagnosis_note", is_phi=True)
+    _install_session(
+        monkeypatch,
+        _call(),
+        [
+            (
+                protected_field,
+                _value(
+                    "Sensitive diagnosis",
+                    value_encrypted="ciphertext",
+                    fail_if_called=True,
+                ),
+            ),
+        ],
+    )
+
+    response = await _route_target(calls_routes.get_call)(
+        request=object(),
+        call_id="33333333-3333-3333-3333-333333333333",
+        current_user=_user(UserRole.SUPER_ADMIN.value),
+    )
 
     protected = next(f for f in response.custom_fields if f.field_key == "diagnosis_note")
     assert protected.value is None
     assert protected.value_masked is True
     assert protected.reveal_available is True
-
-    plain = next(f for f in response.custom_fields if f.field_key == "referral_source")
-    assert plain.value == "Google"
-    assert plain.value_masked is False
-    assert plain.reveal_available is False
 
 
 @pytest.mark.asyncio
