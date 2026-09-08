@@ -36,6 +36,7 @@ import {
     type TotpSetupOptions,
     type AuthSession,
 } from "@/lib/mfa-api"
+import { getInitialMfaMode, rememberMfaMode } from "@/lib/mfa-preference"
 
 const credentialsSchema = z.object({
     // Trim before validating so a copy-pasted email with stray surrounding
@@ -162,11 +163,7 @@ export default function Login() {
                 toast.error("No verification methods available for this account.")
                 return
             }
-            const mode: "totp" | "passkey" | "recovery" = allowsPasskeyVerify
-                ? "passkey"
-                : allowsTotpVerify
-                  ? "totp"
-                  : "recovery"
+            const mode = getInitialMfaMode(ch.methods)
             setStep({
                 kind: "mfa_verify",
                 ticket: ch.mfa_ticket,
@@ -200,6 +197,7 @@ export default function Login() {
         setBusy(true)
         try {
             const session = await verifyTotpSetup(step.ticket, values.code.trim())
+            rememberMfaMode("totp")
             const codes = session.recovery_codes ?? []
             if (codes.length > 0) {
                 setStep({ kind: "recovery_codes", codes, session })
@@ -230,6 +228,7 @@ export default function Login() {
             const credential = await startRegistration({ optionsJSON: options })
             const label = labelForm.getValues("device_label")?.trim() || undefined
             const session = await verifyWebauthnRegistration(step.ticket, credential, label)
+            rememberMfaMode("passkey")
             const codes = session.recovery_codes ?? []
             if (codes.length > 0) {
                 setStep({ kind: "recovery_codes", codes, session })
@@ -252,6 +251,7 @@ export default function Login() {
         setBusy(true)
         try {
             const session = await verifyTotp(step.ticket, values.code.trim())
+            rememberMfaMode("totp")
             await completeAuthSession(session)
         } catch (err) {
             toast.error(getDetail(err, "MFA verification failed"))
@@ -286,6 +286,7 @@ export default function Login() {
             const { options } = await startWebauthnAuthentication(step.ticket)
             const credential = await startAuthentication({ optionsJSON: options })
             const session = await verifyWebauthnAuthentication(step.ticket, credential)
+            rememberMfaMode("passkey")
             await completeAuthSession(session)
         } catch (err) {
             if (isWebAuthnUserCancel(err)) {
@@ -412,27 +413,28 @@ export default function Login() {
                             <Button
                                 type="button"
                                 className="w-full"
-                                disabled={busy || !supportsPasskey}
-                                onClick={registerPasskey}
-                            >
-                                {busy ? "Working..." : "Use a passkey (Touch ID, Face ID, security key)"}
-                            </Button>
-                            <p className="text-xs text-muted-foreground">
-                                Recommended. Your device handles authentication; nothing is shared
-                                with the server beyond the public key.
-                            </p>
-                            <Separator />
-                            <Button
-                                type="button"
-                                variant="outline"
-                                className="w-full"
                                 disabled={busy}
                                 onClick={pickTotpSetup}
                             >
                                 Use an authenticator app (TOTP)
                             </Button>
                             <p className="text-xs text-muted-foreground">
-                                Scan a QR code with Google Authenticator, 1Password, Authy, etc.
+                                Recommended for clinic staff who use multiple computers. The
+                                authenticator app stays on your phone.
+                            </p>
+                            <Separator />
+                            <Button
+                                type="button"
+                                variant="outline"
+                                className="w-full"
+                                disabled={busy || !supportsPasskey}
+                                onClick={registerPasskey}
+                            >
+                                {busy ? "Working..." : "Use a passkey (Touch ID, Face ID, security key)"}
+                            </Button>
+                            <p className="text-xs text-muted-foreground">
+                                Phishing-resistant. A passkey may sync through your provider or
+                                remain on one device, depending on your setup.
                             </p>
                             <Separator />
                             <Button
@@ -625,7 +627,7 @@ export default function Login() {
                                             onClick={() => setStep({ ...step, mode: "recovery" })}
                                             disabled={busy}
                                         >
-                                            Use a recovery code instead
+                                            Can&apos;t use your usual method?
                                         </Button>
                                     )}
                                 </>
@@ -674,7 +676,7 @@ export default function Login() {
                                                 onClick={() => setStep({ ...step, mode: "recovery" })}
                                                 disabled={busy}
                                             >
-                                                Use a recovery code instead
+                                                Can&apos;t use your usual method?
                                             </Button>
                                         )}
                                     </form>
@@ -683,6 +685,9 @@ export default function Login() {
                             {step.mode === "recovery" && (
                                 <Form {...recoveryForm}>
                                     <form onSubmit={recoveryForm.handleSubmit(submitVerifyRecovery)} className="space-y-3">
+                                        <p className="text-xs text-muted-foreground">
+                                            Recovery codes are one-time emergency backups.
+                                        </p>
                                         <FormField
                                             control={recoveryForm.control}
                                             name="code"

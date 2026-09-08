@@ -104,6 +104,10 @@ class EnvironmentConfig:
     region: str
     app_env: str
     log_level: str
+    # Rolling authenticated-session window. This is explicit per environment
+    # so a deployment cannot silently fall back to a different application
+    # default than the dashboard's inactivity policy.
+    refresh_token_ttl_minutes: int
     network: NetworkConfig
     cors_allowed_origins: list[str]
     auth_frontend_base_url: str | None
@@ -186,6 +190,7 @@ def load_config(path: str | Path) -> EnvironmentConfig:
         region=raw["region"],
         app_env=raw.get("appEnv", raw["environmentName"]),
         log_level=raw.get("logLevel", "info"),
+        refresh_token_ttl_minutes=int(raw.get("refreshTokenTtlMinutes", 8 * 60)),
         network=NetworkConfig(
             vpc_id=network.get("vpcId"),
             max_azs=network.get("maxAzs", 2),

@@ -1150,7 +1150,7 @@ injected via Docker secret files using the `*_FILE` variants.
 | **Twilio** (SMS) | Outbound/inbound SMS, delivery callbacks | `PUBLIC_API_URL`; `TWILLIO_SID`, `TWILLIO_API_SECRET`; optional `TWILIO_SMS_STATUS_CALLBACK_URL` override *(note spelling)* |
 | **Resend / Amazon SES** (email) | Resend carries auth, staff alerts, and currently patient workflow mail; SES patient send/receive support exists in application code but is not provisioned in staging | `RESEND_*`; `PATIENT_EMAIL_PROVIDER`, `SES_*`, `SES_INBOUND_*` |
 | **AWS S3** | Call-recording storage | `AWS_S3_BUCKET_NAME`, `AWS_REGION` (`ca-central-1`) |
-| **JWT / Auth** | Access/refresh token signing | `JWT_SECRET` (required), `JWT_ALGORITHM` (HS256), `JWT_ISSUER`, `JWT_AUDIENCE` |
+| **JWT / Auth** | Access/refresh token signing; 15-minute access tokens and an eight-hour rolling inactive session | `JWT_SECRET` (required), `JWT_ALGORITHM` (HS256), `JWT_ISSUER`, `JWT_AUDIENCE`, `REFRESH_TOKEN_TTL_MINUTES` (480) |
 | **Encryption (PHI)** | AES-256-GCM for PHI columns | `ENCRYPTION_KEY` (must differ from `JWT_SECRET` in prod) |
 | **WebAuthn / MFA** | Passkeys + TOTP | `WEBAUTHN_RP_ID`, `WEBAUTHN_RP_NAME`, `WEBAUTHN_ALLOWED_ORIGINS` |
 

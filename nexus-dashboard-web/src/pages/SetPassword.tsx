@@ -21,10 +21,11 @@ import type { MfaChallengeResponse } from "@/lib/mfa-api"
 
 const formSchema = z.object({
     password: z.string()
-        .min(8, { message: "Password must be at least 8 characters" })
+        .min(12, { message: "Password must be at least 12 characters" })
         .regex(/[a-z]/, { message: "Password must include a lowercase letter" })
         .regex(/[A-Z]/, { message: "Password must include an uppercase letter" })
-        .regex(/[0-9]/, { message: "Password must include a number" }),
+        .regex(/[0-9]/, { message: "Password must include a number" })
+        .regex(/[^A-Za-z0-9]/, { message: "Password must include a symbol" }),
     confirmPassword: z.string()
 }).refine((data) => data.password === data.confirmPassword, {
     message: "Passwords don't match",
@@ -148,7 +149,7 @@ export default function SetPassword() {
                         {isResetFlow
                             ? "Choose a new password for your account."
                             : "Create a password to activate your account."}
-                        Must be at least 8 characters with uppercase, lowercase, and a number.
+                        Must be at least 12 characters with uppercase, lowercase, a number, and a symbol.
                     </CardDescription>
                 </CardHeader>
                 <CardContent>

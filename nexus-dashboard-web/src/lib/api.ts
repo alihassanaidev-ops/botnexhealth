@@ -40,7 +40,7 @@ async function forceSignOut(): Promise<void> {
     await signOutPromise;
 }
 
-async function refreshBackendToken(): Promise<string> {
+export async function refreshBackendToken(): Promise<string> {
     const response = await axios.post<AuthSessionResponse>(
         `${api.defaults.baseURL}/auth/refresh`,
         {},

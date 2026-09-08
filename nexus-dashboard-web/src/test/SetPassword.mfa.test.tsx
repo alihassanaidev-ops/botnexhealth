@@ -21,6 +21,7 @@ import api from "@/lib/api"
 import * as mfaApi from "@/lib/mfa-api"
 
 vi.mock("@/lib/api", () => ({
+    refreshBackendToken: vi.fn(),
     default: {
         defaults: { baseURL: "http://test.local/api" },
         get: vi.fn(),
@@ -111,6 +112,7 @@ function renderSetPassword() {
 }
 
 beforeEach(() => {
+    window.localStorage.clear()
     axiosPostMock.mockReset()
     apiGet.mockReset()
     mockedNavigate.mockReset()
@@ -122,7 +124,7 @@ beforeEach(() => {
     apiGet.mockRejectedValue({ response: { status: 401 } })
 })
 
-async function submitPasswordForm(password = "Aaaaaaa1!") {
+async function submitPasswordForm(password = "Aaaaaaaaaa1!") {
     const user = userEvent.setup()
     await waitFor(() => expect(screen.getByLabelText(/^New Password$/i)).toBeInTheDocument())
     await user.type(screen.getByLabelText(/^New Password$/i), password)
@@ -162,7 +164,7 @@ describe("SetPassword — MFA continuation after invite/reset", () => {
         expect(mockedNavigate).not.toHaveBeenCalled()
     })
 
-    it("reset flow lands a user with an existing factor onto verify (passkey by default)", async () => {
+    it("reset flow lands a user with existing factors onto authenticator by default", async () => {
         axiosPostMock.mockResolvedValue({
             data: {
                 status: "mfa_required",
@@ -181,9 +183,7 @@ describe("SetPassword — MFA continuation after invite/reset", () => {
         await waitFor(() => {
             expect(screen.getByText(/Two-factor verification/i)).toBeInTheDocument()
         })
-        // Default mode is passkey when the user has one — same logic
-        // the login flow uses.
-        expect(screen.getByRole("button", { name: /Verify with passkey/i })).toBeInTheDocument()
+        expect(screen.getByLabelText(/6-digit code/i)).toBeInTheDocument()
     })
 
     it("setup -> TOTP -> verify dispatches verifyTotpSetup with the ticket from the password response", async () => {

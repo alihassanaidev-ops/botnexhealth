@@ -29,6 +29,7 @@ import * as webauthn from "@simplewebauthn/browser"
 
 // api.ts is mocked so AuthContext bootstrap doesn't issue real /users/me.
 vi.mock("@/lib/api", () => ({
+    refreshBackendToken: vi.fn(),
     default: {
         defaults: { baseURL: "http://test.local/api" },
         get: vi.fn(),
@@ -120,6 +121,7 @@ function renderLogin() {
 }
 
 beforeEach(() => {
+    window.localStorage.clear()
     axiosPostMock.mockReset()
     apiGet.mockReset()
     startRegistrationMock.mockReset()
@@ -286,7 +288,7 @@ describe("Login — MFA flow (passkey)", () => {
 })
 
 describe("Login — MFA flow (verify path for already-enrolled user)", () => {
-    it("user with passkey + TOTP defaults to passkey, can switch to TOTP", async () => {
+    it("user with passkey + TOTP defaults to TOTP, and can switch to passkey", async () => {
         axiosPostMock.mockResolvedValue(
             loginChallenge({
                 status: "mfa_required",
@@ -302,11 +304,29 @@ describe("Login — MFA flow (verify path for already-enrolled user)", () => {
         await waitFor(() => {
             expect(screen.getByText(/Two-factor verification/i)).toBeInTheDocument()
         })
-        expect(screen.getByRole("button", { name: /Sign in with passkey/i })).toBeInTheDocument()
+        expect(screen.getByLabelText(/6-digit code/i)).toBeInTheDocument()
 
-        await user.click(screen.getByRole("button", { name: /Use authenticator code instead/i }))
+        await user.click(screen.getByRole("button", { name: /Use passkey instead/i }))
         await waitFor(() => {
-            expect(screen.getByLabelText(/6-digit code/i)).toBeInTheDocument()
+            expect(screen.getByRole("button", { name: /Sign in with passkey/i })).toBeInTheDocument()
+        })
+    })
+
+    it("remembers passkey as the preferred method after it was chosen successfully", async () => {
+        window.localStorage.setItem("scalenexus.preferred-mfa-method", "passkey")
+        axiosPostMock.mockResolvedValue(
+            loginChallenge({
+                status: "mfa_required",
+                methods: ["webauthn", "totp", "recovery_code"],
+                setup_methods: [],
+            }),
+        )
+
+        renderLogin()
+        await fillCredentialsAndSubmit()
+
+        await waitFor(() => {
+            expect(screen.getByRole("button", { name: /Sign in with passkey/i })).toBeInTheDocument()
         })
     })
 
@@ -386,7 +406,7 @@ describe("Login — MFA flow (verify path for already-enrolled user)", () => {
         await waitFor(() => {
             expect(screen.getByText(/Two-factor verification/i)).toBeInTheDocument()
         })
-        await user.click(screen.getByRole("button", { name: /Use a recovery code instead/i }))
+        await user.click(screen.getByRole("button", { name: /Can.t use your usual method/i }))
         await user.type(screen.getByLabelText(/recovery code/i), "abcd-efgh-ijkl")
         await user.click(screen.getByRole("button", { name: /verify recovery code/i }))
 

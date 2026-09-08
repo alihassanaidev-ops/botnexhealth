@@ -25,6 +25,7 @@ import api from "@/lib/api"
 import type { User } from "@/types"
 
 vi.mock("@/lib/api", () => ({
+    refreshBackendToken: vi.fn(),
     default: { get: vi.fn(), post: vi.fn(), patch: vi.fn(), delete: vi.fn() },
 }))
 

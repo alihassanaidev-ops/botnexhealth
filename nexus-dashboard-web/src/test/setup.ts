@@ -30,6 +30,30 @@ if (!("DOMMatrixReadOnly" in globalThis)) {
         constructor() {}
     } as unknown as typeof DOMMatrixReadOnly
 }
+
+// Node can expose an incomplete localStorage object when its
+// --localstorage-file option is unavailable. Install the small in-memory
+// Storage contract jsdom tests expect so persistence behaviour remains
+// testable and deterministic.
+if (
+  typeof globalThis.localStorage?.getItem !== "function"
+  || typeof globalThis.localStorage?.setItem !== "function"
+  || typeof globalThis.localStorage?.clear !== "function"
+) {
+  const values = new Map<string, string>()
+  const memoryStorage: Storage = {
+    get length() { return values.size },
+    clear: () => values.clear(),
+    getItem: (key) => values.get(key) ?? null,
+    key: (index) => Array.from(values.keys())[index] ?? null,
+    removeItem: (key) => { values.delete(key) },
+    setItem: (key, value) => { values.set(key, String(value)) },
+  }
+  Object.defineProperty(globalThis, "localStorage", {
+    configurable: true,
+    value: memoryStorage,
+  })
+}
 // jsdom lacks these Element methods; TS's DOM lib already declares them, so the
 // negated `in` branch narrows Element.prototype to `never`. Assign via a mutable
 // cast so `tsc -b` (which type-checks test setup) doesn't fail the prod build.
