@@ -3,7 +3,7 @@
  * (click-to-add). Also exposes a "Trigger" affordance to open the trigger config.
  */
 import { cn } from "@/lib/utils"
-import { NODE_META, PALETTE_GROUPS, TRIGGER_META, WORKFLOW_NODE_DND_MIME } from "@/lib/workflow/catalog"
+import { NODE_META, PALETTE_GROUPS, triggerMetaFor, WORKFLOW_NODE_DND_MIME } from "@/lib/workflow/catalog"
 import type { NodeType, WorkflowTrigger } from "@/types/workflow"
 import { Input } from "@/components/ui/input"
 import { Search } from "lucide-react"
@@ -30,7 +30,8 @@ export default function WorkflowPalette({
     onSearchChange,
     onSelectResult,
 }: WorkflowPaletteProps) {
-    const triggerMeta = TRIGGER_META[trigger.type]
+    // Same reason as the canvas card: a retired trigger type must still render.
+    const triggerMeta = triggerMetaFor(trigger.type)
     return (
         <div className="flex h-full flex-col gap-4 overflow-y-auto p-3">
             {onSearchChange && (

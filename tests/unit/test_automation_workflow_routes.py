@@ -27,6 +27,7 @@ from src.app.api.routes.automation_workflows import (
     enroll_in_workflow,
     get_campaign_operations,
     get_campaign_overview,
+    get_current_campaign_manager,
     get_run_status,
     get_run_timeline,
     get_launch_checklist,
@@ -64,10 +65,15 @@ _NOW = datetime(2026, 7, 2, 14, 0, 0, tzinfo=timezone.utc)
 # ---------------------------------------------------------------------------
 
 
-def _make_user(institution_id="inst-1", location_id=None):
+def _make_user(
+    institution_id="inst-1",
+    location_id=None,
+    role="INSTITUTION_ADMIN",
+):
     u = MagicMock()
     u.institution_id = institution_id
     u.location_id = location_id
+    u.role = role
     return u
 
 
@@ -146,6 +152,9 @@ def _make_session(wf=None, run=None, version=None, contact=None):
     session.__aenter__ = AsyncMock(return_value=session)
     session.__aexit__ = AsyncMock(return_value=False)
     session.flush = AsyncMock()
+    execute_result = MagicMock()
+    execute_result.scalar_one_or_none.return_value = wf
+    session.execute = AsyncMock(return_value=execute_result)
 
     async def _get(model, pk, **kwargs):
         from src.app.models.automation_workflow import AutomationWorkflowRun, AutomationWorkflowVersion
@@ -176,6 +185,15 @@ def test_institution_id_raises_on_none():
     user = _make_user(institution_id=None)
     with pytest.raises(HTTPException) as exc_info:
         _institution_id(user)
+    assert exc_info.value.status_code == 403
+
+
+def test_campaign_manager_requires_location_admin_assignment():
+    user = _make_user(location_id=None, role="LOCATION_ADMIN")
+
+    with pytest.raises(HTTPException) as exc_info:
+        asyncio.run(get_current_campaign_manager(user, user))
+
     assert exc_info.value.status_code == 403
 
 
@@ -323,6 +341,51 @@ def test_create_draft_workflow_rejects_location_outside_institution():
     assert exc_info.value.detail == "Location not found"
 
 
+def test_location_admin_create_draft_is_pinned_to_assigned_location():
+    user = _make_user(location_id="loc-1", role="LOCATION_ADMIN")
+    wf = _make_workflow(status="draft")
+    wf.location_id = "loc-1"
+    mock_svc = AsyncMock()
+    mock_svc.create_draft = AsyncMock(return_value=wf)
+    session = _make_session()
+    location_result = MagicMock()
+    location_result.scalar_one_or_none.return_value = "loc-1"
+    session.execute.return_value = location_result
+
+    with (
+        patch("src.app.api.routes.automation_workflows.get_db_session", return_value=session),
+        patch(
+            "src.app.api.routes.automation_workflows.AutomationWorkflowDefinitionService",
+            return_value=mock_svc,
+        ),
+    ):
+        result = asyncio.run(
+            create_draft_workflow(WorkflowDraftCreateRequest(name="Local"), user)
+        )
+
+    assert result.location_id == "loc-1"
+    mock_svc.create_draft.assert_awaited_once_with(
+        institution_id="inst-1",
+        name="Local",
+        location_id="loc-1",
+    )
+
+
+def test_location_admin_cannot_create_draft_for_another_location():
+    user = _make_user(location_id="loc-1", role="LOCATION_ADMIN")
+
+    with pytest.raises(HTTPException) as exc_info:
+        asyncio.run(
+            create_draft_workflow(
+                WorkflowDraftCreateRequest(name="Wrong clinic", location_id="loc-2"),
+                user,
+            )
+        )
+
+    assert exc_info.value.status_code == 403
+    assert exc_info.value.detail == "Cannot manage campaigns for another location"
+
+
 # ---------------------------------------------------------------------------
 # list_workflows
 # ---------------------------------------------------------------------------
@@ -345,6 +408,27 @@ def test_list_workflows_returns_list():
         result = asyncio.run(list_workflows(user))
 
     assert len(result) == 2
+
+
+def test_location_admin_list_is_explicitly_filtered_to_assigned_location():
+    user = _make_user(location_id="loc-1", role="LOCATION_ADMIN")
+    mock_svc = AsyncMock()
+    mock_svc.list_workflows = AsyncMock(return_value=[])
+    session = _make_session()
+
+    with (
+        patch("src.app.api.routes.automation_workflows.get_db_session", return_value=session),
+        patch(
+            "src.app.api.routes.automation_workflows.AutomationWorkflowDefinitionService",
+            return_value=mock_svc,
+        ),
+    ):
+        asyncio.run(list_workflows(user))
+
+    mock_svc.list_workflows.assert_awaited_once_with(
+        institution_id="inst-1",
+        location_id="loc-1",
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -386,6 +470,30 @@ def test_get_workflow_not_found_raises_404():
     ):
         with pytest.raises(HTTPException) as exc_info:
             asyncio.run(get_workflow("wf-bad", user))
+
+    assert exc_info.value.status_code == 404
+
+
+@pytest.mark.parametrize("workflow_location", [None, "loc-2"])
+def test_location_admin_cannot_read_unscoped_or_other_location_workflow(
+    workflow_location,
+):
+    user = _make_user(location_id="loc-1", role="LOCATION_ADMIN")
+    wf = _make_workflow()
+    wf.location_id = workflow_location
+    mock_svc = AsyncMock()
+    mock_svc.get_workflow = AsyncMock(return_value=wf)
+    session = _make_session()
+
+    with (
+        patch("src.app.api.routes.automation_workflows.get_db_session", return_value=session),
+        patch(
+            "src.app.api.routes.automation_workflows.AutomationWorkflowDefinitionService",
+            return_value=mock_svc,
+        ),
+    ):
+        with pytest.raises(HTTPException) as exc_info:
+            asyncio.run(get_workflow("wf-1", user))
 
     assert exc_info.value.status_code == 404
 
@@ -734,7 +842,7 @@ def test_get_run_timeline_returns_phi_light_items():
             ],
         )
     )
-    session = _make_session()
+    session = _make_session(wf=_make_workflow())
 
     with (
         patch("src.app.api.routes.automation_workflows.get_db_session", return_value=session),
@@ -1035,7 +1143,7 @@ def test_enroll_uses_workflow_location_when_request_and_user_have_none():
 def test_get_run_status_returns_run():
     user = _make_user()
     run = _make_run(status="waiting")
-    session = _make_session(run=run)
+    session = _make_session(wf=_make_workflow(), run=run)
 
     with patch("src.app.api.routes.automation_workflows.get_db_session", return_value=session):
         result = asyncio.run(get_run_status("wf-1", "run-1", user))
@@ -1046,7 +1154,7 @@ def test_get_run_status_returns_run():
 def test_get_run_status_wrong_workflow_raises_404():
     user = _make_user()
     run = _make_run(status="waiting")
-    session = _make_session(run=run)
+    session = _make_session(wf=_make_workflow(), run=run)
 
     with patch("src.app.api.routes.automation_workflows.get_db_session", return_value=session):
         with pytest.raises(HTTPException) as exc_info:
@@ -1063,7 +1171,7 @@ def test_get_run_status_wrong_workflow_raises_404():
 def test_cancel_run_calls_cancel():
     user = _make_user()
     run = _make_run(status="waiting")
-    session = _make_session(run=run)
+    session = _make_session(wf=_make_workflow(), run=run)
     enroll_svc = AsyncMock()
     enroll_svc.cancel_run = AsyncMock()
 

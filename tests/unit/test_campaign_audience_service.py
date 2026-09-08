@@ -10,6 +10,7 @@ import pytest
 from src.app.services.automation.audience_service import (
     AudienceSegment,
     CampaignAudienceService,
+    _effective_location_ids,
 )
 
 
@@ -46,6 +47,14 @@ def _contact(contact_id: str, *, phone: str | None = "+15550101010"):
         email=None,
         nexhealth_patient_id=None,
     )
+
+
+def test_location_owned_workflow_cannot_be_widened_by_segment_filter():
+    segment = AudienceSegment(
+        filters={"location_id_in": ["loc-2"]},
+    )
+
+    assert _effective_location_ids(segment, _workflow()) == ["loc-1"]
 
 
 class _PreviewService(CampaignAudienceService):

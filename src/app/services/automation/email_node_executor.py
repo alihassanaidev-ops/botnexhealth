@@ -33,7 +33,7 @@ from src.app.services.circuit_breaker import (
     NoOpCircuitBreaker,
     ServiceBreaker,
 )
-from src.app.services.automation.template_renderer import build_merge_vars
+from src.app.services.automation.template_renderer import build_render_vars
 from src.app.services.email.identity_service import EmailIdentityService
 from src.app.services.email.reply_address import make_reply_address
 from src.app.services.email.sender import (
@@ -222,7 +222,10 @@ class EmailNodeExecutor:
         # editor behaves identically here — conditionals and filters included.
         # Text and subject render unescaped; the HTML part escapes rendered
         # patient data so a name cannot inject markup.
-        merge_vars = build_merge_vars(contact, location, context)
+        # Nested context included: Jinja resolves `{{appointment.status}}` by
+        # attribute access, and without the branch in scope it raises rather
+        # than rendering empty — the send fails outright.
+        merge_vars = build_render_vars(contact, location, context)
         subject = render_text(subject_tpl, merge_vars)
         body = render_text(text_tpl, merge_vars)
         html = render_html(html_tpl, merge_vars) if html_tpl else None

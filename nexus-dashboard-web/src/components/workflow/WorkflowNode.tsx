@@ -7,7 +7,7 @@
 import { Handle, Position, type NodeProps } from "@xyflow/react"
 import { CheckCircle2, CircleDashed, Clock3, Plus, XCircle } from "lucide-react"
 import { cn } from "@/lib/utils"
-import { NODE_META, TRIGGER_META } from "@/lib/workflow/catalog"
+import { NODE_META, triggerMetaFor } from "@/lib/workflow/catalog"
 import { humanizeSeconds } from "@/lib/workflow/format"
 import {
     outgoing,
@@ -164,7 +164,10 @@ const EXECUTION_STYLE = {
 
 export function TriggerNodeCard({ data }: NodeProps<FlowNode>) {
     if (data.kind !== "trigger") return null
-    const meta = TRIGGER_META[data.trigger.type]
+    // Total lookup: definitions published before the trigger rearchitecture
+    // still store their original type, and `meta.icon` on an undefined took the
+    // whole canvas down for them.
+    const meta = triggerMetaFor(data.trigger.type)
     const Icon = meta.icon
     return (
         <div className={cn("w-[210px] rounded-lg border border-dashed border-primary/50 bg-primary/5 p-3 shadow-sm", issueRing(data.issueLevel), data.executionStatus && EXECUTION_STYLE[data.executionStatus].className)}>

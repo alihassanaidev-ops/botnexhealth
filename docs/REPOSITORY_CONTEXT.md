@@ -180,6 +180,9 @@ contact in the institution. Visibility is granted per-contact via the
 |---|---|
 | `/admin/*` (institutions, users, groups, twilio, sms, platform dead-letter view) | **SUPER_ADMIN only** |
 | `/institution/undeliverables` (Automation issues page) | INSTITUTION_ADMIN, LOCATION_ADMIN (retry additionally requires `write:replay`) |
+| `/automation/workflows`, `/automation/templates`, campaign builder/detail | INSTITUTION_ADMIN, LOCATION_ADMIN (`campaign:configure`; location admin pinned to one clinic) |
+| `/automation/workflows/outbound-halt` | **INSTITUTION_ADMIN only** (institution-wide kill switch) |
+| `/compliance/quiet-hours/exceptions` | INSTITUTION_ADMIN, LOCATION_ADMIN (location admin pinned to one clinic) |
 | `/group/*` | **GROUP_ADMIN only** |
 | `/institution/setup`, `/institution/statuses` | INSTITUTION_ADMIN, LOCATION_ADMIN |
 | `/institution/email-templates`, `/custom-fields`, `/notification-recipients`, dashboard mutations | **INSTITUTION_ADMIN only** |
@@ -376,8 +379,22 @@ and executed as tenant/location-scoped runs with step executions, durable timers
 events, and drip state. The dashboard surfaces this through the workflow builder
 and campaign detail pages under `nexus-dashboard-web/`.
 Drafts created from the Campaigns page inherit the institution admin's currently
-selected location so channel readiness, enrollment, and inbound reply routing all
-use the same location-level Twilio number.
+selected location. A location admin also has the named `campaign:configure`
+permission, but every create, template clone, builder validation, lifecycle,
+audience, CSV/bulk enrollment, and campaign-halt path pins the request to the
+admin's assigned `location_id`. Location admins cannot read or mutate
+institution-wide or another clinic's workflows; object lookups return 404 so
+their existence is not disclosed. The institution-wide outbound kill switch
+remains institution-admin-only. These rules keep channel readiness, enrollment,
+quiet hours, and inbound reply routing on the same location-level Twilio number.
+
+Postgres is the second enforcement layer. Restrictive policies require exact
+`location_id = app_rls_location_id()` matches for location-admin sessions across
+workflow definitions, immutable versions, runs, steps, drip/split state, timers,
+events, channel attempts, response/handoff/conversation records, analytics,
+campaign audiences, and quiet-hours exceptions. `workflow_schedules` is also
+protected by FORCE RLS. Institution-admin and tenant-scoped worker behavior is
+unchanged.
 
 Every step attempt records a PHI-safe input snapshot when execution starts and an
 output snapshot when it completes, fails, waits, or resumes. These snapshots are
@@ -423,10 +440,9 @@ published before the rule existed. This prevents patient links from being sent
 when the linked booking/registration route can only fail for lack of location
 context.
 
-Current schema version `1.0` supports triggers such as `appointment_offset`,
-`appointment_state_changed`, `recall_scan`, `manual`, `bulk_import`,
-`enquiry_received`, `form_submitted`, `callback_requested`,
-`patient_status_changed`, `sms_reply`, and `email_reply`; node types include `wait`, `drip`,
+Current schema version `1.0` supports six triggers: `event`, `manual`,
+`form_submitted`, `internal_status`, `schedule`, and `inbound_message`. Node
+types include `wait`, `drip`,
 `send_sms`, `send_voice`, `send_email`, `retell_sms_conversation`,
 `update_patient_status`, `update_appointment`, `book_appointment`,
 `update_gotracker_appointment`, `booking_link`, `patient_registration`,
@@ -453,19 +469,68 @@ adapter, and branches to `booked`, `could_not_book`, or `pending`. `booking_link
 is separate: it configures what a patient-facing link may do later, but does not
 itself write an appointment.
 
-Two of those triggers are accepted by the schema but are **not offered in the
-builder**, because nothing enrols from them yet: `bulk_import` has no import
-route, and `email_reply` has no trigger service. (The email *wait* node is fully
-wired and is a separate feature.) `update_gotracker_appointment` is likewise kept
-for already-published definitions but removed from the palette — new workflows
-should use the PMS-neutral `update_appointment`. The excluded set lives in
-`UNAVAILABLE_TRIGGER_TYPES` in `nexus-dashboard-web/src/lib/workflow/catalog.ts`,
-and `tests/unit/test_workflow_schema_frontend_parity.py` fails if the builder's
-TypeScript model drifts from `definition_schema.py` in either direction.
+### The trigger vocabulary
 
-`enquiry_received` is the sales-intake trigger. Public signed form intake and
+Eleven trigger types were replaced by these six. The retired ones are converted
+on load by `upconvert_legacy_trigger` in `definition_schema.py`, so definitions
+published before the change keep running untouched;
+`src/app/scripts/migrate_workflow_triggers.py` rewrites them at rest, after
+which that converter can be deleted.
+
+| Trigger | Starts a campaign when |
+| --- | --- |
+| `event` | A canonical event happens — `appointment.cancelled`, `enquiry.received`, `call.inbound.completed` |
+| `manual` | A person is enrolled by hand or from a CSV upload |
+| `form_submitted` | A connected Meta or Typeform form is submitted |
+| `internal_status` | A status the platform owns changes on a call, contact or staff handoff |
+| `schedule` | A cron tick fires, sourced from PMS recall or a saved audience |
+| `inbound_message` | A patient replies by SMS or email |
+
+`event` is authored against the canonical vocabulary in `event_catalog.py`, not
+against raw PMS payload fields. Each event declares which practice-management
+system can raise it (`native` / `derived` / `unsupported`) and the builder only
+offers what the caller's system can actually deliver — so a NexHealth clinic is
+not shown `appointment.checked_in`, which it can never report.
+
+**NexHealth cannot detect a no-show**, and this is load-bearing rather than a
+detail. An appointment nobody attended is not cancelled, so the completion sweep
+marks it complete and a post-visit campaign will call someone who was never
+seen. `appointment.no_show` is therefore declared `unsupported` on NexHealth so
+the trigger cannot be authored there at all. Suppressing the false completions
+needs a real status signal from NexHealth; see `docs/NEXHEALTH.md`.
+
+`update_gotracker_appointment` is kept for already-published definitions but
+removed from the palette — new workflows should use the PMS-neutral
+`update_appointment`. `tests/unit/test_workflow_schema_frontend_parity.py` fails
+if the builder's TypeScript model drifts from `definition_schema.py` in either
+direction, and `tests/unit/test_event_context_contract.py` fails if the catalog
+promises a field the runtime does not actually produce, or if an event is
+offered in the picker with no publisher behind it.
+
+### One field vocabulary
+
+The builder previously carried six competing lists of field names — the webhook
+handler's keys, the projection's, the condition editor's, the merge catalog's,
+dry-run's samples, and the event catalog's — none generated from any other. An
+author saw `appointment_at` in one panel and `{{appointment_datetime}}` in the
+next, with no signal when a chosen field would arrive empty.
+
+`canonical_context.merge_canonical_context` is now the single writer: every
+trigger publisher projects its payload onto the canonical paths before a run is
+created. It is purely additive, so the flat legacy keys published definitions
+branch on are untouched. The condition editor, the message insert menu and
+dry-run all read `event_catalog`, which is the single description of what that
+writer produces.
+
+Messages fail closed. `{{appointment.status}}` renders (it used to reach the
+patient as literal braces), a token with no value blocks publish or skips the
+send rather than delivering a gap, and `{{field | "fallback"}}` is the escape
+hatch. Condition field paths are validated too — previously a typo resolved to
+null and took the false branch silently, forever.
+
+`enquiry.received` is the sales-intake event. Public signed form intake and
 staff-entered enquiries both go through `enquiry_intake_service.py`; after the
-contact write commits, matching active `enquiry_received` workflows are enqueued
+contact write commits, matching active workflows subscribed to it are enqueued
 through `enquiry_trigger_service.py` with PHI-light trigger metadata. The Sales
 Qualification launch template uses that trigger, a Retell SMS conversation,
 patient registration, and a restricted booking link.
@@ -512,7 +577,8 @@ same booking link. A contact already linked to a PMS patient skips this choice.
 
 The `appointment-reminder-24h` launch template is a separate Appointment
 Reminder campaign, not a stage of the confirmation campaign. It uses an
-`appointment_offset` trigger with attending/scheduled status eligibility, records
+`event` trigger on `appointment.reminder_due` with a `-24` hour interval and
+attending/scheduled status eligibility, records
 a `booking_link` policy limited to `confirm` and `reschedule`, then sends a
 two-step SMS ladder with `sms_reply` waits. Deterministic replies route through
 `appointment_reminder_reply`: `YES` confirms via PMS-neutral

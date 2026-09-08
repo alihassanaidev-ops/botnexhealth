@@ -8,7 +8,6 @@ import {
     triggerAllowedForPms,
 } from "@/lib/workflow/catalog"
 import {
-    contextFieldsForTrigger,
     NEXHEALTH_APPOINTMENT_CONTEXT_SAMPLE,
     sampleWorkflowContext,
 } from "@/lib/workflow/context-fields"
@@ -49,21 +48,11 @@ describe("PMS scoping of the workflow builder", () => {
         expect(palette).toContain("update_appointment")
     })
 
-    it("serves no GoTracker context fields to a NexHealth institution", () => {
-        const fields = contextFieldsForTrigger("event", "nexhealth")
-        expect(fields.length).toBeGreaterThan(0)
-        for (const field of fields) {
-            expect(field.name).not.toMatch(/gotracker/)
-            expect(field.label).not.toMatch(/GoTracker/)
-        }
-        expect(fields.map((f) => f.name)).toContain("appointment_id")
-    })
-
-    it("still serves the GoTracker payload fields to GoTracker institutions", () => {
-        const names = contextFieldsForTrigger("event", "gotracker").map((f) => f.name)
-        expect(names).toContain("gotracker_appointment_id")
-        expect(names).not.toContain("appointment_id")
-    })
+    // Per-PMS field availability moved to the served event catalog, which keys
+    // it on the individual field rather than on a hardcoded frontend list. The
+    // equivalent assertions now live in the backend contract test, where they
+    // can be checked against a real payload — see
+    // `tests/unit/test_event_context_contract.py`.
 
     it("uses a NexHealth-shaped sample context for NexHealth", () => {
         const sample = sampleWorkflowContext("nexhealth")

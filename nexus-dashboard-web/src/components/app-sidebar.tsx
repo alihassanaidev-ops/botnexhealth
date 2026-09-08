@@ -191,6 +191,14 @@ const locationAdminNav: NavItemDef[] = [
         url: "/institution-admin/call-statuses",
     },
     {
+        title: "Campaigns",
+        url: "/institution-admin/campaigns",
+    },
+    {
+        title: "Quiet Hours",
+        url: "/institution-admin/quiet-hours-exceptions",
+    },
+    {
         title: "Automation issues",
         url: "/undeliverables",
     },

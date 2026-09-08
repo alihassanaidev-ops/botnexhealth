@@ -20,8 +20,12 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
+from fastapi import HTTPException
 
 from src.app.models.quiet_hours_exception import QuietHoursException
+from src.app.api.routes.quiet_hours_exceptions import (
+    _location_id_for_user as _route_location_id_for_user,
+)
 from src.app.services.automation.quiet_hours_exception_service import (
     QuietHoursExceptionError,
     QuietHoursExceptionService,
@@ -30,6 +34,15 @@ from src.app.services.automation.quiet_hours_service import QuietHoursService
 
 LOCATION = "loc-1"
 UTC = timezone.utc
+
+
+def test_location_admin_quiet_hours_are_pinned_to_assigned_location() -> None:
+    user = SimpleNamespace(role="LOCATION_ADMIN", location_id=LOCATION)
+
+    assert _route_location_id_for_user(user, LOCATION) == LOCATION
+    with pytest.raises(HTTPException) as exc_info:
+        _route_location_id_for_user(user, "loc-2")
+    assert getattr(exc_info.value, "status_code", None) == 403
 
 
 def _hours(day_of_week: int, open_h: int = 9, close_h: int = 17, is_open: bool = True):

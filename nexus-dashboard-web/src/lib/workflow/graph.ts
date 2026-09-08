@@ -1038,7 +1038,13 @@ export function clearLayout(def: WorkflowDefinition): WorkflowDefinition {
 
 /** Ensure schema_version is set before sending to the backend. */
 export function serializeDefinition(def: WorkflowDefinition): WorkflowDefinition {
-    return { ...normalizeDefinition(def), schema_version: SCHEMA_VERSION }
+    // Written back as `triggers`, the shape the backend stores. The singular key
+    // is still accepted, but saving it would undo the migration one campaign at
+    // a time and put the next reader back on the crash path.
+    return {
+        ...definitionForSave(normalizeDefinition(def)),
+        schema_version: SCHEMA_VERSION,
+    } as unknown as WorkflowDefinition
 }
 
 /** Upgrade legacy wait shapes at the frontend seam before editing or saving. */
@@ -1094,7 +1100,33 @@ export function normalizeDefinition(def: WorkflowDefinition): WorkflowDefinition
         }
         return raw as WorkflowNode
     })
-    return { ...def, nodes }
+
+    // The backend stores `triggers` (plural) since the trigger rearchitecture,
+    // and the data migration dropped the singular key from every definition.
+    // This model stays singular because a hundred call sites read `def.trigger`
+    // — so fold the first trigger back onto it. Without this, every one of
+    // those reads is `undefined.type` and the whole builder page errors out.
+    const source = def as unknown as Record<string, unknown>
+    const plural = source.triggers
+    const trigger =
+        def.trigger ??
+        (Array.isArray(plural) && plural.length > 0
+            ? (plural[0] as WorkflowDefinition["trigger"])
+            : undefined)
+
+    return { ...def, nodes, ...(trigger ? { trigger } : {}) }
+}
+
+/**
+ * The wire shape the backend stores.
+ *
+ * Sent as `triggers` so a saved definition keeps the shape the migration put it
+ * in; the backend accepts the singular key too, but writing it back would undo
+ * the migration one campaign at a time.
+ */
+export function definitionForSave(def: WorkflowDefinition): Record<string, unknown> {
+    const { trigger, ...rest } = def as WorkflowDefinition & Record<string, unknown>
+    return { ...rest, triggers: [trigger] }
 }
 
 // ---------------------------------------------------------------------------
