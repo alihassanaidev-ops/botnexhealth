@@ -1,6 +1,6 @@
 import React, { createContext, useCallback, useContext, useEffect, useRef, useState } from "react";
 import axios from "axios";
-import api from "@/lib/api";
+import api, { refreshBackendToken } from "@/lib/api";
 import { User } from "@/types";
 import { Button } from "@/components/ui/button";
 import {
@@ -102,6 +102,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     const [isLoading, setIsLoading] = useState(true);
     const [isSessionWarningOpen, setIsSessionWarningOpen] = useState(false);
     const [sessionSecondsRemaining, setSessionSecondsRemaining] = useState(SESSION_WARNING_SECONDS);
+    const [isExtendingSession, setIsExtendingSession] = useState(false);
     const navigate = useNavigate();
     const location = useLocation();
     const inactivityTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -228,10 +229,21 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         }, warningDelay);
     }, [clearInactivityTimers, signOut]);
 
-    const handleStaySignedIn = useCallback(() => {
-        toast.success("Session extended");
-        resetInactivityTimer();
-    }, [resetInactivityTimer]);
+    const handleStaySignedIn = useCallback(async () => {
+        setIsExtendingSession(true);
+        try {
+            // Rotate the HttpOnly refresh cookie before resetting the visible
+            // inactivity timer so browser and server session windows agree.
+            await refreshBackendToken();
+            resetInactivityTimer();
+            toast.success("Session extended");
+        } catch {
+            toast.error("Your session could not be extended. Please sign in again.");
+            await signOut();
+        } finally {
+            setIsExtendingSession(false);
+        }
+    }, [resetInactivityTimer, signOut]);
 
     useEffect(() => {
         if (!user) {
@@ -449,10 +461,12 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
                         Your session will end in <span className="font-semibold">{sessionSecondsRemaining}s</span>.
                     </div>
                     <DialogFooter>
-                        <Button variant="outline" onClick={() => void signOut()}>
+                        <Button variant="outline" onClick={() => void signOut()} disabled={isExtendingSession}>
                             Sign out now
                         </Button>
-                        <Button onClick={handleStaySignedIn}>Stay signed in</Button>
+                        <Button onClick={() => void handleStaySignedIn()} disabled={isExtendingSession}>
+                            {isExtendingSession ? "Extending..." : "Stay signed in"}
+                        </Button>
                     </DialogFooter>
                 </DialogContent>
             </Dialog>

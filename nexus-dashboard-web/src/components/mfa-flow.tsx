@@ -55,6 +55,7 @@ import {
     type MfaChallengeResponse,
     type TotpSetupOptions,
 } from "@/lib/mfa-api"
+import { getInitialMfaMode, rememberMfaMode } from "@/lib/mfa-preference"
 
 const codeSchema = z.object({
     code: z.string().min(6, { message: "Enter the 6-digit code" }),
@@ -141,7 +142,7 @@ export function MfaFlow({ challenge, onAuthenticated, onCancel }: MfaFlowProps) 
                 : challenge.setup_methods.includes("webauthn")
                   ? { kind: "setup_passkey" }
                   : { kind: "setup_totp", options: { secret: "", provisioning_uri: "" } }
-            : { kind: "verify", mode: challenge.methods.includes("webauthn") ? "passkey" : challenge.methods.includes("totp") ? "totp" : "recovery" }
+            : { kind: "verify", mode: getInitialMfaMode(challenge.methods) }
 
     const [step, setStep] = useState<Step>(initialStep)
     const [busy, setBusy] = useState(false)
@@ -176,6 +177,7 @@ export function MfaFlow({ challenge, onAuthenticated, onCancel }: MfaFlowProps) 
         setBusy(true)
         try {
             const session = await verifyTotpSetup(challenge.mfa_ticket, values.code.trim())
+            rememberMfaMode("totp")
             const codes = session.recovery_codes ?? []
             if (codes.length > 0) {
                 setStep({ kind: "recovery_codes", codes, session })
@@ -202,6 +204,7 @@ export function MfaFlow({ challenge, onAuthenticated, onCancel }: MfaFlowProps) 
             const credential = await startRegistration({ optionsJSON: options })
             const label = labelForm.getValues("device_label")?.trim() || undefined
             const session = await verifyWebauthnRegistration(challenge.mfa_ticket, credential, label)
+            rememberMfaMode("passkey")
             const codes = session.recovery_codes ?? []
             if (codes.length > 0) {
                 setStep({ kind: "recovery_codes", codes, session })
@@ -223,6 +226,7 @@ export function MfaFlow({ challenge, onAuthenticated, onCancel }: MfaFlowProps) 
         setBusy(true)
         try {
             const session = await verifyTotp(challenge.mfa_ticket, values.code.trim())
+            rememberMfaMode("totp")
             await onAuthenticated(session)
         } catch (err) {
             toast.error(getDetail(err, "MFA verification failed"))
@@ -253,6 +257,7 @@ export function MfaFlow({ challenge, onAuthenticated, onCancel }: MfaFlowProps) 
             const { options } = await startWebauthnAuthentication(challenge.mfa_ticket)
             const credential = await startAuthentication({ optionsJSON: options })
             const session = await verifyWebauthnAuthentication(challenge.mfa_ticket, credential)
+            rememberMfaMode("passkey")
             await onAuthenticated(session)
         } catch (err) {
             if (isWebAuthnUserCancel(err)) {
@@ -275,27 +280,28 @@ export function MfaFlow({ challenge, onAuthenticated, onCancel }: MfaFlowProps) 
                 <Button
                     type="button"
                     className="w-full"
-                    disabled={busy || !supportsPasskey}
-                    onClick={registerPasskey}
-                >
-                    {busy ? "Working..." : "Use a passkey (Touch ID, Face ID, security key)"}
-                </Button>
-                <p className="text-xs text-muted-foreground">
-                    Recommended. Your device handles authentication; nothing is shared
-                    with the server beyond the public key.
-                </p>
-                <Separator />
-                <Button
-                    type="button"
-                    variant="outline"
-                    className="w-full"
                     disabled={busy}
                     onClick={pickTotpSetup}
                 >
                     Use an authenticator app (TOTP)
                 </Button>
                 <p className="text-xs text-muted-foreground">
-                    Scan a QR code with Google Authenticator, 1Password, Authy, etc.
+                    Recommended for clinic staff who use multiple computers. The
+                    authenticator app stays on your phone.
+                </p>
+                <Separator />
+                <Button
+                    type="button"
+                    variant="outline"
+                    className="w-full"
+                    disabled={busy || !supportsPasskey}
+                    onClick={registerPasskey}
+                >
+                    {busy ? "Working..." : "Use a passkey (Touch ID, Face ID, security key)"}
+                </Button>
+                <p className="text-xs text-muted-foreground">
+                    Phishing-resistant. A passkey may sync through your provider or
+                    remain on one device, depending on your setup.
                 </p>
                 {onCancel && (
                     <>
@@ -485,7 +491,7 @@ export function MfaFlow({ challenge, onAuthenticated, onCancel }: MfaFlowProps) 
                                 onClick={() => setStep({ kind: "verify", mode: "recovery" })}
                                 disabled={busy}
                             >
-                                Use a recovery code instead
+                                Can&apos;t use your usual method?
                             </Button>
                         )}
                     </>
@@ -534,7 +540,7 @@ export function MfaFlow({ challenge, onAuthenticated, onCancel }: MfaFlowProps) 
                                     onClick={() => setStep({ kind: "verify", mode: "recovery" })}
                                     disabled={busy}
                                 >
-                                    Use a recovery code instead
+                                    Can&apos;t use your usual method?
                                 </Button>
                             )}
                         </form>
@@ -543,6 +549,9 @@ export function MfaFlow({ challenge, onAuthenticated, onCancel }: MfaFlowProps) 
                 {step.mode === "recovery" && (
                     <Form {...recoveryForm}>
                         <form onSubmit={recoveryForm.handleSubmit(submitVerifyRecovery)} className="space-y-3">
+                            <p className="text-xs text-muted-foreground">
+                                Recovery codes are one-time emergency backups.
+                            </p>
                             <FormField
                                 control={recoveryForm.control}
                                 name="code"

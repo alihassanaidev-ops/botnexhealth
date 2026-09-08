@@ -23,6 +23,7 @@ load_config = nex_health_infra_config.load_config
 def test_staging_config_loads_scale_controls() -> None:
     config = load_config(INFRA_ROOT / "config" / "staging.json")
 
+    assert config.refresh_token_ttl_minutes == 8 * 60
     assert config.database.proxy_enabled is False
     assert config.database.app_pool_size == 3
     assert config.database.app_max_overflow == 2
@@ -42,3 +43,7 @@ def test_staging_config_loads_scale_controls() -> None:
     assert config.retention.notification_days == 180
     assert config.retention.dead_letter_raw_days == 30
     assert config.retention.idempotency_days == 7
+def test_production_pins_the_refresh_session_window() -> None:
+    config = load_config(INFRA_ROOT / "config" / "production.json")
+
+    assert config.refresh_token_ttl_minutes == 8 * 60

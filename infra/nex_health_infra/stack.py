@@ -978,6 +978,9 @@ class NexHealthPlatformStack(Stack):
             "DATABASE_POOL_RECYCLE_SECONDS": str(
                 self.config.database.app_pool_recycle_seconds
             ),
+            "REFRESH_TOKEN_TTL_MINUTES": str(
+                self.config.refresh_token_ttl_minutes
+            ),
             "RETENTION_CLINICAL_RECORD_DAYS": str(
                 self.config.retention.clinical_record_days
             ),

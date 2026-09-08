@@ -1,5 +1,5 @@
 /**
- * MFA endpoints (TOTP only — WebAuthn passkeys can be added later).
+ * MFA endpoints for authenticator apps, WebAuthn passkeys, and recovery codes.
  *
  * The login flow is two-phase:
  *   1. POST /auth/login with {email, password}. Backend returns either

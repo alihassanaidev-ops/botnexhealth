@@ -26,6 +26,7 @@ import * as securityApi from "@/lib/security-api"
 import * as webauthn from "@simplewebauthn/browser"
 
 vi.mock("@/lib/api", () => ({
+    refreshBackendToken: vi.fn(),
     default: {
         defaults: { baseURL: "http://test.local/api" },
         get: vi.fn(),

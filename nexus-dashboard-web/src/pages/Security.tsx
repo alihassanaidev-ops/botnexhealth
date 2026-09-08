@@ -276,8 +276,8 @@ export default function Security() {
                             </CardTitle>
                             <CardDescription>
                                 Hardware-backed credentials (Touch ID, Face ID, Windows
-                                Hello, security keys). Recommended over TOTP — phishing
-                                resistant and bound to your device.
+                                Hello, security keys). Phishing-resistant; depending on your
+                                provider, a passkey may sync across devices or remain on one device.
                             </CardDescription>
                         </CardHeader>
                         <CardContent className="space-y-3">
@@ -341,7 +341,8 @@ export default function Security() {
                             </CardTitle>
                             <CardDescription>
                                 Time-based one-time passwords from Google
-                                Authenticator, 1Password, Authy, etc.
+                                Authenticator, Microsoft Authenticator, 1Password, Authy, etc.
+                                Recommended for staff who sign in from multiple clinic computers.
                             </CardDescription>
                         </CardHeader>
                         <CardContent className="flex items-center justify-between gap-3">

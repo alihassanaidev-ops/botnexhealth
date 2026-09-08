@@ -1,6 +1,5 @@
-"""HIPAA §164.312(a)(2)(iii): refresh-cookie TTL is the idle-timeout
-window. Each /refresh resets it; a walked-away tab expires after the
-configured idle window.
+"""The refresh-cookie TTL is the idle-timeout window. Each /refresh
+resets it; a walked-away tab expires after the configured idle window.
 
 Pin two contracts so a future regression that re-extends the cookie
 to days fails CI:
@@ -19,9 +18,9 @@ import pytest
 from src.app.config import settings
 
 
-def test_default_refresh_ttl_is_one_hour() -> None:
-    """Default config bakes in the §164.312(a)(2)(iii) idle window."""
-    assert settings.refresh_token_ttl_minutes == 60
+def test_default_refresh_ttl_matches_dashboard_shift_window() -> None:
+    """Default config matches the dashboard's eight-hour inactivity window."""
+    assert settings.refresh_token_ttl_minutes == 8 * 60
 
 
 def test_refresh_token_service_ttl_seconds_uses_minutes_not_days() -> None:
@@ -34,7 +33,7 @@ def test_refresh_token_service_ttl_seconds_uses_minutes_not_days() -> None:
     assert RefreshTokenService._ttl_seconds() == expected
     # Belt-and-braces: catch the literal "days" mistake.
     assert RefreshTokenService._ttl_seconds() < 24 * 60 * 60, (
-        "Refresh TTL slipped above one day; HIPAA idle-logoff window violated"
+        "Refresh TTL slipped above the intended sub-day idle-logoff window"
     )
 
 

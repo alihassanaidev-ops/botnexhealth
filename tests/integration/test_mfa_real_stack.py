@@ -377,7 +377,7 @@ async def test_refresh_session_redis_ttl_matches_idle_timeout(real_stack):
         assert verify.status_code == 200, verify.text
 
     # Inspect Redis directly — the refresh-session key must have a TTL
-    # bounded by the configured 1-hour idle window, not days.
+    # bounded by the configured eight-hour idle window, not days.
     expected_ttl = settings.refresh_token_ttl_minutes * 60
 
     redis = from_url(settings.redis_url, decode_responses=True)

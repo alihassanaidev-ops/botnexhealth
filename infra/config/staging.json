@@ -5,6 +5,7 @@
   "region": "ca-central-1",
   "appEnv": "staging",
   "logLevel": "info",
+  "refreshTokenTtlMinutes": 480,
   "alarmEmail": "zulkhaifahmed@gmail.com",
   "network": {
     "maxAzs": 2,

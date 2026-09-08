@@ -5,6 +5,7 @@
   "region": "ca-central-1",
   "appEnv": "production",
   "logLevel": "info",
+  "refreshTokenTtlMinutes": 480,
   "network": {
     "vpcId": "vpc-xxxxxxxxxxxxxxxxx"
   },

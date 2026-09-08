@@ -30,6 +30,10 @@ Use a JSON config per environment:
 - [`config/staging.json`](./config/staging.json)
 - [`config/production.example.json`](./config/production.example.json)
 
+`refreshTokenTtlMinutes` controls the rolling authenticated-session window and
+must remain aligned with the dashboard inactivity timeout. Staging and
+production use 480 minutes (eight hours).
+
 Run CDK with a specific config file:
 
 ```bash
