@@ -151,6 +151,22 @@ class Settings(BaseSettings):
     # environment with modern devices.
     webauthn_user_verification_strict: bool = True
 
+    # ── Email sign-in codes ──────────────────────────────────────────────
+    # A one-time code mailed to the account's own address, offered as an
+    # alternative at the login MFA step *after* the user has already
+    # enrolled a passkey or authenticator app. It is never an enrollment
+    # method and never satisfies step-up: the mailbox is the same channel
+    # that /forgot-password trusts, so allowing it to authorise factor
+    # management would make mailbox access a full account takeover.
+    mfa_email_code_enabled: bool = True
+    mfa_email_code_ttl_seconds: int = 600
+    mfa_email_code_resend_seconds: int = 60
+    # Wrong guesses allowed per login ticket before the whole attempt is
+    # torn down. Six digits is a 1e6 space; the cap plus the per-IP
+    # RATE_AUTH limit is what keeps that out of brute-force range.
+    mfa_email_code_max_attempts: int = 5
+    mfa_email_code_max_sends: int = 5
+
     # CORS — comma-separated allowed origins; defaults to "*" for local dev only
     cors_allowed_origins: str = "*"
 

@@ -9,8 +9,11 @@ from webauthn.helpers import bytes_to_base64url
 from src.app.models.mfa import MfaRecoveryCode, UserTotpFactor, WebAuthnCredential
 from src.app.models.user import User, UserRole
 from src.app.services.mfa import (
+    MfaEmailCodeService,
+    MfaEmailCodeThrottled,
     MfaService,
     MfaStatus,
+    MfaTicket,
     MfaTicketInvalid,
     MfaTicketService,
     MfaVerificationFailed,
@@ -22,6 +25,7 @@ from src.app.services.refresh_token_service import RefreshTokenService
 class _FakeRedis:
     def __init__(self) -> None:
         self.values: dict[str, str] = {}
+        self.ttls: dict[str, int | None] = {}
 
     async def setex(self, key: str, _ttl: int, value: str) -> bool:
         self.values[key] = value
@@ -30,8 +34,30 @@ class _FakeRedis:
     async def get(self, key: str) -> str | None:
         return self.values.get(key)
 
-    async def delete(self, key: str) -> int:
-        return 1 if self.values.pop(key, None) is not None else 0
+    async def delete(self, *keys: str) -> int:
+        return sum(1 for key in keys if self.values.pop(key, None) is not None)
+
+    # ── Counter/flag primitives used by MfaEmailCodeService ──────────────
+    # Its throttles rely on SET NX and INCR being atomic; the fake only
+    # needs to reproduce their return values, not their concurrency.
+    async def set(self, key: str, value: str, *, nx: bool = False, ex: int | None = None):
+        if nx and key in self.values:
+            return None
+        self.values[key] = value
+        self.ttls[key] = ex
+        return True
+
+    async def incr(self, key: str) -> int:
+        count = int(self.values.get(key, 0)) + 1
+        self.values[key] = str(count)
+        return count
+
+    async def expire(self, key: str, ttl: int) -> bool:
+        self.ttls[key] = ttl
+        return key in self.values
+
+    async def ttl(self, key: str) -> int:
+        return self.ttls.get(key) or -1
 
     async def getdel(self, key: str) -> str | None:
         # Single-round-trip atomic read-and-delete. Mirrors Redis 6.2+
@@ -486,3 +512,181 @@ async def test_step_up_consume_burns_ticket_even_on_validation_failure(
         await MfaTicketService.consume_step_up(
             token, user_id=user.id, client_ip="203.0.113.10", user_agent="ua",
         )
+
+
+# =============================================================================
+# Email sign-in codes
+# =============================================================================
+
+
+def _email_ticket(*, code_hash: str | None = None, expires_at: int | None = None) -> MfaTicket:
+    return MfaTicket(
+        token="ticket-token",
+        user_id="11111111-1111-1111-1111-111111111111",
+        purpose="login",
+        role=UserRole.INSTITUTION_ADMIN.value,
+        institution_id="22222222-2222-2222-2222-222222222222",
+        location_id=None,
+        audit_request_id="aud-1",
+        email_code_hash=code_hash,
+        email_code_expires_at=expires_at,
+    )
+
+
+def test_email_code_offered_only_once_a_real_factor_is_enrolled() -> None:
+    """The email method is an alternative at the MFA step, not a way past it.
+
+    A user with no passkey and no authenticator app must still be sent
+    through enrollment; offering them an emailed code would reduce the
+    whole second factor to "can read the invite mailbox".
+    """
+    role = UserRole.INSTITUTION_ADMIN.value
+
+    unenrolled = MfaStatus(webauthn_count=0, totp_enabled=False, recovery_codes_remaining=0)
+    assert unenrolled.email_code_allowed_for_role(role) is False
+    assert "email" not in unenrolled.available_methods_for_role(role)
+
+    with_totp = MfaStatus(webauthn_count=0, totp_enabled=True, recovery_codes_remaining=3)
+    assert with_totp.email_code_allowed_for_role(role) is True
+    assert with_totp.available_methods_for_role(role) == ["totp", "email", "recovery_code"]
+
+    with_passkey = MfaStatus(webauthn_count=1, totp_enabled=False, recovery_codes_remaining=0)
+    assert with_passkey.available_methods_for_role(role) == ["webauthn", "email"]
+
+
+def test_email_code_never_counts_as_enrollment() -> None:
+    """enrolled_for_role must stay blind to the email method.
+
+    _mfa_response keys mfa_setup_required off this predicate, so if email
+    ever counted here a brand-new user would skip enrollment entirely.
+    """
+    status = MfaStatus(webauthn_count=0, totp_enabled=False, recovery_codes_remaining=0)
+
+    assert status.enrolled_for_role(UserRole.INSTITUTION_ADMIN.value) is False
+    assert "email" not in status.setup_methods_for_role(UserRole.INSTITUTION_ADMIN.value)
+
+
+def test_email_code_excluded_for_super_admin_in_production(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(settings, "app_env", "production")
+    monkeypatch.setattr(settings, "dev_allow_super_admin_totp", True)
+    status = MfaStatus(webauthn_count=1, totp_enabled=True, recovery_codes_remaining=2)
+
+    assert status.email_code_allowed_for_role(UserRole.SUPER_ADMIN.value) is False
+    assert "email" not in status.available_methods_for_role(UserRole.SUPER_ADMIN.value)
+    # Other roles are unaffected by the super-admin carve-out.
+    assert "email" in status.available_methods_for_role(UserRole.STAFF.value)
+
+
+def test_email_code_kill_switch(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(settings, "mfa_email_code_enabled", False)
+    status = MfaStatus(webauthn_count=1, totp_enabled=True, recovery_codes_remaining=2)
+
+    assert "email" not in status.available_methods_for_role(UserRole.STAFF.value)
+
+
+def test_email_code_generation_and_verification() -> None:
+    code = MfaEmailCodeService.new_code()
+    assert len(code) == 6 and code.isdigit()
+
+    code_hash = MfaEmailCodeService.hash_code(code)
+    assert code not in code_hash
+
+    assert MfaEmailCodeService.verify_code(code=code, code_hash=code_hash) is True
+    # Users retype codes with stray spacing; digits are what matter.
+    assert MfaEmailCodeService.verify_code(code=f" {code} ", code_hash=code_hash) is True
+    assert MfaEmailCodeService.verify_code(code="000000", code_hash=code_hash) is False
+    # A missing hash must not short-circuit into a pass.
+    assert MfaEmailCodeService.verify_code(code=code, code_hash=None) is False
+    assert MfaEmailCodeService.verify_code(code="", code_hash=code_hash) is False
+
+
+def test_email_code_expiry_is_independent_of_ticket_ttl() -> None:
+    """The code carries its own deadline.
+
+    MfaTicketService.update resets the ticket's Redis TTL on every write,
+    so a code that leaned on the ticket's lifetime would be refreshed back
+    to ten minutes each time the user asked for another one.
+    """
+    import time as _time
+
+    assert MfaEmailCodeService.is_expired(_email_ticket()) is True
+    assert MfaEmailCodeService.is_expired(
+        _email_ticket(code_hash="x", expires_at=int(_time.time()) - 1)
+    ) is True
+    assert MfaEmailCodeService.is_expired(
+        _email_ticket(code_hash="x", expires_at=int(_time.time()) + 60)
+    ) is False
+
+
+@pytest.mark.asyncio
+async def test_email_code_resend_cooldown(
+    fake_redis: _FakeRedis, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(settings, "mfa_email_code_resend_seconds", 60)
+
+    await MfaEmailCodeService.claim_send_slot("ticket-token")
+
+    with pytest.raises(MfaEmailCodeThrottled) as excinfo:
+        await MfaEmailCodeService.claim_send_slot("ticket-token")
+    assert excinfo.value.retry_after_seconds == 60
+
+    # A different login attempt has its own slot.
+    await MfaEmailCodeService.claim_send_slot("other-token")
+
+
+@pytest.mark.asyncio
+async def test_email_code_attempt_cap(
+    fake_redis: _FakeRedis, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(settings, "mfa_email_code_max_attempts", 3)
+
+    for expected in (1, 2, 3):
+        assert await MfaEmailCodeService.bump_attempt_count("ticket-token") == expected
+
+    with pytest.raises(MfaEmailCodeThrottled):
+        await MfaEmailCodeService.bump_attempt_count("ticket-token")
+
+
+@pytest.mark.asyncio
+async def test_email_code_send_cap(
+    fake_redis: _FakeRedis, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(settings, "mfa_email_code_max_sends", 2)
+
+    assert await MfaEmailCodeService.bump_send_count("ticket-token") == 1
+    assert await MfaEmailCodeService.bump_send_count("ticket-token") == 2
+
+    with pytest.raises(MfaEmailCodeThrottled):
+        await MfaEmailCodeService.bump_send_count("ticket-token")
+
+
+@pytest.mark.asyncio
+async def test_email_code_survives_a_ticket_round_trip(fake_redis: _FakeRedis) -> None:
+    """The two new fields must survive Redis, i.e. reach _ticket_from_data."""
+    user = User(
+        id="11111111-1111-1111-1111-111111111111",
+        email="user@example.com",
+        role=UserRole.INSTITUTION_ADMIN.value,
+        institution_id="22222222-2222-2222-2222-222222222222",
+    )
+    token = await MfaTicketService.create(
+        user=user,
+        purpose="login",
+        client_ip="203.0.113.10",
+        user_agent="ua",
+        audit_request_id="aud-1",
+    )
+    ticket = await MfaTicketService.get(token, client_ip="203.0.113.10", user_agent="ua")
+
+    code = MfaEmailCodeService.new_code()
+    await MfaTicketService.update(
+        ticket,
+        email_code_hash=MfaEmailCodeService.hash_code(code),
+        email_code_expires_at=1_800_000_000,
+    )
+
+    reloaded = await MfaTicketService.get(token, client_ip="203.0.113.10", user_agent="ua")
+    assert reloaded.email_code_expires_at == 1_800_000_000
+    assert MfaEmailCodeService.verify_code(code=code, code_hash=reloaded.email_code_hash)

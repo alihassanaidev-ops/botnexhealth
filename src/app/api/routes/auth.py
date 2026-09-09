@@ -1,6 +1,7 @@
 """Authentication routes."""
 
 import logging
+import time
 from contextlib import asynccontextmanager
 from datetime import datetime, timedelta, timezone
 from typing import Annotated, Any, Literal
@@ -38,6 +39,8 @@ from src.app.services.mfa import (
     MFA_PURPOSE_SET_PASSWORD,
     MFA_PURPOSE_STEP_UP,
     STEP_UP_ELEVATED_TTL_SECONDS,
+    MfaEmailCodeService,
+    MfaEmailCodeThrottled,
     MfaError,
     MfaService,
     MfaStatus,
@@ -120,6 +123,16 @@ class TotpVerifyRequest(MfaTicketRequest):
 
 
 class RecoveryCodeVerifyRequest(MfaTicketRequest):
+    code: str
+
+
+class EmailCodeSendResponse(BaseModel):
+    status: Literal["sent"] = "sent"
+    expires_in_seconds: int
+    resend_after_seconds: int
+
+
+class EmailCodeVerifyRequest(MfaTicketRequest):
     code: str
 
 
@@ -410,6 +423,17 @@ def _mfa_exception_to_http(exc: MfaError) -> HTTPException:
         return HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail=str(exc) or "MFA verification failed",
+        )
+    if isinstance(exc, MfaEmailCodeThrottled):
+        headers = (
+            {"Retry-After": str(exc.retry_after_seconds)}
+            if exc.retry_after_seconds
+            else None
+        )
+        return HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail=str(exc) or "Too many requests",
+            headers=headers,
         )
     return HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc))
 
@@ -1522,6 +1546,195 @@ async def mfa_recovery_code_verify(
     )
 
 
+# =============================================================================
+# Email sign-in codes.
+#
+# An alternative at the login MFA step for users who have *already* enrolled
+# a passkey or authenticator app: we mail a 6-digit code to the account's own
+# address and accept it in place of the enrolled factor. It is deliberately
+# not offered anywhere else:
+#
+#   - Not an enrollment method. ``MfaStatus.enrolled_for_role`` is untouched,
+#     so a brand-new user still gets ``mfa_setup_required`` and must set up a
+#     real factor first. ``/mfa/email/send`` refuses tickets for such users.
+#   - Not accepted for step-up. The mailbox is the same channel that
+#     /forgot-password trusts; letting it authorise factor management would
+#     make mailbox access enough to strip every stronger factor off the
+#     account. There is intentionally no /mfa/step-up/email/* endpoint, and
+#     the step-up challenge filters "email" out of the methods it advertises.
+#   - Not offered to SUPER_ADMIN in production, on the same terms as TOTP.
+#
+# The code lives only on the Redis login ticket (Argon2id hash + its own
+# absolute expiry). Brute force is bounded by a per-ticket attempt cap that
+# tears down the whole login attempt when exceeded, on top of the per-IP
+# RATE_AUTH limit.
+# =============================================================================
+
+
+def _require_email_code_allowed(ticket: MfaTicket) -> None:
+    """Cheap pre-DB guards shared by the send and verify endpoints."""
+    if not settings.mfa_email_code_enabled:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Email sign-in codes are not available",
+        )
+    if ticket.role == UserRole.SUPER_ADMIN.value and not settings.allow_super_admin_totp:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Super admin accounts must use a passkey or recovery code",
+        )
+
+
+@router.post("/mfa/email/send", response_model=EmailCodeSendResponse)
+@limiter.limit(RATE_AUTH)
+async def mfa_email_code_send(
+    request: Request,
+    data: MfaTicketRequest,
+) -> EmailCodeSendResponse:
+    ticket = await _ticket_from_request(request, data.mfa_ticket)
+    _require_email_code_allowed(ticket)
+
+    async with _auth_db_session(user_id=ticket.user_id) as session:
+        user = await _user_for_mfa_ticket(session, ticket)
+        mfa_status = await MfaService(session).status_for_user(str(user.id))
+        if not mfa_status.email_code_allowed_for_role(user.role):
+            # No enrolled factor to fall back from — this account still owes
+            # us a passkey or authenticator app.
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Email sign-in codes require an enrolled passkey or authenticator app",
+            )
+        recipient = user.email
+        audit_user = user
+
+    try:
+        await MfaEmailCodeService.claim_send_slot(ticket.token)
+        await MfaEmailCodeService.bump_send_count(ticket.token)
+    except MfaError as exc:
+        raise _mfa_exception_to_http(exc) from exc
+
+    code = MfaEmailCodeService.new_code()
+    ttl_seconds = settings.mfa_email_code_ttl_seconds
+    try:
+        await MfaTicketService.update(
+            ticket,
+            email_code_hash=MfaEmailCodeService.hash_code(code),
+            email_code_expires_at=int(time.time()) + ttl_seconds,
+        )
+    except MfaError as exc:
+        raise _mfa_exception_to_http(exc) from exc
+
+    # Outside the DB session, mirroring the invite/reset senders. Unlike
+    # /forgot-password we surface the failure: the caller already proved the
+    # password, so there is no address to enumerate, and swallowing the error
+    # would leave the user waiting for a mail that never arrives.
+    try:
+        await AuthEmailService().send_login_code_email(
+            email=recipient,
+            code=code,
+            ttl_minutes=max(1, ttl_seconds // 60),
+        )
+    except Exception as exc:  # noqa: BLE001
+        logger.error(
+            "mfa_email_code_send_failed user_hash=%s error=%s",
+            hash_for_logging(str(audit_user.id)),
+            safe_error_summary(exc),
+        )
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail="Could not send the sign-in code. Try another method.",
+        ) from exc
+
+    await log_audit(
+        actor=AuditActor.API_CLIENT,
+        action=AuditAction.MFA_CHALLENGE,
+        target_resource=f"user:{audit_user.id}",
+        outcome=AuditOutcome.SUCCESS,
+        metadata={
+            "method": "email",
+            "phase": "email_code_send",
+            "ip_address": _client_ip(request),
+            "purpose": ticket.purpose,
+        },
+        institution_id=audit_user.institution_id,
+        user_id=_audit_user_id(audit_user),
+        location_id=_audit_location_id(audit_user),
+        request_id=ticket.audit_request_id,
+    )
+    return EmailCodeSendResponse(
+        expires_in_seconds=ttl_seconds,
+        resend_after_seconds=settings.mfa_email_code_resend_seconds,
+    )
+
+
+@router.post("/mfa/email/verify", response_model=AuthSession)
+@limiter.limit(RATE_AUTH)
+async def mfa_email_code_verify(
+    request: Request,
+    response: Response,
+    data: EmailCodeVerifyRequest,
+) -> AuthSession:
+    ticket = await _ticket_from_request(request, data.mfa_ticket)
+    _require_email_code_allowed(ticket)
+
+    # Count the attempt before checking anything, so a client that abandons
+    # the request mid-flight still pays for it. Exceeding the cap consumes
+    # the ticket outright: the user restarts from the password, which is the
+    # only reset that also re-proves the first factor.
+    try:
+        await MfaEmailCodeService.bump_attempt_count(ticket.token)
+    except MfaEmailCodeThrottled as exc:
+        await MfaTicketService.consume(ticket)
+        await MfaEmailCodeService.clear_counters(ticket.token)
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail=str(exc),
+        ) from exc
+    except MfaError as exc:
+        raise _mfa_exception_to_http(exc) from exc
+
+    if MfaEmailCodeService.is_expired(ticket) or not ticket.email_code_hash:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="No sign-in code is pending, or it has expired. Send a new one.",
+        )
+
+    async with _auth_db_session(user_id=ticket.user_id) as session:
+        user = await _user_for_mfa_ticket(session, ticket)
+        mfa_status = await MfaService(session).status_for_user(str(user.id))
+        if not mfa_status.email_code_allowed_for_role(user.role):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Email sign-in codes require an enrolled passkey or authenticator app",
+            )
+        if not MfaEmailCodeService.verify_code(
+            code=data.code, code_hash=ticket.email_code_hash
+        ):
+            await _audit_mfa_failure(
+                request=request,
+                user=user,
+                ticket=ticket,
+                method="email",
+                phase="verify",
+                error=MfaVerificationFailed("Invalid sign-in code"),
+            )
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Invalid or expired sign-in code",
+            )
+
+    session_result = await _complete_mfa_auth(
+        request=request,
+        response=response,
+        ticket=ticket,
+        user=user,
+        method="email",
+    )
+    # _complete_mfa_auth deleted the ticket; drop the throttle keys with it.
+    await MfaEmailCodeService.clear_counters(ticket.token)
+    return session_result
+
+
 @router.get("/mfa/status", response_model=MfaStatusResponse)
 @limiter.limit("30/minute")
 async def mfa_status(
@@ -1621,7 +1834,15 @@ async def mfa_step_up_challenge(
     )
     return StepUpChallengeResponse(
         mfa_ticket=token,
-        methods=mfa_status.available_methods_for_role(current_user.role),
+        # "email" is filtered out deliberately: there is no
+        # /mfa/step-up/email/* verifier, and there must not be one. Step-up
+        # gates factor management, so accepting a mailed code there would let
+        # mailbox access alone delete the passkeys it is standing in for.
+        methods=[
+            method
+            for method in mfa_status.available_methods_for_role(current_user.role)
+            if method != "email"
+        ],
         role=current_user.role,
         email=current_user.email,
     )

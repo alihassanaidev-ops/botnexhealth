@@ -95,6 +95,37 @@ export async function verifyRecoveryCode(mfaTicket: string, code: string): Promi
     return data
 }
 
+// ── Email sign-in codes ──────────────────────────────────────────────────
+//
+// The one send-then-verify factor: unlike TOTP, a passkey, or a recovery
+// code, the user has nothing to type until the server has mailed them
+// something. Only offered to accounts that already have a passkey or
+// authenticator app enrolled, and never accepted for step-up.
+
+export interface EmailCodeSent {
+    status: "sent"
+    expires_in_seconds: number
+    resend_after_seconds: number
+}
+
+export async function sendEmailCode(mfaTicket: string): Promise<EmailCodeSent> {
+    const { data } = await axios.post<EmailCodeSent>(
+        `${baseURL}/auth/mfa/email/send`,
+        { mfa_ticket: mfaTicket },
+        { headers: { "Content-Type": "application/json" }, withCredentials: true },
+    )
+    return data
+}
+
+export async function verifyEmailCode(mfaTicket: string, code: string): Promise<AuthSession> {
+    const { data } = await axios.post<AuthSession>(
+        `${baseURL}/auth/mfa/email/verify`,
+        { mfa_ticket: mfaTicket, code },
+        { headers: { "Content-Type": "application/json" }, withCredentials: true },
+    )
+    return data
+}
+
 // ── WebAuthn (passkeys) ──────────────────────────────────────────────────
 //
 // Backend builds py_webauthn options and serialises them via

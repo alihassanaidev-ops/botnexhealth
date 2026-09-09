@@ -77,6 +77,14 @@ class MfaTicket:
     challenge: str | None = None
     challenge_type: str | None = None
     pending_totp_secret: str | None = None
+    # Argon2id hash of the one-time code mailed for the "sign in with email
+    # code" method, plus its own absolute expiry. The expiry cannot be
+    # inferred from the ticket's Redis TTL: `MfaTicketService.update` resets
+    # that TTL on every write, so requesting a code would silently extend the
+    # code's life. Stored on the ticket rather than in Postgres because the
+    # code is single-use and meaningless outside this one login attempt.
+    email_code_hash: str | None = None
+    email_code_expires_at: int | None = None
     # `elevated=True` on a `purpose='step_up'` ticket marks that the user
     # has freshly re-verified their MFA factor and the ticket may be
     # presented to a sensitive factor-management endpoint exactly once.
@@ -123,12 +131,28 @@ class MfaStatus:
             return self.webauthn_count > 0
         return self.webauthn_count > 0 or self.totp_enabled
 
+    def email_code_allowed_for_role(self, role: str) -> bool:
+        """Whether an emailed one-time code may stand in for a real factor.
+
+        Requires a strong factor to already be enrolled: the email method
+        is an alternative *at* the MFA step, never a way to skip
+        enrollment. SUPER_ADMIN is excluded on the same terms as TOTP —
+        that tier stays passkey-only in production.
+        """
+        if not settings.mfa_email_code_enabled:
+            return False
+        if role == UserRole.SUPER_ADMIN.value and not settings.allow_super_admin_totp:
+            return False
+        return self.webauthn_count > 0 or self.totp_enabled
+
     def available_methods_for_role(self, role: str) -> list[str]:
         methods: list[str] = []
         if self.webauthn_count > 0:
             methods.append("webauthn")
         if self.totp_enabled and role != UserRole.SUPER_ADMIN.value:
             methods.append("totp")
+        if self.email_code_allowed_for_role(role):
+            methods.append("email")
         if self.recovery_codes_remaining > 0:
             methods.append("recovery_code")
         return methods
@@ -200,6 +224,12 @@ class MfaTicketService:
             challenge=data.get("challenge"),
             challenge_type=data.get("challenge_type"),
             pending_totp_secret=data.get("pending_totp_secret"),
+            email_code_hash=data.get("email_code_hash"),
+            email_code_expires_at=(
+                int(data["email_code_expires_at"])
+                if data.get("email_code_expires_at") is not None
+                else None
+            ),
             elevated=bool(data.get("elevated", False)),
         )
 
@@ -608,6 +638,161 @@ class MfaTicketService:
             _log_hash(data.get("user_id")),
         )
         return cls._ticket_from_data(token, data)
+
+
+class MfaEmailCodeThrottled(MfaError):
+    """A send or verify was refused by the email-code rate limits."""
+
+    def __init__(self, message: str, *, retry_after_seconds: int | None = None) -> None:
+        super().__init__(message)
+        self.retry_after_seconds = retry_after_seconds
+
+
+class MfaEmailCodeService:
+    """One-time codes mailed to the account's own address at login.
+
+    No database at all: the code's Argon2id hash rides on the Redis login
+    ticket, and the three throttles live in their own Redis keys. They
+    cannot be ticket fields — ``MfaTicketService.update`` is a
+    read-modify-write, so two concurrent requests would each read the old
+    counter and one increment would vanish. ``INCR`` and ``SET NX`` are
+    atomic, which is exactly what a brute-force cap needs.
+    """
+
+    COOLDOWN_PREFIX = "mfa_email_cooldown"
+    SENDS_PREFIX = "mfa_email_sends"
+    ATTEMPTS_PREFIX = "mfa_email_attempts"
+
+    # Counters outlive the login ticket slightly so that a ticket refreshed
+    # near its expiry cannot shed its accumulated attempt count.
+    COUNTER_TTL_SECONDS = MfaTicketService.TTL_SECONDS + 60
+
+    @staticmethod
+    def new_code() -> str:
+        """A 6-digit code, uniform over 000000-999999."""
+        return f"{secrets.randbelow(1_000_000):06d}"
+
+    @staticmethod
+    def hash_code(code: str) -> str:
+        return PasswordService.hash_secret(code)
+
+    @staticmethod
+    def normalize_code(code: str) -> str:
+        return "".join(ch for ch in code if ch.isdigit())
+
+    @classmethod
+    def verify_code(cls, *, code: str, code_hash: str | None) -> bool:
+        """Constant-ish-time check of a presented code.
+
+        Mirrors ``MfaService.use_recovery_code``: a miss still pays for one
+        Argon2 verify against a throwaway hash, so a wrong code and a
+        malformed/absent one are not distinguishable by timing.
+        """
+        normalized = cls.normalize_code(code)
+        if code_hash and normalized and PasswordService.verify_secret(normalized, code_hash):
+            return True
+        PasswordService.verify_secret(
+            normalized or "invalid",
+            PasswordService.hash_secret(secrets.token_urlsafe(16)),
+        )
+        return False
+
+    @staticmethod
+    def is_expired(ticket: MfaTicket) -> bool:
+        return (
+            ticket.email_code_expires_at is None
+            or int(time.time()) >= ticket.email_code_expires_at
+        )
+
+    @classmethod
+    def _key(cls, prefix: str, token: str) -> str:
+        return f"{prefix}:{MfaTicketService._kid(token)}"
+
+    @classmethod
+    async def _client(cls) -> Any:
+        try:
+            return await RefreshTokenService.get_client()
+        except Exception as exc:  # noqa: BLE001
+            raise MfaStoreUnavailable("MFA ticket store is unavailable") from exc
+
+    @classmethod
+    async def claim_send_slot(cls, token: str) -> None:
+        """Reserve the right to send one code, or raise if still cooling down.
+
+        ``SET NX EX`` is the whole mechanism: the first caller wins the key
+        and sends, every other caller inside the window is refused. Being
+        atomic, it also collapses a double-clicked button into one email.
+        """
+        client = await cls._client()
+        key = cls._key(cls.COOLDOWN_PREFIX, token)
+        try:
+            claimed = await client.set(
+                key, "1", nx=True, ex=settings.mfa_email_code_resend_seconds
+            )
+            if claimed:
+                return
+            ttl = await client.ttl(key)
+        except MfaError:
+            raise
+        except Exception as exc:  # noqa: BLE001
+            raise MfaStoreUnavailable("MFA ticket store is unavailable") from exc
+        retry_after = ttl if isinstance(ttl, int) and ttl > 0 else (
+            settings.mfa_email_code_resend_seconds
+        )
+        raise MfaEmailCodeThrottled(
+            "A code was just sent; wait before requesting another",
+            retry_after_seconds=retry_after,
+        )
+
+    @classmethod
+    async def _bump(cls, prefix: str, token: str, *, limit: int, message: str) -> int:
+        client = await cls._client()
+        key = cls._key(prefix, token)
+        try:
+            count = await client.incr(key)
+            if count == 1:
+                await client.expire(key, cls.COUNTER_TTL_SECONDS)
+        except Exception as exc:  # noqa: BLE001
+            raise MfaStoreUnavailable("MFA ticket store is unavailable") from exc
+        if count > limit:
+            raise MfaEmailCodeThrottled(message)
+        return int(count)
+
+    @classmethod
+    async def bump_send_count(cls, token: str) -> int:
+        return await cls._bump(
+            cls.SENDS_PREFIX,
+            token,
+            limit=settings.mfa_email_code_max_sends,
+            message="Too many codes requested; sign in again to restart",
+        )
+
+    @classmethod
+    async def bump_attempt_count(cls, token: str) -> int:
+        """Count one verification attempt; raises once the cap is passed."""
+        return await cls._bump(
+            cls.ATTEMPTS_PREFIX,
+            token,
+            limit=settings.mfa_email_code_max_attempts,
+            message="Too many incorrect codes; sign in again to restart",
+        )
+
+    @classmethod
+    async def clear_counters(cls, token: str) -> None:
+        """Drop the throttle keys once the ticket itself is gone."""
+        try:
+            client = await RefreshTokenService.get_client()
+            await client.delete(
+                cls._key(cls.COOLDOWN_PREFIX, token),
+                cls._key(cls.SENDS_PREFIX, token),
+                cls._key(cls.ATTEMPTS_PREFIX, token),
+            )
+        except Exception:  # noqa: BLE001
+            # Best-effort cleanup; the keys expire on their own.
+            logger.warning(
+                "mfa_email_code_counter_cleanup_failed kid=%s",
+                MfaTicketService._kid(token),
+            )
 
 
 class MfaService:
