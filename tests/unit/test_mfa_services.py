@@ -6,6 +6,7 @@ import pyotp
 import pytest
 from webauthn.helpers import bytes_to_base64url
 
+from src.app.config import settings
 from src.app.models.mfa import MfaRecoveryCode, UserTotpFactor, WebAuthnCredential
 from src.app.models.user import User, UserRole
 from src.app.services.mfa import (
