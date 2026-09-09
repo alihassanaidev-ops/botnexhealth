@@ -90,3 +90,21 @@ def test_the_matrix_matches_nexhealths_own_support_table() -> None:
             f"{data.get('PMS Name')}: support table says recall="
             f"{documented}, our matrix says {ours}"
         )
+
+
+def test_resolve_system_name_prefers_a_recognised_candidate() -> None:
+    """Staging's own field values, in the order the sync-status row offers them."""
+    from src.app.pms.nexhealth.backing_systems import resolve_system_name
+
+    assert resolve_system_name(["Dentrix", "Dentrix Test", "DataSource"]) == "Dentrix"
+    assert resolve_system_name(["Dentrix Test", "dentrix", "DataSource"]) == "dentrix"
+    assert (
+        resolve_system_name(["DataSource for Open Dental", "opendental"]) == "opendental"
+    )
+
+
+def test_resolve_system_name_falls_back_to_the_first_candidate() -> None:
+    from src.app.pms.nexhealth.backing_systems import resolve_system_name
+
+    assert resolve_system_name(["SD #2", "DataSource"]) == "SD #2"
+    assert resolve_system_name([]) is None

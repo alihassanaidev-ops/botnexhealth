@@ -48,7 +48,10 @@ from src.app.services.automation.gotracker_recall_readiness import (
     assess_gotracker_recall_history,
 )
 from src.app.services.automation.nexhealth_sync_status_service import assess_sync_status
-from src.app.services.automation.pms_capability_service import PmsCapabilityService
+from src.app.services.automation.pms_capability_service import (
+    PmsCapabilityService,
+    pms_name_candidates,
+)
 from src.app.services.automation.retell_sms_policy import RETELL_SMS_POLICY
 from src.app.services.automation.validation_service import WorkflowValidationService
 
@@ -685,7 +688,11 @@ class CampaignLaunchChecklistService:
             return []
 
         sync = await self._sync_status(institution_id, location_id)
-        source_name = getattr(sync, "sync_source_name", None)
+        source_name = (
+            backing_systems.resolve_system_name(pms_name_candidates(sync))
+            if sync is not None
+            else None
+        )
 
         if source_name is None:
             return [

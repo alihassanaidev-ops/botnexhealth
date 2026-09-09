@@ -63,6 +63,12 @@ COPY --chown=appuser:appgroup pyproject.toml ./
 COPY --chown=appuser:appgroup alembic/ ./alembic/
 COPY --chown=appuser:appgroup alembic.ini ./
 
+# NexHealth's per-PMS supported-API tables. These are runtime data, not docs:
+# PmsCapabilityService reads them to decide whether a campaign can run against
+# the practice software behind a NexHealth account. Left out of the image, every
+# clinic evaluates as "unknown PMS" and recall campaigns can never launch.
+COPY --chown=appuser:appgroup docs/Supported_API_Per_PMS_Nexhealth/ ./docs/Supported_API_Per_PMS_Nexhealth/
+
 # Copy and set entrypoint script
 COPY --chown=appuser:appgroup entrypoint.sh ./
 RUN chmod +x ./entrypoint.sh

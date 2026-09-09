@@ -214,22 +214,59 @@ class PmsCapabilityService:
         if sync_status is None:
             return None
 
-        candidates: list[str | None] = [
-            sync_status.sync_source_name,
-            sync_status.sync_source_type,
-        ]
-        payload = (
-            sync_status.emr_payload if isinstance(sync_status.emr_payload, dict) else {}
-        )
-        for key in ("display_name", "name", "type", "vendor", "pms", "software"):
-            value = payload.get(key)
-            if isinstance(value, str):
-                candidates.append(value)
+        return _pms_name_from_sync_status(sync_status)
 
-        for candidate in candidates:
-            if candidate and candidate.strip():
-                return candidate.strip()
-        return None
+
+def pms_name_candidates(sync_status: NexHealthSyncStatus) -> list[str]:
+    """Every field on a sync-status row that could name the practice software.
+
+    Ordered by how much the field is worth trusting. ``emr`` is NexHealth's own
+    structured identity for the system behind the account
+    (``{"name": "dentrix", "display_name": "Dentrix"}``), so it leads.
+    ``sync_source_name`` is a free-text label somebody typed when the data
+    source was set up — real values seen on staging include ``"SD #2"``,
+    ``"Dentrix Test"`` and ``"DataSource for Open Dental"`` — so it can name the
+    system, but it cannot be relied on to. ``sync_source_type`` is a
+    discriminator (``"DataSource"``) and ``emr.type`` a hosting model
+    (``"onprem"``); neither ever names a PMS, and they trail purely so an
+    unresolvable row still has something to show a human.
+    """
+    payload = (
+        sync_status.emr_payload if isinstance(sync_status.emr_payload, dict) else {}
+    )
+
+    def _emr(key: str) -> str | None:
+        value = payload.get(key)
+        return value if isinstance(value, str) else None
+
+    ordered: list[str | None] = [
+        _emr("display_name"),
+        _emr("name"),
+        sync_status.sync_source_name,
+        _emr("vendor"),
+        _emr("pms"),
+        _emr("software"),
+        sync_status.sync_source_type,
+        _emr("type"),
+    ]
+    return [value.strip() for value in ordered if value and value.strip()]
+
+
+def _pms_name_from_sync_status(sync_status: NexHealthSyncStatus) -> str | None:
+    """The PMS name for a sync-status row, preferring one we hold a matrix for.
+
+    Returning the first non-empty candidate is what made every one of these
+    locations unverifiable: the DataSource label wins that race and matches no
+    matrix, so a Dentrix clinic reported as ``"Dentrix Test"`` was treated as an
+    unknown PMS while ``emr.display_name`` said ``"Dentrix"`` two fields later.
+    Resolvability decides instead, and the first candidate is kept only as the
+    label for the "cannot verify" message.
+    """
+    candidates = pms_name_candidates(sync_status)
+    for candidate in candidates:
+        if _matrix_for_pms(candidate) is not None:
+            return candidate
+    return candidates[0] if candidates else None
 
 
 def _normalize_requirements(requirements: list[str]) -> list[str]:
@@ -404,6 +441,14 @@ def _matrix_for_pms(pms_name: str | None) -> _CapabilityMatrix | None:
 
 @lru_cache(maxsize=1)
 def _capability_matrices() -> dict[str, _CapabilityMatrix]:
+    """Load NexHealth's per-PMS supported-API tables.
+
+    An empty result is never a legitimate state: it makes every clinic evaluate
+    as "unknown PMS", which silently blocks recall from launching everywhere and
+    looks identical to a genuinely unsupported practice system. That is exactly
+    how this shipped broken — the tables live under ``docs/``, which the image
+    excluded — so refuse to run rather than degrade into a permanent block.
+    """
     matrices: dict[str, _CapabilityMatrix] = {}
     for path in sorted(_MATRIX_DIR.glob("*.json")):
         data = json.loads(path.read_text(encoding="utf-8"))
@@ -414,6 +459,13 @@ def _capability_matrices() -> dict[str, _CapabilityMatrix]:
             apis={
                 _normalize_label(str(key)): str(value) for key, value in apis.items()
             },
+        )
+    if not matrices:
+        raise RuntimeError(
+            "No NexHealth PMS capability matrices found at "
+            f"{_MATRIX_DIR}. The deployed image must include "
+            "docs/Supported_API_Per_PMS_Nexhealth/*.json — without it every "
+            "clinic evaluates as an unknown PMS and no recall campaign can launch."
         )
     return matrices
 

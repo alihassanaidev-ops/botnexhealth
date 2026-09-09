@@ -128,6 +128,23 @@ def unavailable_reason(capability: Capability, source_name: str | None) -> str |
     return f"{label} does not expose treatment plans through NexHealth."
 
 
+def resolve_system_name(candidates: list[str]) -> str | None:
+    """The first candidate this matrix recognises, else the first one at all.
+
+    A sync-status row offers several fields that might name the practice
+    system, and the one that reads most like a name is often the least
+    reliable: a Dentrix account whose data source somebody labelled
+    ``"Dentrix Test"`` folds to ``dentrixtest``, which is not a key here, so
+    choosing by position reports "we have not learned which system backs this
+    location" about a system we do in fact know. Recognition chooses instead.
+    """
+    for candidate in candidates:
+        key = normalise_system_name(candidate)
+        if key and key in DISPLAY_NAMES:
+            return candidate
+    return candidates[0] if candidates else None
+
+
 __all__ = [
     "DISPLAY_NAMES",
     "NO_RECALL_SYSTEMS",
@@ -135,6 +152,7 @@ __all__ = [
     "Capability",
     "display_name",
     "normalise_system_name",
+    "resolve_system_name",
     "supports",
     "unavailable_reason",
 ]

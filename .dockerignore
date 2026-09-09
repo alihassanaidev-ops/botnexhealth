@@ -32,6 +32,10 @@ htmlcov
 
 # Documentation (not needed in container)
 docs/
+# ...except NexHealth's per-PMS supported-API tables. Those are runtime data,
+# not documentation: PmsCapabilityService reads them on every launch-checklist
+# build. They are maintained under docs/, so re-admit just that directory.
+!docs/Supported_API_Per_PMS_Nexhealth/
 *.md
 !README.md
 
