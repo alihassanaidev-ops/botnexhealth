@@ -67,6 +67,7 @@ AUDITED_VIA_HELPER: dict[str, str] = {
     "auth:mfa_webauthn_authenticate_verify": "_record_mfa → MFA_VERIFY",
     "auth:mfa_totp_setup_verify": "_record_mfa → MFA_ENROLL",
     "auth:mfa_totp_verify": "_record_mfa → MFA_VERIFY",
+    "auth:mfa_email_code_verify": "_record_mfa → MFA_VERIFY",
     "auth:mfa_step_up_totp_verify": "step-up path → MFA_CHALLENGE",
     "auth:mfa_step_up_webauthn_verify": "step-up path → MFA_CHALLENGE",
     "auth:mfa_step_up_recovery_code_verify": "→ MFA_RECOVERY_CODE_USE",

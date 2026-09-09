@@ -53,11 +53,20 @@ import {
     verifyWebauthnRegistration,
     startWebauthnAuthentication,
     verifyWebauthnAuthentication,
+    sendEmailCode,
+    verifyEmailCode,
     type AuthSession,
     type MfaChallengeResponse,
     type TotpSetupOptions,
 } from "@/lib/mfa-api"
-import { getInitialMfaMode, rememberMfaMode } from "@/lib/mfa-preference"
+import {
+    getInitialMfaMode,
+    rememberMfaMode,
+    type MfaVerifyMode,
+} from "@/lib/mfa-preference"
+import { useCooldown } from "@/hooks/use-cooldown"
+
+const DEFAULT_EMAIL_CODE_COOLDOWN_SECONDS = 60
 
 const codeSchema = z.object({
     code: z.string().min(6, { message: "Enter the 6-digit code" }),
@@ -75,7 +84,9 @@ type Step =
     | { kind: "setup_choose" }
     | { kind: "setup_passkey" }
     | { kind: "setup_totp"; options: TotpSetupOptions }
-    | { kind: "verify"; mode: "totp" | "passkey" | "recovery" }
+    // `emailSent` tracks the one send-then-verify method: there is nothing
+    // to type until the server has actually mailed a code.
+    | { kind: "verify"; mode: MfaVerifyMode; emailSent?: boolean }
     | { kind: "recovery_codes"; codes: string[]; session: AuthSession }
 
 interface MfaFlowProps {
@@ -148,6 +159,9 @@ export function MfaFlow({ challenge, onAuthenticated, onCancel }: MfaFlowProps) 
 
     const [step, setStep] = useState<Step>(initialStep)
     const [busy, setBusy] = useState(false)
+    // The server owns the resend window; the countdown mirrors whatever it
+    // reports so the button says how long is left instead of 429ing.
+    const emailCodeCooldown = useCooldown(DEFAULT_EMAIL_CODE_COOLDOWN_SECONDS)
 
     const codeForm = useForm<z.infer<typeof codeSchema>>({
         resolver: zodResolver(codeSchema),
@@ -219,6 +233,49 @@ export function MfaFlow({ challenge, onAuthenticated, onCancel }: MfaFlowProps) 
                 return
             }
             toast.error(getDetail(err, "Passkey registration failed"))
+        } finally {
+            setBusy(false)
+        }
+    }
+
+    /**
+     * Switch between verification methods.
+     *
+     * codeForm is shared by the authenticator and email-code fields, so it
+     * has to be cleared on the way out — otherwise a half-typed code
+     * reappears under the other method's label.
+     */
+    function switchVerifyMode(mode: MfaVerifyMode) {
+        codeForm.reset({ code: "" })
+        recoveryForm.reset({ code: "" })
+        setStep((prev) =>
+            prev.kind === "verify" ? { ...prev, mode } : { kind: "verify", mode },
+        )
+    }
+
+    async function sendLoginEmailCode() {
+        setBusy(true)
+        try {
+            const sent = await sendEmailCode(challenge.mfa_ticket)
+            emailCodeCooldown.start(sent.resend_after_seconds)
+            codeForm.reset({ code: "" })
+            setStep({ kind: "verify", mode: "email", emailSent: true })
+            toast.success(`We sent a code to ${challenge.email}.`)
+        } catch (err) {
+            toast.error(getDetail(err, "Couldn't send the code. Try another method."))
+        } finally {
+            setBusy(false)
+        }
+    }
+
+    async function submitVerifyEmail(values: z.infer<typeof codeSchema>) {
+        setBusy(true)
+        try {
+            const session = await verifyEmailCode(challenge.mfa_ticket, values.code.trim())
+            rememberMfaMode("email")
+            await onAuthenticated(session)
+        } catch (err) {
+            toast.error(getDetail(err, "Email code verification failed"))
         } finally {
             setBusy(false)
         }
@@ -466,7 +523,11 @@ export function MfaFlow({ challenge, onAuthenticated, onCancel }: MfaFlowProps) 
                         ? `Use your registered passkey for ${challenge.email}.`
                         : step.mode === "recovery"
                           ? `Enter one of your saved recovery codes for ${challenge.email}.`
-                          : `Enter the 6-digit code from your authenticator app for ${challenge.email}.`}
+                          : step.mode === "email"
+                            ? step.emailSent
+                                ? `Enter the 6-digit code we emailed to ${challenge.email}.`
+                                : `We'll email a 6-digit sign-in code to ${challenge.email}.`
+                            : `Enter the 6-digit code from your authenticator app for ${challenge.email}.`}
                 </p>
                 {step.mode === "passkey" && (
                     <>
@@ -483,10 +544,21 @@ export function MfaFlow({ challenge, onAuthenticated, onCancel }: MfaFlowProps) 
                                 type="button"
                                 variant="ghost"
                                 className="w-full"
-                                onClick={() => setStep({ kind: "verify", mode: "totp" })}
+                                onClick={() => switchVerifyMode("totp")}
                                 disabled={busy}
                             >
                                 Use authenticator code instead
+                            </Button>
+                        )}
+                        {challenge.methods.includes("email") && (
+                            <Button
+                                type="button"
+                                variant="ghost"
+                                className="w-full"
+                                onClick={() => switchVerifyMode("email")}
+                                disabled={busy}
+                            >
+                                Use an email code instead
                             </Button>
                         )}
                         {challenge.methods.includes("recovery_code") && (
@@ -494,10 +566,93 @@ export function MfaFlow({ challenge, onAuthenticated, onCancel }: MfaFlowProps) 
                                 type="button"
                                 variant="ghost"
                                 className="w-full"
-                                onClick={() => setStep({ kind: "verify", mode: "recovery" })}
+                                onClick={() => switchVerifyMode("recovery")}
                                 disabled={busy}
                             >
                                 Can&apos;t use your usual method?
+                            </Button>
+                        )}
+                    </>
+                )}
+                {step.mode === "email" && (
+                    <>
+                        {!step.emailSent ? (
+                            <>
+                                <p className="text-xs text-muted-foreground">
+                                    Use this when your authenticator app or passkey isn&apos;t
+                                    available.
+                                </p>
+                                <Button
+                                    type="button"
+                                    className="w-full"
+                                    onClick={sendLoginEmailCode}
+                                    disabled={busy}
+                                >
+                                    {busy ? "Sending..." : "Email me a code"}
+                                </Button>
+                            </>
+                        ) : (
+                            <Form {...codeForm}>
+                                <form
+                                    onSubmit={codeForm.handleSubmit(submitVerifyEmail)}
+                                    className="space-y-3"
+                                >
+                                    <FormField
+                                        control={codeForm.control}
+                                        name="code"
+                                        render={({ field }) => (
+                                            <FormItem>
+                                                <FormLabel>6-digit code</FormLabel>
+                                                <FormControl>
+                                                    <Input
+                                                        inputMode="numeric"
+                                                        autoComplete="one-time-code"
+                                                        placeholder="123456"
+                                                        maxLength={6}
+                                                        {...field}
+                                                    />
+                                                </FormControl>
+                                                <FormMessage />
+                                            </FormItem>
+                                        )}
+                                    />
+                                    <Button type="submit" className="w-full" disabled={busy}>
+                                        {busy ? "Verifying..." : "Verify"}
+                                    </Button>
+                                    <Button
+                                        type="button"
+                                        variant="ghost"
+                                        className="w-full"
+                                        onClick={sendLoginEmailCode}
+                                        disabled={busy || emailCodeCooldown.isActive}
+                                    >
+                                        {emailCodeCooldown.isActive
+                                            ? `Resend code in ${emailCodeCooldown.remaining}s`
+                                            : "Resend code"}
+                                    </Button>
+                                </form>
+                            </Form>
+                        )}
+                        {challenge.methods.includes("totp") && (
+                            <Button
+                                type="button"
+                                variant="ghost"
+                                className="w-full"
+                                onClick={() => switchVerifyMode("totp")}
+                                disabled={busy}
+                            >
+                                Use authenticator code instead
+                            </Button>
+                        )}
+                        {challenge.methods.includes("webauthn") && (
+                            <Button
+                                type="button"
+                                variant="ghost"
+                                className="w-full"
+                                onClick={() => switchVerifyMode("passkey")}
+                                disabled={busy}
+                            >
+                                Use passkey instead
                             </Button>
                         )}
                     </>
@@ -532,10 +687,21 @@ export function MfaFlow({ challenge, onAuthenticated, onCancel }: MfaFlowProps) 
                                     type="button"
                                     variant="ghost"
                                     className="w-full"
-                                    onClick={() => setStep({ kind: "verify", mode: "passkey" })}
+                                    onClick={() => switchVerifyMode("passkey")}
                                     disabled={busy}
                                 >
                                     Use passkey instead
+                                </Button>
+                            )}
+                            {challenge.methods.includes("email") && (
+                                <Button
+                                    type="button"
+                                    variant="ghost"
+                                    className="w-full"
+                                    onClick={() => switchVerifyMode("email")}
+                                    disabled={busy}
+                                >
+                                    Use an email code instead
                                 </Button>
                             )}
                             {challenge.methods.includes("recovery_code") && (
@@ -543,7 +709,7 @@ export function MfaFlow({ challenge, onAuthenticated, onCancel }: MfaFlowProps) 
                                     type="button"
                                     variant="ghost"
                                     className="w-full"
-                                    onClick={() => setStep({ kind: "verify", mode: "recovery" })}
+                                    onClick={() => switchVerifyMode("recovery")}
                                     disabled={busy}
                                 >
                                     Can&apos;t use your usual method?
@@ -583,10 +749,21 @@ export function MfaFlow({ challenge, onAuthenticated, onCancel }: MfaFlowProps) 
                                     type="button"
                                     variant="ghost"
                                     className="w-full"
-                                    onClick={() => setStep({ kind: "verify", mode: "totp" })}
+                                    onClick={() => switchVerifyMode("totp")}
                                     disabled={busy}
                                 >
                                     Use authenticator code instead
+                                </Button>
+                            )}
+                            {challenge.methods.includes("email") && (
+                                <Button
+                                    type="button"
+                                    variant="ghost"
+                                    className="w-full"
+                                    onClick={() => switchVerifyMode("email")}
+                                    disabled={busy}
+                                >
+                                    Use an email code instead
                                 </Button>
                             )}
                         </form>

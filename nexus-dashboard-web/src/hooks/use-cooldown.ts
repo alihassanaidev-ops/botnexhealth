@@ -3,9 +3,23 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 export function useCooldown(durationSeconds: number) {
     const [remaining, setRemaining] = useState(0);
 
-    const start = useCallback(() => {
-        setRemaining(durationSeconds);
-    }, [durationSeconds]);
+    /**
+     * Begin the countdown. Pass `overrideSeconds` when the server, rather
+     * than the caller, decides the window — e.g. a resend endpoint that
+     * returns its own retry delay. Without it the caller would have to
+     * push that value into state first, and `start` would still be bound
+     * to the previous duration for that render.
+     */
+    const start = useCallback(
+        (overrideSeconds?: number) => {
+            setRemaining(
+                typeof overrideSeconds === "number" && overrideSeconds > 0
+                    ? overrideSeconds
+                    : durationSeconds,
+            );
+        },
+        [durationSeconds]
+    );
 
     const reset = useCallback(() => {
         setRemaining(0);

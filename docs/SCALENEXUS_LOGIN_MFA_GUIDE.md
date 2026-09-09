@@ -7,7 +7,9 @@ This short guide is intended for clinic staff and administrators.
 1. Open the ScaleNexus login page and enter your own work email and password.
 2. Enter the six-digit code shown in the authenticator app on your phone, or use
    your passkey if that is your preferred method.
-3. Recovery codes are not part of normal sign-in. Use one only if your usual MFA
+3. If neither is to hand, choose **Use an email code instead** and we will send a
+   six-digit code to your work email address.
+4. Recovery codes are not part of normal sign-in. Use one only if your usual MFA
    method is unavailable.
 
 Each staff member should use an individual account. Shared accounts make it hard
@@ -34,6 +36,26 @@ the authenticator app enabled as another sign-in method.
 You can add more than one passkey from **Security** settings and give each one a
 clear device name.
 
+## Email codes
+
+From your second sign-in onward, the verification screen offers **Use an email
+code instead**. We email a six-digit code to your work address; enter it to
+finish signing in. The code is different from your authenticator app code, works
+once, and expires after ten minutes. If it does not arrive, wait a minute and
+choose **Resend code**.
+
+This option only appears after you have set up an authenticator app or a passkey
+— it is a convenience for when your phone or passkey is out of reach, not a
+replacement for setting one up. It also cannot be used to change your security
+settings: adding or removing a passkey, disabling the authenticator app, or
+regenerating recovery codes still requires your authenticator app, passkey, or a
+recovery code. That way, someone who reaches your mailbox cannot remove the
+methods protecting your account.
+
+Because the code arrives in your mailbox, an email code is only as strong as your
+email account. Keep your work email protected with its own MFA, and prefer the
+authenticator app or a passkey for everyday sign-in.
+
 ## Recovery codes
 
 Recovery codes are one-time emergency backups. Store them somewhere secure and
@@ -56,4 +78,8 @@ before the reset is performed.
 
 Open **Security** settings to add or remove passkeys, enable or disable an
 authenticator app, or generate a fresh set of recovery codes. Adding, removing,
-or regenerating a security factor requires another MFA check.
+or regenerating a security factor requires another MFA check — and that check
+does not accept an email code.
+
+Email codes need no setup and appear on the sign-in screen automatically, so
+there is nothing to manage for them here.

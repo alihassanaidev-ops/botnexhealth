@@ -33,10 +33,19 @@ import {
     verifyWebauthnRegistration,
     startWebauthnAuthentication,
     verifyWebauthnAuthentication,
+    sendEmailCode,
+    verifyEmailCode,
     type TotpSetupOptions,
     type AuthSession,
 } from "@/lib/mfa-api"
-import { getInitialMfaMode, rememberMfaMode } from "@/lib/mfa-preference"
+import {
+    getInitialMfaMode,
+    rememberMfaMode,
+    type MfaVerifyMode,
+} from "@/lib/mfa-preference"
+import { useCooldown } from "@/hooks/use-cooldown"
+
+const DEFAULT_EMAIL_CODE_COOLDOWN_SECONDS = 60
 
 const credentialsSchema = z.object({
     // Trim before validating so a copy-pasted email with stray surrounding
@@ -74,7 +83,10 @@ type Step =
           ticket: string
           email: string
           methods: string[]
-          mode: "totp" | "passkey" | "recovery"
+          mode: MfaVerifyMode
+          // Email is the one send-then-verify method: there is nothing to
+          // type until the server has actually mailed something.
+          emailSent?: boolean
       }
     | { kind: "recovery_codes"; codes: string[]; session: AuthSession }
 
@@ -103,6 +115,9 @@ export default function Login() {
     const [busy, setBusy] = useState(false)
     const [resetLoading, setResetLoading] = useState(false)
     const supportsPasskey = typeof window !== "undefined" && browserSupportsWebAuthn()
+    // The server owns the resend window; the countdown mirrors whatever it
+    // reports so the button says how long is left instead of 429ing.
+    const emailCodeCooldown = useCooldown(DEFAULT_EMAIL_CODE_COOLDOWN_SECONDS)
 
     const credForm = useForm<z.infer<typeof credentialsSchema>>({
         resolver: zodResolver(credentialsSchema),
@@ -159,7 +174,8 @@ export default function Login() {
             const allowsTotpVerify = ch.methods.includes("totp")
             const allowsPasskeyVerify = ch.methods.includes("webauthn")
             const allowsRecovery = ch.methods.includes("recovery_code")
-            if (!allowsTotpVerify && !allowsPasskeyVerify && !allowsRecovery) {
+            const allowsEmail = ch.methods.includes("email")
+            if (!allowsTotpVerify && !allowsPasskeyVerify && !allowsRecovery && !allowsEmail) {
                 toast.error("No verification methods available for this account.")
                 return
             }
@@ -241,6 +257,50 @@ export default function Login() {
                 return
             }
             toast.error(getDetail(err, "Passkey registration failed"))
+        } finally {
+            setBusy(false)
+        }
+    }
+
+    /**
+     * Switch between verification methods.
+     *
+     * codeForm is shared by the authenticator and email-code fields, so it
+     * has to be cleared on the way out — otherwise a half-typed TOTP code
+     * reappears in the email box (and vice versa).
+     */
+    function switchVerifyMode(mode: MfaVerifyMode) {
+        if (step.kind !== "mfa_verify") return
+        codeForm.reset({ code: "" })
+        recoveryForm.reset({ code: "" })
+        setStep({ ...step, mode })
+    }
+
+    async function sendLoginEmailCode() {
+        if (step.kind !== "mfa_verify") return
+        setBusy(true)
+        try {
+            const sent = await sendEmailCode(step.ticket)
+            emailCodeCooldown.start(sent.resend_after_seconds)
+            codeForm.reset({ code: "" })
+            setStep({ ...step, mode: "email", emailSent: true })
+            toast.success(`We sent a code to ${step.email}.`)
+        } catch (err) {
+            toast.error(getDetail(err, "Couldn't send the code. Try another method."))
+        } finally {
+            setBusy(false)
+        }
+    }
+
+    async function submitVerifyEmail(values: z.infer<typeof codeSchema>) {
+        if (step.kind !== "mfa_verify") return
+        setBusy(true)
+        try {
+            const session = await verifyEmailCode(step.ticket, values.code.trim())
+            rememberMfaMode("email")
+            await completeAuthSession(session)
+        } catch (err) {
+            toast.error(getDetail(err, "Email code verification failed"))
         } finally {
             setBusy(false)
         }
@@ -594,7 +654,11 @@ export default function Login() {
                                     ? `Use your registered passkey for ${step.email}.`
                                     : step.mode === "recovery"
                                       ? `Enter one of your saved recovery codes for ${step.email}.`
-                                      : `Enter the 6-digit code from your authenticator app for ${step.email}.`}
+                                      : step.mode === "email"
+                                        ? step.emailSent
+                                            ? `Enter the 6-digit code we emailed to ${step.email}.`
+                                            : `We'll email a 6-digit sign-in code to ${step.email}.`
+                                        : `Enter the 6-digit code from your authenticator app for ${step.email}.`}
                             </CardDescription>
                         </CardHeader>
                         <CardContent className="space-y-3">
@@ -613,10 +677,21 @@ export default function Login() {
                                             type="button"
                                             variant="ghost"
                                             className="w-full"
-                                            onClick={() => setStep({ ...step, mode: "totp" })}
+                                            onClick={() => switchVerifyMode("totp")}
                                             disabled={busy}
                                         >
                                             Use authenticator code instead
+                                        </Button>
+                                    )}
+                                    {step.methods.includes("email") && (
+                                        <Button
+                                            type="button"
+                                            variant="ghost"
+                                            className="w-full"
+                                            onClick={() => switchVerifyMode("email")}
+                                            disabled={busy}
+                                        >
+                                            Use an email code instead
                                         </Button>
                                     )}
                                     {step.methods.includes("recovery_code") && (
@@ -624,10 +699,93 @@ export default function Login() {
                                             type="button"
                                             variant="ghost"
                                             className="w-full"
-                                            onClick={() => setStep({ ...step, mode: "recovery" })}
+                                            onClick={() => switchVerifyMode("recovery")}
                                             disabled={busy}
                                         >
                                             Can&apos;t use your usual method?
+                                        </Button>
+                                    )}
+                                </>
+                            )}
+                            {step.mode === "email" && (
+                                <>
+                                    {!step.emailSent ? (
+                                        <>
+                                            <p className="text-xs text-muted-foreground">
+                                                Use this when your authenticator app or passkey
+                                                isn&apos;t available.
+                                            </p>
+                                            <Button
+                                                type="button"
+                                                className="w-full"
+                                                onClick={sendLoginEmailCode}
+                                                disabled={busy}
+                                            >
+                                                {busy ? "Sending..." : "Email me a code"}
+                                            </Button>
+                                        </>
+                                    ) : (
+                                        <Form {...codeForm}>
+                                            <form
+                                                onSubmit={codeForm.handleSubmit(submitVerifyEmail)}
+                                                className="space-y-3"
+                                            >
+                                                <FormField
+                                                    control={codeForm.control}
+                                                    name="code"
+                                                    render={({ field }) => (
+                                                        <FormItem>
+                                                            <FormLabel>6-digit code</FormLabel>
+                                                            <FormControl>
+                                                                <Input
+                                                                    inputMode="numeric"
+                                                                    autoComplete="one-time-code"
+                                                                    placeholder="123456"
+                                                                    maxLength={6}
+                                                                    {...field}
+                                                                />
+                                                            </FormControl>
+                                                            <FormMessage />
+                                                        </FormItem>
+                                                    )}
+                                                />
+                                                <Button type="submit" className="w-full" disabled={busy}>
+                                                    {busy ? "Verifying..." : "Verify"}
+                                                </Button>
+                                                <Button
+                                                    type="button"
+                                                    variant="ghost"
+                                                    className="w-full"
+                                                    onClick={sendLoginEmailCode}
+                                                    disabled={busy || emailCodeCooldown.isActive}
+                                                >
+                                                    {emailCodeCooldown.isActive
+                                                        ? `Resend code in ${emailCodeCooldown.remaining}s`
+                                                        : "Resend code"}
+                                                </Button>
+                                            </form>
+                                        </Form>
+                                    )}
+                                    {step.methods.includes("totp") && (
+                                        <Button
+                                            type="button"
+                                            variant="ghost"
+                                            className="w-full"
+                                            onClick={() => switchVerifyMode("totp")}
+                                            disabled={busy}
+                                        >
+                                            Use authenticator code instead
+                                        </Button>
+                                    )}
+                                    {step.methods.includes("webauthn") && (
+                                        <Button
+                                            type="button"
+                                            variant="ghost"
+                                            className="w-full"
+                                            onClick={() => switchVerifyMode("passkey")}
+                                            disabled={busy}
+                                        >
+                                            Use passkey instead
                                         </Button>
                                     )}
                                 </>
@@ -662,10 +820,21 @@ export default function Login() {
                                                 type="button"
                                                 variant="ghost"
                                                 className="w-full"
-                                                onClick={() => setStep({ ...step, mode: "passkey" })}
+                                                onClick={() => switchVerifyMode("passkey")}
                                                 disabled={busy}
                                             >
                                                 Use passkey instead
+                                            </Button>
+                                        )}
+                                        {step.methods.includes("email") && (
+                                            <Button
+                                                type="button"
+                                                variant="ghost"
+                                                className="w-full"
+                                                onClick={() => switchVerifyMode("email")}
+                                                disabled={busy}
+                                            >
+                                                Use an email code instead
                                             </Button>
                                         )}
                                         {step.methods.includes("recovery_code") && (
@@ -673,7 +842,7 @@ export default function Login() {
                                                 type="button"
                                                 variant="ghost"
                                                 className="w-full"
-                                                onClick={() => setStep({ ...step, mode: "recovery" })}
+                                                onClick={() => switchVerifyMode("recovery")}
                                                 disabled={busy}
                                             >
                                                 Can&apos;t use your usual method?
@@ -713,10 +882,21 @@ export default function Login() {
                                                 type="button"
                                                 variant="ghost"
                                                 className="w-full"
-                                                onClick={() => setStep({ ...step, mode: "totp" })}
+                                                onClick={() => switchVerifyMode("totp")}
                                                 disabled={busy}
                                             >
                                                 Use authenticator code instead
+                                            </Button>
+                                        )}
+                                        {step.methods.includes("email") && (
+                                            <Button
+                                                type="button"
+                                                variant="ghost"
+                                                className="w-full"
+                                                onClick={() => switchVerifyMode("email")}
+                                                disabled={busy}
+                                            >
+                                                Use an email code instead
                                             </Button>
                                         )}
                                     </form>

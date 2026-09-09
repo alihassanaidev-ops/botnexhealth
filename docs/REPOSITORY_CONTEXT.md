@@ -1152,7 +1152,7 @@ injected via Docker secret files using the `*_FILE` variants.
 | **AWS S3** | Call-recording storage | `AWS_S3_BUCKET_NAME`, `AWS_REGION` (`ca-central-1`) |
 | **JWT / Auth** | Access/refresh token signing; 15-minute access tokens and an eight-hour rolling inactive session | `JWT_SECRET` (required), `JWT_ALGORITHM` (HS256), `JWT_ISSUER`, `JWT_AUDIENCE`, `REFRESH_TOKEN_TTL_MINUTES` (480) |
 | **Encryption (PHI)** | AES-256-GCM for PHI columns | `ENCRYPTION_KEY` (must differ from `JWT_SECRET` in prod) |
-| **WebAuthn / MFA** | Passkeys + TOTP | `WEBAUTHN_RP_ID`, `WEBAUTHN_RP_NAME`, `WEBAUTHN_ALLOWED_ORIGINS` |
+| **WebAuthn / MFA** | Passkeys + TOTP, plus emailed sign-in codes as a login-only alternative once a real factor is enrolled | `WEBAUTHN_RP_ID`, `WEBAUTHN_RP_NAME`, `WEBAUTHN_ALLOWED_ORIGINS`, `MFA_EMAIL_CODE_*` |
 
 ### 7.1 Email providers and reply handling
 
@@ -1230,7 +1230,7 @@ operatories from the PMS adapter) · `slot_filter` (trim slots to operating hour
 appointment projection, campaign analytics, GoTracker writeback) ·
 `sms_service` / `sms_compliance` / `sms_privacy` (SMS send + multichannel consent/DNC) ·
 `email_notification_service` / `auth_email_service` / `email_template_service`
-(Resend + templates) · `mfa` (WebAuthn/TOTP/recovery) ·
+(Resend + templates) · `mfa` (WebAuthn/TOTP/recovery/email code) ·
 `refresh_token_service` (Redis sessions) · `event_bus` (SSE over Redis) ·
 `dead_letter` (capture + replay) · `retention_policy` (PHI windows) ·
 `dashboard_rollup` (daily metrics) · `audit` / `audit_decorator` (append-only audit).

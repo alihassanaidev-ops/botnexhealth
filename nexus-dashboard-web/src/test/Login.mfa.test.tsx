@@ -26,6 +26,7 @@ import { AuthProvider } from "@/context/AuthContext"
 import api from "@/lib/api"
 import * as mfaApi from "@/lib/mfa-api"
 import * as webauthn from "@simplewebauthn/browser"
+import { toast } from "sonner"
 
 // api.ts is mocked so AuthContext bootstrap doesn't issue real /users/me.
 vi.mock("@/lib/api", () => ({
@@ -78,6 +79,8 @@ vi.mock("@/lib/mfa-api", () => ({
     verifyWebauthnRegistration: vi.fn(),
     startWebauthnAuthentication: vi.fn(),
     verifyWebauthnAuthentication: vi.fn(),
+    sendEmailCode: vi.fn(),
+    verifyEmailCode: vi.fn(),
 }))
 
 // AuthContext's signIn issues axios.post to /auth/login directly. Stub
@@ -412,6 +415,204 @@ describe("Login — MFA flow (verify path for already-enrolled user)", () => {
 
         await waitFor(() => {
             expect(mfaApi.verifyRecoveryCode).toHaveBeenCalledWith("ticket-v3", "abcd-efgh-ijkl")
+        })
+    })
+})
+
+describe("Login — email sign-in codes", () => {
+    function emailChallenge(methods = ["totp", "email", "recovery_code"]) {
+        return loginChallenge({
+            status: "mfa_required",
+            mfa_ticket: "ticket-e1",
+            methods,
+            setup_methods: [],
+            role: "STAFF",
+            email: "bob@clinic.test",
+        })
+    }
+
+    function stubPostAuthProfile() {
+        apiGet.mockResolvedValue({
+            data: {
+                id: "u1",
+                email: "bob@clinic.test",
+                role: "STAFF",
+                institution_id: "inst-1",
+                location_id: "loc-1",
+                is_active: true,
+            },
+        })
+    }
+
+    it("offers the email option without making it the default", async () => {
+        // The stronger factor stays in front; email is one click away.
+        axiosPostMock.mockResolvedValue(emailChallenge())
+
+        renderLogin()
+        await fillCredentialsAndSubmit("bob@clinic.test")
+
+        await waitFor(() => {
+            expect(screen.getByLabelText(/6-digit code/i)).toBeInTheDocument()
+        })
+        expect(screen.getByText(/from your authenticator app/i)).toBeInTheDocument()
+        expect(
+            screen.getByRole("button", { name: /use an email code instead/i }),
+        ).toBeInTheDocument()
+        expect(mfaApi.sendEmailCode).not.toHaveBeenCalled()
+    })
+
+    it("hides the email option when the backend does not offer it", async () => {
+        axiosPostMock.mockResolvedValue(emailChallenge(["totp", "recovery_code"]))
+
+        renderLogin()
+        await fillCredentialsAndSubmit("bob@clinic.test")
+
+        await waitFor(() => {
+            expect(screen.getByLabelText(/6-digit code/i)).toBeInTheDocument()
+        })
+        expect(
+            screen.queryByRole("button", { name: /use an email code instead/i }),
+        ).not.toBeInTheDocument()
+    })
+
+    it("sends a code only when the user asks, then verifies what they type", async () => {
+        axiosPostMock.mockResolvedValue(emailChallenge())
+        ;(mfaApi.sendEmailCode as ReturnType<typeof vi.fn>).mockResolvedValue({
+            status: "sent",
+            expires_in_seconds: 600,
+            resend_after_seconds: 60,
+        })
+        ;(mfaApi.verifyEmailCode as ReturnType<typeof vi.fn>).mockResolvedValue({
+            status: "authenticated",
+            access_token: "jwt-email",
+            token_type: "bearer",
+            recovery_codes: null,
+        })
+        stubPostAuthProfile()
+
+        renderLogin()
+        const user = await fillCredentialsAndSubmit("bob@clinic.test")
+        await waitFor(() => {
+            expect(screen.getByLabelText(/6-digit code/i)).toBeInTheDocument()
+        })
+
+        await user.click(screen.getByRole("button", { name: /use an email code instead/i }))
+
+        // Nothing to type yet — the code has to be requested first.
+        expect(screen.queryByLabelText(/6-digit code/i)).not.toBeInTheDocument()
+        await user.click(screen.getByRole("button", { name: /email me a code/i }))
+
+        await waitFor(() => {
+            expect(mfaApi.sendEmailCode).toHaveBeenCalledWith("ticket-e1")
+        })
+
+        await waitFor(() => {
+            expect(screen.getByLabelText(/6-digit code/i)).toBeInTheDocument()
+        })
+        await user.type(screen.getByLabelText(/6-digit code/i), "481902")
+        await user.click(screen.getByRole("button", { name: /^verify$/i }))
+
+        await waitFor(() => {
+            expect(mfaApi.verifyEmailCode).toHaveBeenCalledWith("ticket-e1", "481902")
+        })
+    })
+
+    it("holds the resend button for the window the server asked for", async () => {
+        axiosPostMock.mockResolvedValue(emailChallenge())
+        ;(mfaApi.sendEmailCode as ReturnType<typeof vi.fn>).mockResolvedValue({
+            status: "sent",
+            expires_in_seconds: 600,
+            resend_after_seconds: 45,
+        })
+
+        renderLogin()
+        const user = await fillCredentialsAndSubmit("bob@clinic.test")
+        await waitFor(() => {
+            expect(screen.getByLabelText(/6-digit code/i)).toBeInTheDocument()
+        })
+        await user.click(screen.getByRole("button", { name: /use an email code instead/i }))
+        await user.click(screen.getByRole("button", { name: /email me a code/i }))
+
+        // Counting down in the label beats letting the click 429.
+        const resend = await screen.findByRole("button", { name: /resend code in 45s/i })
+        expect(resend).toBeDisabled()
+        expect(mfaApi.sendEmailCode).toHaveBeenCalledTimes(1)
+    })
+
+    it("does not strand the user when the mail fails to send", async () => {
+        axiosPostMock.mockResolvedValue(emailChallenge())
+        ;(mfaApi.sendEmailCode as ReturnType<typeof vi.fn>).mockRejectedValue(
+            new Error("provider down"),
+        )
+
+        renderLogin()
+        const user = await fillCredentialsAndSubmit("bob@clinic.test")
+        await waitFor(() => {
+            expect(screen.getByLabelText(/6-digit code/i)).toBeInTheDocument()
+        })
+        await user.click(screen.getByRole("button", { name: /use an email code instead/i }))
+        await user.click(screen.getByRole("button", { name: /email me a code/i }))
+
+        await waitFor(() => expect(toast.error).toHaveBeenCalled())
+        // Still on the send screen, and the other methods remain reachable.
+        expect(screen.getByRole("button", { name: /email me a code/i })).toBeInTheDocument()
+        expect(
+            screen.getByRole("button", { name: /use authenticator code instead/i }),
+        ).toBeInTheDocument()
+    })
+
+    it("clears a half-typed authenticator code when switching to email", async () => {
+        // codeForm is shared by both methods; a leaked value would look like
+        // the emailed code was prefilled.
+        axiosPostMock.mockResolvedValue(emailChallenge())
+        ;(mfaApi.sendEmailCode as ReturnType<typeof vi.fn>).mockResolvedValue({
+            status: "sent",
+            expires_in_seconds: 600,
+            resend_after_seconds: 60,
+        })
+
+        renderLogin()
+        const user = await fillCredentialsAndSubmit("bob@clinic.test")
+        await waitFor(() => {
+            expect(screen.getByLabelText(/6-digit code/i)).toBeInTheDocument()
+        })
+        await user.type(screen.getByLabelText(/6-digit code/i), "111222")
+
+        await user.click(screen.getByRole("button", { name: /use an email code instead/i }))
+        await user.click(screen.getByRole("button", { name: /email me a code/i }))
+
+        const field = await screen.findByLabelText(/6-digit code/i)
+        expect(field).toHaveValue("")
+    })
+
+    it("remembers email as the preferred method after a successful sign-in", async () => {
+        axiosPostMock.mockResolvedValue(emailChallenge())
+        ;(mfaApi.sendEmailCode as ReturnType<typeof vi.fn>).mockResolvedValue({
+            status: "sent",
+            expires_in_seconds: 600,
+            resend_after_seconds: 60,
+        })
+        ;(mfaApi.verifyEmailCode as ReturnType<typeof vi.fn>).mockResolvedValue({
+            status: "authenticated",
+            access_token: "jwt-email",
+            token_type: "bearer",
+            recovery_codes: null,
+        })
+        stubPostAuthProfile()
+
+        renderLogin()
+        const user = await fillCredentialsAndSubmit("bob@clinic.test")
+        await waitFor(() => {
+            expect(screen.getByLabelText(/6-digit code/i)).toBeInTheDocument()
+        })
+        await user.click(screen.getByRole("button", { name: /use an email code instead/i }))
+        await user.click(screen.getByRole("button", { name: /email me a code/i }))
+        await screen.findByLabelText(/6-digit code/i)
+        await user.type(screen.getByLabelText(/6-digit code/i), "481902")
+        await user.click(screen.getByRole("button", { name: /^verify$/i }))
+
+        await waitFor(() => {
+            expect(window.localStorage.getItem("scalenexus.preferred-mfa-method")).toBe("email")
         })
     })
 })

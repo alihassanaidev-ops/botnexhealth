@@ -1,4 +1,4 @@
-export type MfaVerifyMode = "totp" | "passkey" | "recovery"
+export type MfaVerifyMode = "totp" | "passkey" | "recovery" | "email"
 
 const MFA_PREFERENCE_KEY = "scalenexus.preferred-mfa-method"
 
@@ -11,6 +11,7 @@ export function getInitialMfaMode(methods: string[]): MfaVerifyMode {
         const preferred = window.localStorage.getItem(MFA_PREFERENCE_KEY)
         if (preferred === "totp" && methods.includes("totp")) return "totp"
         if (preferred === "passkey" && methods.includes("webauthn")) return "passkey"
+        if (preferred === "email" && methods.includes("email")) return "email"
     } catch {
         // Storage may be unavailable in private/restricted browser contexts.
     }
@@ -20,6 +21,10 @@ export function getInitialMfaMode(methods: string[]): MfaVerifyMode {
     // become the default after a user successfully chooses one.
     if (methods.includes("totp")) return "totp"
     if (methods.includes("webauthn")) return "passkey"
+    // Email codes rank below both: they are the fallback for a user whose
+    // phone or passkey is out of reach, not the everyday route. A user who
+    // picks one anyway is remembered by the preference check above.
+    if (methods.includes("email")) return "email"
     return "recovery"
 }
 

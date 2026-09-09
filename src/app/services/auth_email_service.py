@@ -58,8 +58,50 @@ _BRANDED_EMAIL_TEMPLATE = Template(
 )
 
 
+# Same card, wordmark and footer as the branded template above, but built
+# around a code the reader retypes rather than a link they click. There is
+# deliberately no URL anywhere in this mail: a sign-in code email that also
+# carries a clickable link is a ready-made phishing template, and the code
+# is only usable in the browser tab that already holds the login ticket.
+_CODE_EMAIL_TEMPLATE = Template(
+    """\
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="color-scheme" content="dark">
+</head>
+<body style="margin:0;padding:0;background-color:#050505;">
+<span style="display:none;max-height:0;overflow:hidden;opacity:0;color:#050505;">$preheader</span>
+<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="background-color:#050505;">
+<tr><td align="center" style="padding:32px 16px;">
+<table role="presentation" width="480" cellpadding="0" cellspacing="0" border="0" style="width:480px;max-width:100%;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;">
+<tr><td style="padding:0 4px 20px;">
+<span style="font-size:18px;font-weight:600;letter-spacing:-0.02em;color:#fafafa;">ScaleNexus<span style="color:#a78bfa;">.AI</span></span>
+</td></tr>
+<tr><td style="background-color:#0d0d0d;border:1px solid #1f2937;border-radius:12px;padding:32px;">
+<h1 style="margin:0 0 12px;font-size:20px;font-weight:600;letter-spacing:-0.02em;color:#eef2ff;">$heading</h1>
+<p style="margin:0 0 24px;font-size:14px;line-height:22px;color:#94a3b8;">$intro</p>
+<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0"><tr>
+<td align="center" bgcolor="#111827" style="border-radius:8px;background-color:#111827;border:1px solid #1f2937;padding:20px 12px;">
+<span style="font-family:'SFMono-Regular',Consolas,'Liberation Mono',Menlo,monospace;font-size:32px;font-weight:600;letter-spacing:0.35em;line-height:40px;color:#eef2ff;">$code</span>
+</td></tr></table>
+<p style="margin:24px 0 0;font-size:12px;line-height:18px;color:#6b7280;">$expiry_note</p>
+</td></tr>
+<tr><td style="padding:20px 4px 0;">
+<p style="margin:0;font-size:12px;line-height:18px;color:#6b7280;">$footer</p>
+</td></tr>
+</table>
+</td></tr>
+</table>
+</body>
+</html>"""
+)
+
+
 class AuthEmailService:
-    """Send invite and password reset emails via Resend."""
+    """Send invite, password reset, and sign-in code emails via Resend."""
 
     async def send_invite_email(
         self,
@@ -130,6 +172,44 @@ class AuthEmailService:
             text=(
                 "You requested a password reset.\n\n"
                 f"Reset your password: {link}\n"
+            ),
+        )
+
+    async def send_login_code_email(
+        self,
+        *,
+        email: str,
+        code: str,
+        ttl_minutes: int,
+    ) -> None:
+        """Mail a one-time sign-in code for the email MFA method."""
+        minutes = max(1, ttl_minutes)
+        plural = "minute" if minutes == 1 else "minutes"
+        expiry_note = f"This code expires in {minutes} {plural} and can be used once."
+        await self._send_email(
+            to=email,
+            subject="Your ScaleNexus sign-in code",
+            html=self._render_code_html(
+                preheader=f"Your ScaleNexus sign-in code is {code}.",
+                heading="Your sign-in code",
+                intro=(
+                    "Enter this code in the ScaleNexus sign-in screen to finish "
+                    "signing in."
+                ),
+                code=code,
+                expiry_note=expiry_note,
+                footer=(
+                    "If you didn't try to sign in, someone may know your password "
+                    "— change it and contact your ScaleNexus administrator. "
+                    "ScaleNexus will never ask you for this code."
+                ),
+            ),
+            text=(
+                "Your ScaleNexus sign-in code is:\n\n"
+                f"{code}\n\n"
+                f"{expiry_note}\n\n"
+                "If you didn't try to sign in, change your password and contact "
+                "your ScaleNexus administrator.\n"
             ),
         )
 
@@ -228,6 +308,26 @@ class AuthEmailService:
             intro=intro,
             button_label=button_label,
             link=link,
+            footer=footer,
+        )
+
+    def _render_code_html(
+        self,
+        *,
+        preheader: str,
+        heading: str,
+        intro: str,
+        code: str,
+        expiry_note: str,
+        footer: str,
+    ) -> str:
+        """Render the branded code email (no links, by design)."""
+        return _CODE_EMAIL_TEMPLATE.substitute(
+            preheader=preheader,
+            heading=heading,
+            intro=intro,
+            code=code,
+            expiry_note=expiry_note,
             footer=footer,
         )
 

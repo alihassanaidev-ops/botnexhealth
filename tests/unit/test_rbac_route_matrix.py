@@ -90,6 +90,8 @@ ROUTES_BY_BOUNDARY: dict[str, tuple[str, ...]] = {
         "POST /api/auth/mfa/totp/setup/verify",
         "POST /api/auth/mfa/totp/verify",
         "POST /api/auth/mfa/recovery-code/verify",
+        "POST /api/auth/mfa/email/send",
+        "POST /api/auth/mfa/email/verify",
     ),
     SIGNED_WEBHOOK: (
         "POST /api/v1/retell/functions",
