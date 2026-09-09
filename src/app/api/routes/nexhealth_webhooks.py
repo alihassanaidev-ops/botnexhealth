@@ -87,6 +87,16 @@ def _event_family(event_name: str | None) -> str:
     return str(event_name or "").split(".", 1)[0]
 
 
+def _nexhealth_id_lookup_values(value: str | None) -> list[str]:
+    """Return raw and locally-prefixed forms for NexHealth ids."""
+    text = _clean_str(value)
+    if not text:
+        return []
+    raw = text.removeprefix("nh-")
+    values = [raw, f"nh-{raw}"]
+    return list(dict.fromkeys(values))
+
+
 def _change_marker(key: str, value: Any) -> str | None:
     if isinstance(value, bool):
         return f"{key}:{str(value).lower()}"
@@ -173,13 +183,14 @@ async def _resolve_appointment_reason(
     """
     if not appointment_type_id:
         return None
+    lookup_values = _nexhealth_id_lookup_values(appointment_type_id)
 
     row = await session.execute(
         select(InstitutionAppointmentType.name).where(
             InstitutionAppointmentType.institution_id == institution_id,
             InstitutionAppointmentType.location_id == location_id,
             InstitutionAppointmentType.source == "nexhealth",
-            InstitutionAppointmentType.source_id == appointment_type_id,
+            InstitutionAppointmentType.source_id.in_(lookup_values),
         )
     )
     name = row.scalar_one_or_none()

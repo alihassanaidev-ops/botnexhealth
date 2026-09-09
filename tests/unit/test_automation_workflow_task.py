@@ -17,6 +17,9 @@ from src.app.models.automation_workflow import (
     AutomationWorkflowVersion,
 )
 from src.app.pms.base import SupportsAppointmentConfirmation
+from src.app.services.automation.appointment_trigger_service import (
+    _nexhealth_id_lookup_values,
+)
 from src.app.services.automation.definition_schema import WorkflowDefinition
 from src.app.tasks.automation_workflow import (
     _claim_and_enqueue_async,
@@ -35,6 +38,11 @@ from src.app.tasks.automation_workflow import (
 )
 
 _NOW = datetime(2026, 7, 2, 14, 0, 0, tzinfo=timezone.utc)
+
+
+def test_appointment_trigger_nexhealth_id_lookup_values_match_cached_source_ids():
+    assert _nexhealth_id_lookup_values("1232986") == ["1232986", "nh-1232986"]
+    assert _nexhealth_id_lookup_values("nh-1232986") == ["1232986", "nh-1232986"]
 
 
 class _FakeConfirmAdapter(SupportsAppointmentConfirmation):

@@ -12,6 +12,7 @@ import pytest
 
 from src.app.api.routes.nexhealth_webhooks import (
     _appointment_dedup_key,
+    _nexhealth_id_lookup_values,
     _patient_dedup_key,
     _sync_status_dedup_key,
     _verify_signature,
@@ -169,6 +170,11 @@ _VALID_PAYLOAD = {
 # ---------------------------------------------------------------------------
 # Business event dedup keys
 # ---------------------------------------------------------------------------
+
+
+def test_nexhealth_id_lookup_values_matches_raw_and_prefixed_forms():
+    assert _nexhealth_id_lookup_values("1232986") == ["1232986", "nh-1232986"]
+    assert _nexhealth_id_lookup_values("nh-1232986") == ["1232986", "nh-1232986"]
 
 
 def test_appointment_dedup_key_matches_v2_v3_overlap_payloads():

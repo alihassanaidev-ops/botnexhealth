@@ -33,6 +33,14 @@ from src.app.services.automation.trigger_filter import trigger_filter_matches
 from src.app.services.automation.trigger_lookup import find_active_workflows
 
 
+def _nexhealth_id_lookup_values(value: str | None) -> list[str]:
+    text = str(value or "").strip()
+    if not text:
+        return []
+    raw = text.removeprefix("nh-")
+    return list(dict.fromkeys([raw, f"nh-{raw}"]))
+
+
 class AppointmentTriggerService:
     def __init__(self, session: AsyncSession) -> None:
         self.session = session
@@ -71,7 +79,9 @@ class AppointmentTriggerService:
             type_result = await self.session.execute(
                 select(InstitutionAppointmentType).where(
                     InstitutionAppointmentType.institution_id == institution_id,
-                    InstitutionAppointmentType.source_id == appt.appointment_type_id,
+                    InstitutionAppointmentType.source_id.in_(
+                        _nexhealth_id_lookup_values(appt.appointment_type_id)
+                    ),
                     InstitutionAppointmentType.location_id
                     == (appt.location_id or fallback_location_id),
                 )
