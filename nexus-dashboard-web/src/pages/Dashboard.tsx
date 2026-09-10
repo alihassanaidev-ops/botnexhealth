@@ -518,6 +518,12 @@ export default function Dashboard() {
     const totalTagCount = tagCounts.reduce((sum, tc) => sum + tc.count, 0)
     const isNoPmsDashboard = !institutionLoading && (pmsType === "none" || !hasPms)
     const rangeCardConfig = isNoPmsDashboard ? NO_PMS_RANGE_CARD_CONFIG : RANGE_CARD_CONFIG
+    // Nine cards across two rows of four left one stranded on a line of its own.
+    // Avg Call Duration is the one that reads as happily beside money as beside
+    // counts, so it moves to whichever row needs a fourth.
+    const countCards = value
+        ? rangeCardConfig.filter((card) => card.key !== "avg_call_duration_seconds")
+        : rangeCardConfig
     const bookingQuickLink = isNoPmsDashboard
         ? { label: "Needs Booking", tags: ["needs_booking"] }
         : { label: "Booked Today", tags: ["appointment_booked"] }
@@ -552,9 +558,11 @@ export default function Dashboard() {
                     }
                 />
 
-                {/* Range-scoped cards (driven by the date-range picker) */}
-                <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-4">
-                    {rangeCardConfig.map(({ label, key, icon, accentColor, glowRgb, suffix }) => (
+                {/* Counts for the selected range. Four so the row always fills;
+                    Avg Call Duration joins the value row below, or comes back
+                    here as a fifth when there is no value row to join. */}
+                <div className={`grid gap-4 md:grid-cols-2 ${value ? "lg:grid-cols-4" : "lg:grid-cols-5"}`}>
+                    {countCards.map(({ label, key, icon, accentColor, glowRgb, suffix }) => (
                         <GlassCard
                             key={key}
                             label={label}
@@ -563,19 +571,25 @@ export default function Dashboard() {
                             accentColor={accentColor}
                             glowRgb={glowRgb}
                             suffix={suffix}
+                            formatValue={
+                                key === "avg_call_duration_seconds" ? formatDuration : undefined
+                            }
                             loading={loading}
                         />
                     ))}
                 </div>
 
                 {/* Value generated, same window as the counts above. Absent
-                    until the financials are saved — see fetchSummary. */}
+                    until the financials are saved — see fetchSummary.
+                    Total Value is deliberately not a card: it is revenue plus
+                    staff saving, and with no subscription cost recorded it is
+                    the same number as Net Value sitting next to it. */}
                 {value && (
                     <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-4">
+                        <GlassCard label="Avg Call Duration" value={summary?.range?.avg_call_duration_seconds ?? 0} icon={Timer} accentColor="violet" glowRgb="139,92,246" formatValue={formatDuration} loading={loading} />
                         <GlassCard label="Revenue Generated" value={value.revenue} icon={DollarSign} accentColor="emerald" glowRgb="16,185,129" formatValue={formatMoney} loading={loading} />
                         <GlassCard label="Staff Cost Saved" value={value.staffCostSaved ?? 0} icon={Clock} accentColor="sky" glowRgb="14,165,233" formatValue={value.staffCostSaved === null ? () => "—" : formatMoney} loading={loading} />
-                        <GlassCard label="Total Value" value={value.totalValue} icon={TrendingUp} accentColor="violet" glowRgb="139,92,246" formatValue={formatMoney} loading={loading} />
-                        <GlassCard label="Net Value" value={value.netValue} icon={Percent} accentColor="amber" glowRgb="245,158,11" formatValue={formatMoney} loading={loading} />
+                        <GlassCard label="Net Value" value={value.netValue} icon={TrendingUp} accentColor="amber" glowRgb="245,158,11" formatValue={formatMoney} loading={loading} />
                     </div>
                 )}
 
