@@ -4,6 +4,7 @@ Institution portal routes.
 
 from __future__ import annotations
 
+from datetime import date as date_type
 from datetime import time as dt_time
 import re
 from typing import Annotated, Any, Literal
@@ -1590,6 +1591,9 @@ class ROIConfigResponse(BaseModel):
 class ROICalculationResponse(BaseModel):
     # Inputs used
     config: ROIConfigResponse
+    #: The window these figures cover.
+    period_start: date_type | None = None
+    period_end: date_type | None = None
     # Raw metrics
     total_calls_month: int
     appointments_booked_month: int
@@ -1659,14 +1663,21 @@ async def update_roi_config(
 @router.get("/roi/calculate", response_model=ROICalculationResponse)
 async def calculate_roi(
     current_user: Annotated[User, Depends(get_current_institution_admin)],
+    start_date: date_type | None = Query(
+        None, description="Inclusive window start (YYYY-MM-DD). Defaults to the 1st."
+    ),
+    end_date: date_type | None = Query(
+        None, description="Inclusive window end (YYYY-MM-DD). Defaults to today."
+    ),
 ):
     if not current_user.institution_id:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST, detail="No institution assignment"
         )
 
-    from datetime import datetime, timezone as tz
     from src.app.models.call import Call, CallStatus
+
+    period_start, period_end = _roi_window(start_date, end_date)
 
     async with get_db_session() as session:
         svc = InstitutionService(session)
@@ -1679,36 +1690,23 @@ async def calculate_roi(
 
         config = ROIConfigResponse(**institution.roi_config)
         institution_id = current_user.institution_id
-        today = datetime.now(tz.utc).date()
-        month_start = today.replace(day=1)
 
-        total_calls_month = (
-            await session.execute(
-                select(func.count(Call.id)).where(
-                    Call.institution_id == institution_id,
-                    Call.call_date >= month_start,
-                )
+        def _count(*extra):
+            return select(func.count(Call.id)).where(
+                Call.institution_id == institution_id,
+                Call.call_date >= period_start,
+                Call.call_date <= period_end,
+                *extra,
             )
-        ).scalar_one()
 
+        total_calls_month = (await session.execute(_count())).scalar_one()
         appointments_booked_month = (
             await session.execute(
-                select(func.count(Call.id)).where(
-                    Call.institution_id == institution_id,
-                    Call.call_status == CallStatus.APPOINTMENT_BOOKED.value,
-                    Call.call_date >= month_start,
-                )
+                _count(Call.call_status == CallStatus.APPOINTMENT_BOOKED.value)
             )
         ).scalar_one()
-
         new_patients_month = (
-            await session.execute(
-                select(func.count(Call.id)).where(
-                    Call.institution_id == institution_id,
-                    Call.is_new_patient.is_(True),
-                    Call.call_date >= month_start,
-                )
-            )
+            await session.execute(_count(Call.is_new_patient.is_(True)))
         ).scalar_one()
 
         billing_mode = _billing_mode(institution)
@@ -1754,6 +1752,8 @@ async def calculate_roi(
 
     return ROICalculationResponse(
         config=config,
+        period_start=period_start,
+        period_end=period_end,
         total_calls_month=total_calls_month,
         appointments_booked_month=appointments_booked_month,
         new_patients_month=new_patients_month,
@@ -1793,8 +1793,11 @@ class LocationROIConfigRequest(BaseModel):
     avg_new_patient_value: float = Field(
         ..., ge=0, description="Average new patient first-visit revenue here ($)"
     )
-    staff_hourly_rate: float = Field(
-        ..., ge=0, description="Front desk staff hourly rate at this location ($)"
+    #: Optional. Clinics that do not track a front desk rate leave it blank,
+    #: and the staff-time saving is then reported as unknown rather than as a
+    #: saving of zero — "not measured" and "saved nothing" are different claims.
+    staff_hourly_rate: float | None = Field(
+        None, ge=0, description="Front desk staff hourly rate at this location ($)"
     )
     avg_call_duration_minutes: float = Field(
         4.0, ge=0, description="Avg manual call handling time (minutes)"
@@ -1812,7 +1815,7 @@ class LocationROIConfigResponse(BaseModel):
     location_slug: str
     avg_appointment_value: float
     avg_new_patient_value: float
-    staff_hourly_rate: float
+    staff_hourly_rate: float | None
     avg_call_duration_minutes: float
     #: None when this location has no price of its own. Meaningful only under
     #: per-location billing; under per-institution billing it stays None and the
@@ -1830,6 +1833,10 @@ class LocationROIConfigResponse(BaseModel):
 
 class LocationROICalculationResponse(BaseModel):
     config: LocationROIConfigResponse
+    #: The window these figures cover. Explicit because the caller can pick it,
+    #: and a revenue number without its period is unreadable.
+    period_start: date_type
+    period_end: date_type
     total_calls_month: int
     appointments_booked_month: int
     new_patients_month: int
@@ -1837,7 +1844,8 @@ class LocationROICalculationResponse(BaseModel):
     revenue_from_new_patients: float
     total_revenue_generated: float
     staff_time_saved_hours: float
-    staff_cost_saved: float
+    #: None when no hourly rate is configured — unknown, not zero.
+    staff_cost_saved: float | None
     total_value: float
     #: This location's monthly subscription — its own price under per-location
     #: billing, the institution's apportioned share under per-institution.
@@ -1858,6 +1866,32 @@ _LOCATION_ROI_FIELDS = (
     "staff_hourly_rate",
     "avg_call_duration_minutes",
 )
+
+
+def _roi_window(start_date: Any, end_date: Any) -> tuple[Any, Any]:
+    """Resolve the reporting window, defaulting to calendar month-to-date.
+
+    The dashboard drives this from the same picker as its call cards, so a
+    revenue figure can never describe a different period from the counts it
+    sits beside — which is precisely the confusion the fixed-month KPI row on
+    that page caused before it was removed.
+    """
+    from datetime import date as _date
+    from datetime import datetime as _datetime
+    from datetime import timezone as _tz
+
+    today = _datetime.now(_tz.utc).date()
+    end = end_date or today
+    if end > today:  # no data in the future
+        end = today
+    start = start_date or end.replace(day=1)
+    if start > end:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="start_date must be on or before end_date",
+        )
+    assert isinstance(start, _date) and isinstance(end, _date)
+    return start, end
 
 
 def _billing_mode(institution: Any) -> str:
@@ -1881,7 +1915,7 @@ def _location_subscription_cost(location: Any) -> float | None:
 
 def _resolved_location_roi(
     location: Any, institution: Any
-) -> tuple[dict[str, float], str] | None:
+) -> tuple[dict[str, float | None], str] | None:
     """This location's inputs and where they came from, or None if unset.
 
     Falls through to the institution only as a whole: mixing a location's
@@ -1894,7 +1928,14 @@ def _resolved_location_roi(
         raw, source = institution.roi_config, "institution"
     else:
         return None
-    return {key: float(raw.get(key) or 0.0) for key in _LOCATION_ROI_FIELDS}, source
+    values: dict[str, float | None] = {
+        key: float(raw.get(key) or 0.0) for key in _LOCATION_ROI_FIELDS
+    }
+    # Distinguish "no rate configured" from "a rate of zero": the first makes
+    # the staff saving unknown, the second makes it genuinely nil.
+    rate = raw.get("staff_hourly_rate")
+    values["staff_hourly_rate"] = None if rate is None else float(rate)
+    return values, source
 
 
 async def _location_for_roi(session, loc_slug: str, current_user: User):
@@ -2017,14 +2058,17 @@ async def clear_location_roi_config(
 async def calculate_location_roi(
     loc_slug: str,
     current_user: Annotated[User, Depends(get_current_institution_or_location_admin)],
+    start_date: date_type | None = Query(
+        None, description="Inclusive window start (YYYY-MM-DD). Defaults to the 1st."
+    ),
+    end_date: date_type | None = Query(
+        None, description="Inclusive window end (YYYY-MM-DD). Defaults to today."
+    ),
 ):
-    from datetime import datetime, timezone as tz
-
     from src.app.models.call import Call, CallStatus
 
     institution_id = _require_institution(current_user)
-    today = datetime.now(tz.utc).date()
-    month_start = today.replace(day=1)
+    period_start, period_end = _roi_window(start_date, end_date)
 
     async with get_db_session() as session:
         location, institution = await _location_for_roi(
@@ -2046,7 +2090,8 @@ async def calculate_location_roi(
             return select(func.count(Call.id)).where(
                 Call.institution_id == institution_id,
                 Call.location_id == location_id,
-                Call.call_date >= month_start,
+                Call.call_date >= period_start,
+                Call.call_date <= period_end,
                 *extra,
             )
 
@@ -2076,7 +2121,8 @@ async def calculate_location_roi(
                     select(func.count(Call.id)).where(
                         Call.institution_id == institution_id,
                         Call.location_id.is_not(None),
-                        Call.call_date >= month_start,
+                        Call.call_date >= period_start,
+                        Call.call_date <= period_end,
                     )
                 )
             ).scalar_one()
@@ -2105,14 +2151,14 @@ async def calculate_location_roi(
         monthly_cost_allocated = round(institution_cost * share, 2)
         cost_allocation_basis = (
             f"Billed per institution: {total_calls_month} of "
-            f"{institution_calls_month} located calls this month "
+            f"{institution_calls_month} located calls in this period "
             f"({share:.1%} of the institution subscription)"
         )
     else:
         monthly_cost_allocated = 0.0
         cost_allocation_basis = (
-            "Billed per institution, but there were no located calls this "
-            "month, so no subscription cost is apportioned"
+            "Billed per institution, but there were no located calls in this "
+            "period, so no subscription cost is apportioned"
         )
 
     revenue_from_bookings = appointments_booked_month * values["avg_appointment_value"]
@@ -2120,11 +2166,15 @@ async def calculate_location_roi(
     total_revenue_generated = revenue_from_bookings + revenue_from_new_patients
 
     staff_time_saved_hours = round(
-        (total_calls_month * values["avg_call_duration_minutes"]) / 60, 2
+        (total_calls_month * (values["avg_call_duration_minutes"] or 0.0)) / 60, 2
     )
-    staff_cost_saved = round(staff_time_saved_hours * values["staff_hourly_rate"], 2)
+    # No rate configured means the saving is unknown, not nil, so it is left out
+    # of the total rather than added as zero. Reporting it as zero would let a
+    # clinic conclude the AI saved its front desk nothing.
+    rate = values["staff_hourly_rate"]
+    staff_cost_saved = None if rate is None else round(staff_time_saved_hours * rate, 2)
 
-    total_value = round(total_revenue_generated + staff_cost_saved, 2)
+    total_value = round(total_revenue_generated + (staff_cost_saved or 0.0), 2)
     net_value = round(total_value - monthly_cost_allocated, 2)
     roi_percentage = (
         round((net_value / monthly_cost_allocated) * 100, 2)

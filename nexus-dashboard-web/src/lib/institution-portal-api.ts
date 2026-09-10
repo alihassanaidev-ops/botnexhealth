@@ -272,8 +272,23 @@ export async function updateROIConfig(config: ROIConfig): Promise<ROIConfig> {
     return data
 }
 
-export async function calculateROI(): Promise<ROICalculation> {
-    const { data } = await api.get<ROICalculation>("/institution/roi/calculate")
+export interface ROIWindow {
+    startDate?: string
+    endDate?: string
+}
+
+function roiParams(window?: ROIWindow): string {
+    const params = new URLSearchParams()
+    if (window?.startDate) params.set("start_date", window.startDate)
+    if (window?.endDate) params.set("end_date", window.endDate)
+    const qs = params.toString()
+    return qs ? `?${qs}` : ""
+}
+
+export async function calculateROI(window?: ROIWindow): Promise<ROICalculation> {
+    const { data } = await api.get<ROICalculation>(
+        `/institution/roi/calculate${roiParams(window)}`,
+    )
     return data
 }
 
@@ -286,7 +301,8 @@ export interface LocationROIConfig {
     location_slug: string
     avg_appointment_value: number
     avg_new_patient_value: number
-    staff_hourly_rate: number
+    /** Null when the clinic does not track a front desk rate. */
+    staff_hourly_rate: number | null
     avg_call_duration_minutes: number
     /** This clinic's own price. Null when unset; never inherited. */
     monthly_subscription_cost: number | null
@@ -313,7 +329,10 @@ export interface LocationROICalculation {
     revenue_from_new_patients: number
     total_revenue_generated: number
     staff_time_saved_hours: number
-    staff_cost_saved: number
+    /** Null when no hourly rate is configured — unknown, not zero. */
+    staff_cost_saved: number | null
+    period_start: string
+    period_end: string
     total_value: number
     monthly_cost_allocated: number
     cost_allocation_basis: string
@@ -350,9 +369,10 @@ export async function clearLocationROIConfig(locSlug: string): Promise<void> {
 
 export async function calculateLocationROI(
     locSlug: string,
+    window?: ROIWindow,
 ): Promise<LocationROICalculation> {
     const { data } = await api.get<LocationROICalculation>(
-        `/institution/locations/${encodeURIComponent(locSlug)}/roi/calculate`,
+        `/institution/locations/${encodeURIComponent(locSlug)}/roi/calculate${roiParams(window)}`,
     )
     return data
 }

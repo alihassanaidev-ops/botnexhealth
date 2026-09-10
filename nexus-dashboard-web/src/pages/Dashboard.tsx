@@ -10,6 +10,8 @@ import {
     ArrowRight,
     CalendarDays,
     Clock,
+    DollarSign,
+    TrendingUp,
     Users,
     Percent,
     Timer,
@@ -42,6 +44,7 @@ import { cn } from "@/lib/utils"
 import { getDashboardSummary, getAggregateDashboard, getMonthlyMetrics } from "@/lib/dashboard-api"
 import type { MonthlyMetricPoint } from "@/lib/dashboard-api"
 import { TrendChart } from "@/components/dashboard/TrendChart"
+import { calculateROI, calculateLocationROI } from "@/lib/institution-portal-api"
 import { resolveCallback } from "@/lib/calls-api"
 import { STATUS_OPTIONS } from "@/lib/constants"
 import { DateRangePicker } from "@/components/dashboard/DateRangePicker"
@@ -72,6 +75,20 @@ function formatDuration(seconds: number | null): string {
     const s = rounded % 60
     return s > 0 ? `${m}m ${s}s` : `${m}m`
 }
+
+interface DashboardValue {
+    revenue: number
+    staffCostSaved: number | null
+    totalValue: number
+    netValue: number
+}
+
+const formatMoney = (value: number) =>
+    value.toLocaleString(undefined, {
+        style: "currency",
+        currency: "USD",
+        maximumFractionDigits: 0,
+    })
 
 // ── Volume Card Configs ──────────────────────────────────────────────────────
 
@@ -433,6 +450,7 @@ export default function Dashboard() {
     const [selectedLocationSlug, setSelectedLocationSlug] = useState<string>("all")
     const [locations, setLocations] = useState<{ slug: string; name: string }[]>([])
     const [trendPoints, setTrendPoints] = useState<MonthlyMetricPoint[]>([])
+    const [value, setValue] = useState<DashboardValue | null>(null)
 
     const [range, setRange] = useState<DateRangeValue>(() => lastNDaysRange(7))
 
@@ -452,6 +470,25 @@ export default function Dashboard() {
                 setTrendPoints(trend.points)
             } catch {
                 setTrendPoints([])
+            }
+
+            // Revenue is only meaningful once somebody has entered what an
+            // appointment is worth, so an unconfigured tenant gets no cards
+            // rather than a row of zeroes. The endpoint says so with a 400.
+            // Same window as everything else on the page.
+            const roiWindow = { startDate: range.startDate, endDate: range.endDate }
+            try {
+                const roi = locationSlug
+                    ? await calculateLocationROI(locationSlug, roiWindow)
+                    : await calculateROI(roiWindow)
+                setValue({
+                    revenue: roi.total_revenue_generated,
+                    staffCostSaved: roi.staff_cost_saved ?? null,
+                    totalValue: roi.total_value,
+                    netValue: roi.net_value,
+                })
+            } catch {
+                setValue(null)
             }
 
             // The location switcher list still comes from the aggregate
@@ -567,6 +604,17 @@ export default function Dashboard() {
                         />
                     ))}
                 </div>
+
+                {/* Value generated, same window as the counts above. Absent
+                    until the financials are saved — see fetchSummary. */}
+                {value && (
+                    <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-4">
+                        <GlassCard label="Revenue Generated" value={value.revenue} icon={DollarSign} accentColor="emerald" glowRgb="16,185,129" formatValue={formatMoney} loading={loading} />
+                        <GlassCard label="Staff Cost Saved" value={value.staffCostSaved ?? 0} icon={Clock} accentColor="sky" glowRgb="14,165,233" formatValue={value.staffCostSaved === null ? () => "—" : formatMoney} loading={loading} />
+                        <GlassCard label="Total Value" value={value.totalValue} icon={TrendingUp} accentColor="violet" glowRgb="139,92,246" formatValue={formatMoney} loading={loading} />
+                        <GlassCard label="Net Value" value={value.netValue} icon={Percent} accentColor="amber" glowRgb="245,158,11" formatValue={formatMoney} loading={loading} />
+                    </div>
+                )}
 
                 {/* Trend over the selected range. The cards answer "how many";
                     this answers "is that better than before", which is the

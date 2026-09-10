@@ -80,8 +80,9 @@ def test_fall_through_is_whole_config_not_field_by_field() -> None:
 
     assert source == "location"
     assert values["avg_appointment_value"] == 310.0
-    # Not 22.0 from the institution.
-    assert values["staff_hourly_rate"] == 0.0
+    # Not 22.0 from the institution. Absent rather than zero, so the staff
+    # saving reports as unknown instead of as a saving of nothing.
+    assert values["staff_hourly_rate"] is None
 
 
 def test_subscription_cost_is_settable_per_location() -> None:
@@ -162,3 +163,32 @@ def test_call_duration_has_a_default_so_it_is_optional() -> None:
     )
 
     assert request.avg_call_duration_minutes == 4.0
+
+
+def test_missing_hourly_rate_is_unknown_not_zero() -> None:
+    """A clinic that does not track a front desk rate has not saved nothing."""
+    values, _ = _resolved_location_roi(
+        _location({k: v for k, v in LOCATION_CONFIG.items() if k != "staff_hourly_rate"}),
+        _institution(INSTITUTION_CONFIG),
+    )
+
+    assert values["staff_hourly_rate"] is None
+
+
+def test_zero_hourly_rate_stays_zero() -> None:
+    """Explicitly zero is a real answer and must not become "unknown"."""
+    values, _ = _resolved_location_roi(
+        _location({**LOCATION_CONFIG, "staff_hourly_rate": 0.0}),
+        _institution(INSTITUTION_CONFIG),
+    )
+
+    assert values["staff_hourly_rate"] == 0.0
+
+
+def test_hourly_rate_is_optional_on_the_request() -> None:
+    request = LocationROIConfigRequest(
+        avg_appointment_value=310.0,
+        avg_new_patient_value=700.0,
+    )
+
+    assert request.staff_hourly_rate is None

@@ -24,15 +24,25 @@ import {
 const EMPTY_DRAFT: LocationROIConfigInput = {
     avg_appointment_value: 0,
     avg_new_patient_value: 0,
-    staff_hourly_rate: 0,
+    staff_hourly_rate: null,
     avg_call_duration_minutes: 4,
     monthly_subscription_cost: null,
 }
 
-const FIELDS: { id: keyof LocationROIConfigInput; label: string; step: string }[] = [
+const FIELDS: {
+    id: keyof LocationROIConfigInput
+    label: string
+    step: string
+    hint?: string
+}[] = [
     { id: "avg_appointment_value", label: "Avg Revenue per Appointment ($)", step: "1" },
     { id: "avg_new_patient_value", label: "Avg New Patient Value ($)", step: "1" },
-    { id: "staff_hourly_rate", label: "Staff Hourly Rate ($)", step: "0.5" },
+    {
+        id: "staff_hourly_rate",
+        label: "Staff Hourly Rate ($)",
+        step: "0.5",
+        hint: "Optional — leave blank and the staff-time saving is left out rather than counted as zero.",
+    },
     { id: "avg_call_duration_minutes", label: "Avg Manual Call Duration (min)", step: "0.5" },
 ]
 
@@ -201,14 +211,20 @@ export default function LocationSettings() {
                                     type="number"
                                     min="0"
                                     step={field.step}
-                                    value={draft[field.id] || ""}
+                                    value={draft[field.id] ?? ""}
                                     onChange={(event) =>
                                         setDraft((current) => ({
                                             ...current,
-                                            [field.id]: Number(event.target.value),
+                                            [field.id]:
+                                                event.target.value === "" && field.hint
+                                                    ? null
+                                                    : Number(event.target.value),
                                         }))
                                     }
                                 />
+                                {field.hint && (
+                                    <p className="text-xs text-muted-foreground">{field.hint}</p>
+                                )}
                             </div>
                         ))}
                     </div>
@@ -271,7 +287,14 @@ export default function LocationSettings() {
                     <CardContent className="space-y-4">
                         <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
                             <Stat label="Revenue generated" value={money(calculation.total_revenue_generated)} />
-                            <Stat label="Staff cost saved" value={money(calculation.staff_cost_saved)} />
+                            <Stat
+                                label="Staff cost saved"
+                                value={
+                                    calculation.staff_cost_saved === null
+                                        ? "—"
+                                        : money(calculation.staff_cost_saved)
+                                }
+                            />
                             <Stat label="Total value" value={money(calculation.total_value)} />
                             <Stat label="Net value" value={money(calculation.net_value)} />
                             <Stat
