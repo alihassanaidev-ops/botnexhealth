@@ -33,6 +33,7 @@ export interface CampaignTemplateSetupField {
         | "text"
         | "number"
         | "string_list"
+        | "pms_appointment_multiselect"
         | "appointment_type_multiselect"
         | "voice_profile_select"
         | "retell_sms_profile_select"

@@ -82,7 +82,7 @@ from src.app.services.automation.gotracker_recall_readiness import (
     assess_gotracker_recall_history,
 )
 from src.app.services.automation.canonical_context import (
-    appointment_event_key,
+    build_appointment_trigger_context,
     merge_canonical_context,
 )
 from src.app.services.automation.revalidation import PmsLiveRevalidationService
@@ -1403,21 +1403,13 @@ async def _trigger_appointment_async(
     skipped = 0
     skipped_type = 0
     skipped_filter = 0
-    enriched_metadata = {
-        **trigger_metadata,
-        **{k: v for k, v in appointment_context.items() if v is not None},
-        "appointment_id": appointment_id,
-        "appointment_at": appointment_at_iso,
-    }
-    # Project onto the canonical vocabulary the builder authors against. Purely
-    # additive — every flat legacy key survives, so published definitions branch
-    # on exactly what they branched on before. Without this the picker offers
-    # `appointment.start_at` and the run never contains it.
-    enriched_metadata = merge_canonical_context(
-        enriched_metadata,
-        event_key=appointment_event_key(enriched_metadata),
-        source_pms=enriched_metadata.get("pms_source")
-        or enriched_metadata.get("source"),
+    enriched_metadata = build_appointment_trigger_context(
+        appointment_context,
+        {
+            **trigger_metadata,
+            "appointment_id": appointment_id,
+            "appointment_at": appointment_at_iso,
+        },
     )
     effective_contact_id = contact_id or appointment_context.get("contact_id")
     effective_location_id = location_id or appointment_context.get("location_id")
@@ -1576,26 +1568,20 @@ async def _trigger_appointment_state_async(
             location_id=location_id or appointment_context.get("location_id"),
         )
 
-    enriched_metadata = {
-        **(trigger_metadata or {}),
-        **{k: v for k, v in appointment_context.items() if v is not None},
-        "appointment_id": appointment_id,
-        "appointment_status_id": status_id,
-        "gotracker_status_id": status_id,
-        "is_confirmed": confirmed,
-        "is_preconfirmed": preconfirmed,
-        "appointment_flow_state": flow_state,
-        "flow_state": flow_state,
-        "appointment_flow_changed_at": flow_changed_at,
-        "flow_changed_at": flow_changed_at,
-    }
-    # Same canonical projection as the reminder path, so a campaign branching on
-    # `appointment.status` works whichever appointment event started it.
-    enriched_metadata = merge_canonical_context(
-        enriched_metadata,
-        event_key=appointment_event_key(enriched_metadata),
-        source_pms=enriched_metadata.get("pms_source")
-        or enriched_metadata.get("source"),
+    enriched_metadata = build_appointment_trigger_context(
+        appointment_context,
+        {
+            **(trigger_metadata or {}),
+            "appointment_id": appointment_id,
+            "appointment_status_id": status_id,
+            "gotracker_status_id": status_id,
+            "is_confirmed": confirmed,
+            "is_preconfirmed": preconfirmed,
+            "appointment_flow_state": flow_state,
+            "flow_state": flow_state,
+            "appointment_flow_changed_at": flow_changed_at,
+            "flow_changed_at": flow_changed_at,
+        },
     )
     effective_contact_id = contact_id or appointment_context.get("contact_id")
     effective_location_id = location_id or appointment_context.get("location_id")
@@ -3505,7 +3491,9 @@ async def _tick_workflow_schedules_async() -> dict:
             recall_enrolled += int(counters.get("enrollments_scheduled", 0))
         except Exception:
             # One tenant's PMS being unreachable must not stop the others.
-            logger.exception("scheduled recall failed for institution %s", institution_id)
+            logger.exception(
+                "scheduled recall failed for institution %s", institution_id
+            )
 
     return {
         "claimed": len(claimed),
@@ -3563,6 +3551,7 @@ def _pms_recall_source(definition: "WorkflowDefinition"):
         ):
             return trigger.source
     return None
+
 
 _FUTURE_APPOINTMENT_STATUSES = ("scheduled", "booked", "booked_waiting", "pending")
 _RECALL_SCAN_COUNT_KEYS = (

@@ -246,6 +246,100 @@ async def test_trigger_appointment_no_workflows():
     assert result["appointment_id"] == "appt-1"
 
 
+@pytest.mark.asyncio
+async def test_nexhealth_event_facts_win_over_stale_projection_for_filtering():
+    appointment_at = datetime.now(tz=timezone.utc) + timedelta(hours=48)
+    wf = _make_workflow(
+        offset_hours=-24,
+        trigger_filter={
+            "kind": "group",
+            "op": "and",
+            "children": [
+                {
+                    "kind": "rule",
+                    "field": "appointment_status",
+                    "op": "in_case_insensitive",
+                    "value": ["booked"],
+                },
+                {
+                    "kind": "rule",
+                    "field": "appointment_reason",
+                    "op": "in_case_insensitive",
+                    "value": ["Surgery"],
+                },
+                {
+                    "kind": "rule",
+                    "field": "nexhealth_payload.appointment.cancelled",
+                    "op": "eq",
+                    "value": False,
+                },
+                {
+                    "kind": "rule",
+                    "field": "nexhealth_payload.appointment.appointment_type_id",
+                    "op": "in_case_insensitive",
+                    "value": ["4", "nh-4"],
+                },
+            ],
+        },
+    )
+    mock_session = _make_session(workflows=[wf])
+
+    with (
+        patch(
+            "src.app.tasks.automation_workflow.get_system_db_session",
+            return_value=mock_session,
+        ),
+        patch(
+            "src.app.tasks.automation_workflow.AppointmentTriggerService"
+        ) as mock_svc,
+        patch(
+            "src.app.tasks.automation_workflow.enroll_and_start_workflow_run"
+        ) as mock_task,
+    ):
+        instance = AsyncMock()
+        instance.find_active_appointment_workflows = AsyncMock(return_value=[wf])
+        instance.get_appointment_context = AsyncMock(
+            return_value={
+                "pms_source": "nexhealth",
+                "appointment_status": "scheduled",
+                "appointment_reason": None,
+                "appointment_type_id": "4",
+                "location_id": "loc-1",
+            }
+        )
+        mock_svc.return_value = instance
+        mock_task.apply_async = MagicMock()
+
+        result = await _trigger_appointment_async(
+            institution_id="inst-1",
+            appointment_id="1683218907",
+            appointment_at_iso=appointment_at.isoformat(),
+            contact_id="contact-1",
+            location_id="loc-1",
+            trigger_metadata={
+                "event": "appointment_insertion",
+                "pms_source": "nexhealth",
+                "appointment_status": "booked",
+                "appointment_reason": "Surgery",
+                "appointment_type_name": "Surgery",
+                "nexhealth_payload": {
+                    "event": "appointment_insertion",
+                    "appointment": {
+                        "appointment_type_id": "4",
+                        "appointment_type_name": "Surgery",
+                        "cancelled": False,
+                    },
+                },
+            },
+        )
+
+    assert result["scheduled"] == 1
+    metadata = mock_task.apply_async.call_args.kwargs["kwargs"]["trigger_metadata"]
+    assert metadata["appointment_status"] == "booked"
+    assert metadata["appointment_reason"] == "Surgery"
+    assert metadata["nexhealth_payload"]["appointment"]["appointment_type_id"] == "4"
+
+
 # ---------------------------------------------------------------------------
 # make_recall_idempotency_key
 # ---------------------------------------------------------------------------
@@ -392,9 +486,7 @@ async def test_scan_recall_async_enrolls_due_patients():
         for c in mock_task.apply_async.call_args_list
     )
     assert all(
-        c.kwargs["kwargs"]["trigger_metadata"][
-            "recall_reenrollment_cooldown_days"
-        ]
+        c.kwargs["kwargs"]["trigger_metadata"]["recall_reenrollment_cooldown_days"]
         == 90
         for c in mock_task.apply_async.call_args_list
     )
@@ -513,15 +605,18 @@ async def test_scan_recall_applies_declared_patient_communication_context_filter
     # `trigger.*` section on top. The legacy flat keys are what published
     # definitions branch on, so those are what must not move.
     metadata = kwargs["trigger_metadata"]
-    assert metadata.items() >= {
-        "nexhealth_patient_id": "p1",
-        "recall_due_date": "2020-01-01",
-        "recall_period": period,
-        "recall_type_name": "Hygiene",
-        "treatment_plan_statuses": [],
-        "has_active_treatment_plan": False,
-        "recall_reenrollment_cooldown_days": 90,
-    }.items()
+    assert (
+        metadata.items()
+        >= {
+            "nexhealth_patient_id": "p1",
+            "recall_due_date": "2020-01-01",
+            "recall_period": period,
+            "recall_type_name": "Hygiene",
+            "treatment_plan_statuses": [],
+            "has_active_treatment_plan": False,
+            "recall_reenrollment_cooldown_days": 90,
+        }.items()
+    )
     # …and the canonical view of the same facts is present for new campaigns.
     assert metadata["recall"]["due_at"] == "2020-01-01"
     assert metadata["recall"]["type"] == "Hygiene"
@@ -796,15 +891,18 @@ async def test_scan_recall_enrolls_gotracker_with_completed_history_and_inline_c
     # `trigger.*` section on top. The legacy flat keys are what published
     # definitions branch on, so those are what must not move.
     metadata = kwargs["trigger_metadata"]
-    assert metadata.items() >= {
-        "nexhealth_patient_id": "gt-p1",
-        "recall_due_date": "2020-01-01",
-        "recall_period": period,
-        "recall_type_name": "Hygiene",
-        "treatment_plan_statuses": [],
-        "has_active_treatment_plan": False,
-        "recall_reenrollment_cooldown_days": 90,
-    }.items()
+    assert (
+        metadata.items()
+        >= {
+            "nexhealth_patient_id": "gt-p1",
+            "recall_due_date": "2020-01-01",
+            "recall_period": period,
+            "recall_type_name": "Hygiene",
+            "treatment_plan_statuses": [],
+            "has_active_treatment_plan": False,
+            "recall_reenrollment_cooldown_days": 90,
+        }.items()
+    )
     # …and the canonical view of the same facts is present for new campaigns.
     assert metadata["recall"]["due_at"] == "2020-01-01"
     assert metadata["recall"]["type"] == "Hygiene"

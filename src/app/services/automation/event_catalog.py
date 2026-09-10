@@ -1,26 +1,14 @@
-"""Canonical event keys and the typed context each one carries.
+"""Workflow event catalog with PMS-native appointment schemas.
 
-The workflow builder used to speak GoTracker. Every appointment field an author
-could branch on was a Tracker payload field — ``gotracker_status_id``,
-``in_chair``, ``booked_machine_name`` — so a workflow written against them
-evaluated to ``null`` on a NexHealth location and silently took the false
-branch. NexHealth was made to impersonate GoTracker instead: the completed-visit
-sweep writes the literal Chair Flow string ``"Completed"`` so it can ride the
-GoTracker trigger.
+Lifecycle event keys are shared because the engine needs stable subscriptions,
+but appointment filter fields are not forced through a lowest-common-denominator
+schema. The API serves ``nexhealth_payload.*`` to NexHealth institutions and
+``gotracker_payload.*`` to GoTracker institutions, including fields unique to
+either system. Shared platform fields such as patient and location context stay
+available alongside that native payload.
 
-This module is the vocabulary that replaces that. An **event key** names
-something that happened in clinic terms, and each key declares the canonical
-context fields it carries. Both PMS adapters translate into these; neither one's
-native shape is the vocabulary.
-
-Native payloads are not thrown away — they stay addressable under ``raw.*`` and
-are marked PMS-specific so the builder can warn that a workflow using them will
-not port. The point is that an author never *has* to reach for them.
-
-``pms_support`` records, per field, whether a PMS supplies it natively, derives
-it, or cannot supply it at all. The builder greys out what the current location
-cannot provide, instead of letting someone publish a campaign that silently
-never matches.
+The older ``appointment.*`` vocabulary remains here for runtime compatibility
+with published workflows, but is omitted from PMS-scoped builder responses.
 """
 
 from __future__ import annotations
@@ -80,7 +68,7 @@ class ContextFieldSpec:
     # Mirrors the merge-field catalog's classification so the builder can warn
     # before clinical detail is put on SMS or read aloud by a voice agent.
     phi_level: Literal["none", "low", "medium", "high"] = "none"
-    #: True for fields under ``raw.*``: usable, but they do not port across PMSs.
+    #: True for fields in one PMS's native namespace.
     pms_specific: bool = False
     #: Channels this field can be rendered into. A booking URL is fine in an SMS
     #: and useless read aloud by a voice agent, so the field set is scoped on
@@ -115,6 +103,7 @@ def _field(
     *,
     support: dict[str, PmsSupport] | None = None,
     phi_level: Literal["none", "low", "medium", "high"] = "none",
+    pms_specific: bool = False,
     channels: tuple[str, ...] = ("sms", "email", "voice"),
 ) -> ContextFieldSpec:
     return ContextFieldSpec(
@@ -125,6 +114,7 @@ def _field(
         sample=sample,
         pms_support=support or dict(_ALL_NATIVE),
         phi_level=phi_level,
+        pms_specific=pms_specific,
         channels=channels,
     )
 
@@ -136,11 +126,19 @@ def _field(
 PATIENT_FIELDS: tuple[ContextFieldSpec, ...] = (
     _field("patient.id", "Patient ID", "string", "Local contact id.", "c-8821"),
     _field(
-        "patient.first_name", "Patient first name", "string", "Given name.", "Jordan",
+        "patient.first_name",
+        "Patient first name",
+        "string",
+        "Given name.",
+        "Jordan",
         phi_level="low",
     ),
     _field(
-        "patient.last_name", "Patient last name", "string", "Family name.", "Rivera",
+        "patient.last_name",
+        "Patient last name",
+        "string",
+        "Family name.",
+        "Rivera",
         phi_level="low",
     ),
     _field(
@@ -186,6 +184,7 @@ APPOINTMENT_FIELDS: tuple[ContextFieldSpec, ...] = (
         "string",
         "Primary reason or procedure label.",
         "implant surgery",
+        support={"gotracker": "native", "nexhealth": "unsupported"},
         phi_level="medium",
     ),
     _field(
@@ -194,6 +193,7 @@ APPOINTMENT_FIELDS: tuple[ContextFieldSpec, ...] = (
         "list",
         "Every reason on the appointment, when the PMS sends more than one.",
         ["implant surgery"],
+        support={"gotracker": "native", "nexhealth": "unsupported"},
         phi_level="medium",
     ),
     _field(
@@ -225,7 +225,11 @@ APPOINTMENT_FIELDS: tuple[ContextFieldSpec, ...] = (
         support={"gotracker": "native", "nexhealth": "unsupported"},
     ),
     _field(
-        "appointment.type.id", "Appointment type ID", "string", "PMS type id.", "at-4",
+        "appointment.type.id",
+        "Appointment type ID",
+        "string",
+        "PMS type id.",
+        "at-4",
         support={"gotracker": "unsupported", "nexhealth": "native"},
     ),
     _field(
@@ -234,7 +238,7 @@ APPOINTMENT_FIELDS: tuple[ContextFieldSpec, ...] = (
         "string",
         "Named appointment type. GoTracker sends reasons rather than typed appointments.",
         "Implant consult",
-        support={"gotracker": "unsupported", "nexhealth": "native"},
+        support={"gotracker": "unsupported", "nexhealth": "derived"},
     ),
     _field(
         "appointment.original_start_at",
@@ -247,10 +251,261 @@ APPOINTMENT_FIELDS: tuple[ContextFieldSpec, ...] = (
     ),
 )
 
+_NEXHEALTH_APPOINTMENT_FIELDS: tuple[ContextFieldSpec, ...] = (
+    _field(
+        "nexhealth_payload.event",
+        "NexHealth event",
+        "string",
+        "Native NexHealth appointment event name.",
+        "appointment_insertion",
+        support={"gotracker": "unsupported", "nexhealth": "native"},
+        pms_specific=True,
+    ),
+    *(
+        _field(
+            f"nexhealth_payload.appointment.{path}",
+            label,
+            type_,
+            description,
+            sample,
+            support={
+                "gotracker": "unsupported",
+                "nexhealth": "derived" if path == "appointment_type_name" else "native",
+            },
+            pms_specific=True,
+            phi_level=phi,
+        )
+        for path, label, type_, description, sample, phi in (
+            (
+                "id",
+                "NexHealth appointment ID",
+                "string",
+                "Native NexHealth appointment id.",
+                "9001",
+                "none",
+            ),
+            (
+                "location_id",
+                "NexHealth location ID",
+                "string",
+                "Native NexHealth location id.",
+                "22",
+                "none",
+            ),
+            (
+                "patient_id",
+                "NexHealth patient ID",
+                "string",
+                "Native NexHealth patient id.",
+                "77",
+                "low",
+            ),
+            (
+                "provider_id",
+                "NexHealth provider ID",
+                "string",
+                "Native NexHealth provider id.",
+                "3",
+                "none",
+            ),
+            (
+                "appointment_type_id",
+                "NexHealth appointment type ID",
+                "string",
+                "Native appointment type id used for reliable campaign targeting.",
+                "4",
+                "none",
+            ),
+            (
+                "appointment_type_name",
+                "NexHealth appointment type",
+                "string",
+                "Appointment type name resolved from the location cache.",
+                "Implant consult",
+                "medium",
+            ),
+            (
+                "start_time",
+                "NexHealth start time",
+                "datetime",
+                "Native NexHealth appointment start time.",
+                "2026-09-04T14:15:00Z",
+                "medium",
+            ),
+            (
+                "confirmed",
+                "NexHealth confirmed",
+                "boolean",
+                "Native NexHealth confirmation flag when supplied.",
+                False,
+                "none",
+            ),
+            (
+                "cancelled",
+                "NexHealth cancelled",
+                "boolean",
+                "Native NexHealth cancellation flag.",
+                False,
+                "none",
+            ),
+        )
+    ),
+)
+
+_GOTRACKER_APPOINTMENT_FIELDS: tuple[ContextFieldSpec, ...] = (
+    _field(
+        "gotracker_payload.event",
+        "GoTracker event",
+        "string",
+        "Native GoTracker appointment event name.",
+        "appointment.updated",
+        support={"gotracker": "native", "nexhealth": "unsupported"},
+        pms_specific=True,
+    ),
+    *(
+        _field(
+            f"gotracker_payload.appointment.{path}",
+            label,
+            type_,
+            description,
+            sample,
+            support={"gotracker": "native", "nexhealth": "unsupported"},
+            pms_specific=True,
+            phi_level=phi,
+        )
+        for path, label, type_, description, sample, phi in (
+            (
+                "id",
+                "GoTracker appointment ID",
+                "string",
+                "Native GoTracker appointment id.",
+                "1343",
+                "none",
+            ),
+            (
+                "contact_id",
+                "GoTracker contact ID",
+                "string",
+                "Native GoTracker patient/contact id.",
+                "8821",
+                "low",
+            ),
+            (
+                "date",
+                "GoTracker appointment date",
+                "datetime",
+                "Native GoTracker appointment date.",
+                "2026-09-04",
+                "medium",
+            ),
+            (
+                "time",
+                "GoTracker appointment time",
+                "string",
+                "Native GoTracker appointment time.",
+                "14:15:00",
+                "medium",
+            ),
+            (
+                "reasons",
+                "GoTracker reasons",
+                "list",
+                "Native GoTracker appointment reason labels.",
+                ["implant surgery"],
+                "medium",
+            ),
+            (
+                "provider_id",
+                "GoTracker provider ID",
+                "string",
+                "Native GoTracker provider id.",
+                "2",
+                "none",
+            ),
+            (
+                "schedule_column_id",
+                "GoTracker schedule column ID",
+                "string",
+                "Native GoTracker schedule column id.",
+                "7",
+                "none",
+            ),
+            (
+                "status_id",
+                "GoTracker status ID",
+                "string",
+                "Native GoTracker appointment status id.",
+                "1",
+                "none",
+            ),
+            (
+                "status",
+                "GoTracker status",
+                "string",
+                "GoTracker status label resolved from its status id.",
+                "booked",
+                "none",
+            ),
+            (
+                "duration",
+                "GoTracker duration",
+                "string",
+                "Native GoTracker appointment duration.",
+                "00:30:00",
+                "none",
+            ),
+            (
+                "is_confirmed",
+                "GoTracker confirmed",
+                "boolean",
+                "Native GoTracker confirmation flag.",
+                False,
+                "none",
+            ),
+            (
+                "is_preconfirmed",
+                "GoTracker preconfirmed",
+                "boolean",
+                "Native GoTracker preconfirmation flag.",
+                False,
+                "none",
+            ),
+            (
+                "flow_state",
+                "GoTracker Chair Flow state",
+                "string",
+                "Native GoTracker Chair Flow state.",
+                "Completed",
+                "medium",
+            ),
+            (
+                "flow_change",
+                "GoTracker Chair Flow changed at",
+                "datetime",
+                "When the native Chair Flow state changed.",
+                "2026-09-04T14:45:00Z",
+                "medium",
+            ),
+        )
+    ),
+)
+
 LOCATION_FIELDS: tuple[ContextFieldSpec, ...] = (
     _field("location.id", "Location ID", "string", "Local location id.", "loc-1"),
-    _field("location.name", "Location name", "string", "Clinic display name.", "Riverside Dental"),
-    _field("location.timezone", "Location timezone", "string", "IANA timezone.", "America/Toronto"),
+    _field(
+        "location.name",
+        "Location name",
+        "string",
+        "Clinic display name.",
+        "Riverside Dental",
+    ),
+    _field(
+        "location.timezone",
+        "Location timezone",
+        "string",
+        "IANA timezone.",
+        "America/Toronto",
+    ),
 )
 
 _VISIT_FIELDS: tuple[ContextFieldSpec, ...] = (
@@ -280,7 +535,11 @@ _CALL_FIELDS: tuple[ContextFieldSpec, ...] = (
         "needs_callback",
     ),
     _field(
-        "call.duration_seconds", "Call duration (seconds)", "number", "Connected time.", 84
+        "call.duration_seconds",
+        "Call duration (seconds)",
+        "number",
+        "Connected time.",
+        84,
     ),
     _field(
         "call.callback_at",
@@ -292,7 +551,9 @@ _CALL_FIELDS: tuple[ContextFieldSpec, ...] = (
 )
 
 _MESSAGE_FIELDS: tuple[ContextFieldSpec, ...] = (
-    _field("message.id", "Message ID", "string", "Local inbound message id.", "inbound-1"),
+    _field(
+        "message.id", "Message ID", "string", "Local inbound message id.", "inbound-1"
+    ),
     _field("message.channel", "Channel", "string", "sms or email.", "sms"),
     _field(
         "message.body",
@@ -411,9 +672,27 @@ _INTERNAL_STATUS_FIELDS: tuple[ContextFieldSpec, ...] = (
 # flat `event` string (the native webhook name), and a canonical object under the
 # same key would shadow it.
 _COMMON_FIELDS: tuple[ContextFieldSpec, ...] = (
-    _field("trigger.key", "Event", "string", "Which event started this run.", "appointment.booked"),
-    _field("trigger.occurred_at", "Event time", "datetime", "When it happened.", "2026-09-01T09:00:00Z"),
-    _field("trigger.source_pms", "Source PMS", "string", "gotracker, nexhealth, or none.", "gotracker"),
+    _field(
+        "trigger.key",
+        "Event",
+        "string",
+        "Which event started this run.",
+        "appointment.booked",
+    ),
+    _field(
+        "trigger.occurred_at",
+        "Event time",
+        "datetime",
+        "When it happened.",
+        "2026-09-01T09:00:00Z",
+    ),
+    _field(
+        "trigger.source_pms",
+        "Source PMS",
+        "string",
+        "gotracker, nexhealth, or none.",
+        "gotracker",
+    ),
 )
 
 
@@ -422,7 +701,12 @@ _COMMON_FIELDS: tuple[ContextFieldSpec, ...] = (
 # ---------------------------------------------------------------------------
 
 _APPOINTMENT_CONTEXT = (
-    _COMMON_FIELDS + PATIENT_FIELDS + APPOINTMENT_FIELDS + LOCATION_FIELDS
+    _COMMON_FIELDS
+    + PATIENT_FIELDS
+    + APPOINTMENT_FIELDS
+    + _NEXHEALTH_APPOINTMENT_FIELDS
+    + _GOTRACKER_APPOINTMENT_FIELDS
+    + LOCATION_FIELDS
 )
 
 EVENT_CONTEXT: dict[str, tuple[ContextFieldSpec, ...]] = {
@@ -434,14 +718,29 @@ EVENT_CONTEXT: dict[str, tuple[ContextFieldSpec, ...]] = {
     "appointment.checked_in": _APPOINTMENT_CONTEXT,
     "appointment.completed": _APPOINTMENT_CONTEXT + _VISIT_FIELDS,
     "appointment.reminder_due": _APPOINTMENT_CONTEXT,
-    "patient.recall_due": _COMMON_FIELDS + PATIENT_FIELDS + LOCATION_FIELDS + _RECALL_FIELDS,
+    "patient.recall_due": _COMMON_FIELDS
+    + PATIENT_FIELDS
+    + LOCATION_FIELDS
+    + _RECALL_FIELDS,
     # Appointment fields stay declared here because a status change recorded by
     # a campaign inherits the source run's context, which usually has them.
     "patient.status_changed": _APPOINTMENT_CONTEXT + _INTERNAL_STATUS_FIELDS,
-    "call.inbound.completed": _COMMON_FIELDS + PATIENT_FIELDS + LOCATION_FIELDS + _CALL_FIELDS,
-    "message.sms.inbound": _COMMON_FIELDS + PATIENT_FIELDS + LOCATION_FIELDS + _MESSAGE_FIELDS,
-    "message.email.inbound": _COMMON_FIELDS + PATIENT_FIELDS + LOCATION_FIELDS + _MESSAGE_FIELDS,
-    "enquiry.received": _COMMON_FIELDS + PATIENT_FIELDS + LOCATION_FIELDS + _ENQUIRY_FIELDS,
+    "call.inbound.completed": _COMMON_FIELDS
+    + PATIENT_FIELDS
+    + LOCATION_FIELDS
+    + _CALL_FIELDS,
+    "message.sms.inbound": _COMMON_FIELDS
+    + PATIENT_FIELDS
+    + LOCATION_FIELDS
+    + _MESSAGE_FIELDS,
+    "message.email.inbound": _COMMON_FIELDS
+    + PATIENT_FIELDS
+    + LOCATION_FIELDS
+    + _MESSAGE_FIELDS,
+    "enquiry.received": _COMMON_FIELDS
+    + PATIENT_FIELDS
+    + LOCATION_FIELDS
+    + _ENQUIRY_FIELDS,
     "schedule.tick": _COMMON_FIELDS + PATIENT_FIELDS + LOCATION_FIELDS + _RECALL_FIELDS,
 }
 
@@ -456,13 +755,26 @@ class EventSpec:
     #: Whether a PMS can raise this event at all.
     pms_support: dict[str, PmsSupport]
 
-    def as_dict(self) -> dict[str, Any]:
+    def as_dict(self, pms: str | None = None) -> dict[str, Any]:
         return {
             "key": self.key,
             "label": self.label,
             "description": self.description,
             "pms_support": dict(self.pms_support),
-            "context": [field.as_dict() for field in EVENT_CONTEXT[self.key]],
+            "context": [
+                field.as_dict()
+                for field in EVENT_CONTEXT[self.key]
+                if (
+                    pms is None
+                    or (
+                        field.pms_support.get(pms, "unsupported") != "unsupported"
+                        and not (
+                            field.path.startswith("appointment.")
+                            and not field.pms_specific
+                        )
+                    )
+                )
+            ],
         }
 
 
@@ -589,7 +901,6 @@ def context_fields(key: str) -> tuple[ContextFieldSpec, ...]:
     return EVENT_CONTEXT.get(key, ())
 
 
-
 def fields_for_events(
     event_keys: Iterable[str],
     *,
@@ -631,7 +942,7 @@ def public_events(pms: str | None = None) -> list[dict[str, Any]]:
     trigger picker only offers what the selected location can actually deliver.
     """
     return [
-        event.as_dict()
+        event.as_dict(pms)
         for event in EVENTS
         if pms is None or event.pms_support.get(pms, "unsupported") != "unsupported"
     ]

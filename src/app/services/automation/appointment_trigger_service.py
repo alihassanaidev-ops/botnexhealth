@@ -22,6 +22,8 @@ from src.app.services.automation.definition_schema import (
     ScheduleTrigger,
     WorkflowDefinition,
 )
+from src.app.services.automation.trigger_filter import trigger_filter_matches
+from src.app.services.automation.trigger_lookup import find_active_workflows
 
 #: PMS-neutral appointment status → the event that status change represents.
 _STATE_EVENT_BY_SEMANTICS: dict[str, str] = {
@@ -29,8 +31,6 @@ _STATE_EVENT_BY_SEMANTICS: dict[str, str] = {
     "no_show": "appointment.no_show",
     "waiting": "appointment.checked_in",
 }
-from src.app.services.automation.trigger_filter import trigger_filter_matches
-from src.app.services.automation.trigger_lookup import find_active_workflows
 
 
 def _nexhealth_id_lookup_values(value: str | None) -> list[str]:
@@ -74,11 +74,17 @@ class AppointmentTriggerService:
         if appt is None:
             return {}
 
+        source_pms = (
+            "gotracker"
+            if str(appt.nexhealth_appointment_id).startswith("gt-")
+            else "nexhealth"
+        )
         type_name = None
         if appt.appointment_type_id:
             type_result = await self.session.execute(
                 select(InstitutionAppointmentType).where(
                     InstitutionAppointmentType.institution_id == institution_id,
+                    InstitutionAppointmentType.source == source_pms,
                     InstitutionAppointmentType.source_id.in_(
                         _nexhealth_id_lookup_values(appt.appointment_type_id)
                     ),
@@ -90,24 +96,32 @@ class AppointmentTriggerService:
             if appt_type is not None:
                 type_name = appt_type.name
 
-        return {
-            "appointment_id": appt.nexhealth_appointment_id,
-            "appointment_at": appt.start_time.isoformat() if appt.start_time else None,
-            "appointment_start_time": appt.start_time.isoformat()
-            if appt.start_time
-            else None,
+        appointment_id = appt.nexhealth_appointment_id
+        location_id = appt.location_id or fallback_location_id
+        start_time = appt.start_time.isoformat() if appt.start_time else None
+        reasons = [appt.appointment_reason] if appt.appointment_reason else []
+        context = {
+            "pms_source": source_pms,
+            "appointment_id": appointment_id,
+            "appointment_at": start_time,
+            "appointment_start_time": start_time,
             "appointment_status": appt.status,
             "appointment_reason": appt.appointment_reason,
+            "appointment_reasons": reasons,
             "appointment_type_id": appt.appointment_type_id,
             "appointment_type": type_name or appt.appointment_type_id,
             "appointment_type_name": type_name,
             "provider_id": appt.provider_id,
+            "gotracker_status_id": getattr(appt, "gotracker_status_id", None),
+            "appointment_status_id": getattr(appt, "gotracker_status_id", None),
+            "is_confirmed": getattr(appt, "is_confirmed", None),
+            "is_preconfirmed": getattr(appt, "is_preconfirmed", None),
             "patient_id": appt.nexhealth_patient_id,
             "contact_id": appt.contact_id,
-            "location_id": appt.location_id or fallback_location_id,
+            "location_id": location_id,
             "appointment": {
-                "id": appt.nexhealth_appointment_id,
-                "start_time": appt.start_time.isoformat() if appt.start_time else None,
+                "id": appointment_id,
+                "start_time": start_time,
                 "status": appt.status,
                 "reason": appt.appointment_reason,
                 "appointment_type_id": appt.appointment_type_id,
@@ -115,6 +129,49 @@ class AppointmentTriggerService:
                 "provider_id": appt.provider_id,
             },
         }
+        if source_pms == "nexhealth":
+            context["nexhealth_payload"] = {
+                "event": appt.last_event,
+                "appointment": {
+                    "id": appointment_id.removeprefix("nh-"),
+                    "location_id": location_id,
+                    "patient_id": appt.nexhealth_patient_id,
+                    "provider_id": appt.provider_id,
+                    "appointment_type_id": appt.appointment_type_id,
+                    "appointment_type_name": type_name or appt.appointment_reason,
+                    "start_time": start_time,
+                    "confirmed": getattr(appt, "is_confirmed", None),
+                    "cancelled": appt.status == "cancelled",
+                },
+            }
+        else:
+            context["gotracker_payload"] = {
+                "event": appt.last_event,
+                "appointment": {
+                    "id": appointment_id.removeprefix("gt-"),
+                    "contact_id": appt.nexhealth_patient_id,
+                    "date": appt.start_time.date().isoformat()
+                    if appt.start_time
+                    else None,
+                    "time": appt.start_time.timetz().isoformat()
+                    if appt.start_time
+                    else None,
+                    "reasons": reasons,
+                    "provider_id": appt.provider_id,
+                    "status_id": getattr(appt, "gotracker_status_id", None),
+                    "status": getattr(appt, "gotracker_status_label", None)
+                    or appt.status,
+                    "is_confirmed": getattr(appt, "is_confirmed", None),
+                    "is_preconfirmed": getattr(appt, "is_preconfirmed", None),
+                    "flow_state": getattr(appt, "flow_state", None),
+                    "flow_change": (
+                        appt.flow_changed_at.isoformat()
+                        if getattr(appt, "flow_changed_at", None)
+                        else None
+                    ),
+                },
+            }
+        return context
 
     async def find_active_recall_workflows(
         self, institution_id: str, *, location_id: str | None = None
@@ -148,9 +205,7 @@ def _validated_definition(workflow: AutomationWorkflow) -> WorkflowDefinition | 
         return None
 
 
-def _event_trigger_for(
-    defn: WorkflowDefinition, event_key: str
-) -> EventTrigger | None:
+def _event_trigger_for(defn: WorkflowDefinition, event_key: str) -> EventTrigger | None:
     """The workflow's event trigger subscribed to ``event_key``, if any."""
     for trigger in defn.triggers:
         if isinstance(trigger, EventTrigger) and event_key in trigger.event_keys:

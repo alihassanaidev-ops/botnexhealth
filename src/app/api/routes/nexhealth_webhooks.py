@@ -153,7 +153,9 @@ def _nexhealth_lookup_external_id(
     """
     clean_subdomain = str(subdomain or "").strip()
     clean_location = str(location_id or "").strip()
-    clean_locations = [str(item).strip() for item in location_ids or [] if str(item).strip()]
+    clean_locations = [
+        str(item).strip() for item in location_ids or [] if str(item).strip()
+    ]
 
     if clean_subdomain and clean_location:
         return f"mapping:{clean_subdomain}:{clean_location}"
@@ -241,12 +243,29 @@ def _appointment_trigger_metadata(
         "nexhealth_patient_id": nexhealth_patient_id,
         "provider_id": provider_id,
         "appointment_type_id": appointment_type_id,
+        "appointment_type_name": appointment_reason,
         # Normalized fields the templates branch on
         "appointment_status": "cancelled" if cancelled else "booked",
         "appointment_reason": appointment_reason,
         "appointment_reasons": [appointment_reason] if appointment_reason else [],
         "appointment_confirmed": bool(confirmed) if confirmed is not None else None,
         "appointment_datetime": start_time,
+        # Curated native context for NexHealth-authored workflows. Do not place
+        # the entire delivery here: webhook payloads can grow new PHI fields.
+        "nexhealth_payload": {
+            "event": event,
+            "appointment": {
+                "id": appointment_id,
+                "location_id": nexhealth_location_id,
+                "patient_id": nexhealth_patient_id,
+                "provider_id": provider_id,
+                "appointment_type_id": appointment_type_id,
+                "appointment_type_name": appointment_reason,
+                "start_time": start_time,
+                "confirmed": bool(confirmed) if confirmed is not None else None,
+                "cancelled": cancelled,
+            },
+        },
     }
 
 
@@ -1230,6 +1249,13 @@ async def _process_appointment_event(
                 cancelled=is_cancelled,
                 provider_id=provider_id,
                 appointment_type_id=appointment_type_id,
+                appointment_reason=appointment_reason,
+                is_confirmed=(
+                    bool(appt.get("confirmed"))
+                    if appt.get("confirmed") is not None
+                    else None
+                ),
+                status_source="nexhealth_webhook",
             )
         except Exception as exc:  # noqa: BLE001 - valid webhooks are DLQ'd, not retried by NexHealth.
             return await _dead_letter_claimed_webhook(

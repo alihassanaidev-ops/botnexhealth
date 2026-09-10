@@ -1,18 +1,9 @@
-"""Project a PMS-shaped trigger payload onto the canonical context vocabulary.
+"""Assemble workflow context without losing PMS-native appointment fields.
 
-Trigger tasks assemble run context out of whatever the webhook sent, which is
-why the builder's field list is full of ``gotracker_status_id`` and
-``booked_machine_name``. This module adds the canonical view described in
-:mod:`event_catalog` — ``appointment.start_at``, ``appointment.status``,
-``patient.first_name`` — on top of what is already there.
-
-Deliberately **additive**. The flat legacy keys stay exactly as they were,
-because published definitions branch on them and this is not the place to
-rewrite live campaigns. New workflows author against the canonical paths and
-port between PMSs; old ones keep working untouched.
-
-Native payloads remain reachable at ``raw.*`` for the cases canonical fields do
-not cover, and the builder marks those as PMS-specific.
+New workflows author appointment logic against ``nexhealth_payload.*`` or
+``gotracker_payload.*``. The flat and ``appointment.*`` aliases are retained
+only so already-published workflows keep running while native event facts take
+precedence over older projection values.
 """
 
 from __future__ import annotations
@@ -23,6 +14,7 @@ from typing import Any, Mapping
 from src.app.pms.gotracker.statuses import status_for_id
 
 __all__ = [
+    "build_appointment_trigger_context",
     "canonical_context",
     "merge_canonical_context",
     "canonical_appointment_status",
@@ -90,7 +82,9 @@ def canonical_context(
         "trigger.occurred_at",
         (occurred_at or datetime.now(tz=timezone.utc)).isoformat(),
     )
-    put("trigger.source_pms", source_pms or _clean_str(metadata.get("source")) or "none")
+    put(
+        "trigger.source_pms", source_pms or _clean_str(metadata.get("source")) or "none"
+    )
 
     # --- patient -----------------------------------------------------------
     put("patient.id", _first(metadata, "contact_id", "patient_id"))
@@ -161,7 +155,10 @@ def canonical_context(
     # --- visit -------------------------------------------------------------
     # Both PMSs land here: GoTracker through Chair Flow's FlowChange, NexHealth
     # through the derived completion sweep.
-    put("visit.completed_at", _first(metadata, "flow_changed_at", "appointment_flow_changed_at"))
+    put(
+        "visit.completed_at",
+        _first(metadata, "flow_changed_at", "appointment_flow_changed_at"),
+    )
 
     # --- call --------------------------------------------------------------
     put("call.id", metadata.get("call_id"))
@@ -240,6 +237,150 @@ def merge_canonical_context(
         elif key not in merged:
             merged[key] = value
     return merged
+
+
+def build_appointment_trigger_context(
+    projection: Mapping[str, Any],
+    event_metadata: Mapping[str, Any],
+    *,
+    event_key: str | None = None,
+) -> dict[str, Any]:
+    """Build the final appointment context consumed by workflow filters.
+
+    The local projection fills gaps left by a webhook, while non-null facts from
+    the current event win.  Provider-neutral aliases are derived only after that
+    merge, so a projection's storage value (for example NexHealth ``scheduled``)
+    cannot replace the workflow meaning (``booked``).
+    """
+    merged = _deep_merge_non_null(dict(projection), event_metadata)
+    source_pms = _appointment_source_pms(merged)
+    _ensure_native_appointment_payload(merged, source_pms)
+
+    status = canonical_appointment_status(
+        status_id=_first(merged, "gotracker_status_id", "appointment_status_id"),
+        raw_status=merged.get("appointment_status"),
+        source_pms=source_pms,
+    )
+    if status is not None:
+        # Compatibility for already-published definitions. New definitions use
+        # the provider-native namespaces or ``appointment.status``.
+        merged["appointment_status"] = status
+
+    if source_pms == "nexhealth" and not _clean_str(merged.get("appointment_reason")):
+        type_name = _clean_str(
+            _first(merged, "appointment_type_name", "appointment_type")
+        )
+        if type_name is not None:
+            merged["appointment_reason"] = type_name
+            merged["appointment_reasons"] = [type_name]
+
+    key = event_key or appointment_event_key(merged)
+    return merge_canonical_context(
+        merged,
+        event_key=key,
+        source_pms=source_pms,
+    )
+
+
+def _ensure_native_appointment_payload(
+    metadata: dict[str, Any], source_pms: str | None
+) -> None:
+    """Fill the curated PMS namespace when a producer supplied only flat fields."""
+    if source_pms == "nexhealth":
+        status = (_clean_str(metadata.get("appointment_status")) or "").casefold()
+        inferred = {
+            "event": metadata.get("event"),
+            "appointment": {
+                "id": _first(metadata, "nexhealth_appointment_id", "appointment_id"),
+                "location_id": _first(metadata, "nexhealth_location_id", "location_id"),
+                "patient_id": _first(metadata, "nexhealth_patient_id", "patient_id"),
+                "provider_id": metadata.get("provider_id"),
+                "appointment_type_id": metadata.get("appointment_type_id"),
+                "appointment_type_name": _first(
+                    metadata, "appointment_type_name", "appointment_type"
+                ),
+                "start_time": _first(
+                    metadata,
+                    "appointment_datetime",
+                    "appointment_start_time",
+                    "appointment_at",
+                ),
+                "confirmed": _first(metadata, "appointment_confirmed", "is_confirmed"),
+                "cancelled": status in {"cancelled", "canceled"},
+            },
+        }
+        existing = metadata.get("nexhealth_payload")
+        metadata["nexhealth_payload"] = _deep_merge_non_null(
+            inferred,
+            existing if isinstance(existing, Mapping) else {},
+        )
+    elif source_pms == "gotracker":
+        inferred = {
+            "event": metadata.get("event"),
+            "appointment": {
+                "id": _first(metadata, "gotracker_appointment_id", "appointment_id"),
+                "contact_id": _first(
+                    metadata, "gotracker_contact_id", "contact_source_id"
+                ),
+                "date": metadata.get("appointment_date"),
+                "time": metadata.get("appointment_time"),
+                "reasons": _first(metadata, "gotracker_reasons", "appointment_reasons"),
+                "provider_id": _first(metadata, "gotracker_provider_id", "provider_id"),
+                "schedule_column_id": _first(
+                    metadata,
+                    "gotracker_schedule_column_id",
+                    "schedule_column_id",
+                ),
+                "status_id": _first(
+                    metadata, "gotracker_status_id", "appointment_status_id"
+                ),
+                "status": metadata.get("appointment_status")
+                or canonical_appointment_status(
+                    status_id=_first(
+                        metadata, "gotracker_status_id", "appointment_status_id"
+                    ),
+                    source_pms="gotracker",
+                ),
+                "duration": metadata.get("appointment_duration"),
+                "is_confirmed": metadata.get("is_confirmed"),
+                "is_preconfirmed": metadata.get("is_preconfirmed"),
+                "flow_state": metadata.get("flow_state"),
+                "flow_change": metadata.get("flow_changed_at"),
+            },
+        }
+        existing = metadata.get("gotracker_payload")
+        metadata["gotracker_payload"] = _deep_merge_non_null(
+            inferred,
+            existing if isinstance(existing, Mapping) else {},
+        )
+
+
+def _appointment_source_pms(metadata: Mapping[str, Any]) -> str | None:
+    explicit = _clean_str(metadata.get("pms_source"))
+    if explicit in {"nexhealth", "gotracker"}:
+        return explicit
+    source = (_clean_str(metadata.get("source")) or "").casefold()
+    if source.startswith("nexhealth") or "nexhealth_payload" in metadata:
+        return "nexhealth"
+    if source.startswith("gotracker") or "gotracker_payload" in metadata:
+        return "gotracker"
+    return explicit or source or None
+
+
+def _deep_merge_non_null(
+    base: dict[str, Any], overlay: Mapping[str, Any]
+) -> dict[str, Any]:
+    """Merge current-event facts over a projection without erasing known values."""
+    out = dict(base)
+    for key, value in overlay.items():
+        if value is None:
+            continue
+        existing = out.get(key)
+        if isinstance(existing, dict) and isinstance(value, Mapping):
+            out[key] = _deep_merge_non_null(existing, value)
+        else:
+            out[key] = value
+    return out
 
 
 def _deep_merge(legacy: dict[str, Any], canonical: dict[str, Any]) -> dict[str, Any]:
@@ -336,9 +477,7 @@ def appointment_event_key(metadata: Mapping[str, Any]) -> str:
     no distinct cancel event, only a ``cancelled`` flag on ``appointment_updated``
     that its webhook route folds into ``appointment_status`` before we see it.
     """
-    flow_state = _clean_str(
-        _first(metadata, "flow_state", "appointment_flow_state")
-    )
+    flow_state = _clean_str(_first(metadata, "flow_state", "appointment_flow_state"))
     if flow_state and flow_state.casefold() == "completed":
         return "appointment.completed"
 

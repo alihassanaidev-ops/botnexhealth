@@ -77,8 +77,6 @@ import {
 import {
     contextValueAtPath,
     formatContextValue,
-    GOTRACKER_APPOINTMENT_WEBHOOK_SAMPLE,
-    NEXHEALTH_APPOINTMENT_CONTEXT_SAMPLE,
     sampleWorkflowContext,
 } from "@/lib/workflow/context-fields"
 import { usePmsType } from "@/context/InstitutionContext"
@@ -355,8 +353,8 @@ function EventTriggerFields({
     onChange: (t: WorkflowTrigger) => void
     readOnly?: boolean
 }) {
-    const events = useEventCatalog()
     const pmsType = usePmsType()
+    const events = useEventCatalog(pmsType)
     const selected = new Set(trigger.event_keys)
     const isReminder = selected.has("appointment.reminder_due")
 
@@ -2919,17 +2917,13 @@ function JsonMapperFields({
 function ContextPreview({ triggerType }: { triggerType: TriggerType }) {
     const [open, setOpen] = useState(false)
     const pmsType = usePmsType()
-    const fields = canonicalFieldsForTrigger(useEventCatalog(), triggerType)
+    const fields = canonicalFieldsForTrigger(useEventCatalog(pmsType), triggerType)
     if (fields.length === 0) return null
-    const sample =
-        pmsType === "gotracker"
-            ? GOTRACKER_APPOINTMENT_WEBHOOK_SAMPLE
-            : NEXHEALTH_APPOINTMENT_CONTEXT_SAMPLE
     const sampleLabel =
         pmsType === "gotracker"
             ? "Incoming GoTracker appointment webhook."
             : "Appointment context from your practice software."
-    const entries = Object.entries(sample.data)
+    const entries = Object.entries(sampleWorkflowContext(pmsType))
     return (
         <div className="rounded-md border border-border">
             <button
@@ -2968,11 +2962,12 @@ function LlmFields({
     onChange: (n: WorkflowNode) => void
     readOnly?: boolean
 }) {
+    const pmsType = usePmsType()
     const [models, setModels] = useState<WorkflowLlmModel[]>([])
     const [defaultModel, setDefaultModel] = useState(node.model ?? "")
     const [modelLoadFailed, setModelLoadFailed] = useState(false)
     const [variableOpen, setVariableOpen] = useState(false)
-    const variables = canonicalFieldsForTrigger(useEventCatalog(), def.trigger.type)
+    const variables = canonicalFieldsForTrigger(useEventCatalog(pmsType), def.trigger.type)
     useEffect(() => {
         let active = true
         listWorkflowLlmModels()
@@ -3242,7 +3237,8 @@ function ConditionFields({
     onChange: (n: WorkflowNode) => void
     readOnly?: boolean
 }) {
-    const contextFields = canonicalFieldsForTrigger(useEventCatalog(), def.trigger.type)
+    const pmsType = usePmsType()
+    const contextFields = canonicalFieldsForTrigger(useEventCatalog(pmsType), def.trigger.type)
     const contextFieldNames = new Set(contextFields.map((field) => field.path))
     const legacyRules = node.rules ?? []
     const updateRule = (i: number, patch: Partial<ConditionRule>) => {

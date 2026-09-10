@@ -27,11 +27,13 @@ import {
 import { toast } from "sonner"
 import { createWorkflowFromTemplate, listTemplates, type CampaignTemplate } from "@/lib/workflow-api"
 import { triggerTypeLabel } from "@/lib/workflow/catalog"
-import { listAppointmentTypes, listLocations, listProviders } from "@/lib/tenant-api"
+import { listAppointmentTypes, listLocations, listProviders, listReasons } from "@/lib/tenant-api"
 import { listOutboundVoiceProfiles } from "@/lib/outbound-voice-api"
 import { listRetellSmsChatProfiles } from "@/lib/retell-sms-api"
+import { usePmsType } from "@/context/InstitutionContext"
 import type {
     CachedAppointmentType,
+    CachedDescriptor,
     CachedProvider,
     LocationInfo,
     OutboundVoiceProfile,
@@ -63,6 +65,12 @@ function requiresVoiceProfile(template: CampaignTemplate) {
 function requiresAppointmentTypes(template: CampaignTemplate) {
     return template.metadata.setup_fields.some(
         (field) => ["appointment_type_ids", "sales_appointment_type_ids"].includes(field.id) && field.required,
+    )
+}
+
+function requiresAppointmentClassifications(template: CampaignTemplate) {
+    return template.metadata.setup_fields.some(
+        (field) => ["appointment_classifications", "post_op_classifications"].includes(field.id),
     )
 }
 
@@ -131,15 +139,21 @@ function isPositiveWholeNumber(value: string): boolean {
 
 export default function WorkflowTemplates() {
     const navigate = useNavigate()
+    const pmsType = usePmsType()
     const [templates, setTemplates] = useState<CampaignTemplate[]>([])
     const [locations, setLocations] = useState<LocationInfo[]>([])
     const [appointmentTypes, setAppointmentTypes] = useState<CachedAppointmentType[]>([])
+    const [appointmentClassifications, setAppointmentClassifications] = useState<
+        Array<CachedAppointmentType | CachedDescriptor>
+    >([])
     const [providers, setProviders] = useState<CachedProvider[]>([])
     const [voiceProfiles, setVoiceProfiles] = useState<OutboundVoiceProfile[]>([])
     const [retellSmsProfiles, setRetellSmsProfiles] = useState<RetellSmsChatProfile[]>([])
     const [appointmentTypesLocationId, setAppointmentTypesLocationId] = useState<string | null>(null)
+    const [classificationsLocationId, setClassificationsLocationId] = useState<string | null>(null)
     const [providersLocationId, setProvidersLocationId] = useState<string | null>(null)
     const [appointmentTypesLoading, setAppointmentTypesLoading] = useState(false)
+    const [classificationsLoading, setClassificationsLoading] = useState(false)
     const [providersLoading, setProvidersLoading] = useState(false)
     const [voiceProfilesLoading, setVoiceProfilesLoading] = useState(false)
     const [retellSmsProfilesLoading, setRetellSmsProfilesLoading] = useState(false)
@@ -155,6 +169,7 @@ export default function WorkflowTemplates() {
     const [retellSmsProfileId, setRetellSmsProfileId] = useState("")
     const [salesProviderId, setSalesProviderId] = useState("")
     const [appointmentTypeIds, setAppointmentTypeIds] = useState<string[]>([])
+    const [classificationIds, setClassificationIds] = useState<string[]>([])
     const [appointmentReasons, setAppointmentReasons] = useState("")
     const [postOpReasons, setPostOpReasons] = useState("")
     const [callOffsetHoursBefore, setCallOffsetHoursBefore] = useState("24")
@@ -337,6 +352,47 @@ export default function WorkflowTemplates() {
         }
     }, [picked, selectedLocationId])
 
+    useEffect(() => {
+        if (!picked || !selectedLocationId || !requiresAppointmentClassifications(picked)) {
+            setAppointmentClassifications([])
+            setClassificationIds([])
+            setClassificationsLocationId(null)
+            return
+        }
+        let active = true
+        ;(async () => {
+            setClassificationsLoading(true)
+            try {
+                const rows = pmsType === "gotracker"
+                    ? await listReasons(selectedLocationId)
+                    : await listAppointmentTypes(selectedLocationId)
+                if (!active) return
+                const activeRows = rows.filter((row) => row.is_active)
+                setAppointmentClassifications(activeRows)
+                setClassificationsLocationId(selectedLocationId)
+                setClassificationIds((current) =>
+                    current.filter((id) => activeRows.some((row) => row.source_id === id)),
+                )
+            } catch {
+                if (active) {
+                    setAppointmentClassifications([])
+                    setClassificationIds([])
+                    setClassificationsLocationId(selectedLocationId)
+                    toast.error(
+                        pmsType === "gotracker"
+                            ? "Failed to load GoTracker reasons"
+                            : "Failed to load NexHealth appointment types",
+                    )
+                }
+            } finally {
+                if (active) setClassificationsLoading(false)
+            }
+        })()
+        return () => {
+            active = false
+        }
+    }, [picked, pmsType, selectedLocationId])
+
     const categories = useMemo(() => {
         const present = Array.from(new Set(templates.map((t) => t.category)))
         return present.sort((a, b) => {
@@ -378,8 +434,11 @@ export default function WorkflowTemplates() {
         setRetellSmsProfiles([])
         setProviders([])
         setAppointmentTypeIds([])
+        setClassificationIds([])
         setAppointmentTypes([])
+        setAppointmentClassifications([])
         setAppointmentTypesLocationId(null)
+        setClassificationsLocationId(null)
         setProvidersLocationId(null)
         setAppointmentReasons("")
         setPostOpReasons("")
@@ -437,6 +496,17 @@ export default function WorkflowTemplates() {
                     .map((reason) => reason.trim())
                     .filter(Boolean)
             }
+            for (const fieldId of ["appointment_classifications", "post_op_classifications"]) {
+                if (hasSetupField(picked, fieldId)) {
+                    const rows = classificationsLocationId === selectedLocationId
+                        ? appointmentClassifications
+                        : []
+                    setupOptions[fieldId] = classificationIds.map((id) => {
+                        const row = rows.find((candidate) => candidate.source_id === id)
+                        return { id, name: row?.name ?? id }
+                    })
+                }
+            }
             if (hasSetupField(picked, "call_offset_hours_before")) {
                 setupOptions.call_offset_hours_before = Number(callOffsetHoursBefore)
             }
@@ -472,6 +542,7 @@ export default function WorkflowTemplates() {
     const retellSmsRequired = picked ? requiresRetellSmsProfile(picked) : false
     const providerRequired = picked ? requiresProvider(picked) : false
     const appointmentTypesRequired = picked ? requiresAppointmentTypes(picked) : false
+    const classificationsRequired = picked ? requiresAppointmentClassifications(picked) : false
     const appointmentReasonsRequired = picked ? hasSetupField(picked, "appointment_reasons") : false
     const postOpReasonsRequired = picked ? hasSetupField(picked, "post_op_reasons") : false
     const postOpTimingInvalid = Boolean(
@@ -507,6 +578,8 @@ export default function WorkflowTemplates() {
         : []
     const appointmentTypeRows =
         appointmentTypesLocationId === selectedLocationId ? appointmentTypes : []
+    const classificationRows =
+        classificationsLocationId === selectedLocationId ? appointmentClassifications : []
     const providerRows = providersLocationId === selectedLocationId ? providers : []
     const appointmentTypesLabel = picked
         ? setupFieldLabel(
@@ -524,6 +597,13 @@ export default function WorkflowTemplates() {
                 : current.filter((currentId) => currentId !== id),
         )
     }
+    function toggleClassification(id: string, checked: boolean) {
+        setClassificationIds((current) =>
+            checked
+                ? Array.from(new Set([...current, id]))
+                : current.filter((currentId) => currentId !== id),
+        )
+    }
     const createDisabled =
         creating ||
         !name.trim() ||
@@ -532,6 +612,7 @@ export default function WorkflowTemplates() {
         (retellSmsRequired && !retellSmsProfileId.trim()) ||
         (providerRequired && !salesProviderId.trim()) ||
         (appointmentTypesRequired && appointmentTypeIds.length === 0) ||
+        (classificationsRequired && classificationIds.length === 0) ||
         (appointmentReasonsRequired && appointmentReasons.split(",").every((reason) => !reason.trim())) ||
         (postOpReasonsRequired && postOpReasons.split(",").every((reason) => !reason.trim())) ||
         (picked && hasSetupField(picked, "call_offset_hours_before") && !isNonNegativeWholeNumber(callOffsetHoursBefore)) ||
@@ -874,6 +955,45 @@ export default function WorkflowTemplates() {
                                         <p className="text-xs text-muted-foreground">
                                             Comma-separated. Matching is exact and ignores capitalization.
                                         </p>
+                                    </div>
+                                )}
+                                {classificationsRequired && (
+                                    <div className="space-y-2">
+                                        <Label>
+                                            {hasSetupField(picked, "post_op_classifications")
+                                                ? pmsType === "gotracker"
+                                                    ? "Eligible completed GoTracker reasons"
+                                                    : "Eligible completed NexHealth appointment types"
+                                                : pmsType === "gotracker"
+                                                    ? "Eligible GoTracker appointment reasons"
+                                                    : "Eligible NexHealth appointment types"}
+                                        </Label>
+                                        <div className="max-h-56 space-y-2 overflow-y-auto rounded-md border border-border p-2">
+                                            {classificationsLoading ? (
+                                                <p className="text-xs text-muted-foreground">
+                                                    Loading {pmsType === "gotracker" ? "reasons" : "appointment types"}...
+                                                </p>
+                                            ) : classificationRows.length === 0 ? (
+                                                <p className="text-xs text-muted-foreground">
+                                                    No active {pmsType === "gotracker" ? "reasons" : "appointment types"} are available for this location yet.
+                                                </p>
+                                            ) : (
+                                                classificationRows.map((row) => (
+                                                    <label
+                                                        key={row.source_id}
+                                                        className="flex items-center gap-2 rounded px-1.5 py-1 text-sm"
+                                                    >
+                                                        <Checkbox
+                                                            checked={classificationIds.includes(row.source_id)}
+                                                            onCheckedChange={(checked) =>
+                                                                toggleClassification(row.source_id, checked === true)
+                                                            }
+                                                        />
+                                                        <span className="min-w-0 flex-1 truncate">{row.name}</span>
+                                                    </label>
+                                                ))
+                                            )}
+                                        </div>
                                     </div>
                                 )}
                                 {(hasSetupField(picked, "call_offset_hours_before") ||

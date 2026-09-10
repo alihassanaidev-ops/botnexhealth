@@ -41,7 +41,9 @@ from src.app.models.audit_log import AuditAction, AuditActor
 from src.app.models.user import User, UserRole
 from src.app.services.audit_decorator import audit
 from src.app.services.automation.definition_schema import WorkflowDefinition
-from src.app.services.automation.definition_service import AutomationWorkflowDefinitionService
+from src.app.services.automation.definition_service import (
+    AutomationWorkflowDefinitionService,
+)
 from src.app.services.automation.channel_readiness import ChannelReadinessService
 from src.app.services.automation.dry_run import simulate_run
 from src.app.services.automation.template_renderer import build_merge_vars
@@ -84,7 +86,9 @@ from src.app.services.automation.node_registry import (
 )
 from src.app.services.automation import pms_scope
 from src.app.services.automation.validation_service import WorkflowValidationService
-from src.app.services.automation.enrollment_service import AutomationWorkflowEnrollmentService
+from src.app.services.automation.enrollment_service import (
+    AutomationWorkflowEnrollmentService,
+)
 from src.app.services.automation.step_dispatcher import build_dispatcher
 from src.app.services.sms_compliance import SmsComplianceService
 
@@ -111,7 +115,9 @@ _MODEL_EXCLUDE_MARKERS = (
 _InstitutionAdmin = Annotated[User, Depends(get_current_institution_user)]
 
 # Reads and run operations are available to institution and location admins.
-_InstitutionOrLocationAdmin = Annotated[User, Depends(get_current_institution_or_location_admin)]
+_InstitutionOrLocationAdmin = Annotated[
+    User, Depends(get_current_institution_or_location_admin)
+]
 
 
 async def get_current_campaign_manager(
@@ -184,7 +190,9 @@ class WorkflowResponse(BaseModel):
             trigger_type=wf.trigger_type,
             definition=wf.definition,
             location_id=str(wf.location_id) if wf.location_id else None,
-            current_version_id=str(wf.current_version_id) if wf.current_version_id else None,
+            current_version_id=str(wf.current_version_id)
+            if wf.current_version_id
+            else None,
             created_at=wf.created_at,
             updated_at=wf.updated_at,
         )
@@ -263,7 +271,9 @@ class WorkflowVersionResponse(BaseModel):
     is_current: bool
 
     @classmethod
-    def from_model(cls, v: Any, *, current_version_id: str | None) -> "WorkflowVersionResponse":
+    def from_model(
+        cls, v: Any, *, current_version_id: str | None
+    ) -> "WorkflowVersionResponse":
         return cls(
             id=str(v.id),
             workflow_id=str(v.workflow_id),
@@ -276,7 +286,8 @@ class WorkflowVersionResponse(BaseModel):
             ),
             published_at=v.published_at,
             created_at=v.created_at,
-            is_current=bool(current_version_id) and str(v.id) == str(current_version_id),
+            is_current=bool(current_version_id)
+            and str(v.id) == str(current_version_id),
         )
 
 
@@ -501,7 +512,9 @@ class LaunchChecklistResponse(BaseModel):
     items: list[LaunchChecklistItemResponse] = Field(default_factory=list)
 
     @classmethod
-    def from_service(cls, checklist: CampaignLaunchChecklist) -> "LaunchChecklistResponse":
+    def from_service(
+        cls, checklist: CampaignLaunchChecklist
+    ) -> "LaunchChecklistResponse":
         return cls(
             workflow_id=checklist.workflow_id,
             workflow_version_id=checklist.workflow_version_id,
@@ -594,7 +607,10 @@ class AudiencePreviewResponse(BaseModel):
             included_count=preview.included_count,
             excluded_count=preview.excluded_count,
             counts_by_reason=preview.counts_by_reason,
-            samples=[AudienceSampleResponse.from_service(sample) for sample in preview.samples],
+            samples=[
+                AudienceSampleResponse.from_service(sample)
+                for sample in preview.samples
+            ],
             warnings=preview.warnings,
             estimate_basis=preview.estimate_basis,
             generated_at=preview.generated_at,
@@ -611,7 +627,9 @@ class AudienceEnrollRequest(BaseModel):
     def to_segment(self) -> AudienceSegment | None:
         if self.filters is None and self.exclusions is None:
             return None
-        return AudienceSegment(filters=self.filters or {}, exclusions=self.exclusions or {})
+        return AudienceSegment(
+            filters=self.filters or {}, exclusions=self.exclusions or {}
+        )
 
 
 class AudienceEnrollResponse(BaseModel):
@@ -901,7 +919,9 @@ async def _get_workflow_or_404(
         if wf is not None and str(wf.location_id or "") != own_location_id:
             wf = None
     if wf is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Workflow not found")
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Workflow not found"
+        )
     return wf
 
 
@@ -965,7 +985,7 @@ def _issue_from_pydantic_error(
     # Graph-structure errors raised in the model validator are prefixed by
     # pydantic with "Value error, " — strip it for a cleaner message.
     if message.startswith("Value error, "):
-        message = message[len("Value error, "):]
+        message = message[len("Value error, ") :]
     return ValidationIssueResponse(
         node_id=_node_id_for_loc(loc, definition),
         field_path=list(loc),
@@ -981,7 +1001,9 @@ def _issue_from_pydantic_error(
 @router.post("", response_model=WorkflowResponse, status_code=status.HTTP_201_CREATED)
 @audit(
     AuditAction.CAMPAIGN_CREATE,
-    resource=lambda *args, **kwargs: f"campaign:new:{getattr(kwargs.get('data'), 'name', 'unnamed')}",
+    resource=lambda *args, **kwargs: (
+        f"campaign:new:{getattr(kwargs.get('data'), 'name', 'unnamed')}"
+    ),
     actor=AuditActor.ADMIN,
 )
 async def create_workflow(
@@ -1001,10 +1023,14 @@ async def create_workflow(
         return WorkflowResponse.from_model(wf)
 
 
-@router.post("/draft", response_model=WorkflowResponse, status_code=status.HTTP_201_CREATED)
+@router.post(
+    "/draft", response_model=WorkflowResponse, status_code=status.HTTP_201_CREATED
+)
 @audit(
     AuditAction.CAMPAIGN_CREATE,
-    resource=lambda *args, **kwargs: f"campaign:new:{getattr(kwargs.get('data'), 'name', 'unnamed')}",
+    resource=lambda *args, **kwargs: (
+        f"campaign:new:{getattr(kwargs.get('data'), 'name', 'unnamed')}"
+    ),
     actor=AuditActor.ADMIN,
 )
 async def create_draft_workflow(
@@ -1130,11 +1156,15 @@ async def list_pms_appointment_statuses(
     as a workflow id by the parameterised route.
     """
     inst_id = _institution_id(current_user)
-    normalized = (pms or "").strip().lower()
-    if not normalized:
-        async with get_db_session() as session:
-            institution = await session.get(Institution, inst_id)
-        normalized = institution.pms_type if institution else "none"
+    async with get_db_session() as session:
+        institution = await session.get(Institution, inst_id)
+    normalized = institution.pms_type if institution else "none"
+    requested = (pms or "").strip().lower()
+    if requested and requested != normalized:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="The requested PMS does not match the current institution",
+        )
     if normalized != "gotracker":
         # NexHealth has no comparable fixed disposition vocabulary today; it is
         # introduced with the canonical event model rather than faked here.
@@ -1215,7 +1245,8 @@ async def dry_run_definition(
                 location = await session.get(InstitutionLocation, location_id)
                 if location is not None and location.institution_id != inst_id:
                     raise HTTPException(
-                        status_code=status.HTTP_404_NOT_FOUND, detail="Location not found"
+                        status_code=status.HTTP_404_NOT_FOUND,
+                        detail="Location not found",
                     )
             # Resolve through the same builder the sender uses, so the preview
             # cannot disagree with what a real send would put on the wire.
@@ -1241,7 +1272,10 @@ async def dry_run_definition(
     return DryRunResultResponse(
         steps=[
             DryRunStepResponse(
-                node_id=s.node_id, node_type=s.node_type, summary=s.summary, detail=s.detail
+                node_id=s.node_id,
+                node_type=s.node_type,
+                summary=s.summary,
+                detail=s.detail,
             )
             for s in result.steps
         ],
@@ -1371,7 +1405,9 @@ async def _openai_workflow_models() -> list[WorkflowLlmModelResponse]:
 
     base_url = settings.openai_base_url.rstrip("/")
     try:
-        async with httpx.AsyncClient(timeout=settings.workflow_llm_timeout_seconds) as client:
+        async with httpx.AsyncClient(
+            timeout=settings.workflow_llm_timeout_seconds
+        ) as client:
             response = await client.get(
                 f"{base_url}/models",
                 headers={"Authorization": f"Bearer {settings.openai_api_key}"},
@@ -1416,7 +1452,9 @@ def _is_workflow_llm_model(model_id: str) -> bool:
 @router.get("/channel-readiness", response_model=ChannelReadinessResponse)
 async def get_channel_readiness(
     current_user: _CampaignManager,
-    location_id: str = Query(..., description="Location to check channel readiness for"),
+    location_id: str = Query(
+        ..., description="Location to check channel readiness for"
+    ),
 ) -> ChannelReadinessResponse:
     """Report whether SMS / email / voice are provisioned for a location so the
     builder can surface missing setup before publish (B6).
@@ -1604,7 +1642,9 @@ async def release_outbound_halt(
 async def get_launch_checklist(
     workflow_id: str,
     current_user: _InstitutionOrLocationAdmin,
-    location_id: str | None = Query(None, description="Optional location context override"),
+    location_id: str | None = Query(
+        None, description="Optional location context override"
+    ),
 ) -> LaunchChecklistResponse:
     """Return the launch-readiness checklist for the workflow's saved definition."""
     inst_id = _institution_id(current_user)
@@ -1642,7 +1682,9 @@ async def get_campaign_overview(
 async def get_campaign_analytics(
     workflow_id: str,
     current_user: _InstitutionOrLocationAdmin,
-    start_date: date | None = Query(None, description="Inclusive range start (YYYY-MM-DD)"),
+    start_date: date | None = Query(
+        None, description="Inclusive range start (YYYY-MM-DD)"
+    ),
     end_date: date | None = Query(None, description="Inclusive range end (YYYY-MM-DD)"),
 ) -> CampaignAnalyticsResponse:
     """Return normalized outcome analytics from the daily campaign rollup."""
@@ -1670,7 +1712,9 @@ async def get_campaign_analytics(
 async def get_campaign_split_analytics(
     workflow_id: str,
     current_user: _InstitutionOrLocationAdmin,
-    start_date: date | None = Query(None, description="Inclusive range start (YYYY-MM-DD)"),
+    start_date: date | None = Query(
+        None, description="Inclusive range start (YYYY-MM-DD)"
+    ),
     end_date: date | None = Query(None, description="Inclusive range end (YYYY-MM-DD)"),
 ) -> CampaignSplitAnalyticsResponse:
     """Return per-variant results for every Split (A/B) node in the workflow."""
@@ -1691,7 +1735,9 @@ async def get_campaign_split_analytics(
         return CampaignSplitAnalyticsResponse.from_service(analytics)
 
 
-@router.post("/{workflow_id}/launch-checklist/preview", response_model=LaunchChecklistResponse)
+@router.post(
+    "/{workflow_id}/launch-checklist/preview", response_model=LaunchChecklistResponse
+)
 async def preview_launch_checklist(
     workflow_id: str,
     data: LaunchChecklistPreviewRequest,
@@ -1786,7 +1832,9 @@ async def put_audience_definition(
 @router.post("/{workflow_id}/audience/preview", response_model=AudiencePreviewResponse)
 @audit(
     AuditAction.CAMPAIGN_AUDIENCE_PREVIEW,
-    resource=lambda *args, **kwargs: f"campaign:{kwargs.get('workflow_id')}:audience-preview",
+    resource=lambda *args, **kwargs: (
+        f"campaign:{kwargs.get('workflow_id')}:audience-preview"
+    ),
     actor=AuditActor.ADMIN,
 )
 async def preview_audience(
@@ -1822,7 +1870,9 @@ async def preview_audience(
 )
 @audit(
     AuditAction.CAMPAIGN_ENROLL,
-    resource=lambda *args, **kwargs: f"campaign:{kwargs.get('workflow_id')}:audience-enroll",
+    resource=lambda *args, **kwargs: (
+        f"campaign:{kwargs.get('workflow_id')}:audience-enroll"
+    ),
     actor=AuditActor.ADMIN,
 )
 async def enroll_audience(
@@ -1909,7 +1959,9 @@ async def list_workflow_versions(
         )
         versions = list(result.scalars().all())
         return [
-            WorkflowVersionResponse.from_model(v, current_version_id=wf.current_version_id)
+            WorkflowVersionResponse.from_model(
+                v, current_version_id=wf.current_version_id
+            )
             for v in versions
         ]
 
@@ -2014,7 +2066,6 @@ async def resume_workflow(
         return WorkflowResponse.from_model(wf)
 
 
-
 @router.post(
     "/{workflow_id}/enroll/csv",
     response_model=CsvEnrollPreviewResponse,
@@ -2079,7 +2130,9 @@ async def enroll_from_csv(
                 phone_hash=contact.phone_hash,
                 contact_id=str(contact.id),
             ):
-                row.excluded_reason = "Patient has an all-channel do-not-contact restriction"
+                row.excluded_reason = (
+                    "Patient has an all-channel do-not-contact restriction"
+                )
 
         enrolled = 0
         if commit and not preview.parse_errors:
@@ -2289,7 +2342,9 @@ async def enroll_in_workflow(
             # resolves the location timezone (never NoOp / never hardcoded UTC).
             # The live PMS revalidator guards appointment-triggered sends against
             # cancelled/rescheduled appointments; it is a no-op for other runs.
-            from src.app.services.automation.revalidation import PmsLiveRevalidationService
+            from src.app.services.automation.revalidation import (
+                PmsLiveRevalidationService,
+            )
 
             dispatcher, location_timezone = await build_dispatcher(
                 session,
@@ -2400,7 +2455,9 @@ async def get_run_status(
             or str(run.institution_id) != inst_id
             or str(run.workflow_id) != workflow_id
         ):
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Run not found")
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND, detail="Run not found"
+            )
     return WorkflowRunResponse.from_model(run)
 
 
@@ -2421,7 +2478,9 @@ async def get_run_timeline(
             institution_id=inst_id,
         )
         if timeline is None:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Run not found")
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND, detail="Run not found"
+            )
     return RunTimelineResponse(
         run=CampaignRunListItemResponse(**timeline.run.__dict__),
         contact=timeline.contact,
@@ -2433,7 +2492,9 @@ async def get_run_timeline(
 @router.post("/{workflow_id}/runs/{run_id}/cancel", response_model=WorkflowRunResponse)
 @audit(
     AuditAction.CAMPAIGN_RUN_CANCEL,
-    resource=lambda *args, **kwargs: f"campaign:{kwargs.get('workflow_id')}:run:{kwargs.get('run_id')}",
+    resource=lambda *args, **kwargs: (
+        f"campaign:{kwargs.get('workflow_id')}:run:{kwargs.get('run_id')}"
+    ),
     actor=AuditActor.ADMIN,
 )
 async def cancel_run(
@@ -2451,7 +2512,9 @@ async def cancel_run(
             or str(run.institution_id) != inst_id
             or str(run.workflow_id) != workflow_id
         ):
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Run not found")
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND, detail="Run not found"
+            )
         enroll_svc = AutomationWorkflowEnrollmentService(session)
         await enroll_svc.cancel_run(run)
     return WorkflowRunResponse.from_model(run)
@@ -2488,7 +2551,9 @@ class BulkEnrollResponse(BaseModel):
 )
 @audit(
     AuditAction.CAMPAIGN_BULK_ENROLL,
-    resource=lambda *args, **kwargs: f"campaign:{kwargs.get('workflow_id')}:bulk-enroll",
+    resource=lambda *args, **kwargs: (
+        f"campaign:{kwargs.get('workflow_id')}:bulk-enroll"
+    ),
     actor=AuditActor.ADMIN,
 )
 async def bulk_enroll(
@@ -2560,7 +2625,9 @@ class WorkflowHaltResponse(BaseModel):
 @router.post("/{workflow_id}/emergency-halt", response_model=WorkflowHaltResponse)
 @audit(
     AuditAction.CAMPAIGN_EMERGENCY_HALT,
-    resource=lambda *args, **kwargs: f"campaign:{kwargs.get('workflow_id')}:emergency-halt",
+    resource=lambda *args, **kwargs: (
+        f"campaign:{kwargs.get('workflow_id')}:emergency-halt"
+    ),
     actor=AuditActor.ADMIN,
 )
 async def emergency_halt_workflow(

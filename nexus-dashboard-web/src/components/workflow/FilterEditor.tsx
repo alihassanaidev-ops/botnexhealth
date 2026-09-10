@@ -276,7 +276,7 @@ function RuleRow({
     readOnly?: boolean
 }) {
     const pmsType = usePmsType()
-    const events = useEventCatalog()
+    const events = useEventCatalog(pmsType)
     // The same canonical vocabulary the trigger picker and the message insert
     // menu use, so a field an author sees in one panel is usable in the next.
     const suggestions = triggerType

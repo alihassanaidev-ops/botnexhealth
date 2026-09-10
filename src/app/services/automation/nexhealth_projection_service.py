@@ -65,7 +65,9 @@ def _parse_dt(value: str | None) -> datetime | None:
     return dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc)
 
 
-def _parse_flow_time(value: str | None, *, appointment_at: str | None) -> datetime | None:
+def _parse_flow_time(
+    value: str | None, *, appointment_at: str | None
+) -> datetime | None:
     """Parse Tracker flow timestamps, including its time-only CheckIn fields."""
     parsed = _parse_dt(value)
     if parsed is not None:
@@ -313,7 +315,9 @@ class NexHealthProjectionService:
             checked_in_at, appointment_at=start_time
         )
         incoming_in_chair_at = _parse_flow_time(in_chair_at, appointment_at=start_time)
-        incoming_out_chair_at = _parse_flow_time(out_chair_at, appointment_at=start_time)
+        incoming_out_chair_at = _parse_flow_time(
+            out_chair_at, appointment_at=start_time
+        )
         incoming_checked_out_at = _parse_flow_time(
             checked_out_at, appointment_at=start_time
         )
@@ -383,10 +387,15 @@ class NexHealthProjectionService:
         row.nexhealth_patient_id = nexhealth_patient_id or row.nexhealth_patient_id
         row.contact_id = contact_id or row.contact_id
         row.provider_id = provider_id or getattr(row, "provider_id", None)
-        row.appointment_type_id = appointment_type_id or getattr(
-            row, "appointment_type_id", None
-        )
-        row.appointment_reason = appointment_reason or getattr(row, "appointment_reason", None)
+        previous_type_id = getattr(row, "appointment_type_id", None)
+        if appointment_type_id is not None:
+            row.appointment_type_id = appointment_type_id
+            # A changed type with no resolved label must not retain the old
+            # type's reason and silently match the wrong campaign.
+            if appointment_type_id != previous_type_id:
+                row.appointment_reason = appointment_reason
+        if appointment_reason is not None:
+            row.appointment_reason = appointment_reason
         previous_flow_state = getattr(row, "flow_state", None)
         previous_flow_changed_at = getattr(row, "flow_changed_at", None)
         flow_changed = flow_state is not None and (

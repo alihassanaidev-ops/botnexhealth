@@ -16,7 +16,7 @@ import pytest
 
 from src.app.services.automation.canonical_context import (
     appointment_event_key,
-    merge_canonical_context,
+    build_appointment_trigger_context,
 )
 from src.app.services.automation.event_catalog import (
     ALL_EVENT_KEYS,
@@ -73,8 +73,10 @@ GOTRACKER_APPOINTMENT = {
     "appointment_reason": "implant surgery",
     "appointment_reasons": ["implant surgery"],
     "provider_id": "gt-2",
+    "schedule_column_id": "7",
     "provider_name": "Dr Chan",
     "is_confirmed": False,
+    "is_preconfirmed": False,
     "is_recall": False,
     "original_date": "2026-09-01T10:00:00",
     "flow_state": "Completed",
@@ -88,8 +90,10 @@ PAYLOADS = {
 
 
 def _project(payload: dict, event_key: str, pms: str) -> dict:
-    return merge_canonical_context(
-        dict(payload), event_key=event_key, source_pms=pms
+    return build_appointment_trigger_context(
+        {},
+        {**payload, "pms_source": pms},
+        event_key=event_key,
     )
 
 
@@ -192,6 +196,28 @@ def test_nexhealth_is_not_offered_events_it_cannot_detect() -> None:
     """
     assert supports("appointment.no_show", "nexhealth") == "unsupported"
     assert supports("appointment.no_show", "gotracker") == "native"
+
+
+def test_public_catalog_exposes_only_the_selected_pms_native_namespace() -> None:
+    from src.app.services.automation.event_catalog import public_events
+
+    nexhealth_paths = {
+        field["path"]
+        for event in public_events("nexhealth")
+        for field in event["context"]
+    }
+    gotracker_paths = {
+        field["path"]
+        for event in public_events("gotracker")
+        for field in event["context"]
+    }
+
+    assert "nexhealth_payload.appointment.appointment_type_id" in nexhealth_paths
+    assert "appointment.status" not in nexhealth_paths
+    assert not any(path.startswith("gotracker_payload.") for path in nexhealth_paths)
+    assert "gotracker_payload.appointment.reasons" in gotracker_paths
+    assert "appointment.status" not in gotracker_paths
+    assert not any(path.startswith("nexhealth_payload.") for path in gotracker_paths)
 
 
 def test_every_event_declares_support_for_every_known_pms() -> None:

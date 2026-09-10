@@ -86,6 +86,7 @@ def instantiate_definition(
     voice_profile_id: str | None = None,
     voice_agent_id: str | None = None,
     setup_options: dict[str, Any] | None = None,
+    pms_type: str | None = None,
 ) -> dict[str, Any]:
     """Return a clone-ready definition with setup-time substitutions applied."""
     definition = copy.deepcopy(template.definition)
@@ -123,7 +124,12 @@ def instantiate_definition(
                 if node.get("retell_agent_id") == VOICE_AGENT_PLACEHOLDER:
                     node["retell_agent_id"] = ""
 
-    _apply_required_setup_fields(template, definition, setup_options)
+    _apply_required_setup_fields(
+        template,
+        definition,
+        setup_options,
+        pms_type=pms_type,
+    )
     return definition
 
 
@@ -131,6 +137,8 @@ def _apply_required_setup_fields(
     template: CampaignTemplate,
     definition: dict[str, Any],
     setup_options: dict[str, Any],
+    *,
+    pms_type: str | None,
 ) -> None:
     """Apply setup fields that affect executable workflow behavior."""
     fields = template.metadata.setup_fields
@@ -233,6 +241,29 @@ def _apply_required_setup_fields(
                         ):
                             rule["value"] = reasons
             continue
+        if field_id == "appointment_classifications":
+            raw = setup_options.get(field_id)
+            if raw is None:
+                raw = setup_options.get("appointment_reasons")
+            classifications = _classification_items(raw)
+            if setup_field.get("required") and not classifications:
+                raise ValueError(
+                    "appointment_classifications (formerly appointment_reasons) "
+                    "must contain at least one selection"
+                )
+            if classifications:
+                if pms_type is None and field_id not in setup_options:
+                    _set_filter_rule_value(
+                        definition.get("trigger", {}).get("filter"),
+                        field="appointment_reason",
+                        value=[item["name"] or item["id"] for item in classifications],
+                    )
+                else:
+                    definition["trigger"]["filter"] = _appointment_trigger_filter(
+                        pms_type,
+                        classifications,
+                    )
+            continue
         if field_id == "call_offset_hours_before":
             hours = _positive_number(
                 setup_options.get(field_id, setup_field.get("default", 24)),
@@ -284,6 +315,29 @@ def _apply_required_setup_fields(
             node = _node_by_id(definition, "check-post-op-eligible-reason")
             if node:
                 node["rules"][0]["value"] = reasons
+            continue
+        if field_id == "post_op_classifications":
+            raw = setup_options.get(field_id)
+            if raw is None:
+                raw = setup_options.get("post_op_reasons")
+            classifications = _classification_items(raw)
+            if setup_field.get("required") and not classifications:
+                raise ValueError(
+                    "post_op_classifications must contain at least one selection"
+                )
+            if classifications:
+                node = _node_by_id(definition, "check-post-op-eligible-reason")
+                if node:
+                    if pms_type is None and field_id not in setup_options:
+                        node["rules"][0]["value"] = [
+                            item["name"] or item["id"] for item in classifications
+                        ]
+                    else:
+                        node.pop("rules", None)
+                        node["filter"] = _appointment_classification_filter(
+                            pms_type,
+                            classifications,
+                        )
             continue
         if field_id == "post_op_delay_hours":
             hours = _positive_number(
@@ -392,6 +446,110 @@ def _string_list(value: Any) -> list[str]:
     else:
         return []
     return list(dict.fromkeys(str(part).strip() for part in parts if str(part).strip()))
+
+
+def _classification_items(value: Any) -> list[dict[str, str]]:
+    if not isinstance(value, list):
+        value = _string_list(value)
+    items: list[dict[str, str]] = []
+    seen: set[tuple[str, str]] = set()
+    for raw in value:
+        if isinstance(raw, dict):
+            source_id = str(raw.get("id") or raw.get("source_id") or "").strip()
+            name = str(raw.get("name") or "").strip()
+        else:
+            source_id = name = str(raw).strip()
+        if not source_id and not name:
+            continue
+        key = (source_id, name)
+        if key not in seen:
+            items.append({"id": source_id, "name": name})
+            seen.add(key)
+    return items
+
+
+def _nexhealth_id_variants(value: str) -> list[str]:
+    raw = value.removeprefix("nh-")
+    return list(dict.fromkeys([value, raw, f"nh-{raw}"]))
+
+
+def _appointment_classification_filter(
+    pms_type: str | None,
+    classifications: list[dict[str, str]],
+) -> dict[str, Any]:
+    if pms_type == "nexhealth":
+        ids = list(
+            dict.fromkeys(
+                variant
+                for item in classifications
+                for variant in _nexhealth_id_variants(item["id"])
+                if item["id"]
+            )
+        )
+        return {
+            "kind": "rule",
+            "field": "nexhealth_payload.appointment.appointment_type_id",
+            "op": "in_case_insensitive",
+            "value": ids,
+        }
+    if pms_type == "gotracker":
+        names = [item["name"] or item["id"] for item in classifications]
+        return {
+            "kind": "group",
+            "op": "or",
+            "children": [
+                {
+                    "kind": "rule",
+                    "field": "gotracker_payload.appointment.reasons",
+                    "op": "contains",
+                    "value": name,
+                }
+                for name in names
+            ],
+        }
+    names = [item["name"] or item["id"] for item in classifications]
+    return {
+        "kind": "rule",
+        "field": "appointment_reason",
+        "op": "in_case_insensitive",
+        "value": names,
+    }
+
+
+def _appointment_trigger_filter(
+    pms_type: str | None,
+    classifications: list[dict[str, str]],
+) -> dict[str, Any]:
+    classification_filter = _appointment_classification_filter(
+        pms_type,
+        classifications,
+    )
+    if pms_type == "nexhealth":
+        status_filter = {
+            "kind": "rule",
+            "field": "nexhealth_payload.appointment.cancelled",
+            "op": "eq",
+            "value": False,
+        }
+    elif pms_type == "gotracker":
+        status_filter = {
+            "kind": "rule",
+            "field": "gotracker_payload.appointment.status",
+            "op": "in_case_insensitive",
+            "value": ["booked"],
+        }
+    else:
+        status_filter = {
+            "kind": "rule",
+            "field": "appointment_status",
+            "op": "in_case_insensitive",
+            "value": ["booked"],
+        }
+    return {
+        "kind": "group",
+        "op": "and",
+        "children": [status_filter, classification_filter],
+    }
 
 
 def _required_text(
@@ -2238,11 +2396,10 @@ _ALL_TEMPLATES: dict[str, CampaignTemplate] = {
                     "placeholder": "Choose outbound voice profile",
                 },
                 {
-                    "id": "appointment_reasons",
-                    "label": "Eligible appointment reasons",
-                    "type": "string_list",
+                    "id": "appointment_classifications",
+                    "label": "Eligible appointment types or reasons",
+                    "type": "pms_appointment_multiselect",
                     "required": True,
-                    "placeholder": "bridge prep, implant surgery",
                 },
                 {
                     "id": "call_offset_hours_before",
@@ -2291,7 +2448,7 @@ _ALL_TEMPLATES: dict[str, CampaignTemplate] = {
         definition=_POST_OP_FOLLOWUP_AFTER_CONFIRMATION,
         metadata=_metadata(
             category="appointment_ops",
-            goal="Complete configurable post-op follow-up after Tracker marks an eligible appointment Completed.",
+            goal="Complete configurable post-op follow-up after an eligible visit is completed.",
             outcome_labels=["post_op_complete", "staff_handoff", "do_not_call"],
             supported_channels=["voice"],
             required_readiness_checks=["location", "voice", "consent", "quiet_hours"],
@@ -2302,11 +2459,10 @@ _ALL_TEMPLATES: dict[str, CampaignTemplate] = {
                 "appointment_time",
             ],
             content_class="transactional_care",
-            audience="Eligible appointments whose Tracker Chair Flow state became Completed",
+            audience="Eligible appointments whose visit completion was reported or derived",
             eligibility=[
-                "Tracker Chair Flow state is Completed",
-                "appointment reason is selected during setup",
-                "source appointment includes FlowChange",
+                "the practice-management system reports or supports derived visit completion",
+                "a native appointment type or reason is selected during setup",
                 "voice consent exists",
                 "patient is not suppressed",
             ],
@@ -2335,11 +2491,10 @@ _ALL_TEMPLATES: dict[str, CampaignTemplate] = {
                     "placeholder": "Choose outbound voice profile",
                 },
                 {
-                    "id": "post_op_reasons",
-                    "label": "Eligible completed visit reasons",
-                    "type": "string_list",
+                    "id": "post_op_classifications",
+                    "label": "Eligible completed appointment reasons",
+                    "type": "pms_appointment_multiselect",
                     "required": True,
-                    "placeholder": "implant surgery, extraction",
                 },
                 {
                     "id": "post_op_delay_hours",
@@ -2608,7 +2763,5 @@ def template_pms_types(template: CampaignTemplate) -> frozenset[str]:
     ) or template.trigger_type
     allowed &= pms_scope.TRIGGER_PMS.get(trigger_type, pms_scope.ALL_PMS_TYPES)
     for node in template.definition.get("nodes", []):
-        allowed &= pms_scope.NODE_PMS.get(
-            node.get("type", ""), pms_scope.ALL_PMS_TYPES
-        )
+        allowed &= pms_scope.NODE_PMS.get(node.get("type", ""), pms_scope.ALL_PMS_TYPES)
     return frozenset(allowed)

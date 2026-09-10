@@ -22,6 +22,7 @@ from src.app.api.routes.automation_templates import (
     get_campaign_template,
     instantiate_template,
     list_campaign_templates,
+    _validated_classifications,
 )
 
 
@@ -281,7 +282,9 @@ def test_overdue_recall_template_is_launchable_with_item25_eligibility() -> None
 
 
 def test_overdue_recall_reply_waits_route_to_handoff_statuses() -> None:
-    nodes = {node["id"]: node for node in TEMPLATES["recall-sms-6month"].definition["nodes"]}
+    nodes = {
+        node["id"]: node for node in TEMPLATES["recall-sms-6month"].definition["nodes"]
+    }
 
     for wait_id, condition_id in (
         ("wait-recall-reply-1", "check-recall-reply-1"),
@@ -422,6 +425,109 @@ def test_surgery_confirmation_template_allows_call_at_appointment_time() -> None
     assert definition["trigger"]["reminder_offset_hours"] == 0
 
 
+def test_surgery_confirmation_compiles_nexhealth_appointment_type_filter() -> None:
+    definition = instantiate_definition(
+        TEMPLATES["surgery-pre-appointment-confirmation"],
+        voice_profile_id="prof-surgery",
+        pms_type="nexhealth",
+        setup_options={
+            "appointment_classifications": [
+                {"id": "4", "name": "Surgery"},
+            ],
+        },
+    )
+
+    assert definition["trigger"]["filter"] == {
+        "kind": "group",
+        "op": "and",
+        "children": [
+            {
+                "kind": "rule",
+                "field": "nexhealth_payload.appointment.cancelled",
+                "op": "eq",
+                "value": False,
+            },
+            {
+                "kind": "rule",
+                "field": "nexhealth_payload.appointment.appointment_type_id",
+                "op": "in_case_insensitive",
+                "value": ["4", "nh-4"],
+            },
+        ],
+    }
+
+
+def test_surgery_confirmation_compiles_gotracker_reason_filter() -> None:
+    definition = instantiate_definition(
+        TEMPLATES["surgery-pre-appointment-confirmation"],
+        voice_profile_id="prof-surgery",
+        pms_type="gotracker",
+        setup_options={
+            "appointment_classifications": [
+                {"id": "reason-7", "name": "Implant Surgery"},
+            ],
+        },
+    )
+
+    status_filter, reason_filter = definition["trigger"]["filter"]["children"]
+    assert status_filter["field"] == "gotracker_payload.appointment.status"
+    assert reason_filter == {
+        "kind": "group",
+        "op": "or",
+        "children": [
+            {
+                "kind": "rule",
+                "field": "gotracker_payload.appointment.reasons",
+                "op": "contains",
+                "value": "Implant Surgery",
+            }
+        ],
+    }
+
+
+@pytest.mark.asyncio
+async def test_nexhealth_classification_selection_is_resolved_from_location_cache() -> (
+    None
+):
+    from types import SimpleNamespace
+
+    result = MagicMock()
+    result.scalars.return_value.all.return_value = [
+        SimpleNamespace(source_id="4", name="Surgery")
+    ]
+    session = AsyncMock()
+    session.execute = AsyncMock(return_value=result)
+
+    resolved = await _validated_classifications(
+        session,
+        institution_id="inst-1",
+        location_id="loc-1",
+        pms_type="nexhealth",
+        value=[{"id": "4", "name": "client supplied name is ignored"}],
+    )
+
+    assert resolved == [{"id": "4", "name": "Surgery"}]
+
+
+@pytest.mark.asyncio
+async def test_stale_classification_selection_is_rejected() -> None:
+    from fastapi import HTTPException
+
+    result = MagicMock()
+    result.scalars.return_value.all.return_value = []
+    session = AsyncMock()
+    session.execute = AsyncMock(return_value=result)
+
+    with pytest.raises(HTTPException, match="stale or invalid"):
+        await _validated_classifications(
+            session,
+            institution_id="inst-1",
+            location_id="loc-1",
+            pms_type="nexhealth",
+            value=[{"id": "deleted-type", "name": "Surgery"}],
+        )
+
+
 def test_surgery_confirmation_template_requires_at_least_one_reason() -> None:
     template = TEMPLATES["surgery-pre-appointment-confirmation"]
 
@@ -495,7 +601,9 @@ def test_surgery_confirmation_template_does_not_treat_answered_as_confirmed() ->
     assert router["default_next_node_id"] == "mark-followup"
 
 
-def test_post_op_template_starts_from_the_completed_visit_event_and_waits_one_day() -> None:
+def test_post_op_template_starts_from_the_completed_visit_event_and_waits_one_day() -> (
+    None
+):
     t = TEMPLATES["post-op-followup-after-confirmation"]
     nodes = {node["id"]: node for node in t.definition["nodes"]}
 
@@ -911,12 +1019,14 @@ def test_instantiate_creates_publishes_and_pauses_workflow() -> None:
         published_nodes["voice-preop-attempt-1"]["voice_profile_id"] == "prof-surgery"
     )
     assert published_nodes["voice-preop-attempt-1"]["retell_agent_id"] == ""
-    reason_rule = next(
-        rule
-        for rule in published_def["trigger"]["filter"]["children"]
-        if rule["field"] == "appointment_reason"
-    )
-    assert reason_rule["value"] == ["bridge prep"]
+    status_rule, reason_group = published_def["trigger"]["filter"]["children"]
+    assert status_rule["field"] == "gotracker_payload.appointment.status"
+    assert reason_group["children"][0] == {
+        "kind": "rule",
+        "field": "gotracker_payload.appointment.reasons",
+        "op": "contains",
+        "value": "bridge prep",
+    }
     assert (
         mock_svc.publish_version.call_args.kwargs["content_classification"]
         == "transactional_care"

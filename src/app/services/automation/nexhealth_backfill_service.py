@@ -64,13 +64,17 @@ class NexHealthAppointmentSyncService:
     ) -> AppointmentSyncSummary:
         return await self._run(mode="reconciliation", lookahead_days=lookahead_days)
 
-    async def _run(self, *, mode: SyncMode, lookahead_days: int) -> AppointmentSyncSummary:
+    async def _run(
+        self, *, mode: SyncMode, lookahead_days: int
+    ) -> AppointmentSyncSummary:
         rows = await self._load_subscription_locations()
         summary = AppointmentSyncSummary()
         for idx, row in enumerate(rows):
             if idx > 0:
                 await asyncio.sleep(
-                    random.uniform(_LOCATION_PACING_MIN_SECONDS, _LOCATION_PACING_MAX_SECONDS)
+                    random.uniform(
+                        _LOCATION_PACING_MIN_SECONDS, _LOCATION_PACING_MAX_SECONDS
+                    )
                 )
             try:
                 await self._sync_location(
@@ -83,8 +87,13 @@ class NexHealthAppointmentSyncService:
                 )
             except Exception as exc:  # noqa: BLE001
                 summary.failed_locations += 1
-                row.subscription.status = NexHealthWebhookSubscriptionStatus.FAILED.value
-                row.subscription.error_metadata = {"type": type(exc).__name__, "mode": mode}
+                row.subscription.status = (
+                    NexHealthWebhookSubscriptionStatus.FAILED.value
+                )
+                row.subscription.error_metadata = {
+                    "type": type(exc).__name__,
+                    "mode": mode,
+                }
                 logger.exception(
                     "nexhealth %s failed institution=%s location=%s: %s",
                     mode,
@@ -101,8 +110,14 @@ class NexHealthAppointmentSyncService:
                 Institution,
                 InstitutionLocation,
             )
-            .join(Institution, Institution.id == NexHealthWebhookSubscription.institution_id)
-            .join(InstitutionLocation, InstitutionLocation.id == NexHealthWebhookSubscription.location_id)
+            .join(
+                Institution,
+                Institution.id == NexHealthWebhookSubscription.institution_id,
+            )
+            .join(
+                InstitutionLocation,
+                InstitutionLocation.id == NexHealthWebhookSubscription.location_id,
+            )
             .where(
                 Institution.pms_type == "nexhealth",
                 NexHealthWebhookSubscription.status.in_(
@@ -134,8 +149,14 @@ class NexHealthAppointmentSyncService:
                 Institution,
                 InstitutionLocation,
             )
-            .join(Institution, Institution.id == NexHealthWebhookSubscription.institution_id)
-            .join(InstitutionLocation, InstitutionLocation.id == NexHealthWebhookSubscription.location_id)
+            .join(
+                Institution,
+                Institution.id == NexHealthWebhookSubscription.institution_id,
+            )
+            .join(
+                InstitutionLocation,
+                InstitutionLocation.id == NexHealthWebhookSubscription.location_id,
+            )
             .where(
                 NexHealthWebhookSubscription.id == subscription_id,
                 Institution.pms_type == "nexhealth",
@@ -269,9 +290,33 @@ class NexHealthAppointmentSyncService:
                 location_id=location_id,
                 trigger_metadata={
                     "event": f"appointment.{mode}",
+                    "pms_source": "nexhealth",
                     "nexhealth_appointment_id": appointment_id,
                     "nexhealth_location_id": appointment.get("location_id"),
-                    "source": mode,
+                    "source": f"nexhealth_{mode}",
+                    "appointment_status": "booked",
+                    "appointment_reason": _appointment_reason(appointment),
+                    "appointment_reasons": (
+                        [_appointment_reason(appointment)]
+                        if _appointment_reason(appointment)
+                        else []
+                    ),
+                    "appointment_type_id": _appointment_type_id(appointment),
+                    "appointment_type_name": _appointment_reason(appointment),
+                    "nexhealth_payload": {
+                        "event": f"appointment.{mode}",
+                        "appointment": {
+                            "id": appointment_id,
+                            "location_id": appointment.get("location_id"),
+                            "patient_id": patient_id,
+                            "provider_id": _provider_id(appointment),
+                            "appointment_type_id": _appointment_type_id(appointment),
+                            "appointment_type_name": _appointment_reason(appointment),
+                            "start_time": start_time,
+                            "confirmed": _confirmed(appointment),
+                            "cancelled": False,
+                        },
+                    },
                 },
             )
         return True, should_trigger, cancelled_runs
@@ -302,12 +347,16 @@ class NexHealthPatientSyncService:
         return await self._run(mode="reconciliation")
 
     async def _run(self, *, mode: SyncMode) -> PatientSyncSummary:
-        rows = await NexHealthAppointmentSyncService(self.session)._load_subscription_locations()
+        rows = await NexHealthAppointmentSyncService(
+            self.session
+        )._load_subscription_locations()
         summary = PatientSyncSummary()
         for idx, row in enumerate(rows):
             if idx > 0:
                 await asyncio.sleep(
-                    random.uniform(_LOCATION_PACING_MIN_SECONDS, _LOCATION_PACING_MAX_SECONDS)
+                    random.uniform(
+                        _LOCATION_PACING_MIN_SECONDS, _LOCATION_PACING_MAX_SECONDS
+                    )
                 )
             try:
                 await self._sync_location(
@@ -319,7 +368,9 @@ class NexHealthPatientSyncService:
                 )
             except Exception as exc:  # noqa: BLE001
                 summary.failed_locations += 1
-                row.subscription.status = NexHealthWebhookSubscriptionStatus.FAILED.value
+                row.subscription.status = (
+                    NexHealthWebhookSubscriptionStatus.FAILED.value
+                )
                 row.subscription.error_metadata = {
                     "type": type(exc).__name__,
                     "mode": f"patient_{mode}",
@@ -345,7 +396,10 @@ class NexHealthPatientSyncService:
                 Institution,
                 InstitutionLocation,
             )
-            .join(Institution, Institution.id == NexHealthWebhookSubscription.institution_id)
+            .join(
+                Institution,
+                Institution.id == NexHealthWebhookSubscription.institution_id,
+            )
             .join(
                 InstitutionLocation,
                 InstitutionLocation.id == NexHealthWebhookSubscription.location_id,
@@ -380,7 +434,9 @@ class NexHealthPatientSyncService:
     ) -> None:
         from src.app.pms.nexhealth.adapter import NexHealthAdapter
 
-        updated_since = _patient_updated_since(subscription) if mode == "reconciliation" else None
+        updated_since = (
+            _patient_updated_since(subscription) if mode == "reconciliation" else None
+        )
         adapter = await NexHealthAdapter.create(institution, location)
         try:
             patients = await adapter.list_patients(
@@ -496,11 +552,12 @@ def _patient_location_ids(patient: dict[str, Any]) -> list[str]:
     return sorted(set(ids))
 
 
-def _patient_updated_since(subscription: NexHealthWebhookSubscription) -> datetime | None:
-    watermark = (
-        getattr(subscription, "last_patient_reconciliation_at", None)
-        or getattr(subscription, "last_patient_backfill_at", None)
-    )
+def _patient_updated_since(
+    subscription: NexHealthWebhookSubscription,
+) -> datetime | None:
+    watermark = getattr(
+        subscription, "last_patient_reconciliation_at", None
+    ) or getattr(subscription, "last_patient_backfill_at", None)
     if watermark is None:
         return None
     if watermark.tzinfo is None:
@@ -567,7 +624,9 @@ def _is_cancelled(appt: dict[str, Any]) -> bool:
 async def _cancel_runs_for_appointment(
     *, institution_id: str, appointment_id: str, reason: str
 ) -> int:
-    from src.app.api.routes.nexhealth_webhooks import _cancel_runs_for_appointment as cancel
+    from src.app.api.routes.nexhealth_webhooks import (
+        _cancel_runs_for_appointment as cancel,
+    )
 
     return await cancel(institution_id, appointment_id, reason=reason)
 

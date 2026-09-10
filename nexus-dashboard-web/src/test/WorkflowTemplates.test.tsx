@@ -4,9 +4,10 @@ import userEvent from "@testing-library/user-event"
 import { MemoryRouter } from "react-router-dom"
 import WorkflowTemplates from "@/pages/WorkflowTemplates"
 import { listTemplates, createWorkflowFromTemplate } from "@/lib/workflow-api"
-import { listAppointmentTypes, listLocations, listProviders } from "@/lib/tenant-api"
+import { listAppointmentTypes, listLocations, listProviders, listReasons } from "@/lib/tenant-api"
 import { listOutboundVoiceProfiles } from "@/lib/outbound-voice-api"
 import { listRetellSmsChatProfiles } from "@/lib/retell-sms-api"
+import { usePmsType } from "@/context/InstitutionContext"
 
 vi.mock("@/lib/workflow-api", () => ({
     listTemplates: vi.fn(),
@@ -16,7 +17,9 @@ vi.mock("@/lib/tenant-api", () => ({
     listLocations: vi.fn(),
     listAppointmentTypes: vi.fn(),
     listProviders: vi.fn(),
+    listReasons: vi.fn(),
 }))
+vi.mock("@/context/InstitutionContext", () => ({ usePmsType: vi.fn() }))
 vi.mock("@/lib/outbound-voice-api", () => ({
     listOutboundVoiceProfiles: vi.fn(),
 }))
@@ -30,6 +33,8 @@ const create = createWorkflowFromTemplate as ReturnType<typeof vi.fn>
 const locations = listLocations as ReturnType<typeof vi.fn>
 const appointmentTypes = listAppointmentTypes as ReturnType<typeof vi.fn>
 const providers = listProviders as ReturnType<typeof vi.fn>
+const reasons = listReasons as ReturnType<typeof vi.fn>
+const pmsType = usePmsType as ReturnType<typeof vi.fn>
 const voiceProfiles = listOutboundVoiceProfiles as ReturnType<typeof vi.fn>
 const retellSmsProfiles = listRetellSmsChatProfiles as ReturnType<typeof vi.fn>
 
@@ -99,7 +104,7 @@ const PRE_APPOINTMENT_TEMPLATE = {
         default_frequency_cap: { max_per_day: 3, max_per_rolling_7_days: 3 },
         setup_fields: [
             { id: "voice_profile_id", label: "Voice profile", type: "voice_profile_select", required: true },
-            { id: "appointment_reasons", label: "Eligible reasons", type: "string_list", required: true },
+            { id: "appointment_classifications", label: "Eligible reasons", type: "pms_appointment_multiselect", required: true },
             { id: "call_offset_hours_before", label: "Initial call hours before appointment", type: "number", required: true, default: 24 },
             { id: "retry_delay_1_hours", label: "Delay before second attempt (hours)", type: "number", required: true, default: 5 },
             { id: "retry_delay_2_hours", label: "Delay before third attempt (hours)", type: "number", required: true, default: 5 },
@@ -117,7 +122,7 @@ const POST_OP_TEMPLATE = {
         default_frequency_cap: { max_per_day: 1, max_per_rolling_7_days: 3 },
         setup_fields: [
             { id: "voice_profile_id", label: "Post-op voice profile", type: "voice_profile_select", required: true },
-            { id: "post_op_reasons", label: "Eligible completed appointment reasons", type: "string_list", required: true },
+            { id: "post_op_classifications", label: "Eligible completed appointment reasons", type: "pms_appointment_multiselect", required: true },
             { id: "post_op_delay_hours", label: "Hours after completion before calling", type: "number", required: true, default: 24 },
             { id: "post_op_latest_call_hours", label: "Latest allowed post-op call", type: "number", required: true, default: 72 },
             { id: "patient_voice_cooldown_hours", label: "Patient cooldown", type: "number", required: true, default: 24 },
@@ -171,11 +176,15 @@ beforeEach(() => {
     locations.mockReset()
     appointmentTypes.mockReset()
     providers.mockReset()
+    reasons.mockReset()
+    pmsType.mockReset()
     voiceProfiles.mockReset()
     retellSmsProfiles.mockReset()
     locations.mockResolvedValue(LOCATIONS)
     appointmentTypes.mockResolvedValue([])
     providers.mockResolvedValue([])
+    reasons.mockResolvedValue([])
+    pmsType.mockReturnValue("nexhealth")
     voiceProfiles.mockResolvedValue([])
     retellSmsProfiles.mockResolvedValue([])
 })
@@ -246,10 +255,52 @@ describe("WorkflowTemplates page", () => {
         expect(await screen.findByText("No templates available")).toBeInTheDocument()
     })
 
-    it("configures GoTracker reasons and independent voice retry delays", async () => {
+    it("uses NexHealth appointment types for surgery eligibility", async () => {
         list.mockResolvedValue([PRE_APPOINTMENT_TEMPLATE])
         voiceProfiles.mockResolvedValue([
             { id: "profile-preop", display_name: "Pre-appointment", purpose: "reminder" },
+        ])
+        appointmentTypes.mockResolvedValue([
+            { source_id: "type-1", name: "Surgery", duration_minutes: 60, is_active: true },
+        ])
+        create.mockResolvedValue({ id: "wf-preop", name: PRE_APPOINTMENT_TEMPLATE.name })
+        const user = userEvent.setup()
+        render(
+            <MemoryRouter>
+                <WorkflowTemplates />
+            </MemoryRouter>,
+        )
+
+        await screen.findByText(PRE_APPOINTMENT_TEMPLATE.name)
+        await user.click(screen.getByRole("button", { name: /use template/i }))
+        expect(await screen.findByText("Eligible NexHealth appointment types")).toBeInTheDocument()
+        await user.click(await screen.findByRole("combobox", { name: "Voice profile" }))
+        await user.click(screen.getByRole("option", { name: "Pre-appointment" }))
+        await user.click(await screen.findByRole("checkbox", { name: "Surgery" }))
+        await user.click(screen.getByRole("button", { name: /create & open builder/i }))
+
+        await waitFor(() => {
+            expect(create).toHaveBeenCalledWith(
+                PRE_APPOINTMENT_TEMPLATE.id,
+                PRE_APPOINTMENT_TEMPLATE.name,
+                expect.objectContaining({
+                    setupOptions: expect.objectContaining({
+                        appointment_classifications: [{ id: "type-1", name: "Surgery" }],
+                    }),
+                }),
+            )
+        })
+    }, 10_000)
+
+    it("configures GoTracker reasons and independent voice retry delays", async () => {
+        pmsType.mockReturnValue("gotracker")
+        list.mockResolvedValue([PRE_APPOINTMENT_TEMPLATE])
+        voiceProfiles.mockResolvedValue([
+            { id: "profile-preop", display_name: "Pre-appointment", purpose: "reminder" },
+        ])
+        reasons.mockResolvedValue([
+            { source_id: "reason-bridge", name: "Bridge Prep", is_active: true },
+            { source_id: "reason-implant", name: "Implant Surgery", is_active: true },
         ])
         create.mockResolvedValue({ id: "wf-preop", name: PRE_APPOINTMENT_TEMPLATE.name })
         const user = userEvent.setup()
@@ -263,7 +314,8 @@ describe("WorkflowTemplates page", () => {
         await user.click(screen.getByRole("button", { name: /use template/i }))
         await user.click(await screen.findByRole("combobox", { name: "Voice profile" }))
         await user.click(screen.getByRole("option", { name: "Pre-appointment" }))
-        await user.type(screen.getByLabelText("Eligible appointment reasons"), "Bridge Prep, Implant Surgery")
+        await user.click(await screen.findByRole("checkbox", { name: "Bridge Prep" }))
+        await user.click(screen.getByRole("checkbox", { name: "Implant Surgery" }))
         await user.clear(screen.getByLabelText("Initial call hours before appointment"))
         await user.type(screen.getByLabelText("Initial call hours before appointment"), "0")
         await user.clear(screen.getByLabelText("Delay before second attempt (hours)"))
@@ -281,7 +333,10 @@ describe("WorkflowTemplates page", () => {
                 expect.objectContaining({
                     voiceProfileId: "profile-preop",
                     setupOptions: expect.objectContaining({
-                        appointment_reasons: ["Bridge Prep", "Implant Surgery"],
+                        appointment_classifications: [
+                            { id: "reason-bridge", name: "Bridge Prep" },
+                            { id: "reason-implant", name: "Implant Surgery" },
+                        ],
                         call_offset_hours_before: 0,
                         retry_delay_1_hours: 4,
                         retry_delay_2_hours: 7.5,
@@ -293,9 +348,14 @@ describe("WorkflowTemplates page", () => {
     }, 10_000)
 
     it("configures completed-visit reasons and post-op call timing", async () => {
+        pmsType.mockReturnValue("gotracker")
         list.mockResolvedValue([POST_OP_TEMPLATE])
         voiceProfiles.mockResolvedValue([
             { id: "profile-postop", display_name: "Post Appointment", purpose: "post_op" },
+        ])
+        reasons.mockResolvedValue([
+            { source_id: "reason-extraction", name: "Extraction", is_active: true },
+            { source_id: "reason-implant", name: "Implant Surgery", is_active: true },
         ])
         create.mockResolvedValue({ id: "wf-postop", name: POST_OP_TEMPLATE.name })
         const user = userEvent.setup()
@@ -308,15 +368,14 @@ describe("WorkflowTemplates page", () => {
         await screen.findByText(POST_OP_TEMPLATE.name)
         await user.click(screen.getByRole("button", { name: /use template/i }))
 
-        expect(screen.getByLabelText("Eligible completed appointment reasons")).toBeInTheDocument()
+        expect(await screen.findByRole("checkbox", { name: "Extraction" })).toBeInTheDocument()
         expect(screen.getByLabelText("Hours after completion before calling")).toHaveValue(24)
         expect(screen.getByLabelText("Latest allowed post-op call (hours after completion)")).toHaveValue(72)
 
         await user.click(await screen.findByRole("combobox", { name: "Voice profile" }))
         await user.click(screen.getByRole("option", { name: "Post Appointment" }))
-        fireEvent.change(screen.getByLabelText("Eligible completed appointment reasons"), {
-            target: { value: "Extraction, Implant Surgery" },
-        })
+        await user.click(screen.getByRole("checkbox", { name: "Extraction" }))
+        await user.click(screen.getByRole("checkbox", { name: "Implant Surgery" }))
         fireEvent.change(screen.getByLabelText("Hours after completion before calling"), {
             target: { value: "0" },
         })
@@ -335,7 +394,10 @@ describe("WorkflowTemplates page", () => {
                 expect.objectContaining({
                     voiceProfileId: "profile-postop",
                     setupOptions: expect.objectContaining({
-                        post_op_reasons: ["Extraction", "Implant Surgery"],
+                        post_op_classifications: [
+                            { id: "reason-extraction", name: "Extraction" },
+                            { id: "reason-implant", name: "Implant Surgery" },
+                        ],
                         post_op_delay_hours: 0,
                         post_op_latest_call_hours: 24,
                         patient_voice_cooldown_hours: 0,

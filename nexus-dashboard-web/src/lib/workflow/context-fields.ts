@@ -50,6 +50,20 @@ export const NEXHEALTH_APPOINTMENT_CONTEXT_SAMPLE = {
         patient_id: "204012",
         contact_id: "b7f04c1e-2d0f-4a57-9d8f-000000000000",
         location_id: "loc-1",
+        nexhealth_payload: {
+            event: "appointment_insertion",
+            appointment: {
+                id: "987654",
+                location_id: "loc-1",
+                patient_id: "204012",
+                provider_id: "377",
+                appointment_type_id: "1001",
+                appointment_type_name: "Hygiene visit",
+                start_time: "2026-07-30T16:15:00+00:00",
+                confirmed: false,
+                cancelled: false,
+            },
+        },
     },
 }
 

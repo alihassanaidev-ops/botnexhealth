@@ -35,31 +35,37 @@ export const TRIGGER_EVENT_KEYS: Record<TriggerType, string[]> = {
     inbound_message: ["message.sms.inbound", "message.email.inbound"],
 }
 
-let cache: EventCatalogEntry[] | null = null
-let inFlight: Promise<EventCatalogEntry[]> | null = null
+const cache = new Map<string, EventCatalogEntry[]>()
+const inFlight = new Map<string, Promise<EventCatalogEntry[]>>()
+
+function catalogKey(pms: string | null | undefined): string {
+    return pms || "__institution_default__"
+}
 
 /** Test hook: drop the module-scope cache between cases. */
 export function _resetEventCatalogCache(): void {
-    cache = null
-    inFlight = null
+    cache.clear()
+    inFlight.clear()
 }
 
-export async function loadEventCatalog(): Promise<EventCatalogEntry[]> {
-    if (cache) return cache
-    if (!inFlight) {
-        inFlight = listEventCatalog()
+export async function loadEventCatalog(pms?: string | null): Promise<EventCatalogEntry[]> {
+    const key = catalogKey(pms)
+    const cached = cache.get(key)
+    if (cached) return cached
+    if (!inFlight.has(key)) {
+        const request = listEventCatalog(pms || undefined)
             .then((events) => {
-                cache = events
+                cache.set(key, events)
+                inFlight.delete(key)
                 return events
             })
             .catch((error) => {
-                // Clear the in-flight promise so a later mount can retry rather
-                // than latching onto the rejected one forever.
-                inFlight = null
+                inFlight.delete(key)
                 throw error
             })
+        inFlight.set(key, request)
     }
-    return inFlight
+    return inFlight.get(key)!
 }
 
 /**
@@ -69,14 +75,18 @@ export async function loadEventCatalog(): Promise<EventCatalogEntry[]> {
  * load errors — a missing catalog degrades the picker to "no events offered",
  * which is visible, rather than breaking the whole builder.
  */
-export function useEventCatalog(): EventCatalogEntry[] {
-    const [events, setEvents] = useState<EventCatalogEntry[]>(cache ?? [])
+export function useEventCatalog(pms?: string | null): EventCatalogEntry[] {
+    const key = catalogKey(pms)
+    const [snapshot, setSnapshot] = useState<{
+        key: string
+        events: EventCatalogEntry[]
+    }>({ key, events: cache.get(key) ?? [] })
 
     useEffect(() => {
         let active = true
-        loadEventCatalog()
+        loadEventCatalog(pms)
             .then((loaded) => {
-                if (active) setEvents(loaded)
+                if (active) setSnapshot({ key, events: loaded })
             })
             .catch(() => {
                 /* editor still accepts a typed field path */
@@ -84,9 +94,9 @@ export function useEventCatalog(): EventCatalogEntry[] {
         return () => {
             active = false
         }
-    }, [])
+    }, [key, pms])
 
-    return events
+    return snapshot.key === key ? snapshot.events : cache.get(key) ?? []
 }
 
 /**

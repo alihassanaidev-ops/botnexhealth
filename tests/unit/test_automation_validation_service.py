@@ -30,18 +30,26 @@ _SEND_NO_CLASS = {
 }
 
 
-@pytest.mark.xfail(strict=True, reason=(
-    "Compliance enforcement is disabled in validation_service.validate() — the `issues += self._consent_and_content(definition)` line is commented out with 'managed by Retell for now'. The rule itself still exists and is correct. strict=True so that re-enabling it turns this into a failure and forces a deliberate revisit rather than leaving a silently-skipped compliance test."
-))
+@pytest.mark.xfail(
+    strict=True,
+    reason=(
+        "Compliance enforcement is disabled in validation_service.validate() — the `issues += self._consent_and_content(definition)` line is commented out with 'managed by Retell for now'. The rule itself still exists and is correct. strict=True so that re-enabling it turns this into a failure and forces a deliberate revisit rather than leaving a silently-skipped compliance test."
+    ),
+)
 def test_valid_sending_workflow_warns_on_missing_content_class() -> None:
     issues = _validate(_SEND_NO_CLASS)
     assert WorkflowValidationService.is_publishable(issues) is True
-    assert any(i.code == "content_class_unset" and i.severity == "warning" for i in issues)
+    assert any(
+        i.code == "content_class_unset" and i.severity == "warning" for i in issues
+    )
 
 
-@pytest.mark.xfail(strict=True, reason=(
-    "Compliance enforcement is disabled in validation_service.validate() — the `issues += self._consent_and_content(definition)` line is commented out with 'managed by Retell for now'. The rule itself still exists and is correct. strict=True so that re-enabling it turns this into a failure and forces a deliberate revisit rather than leaving a silently-skipped compliance test."
-))
+@pytest.mark.xfail(
+    strict=True,
+    reason=(
+        "Compliance enforcement is disabled in validation_service.validate() — the `issues += self._consent_and_content(definition)` line is commented out with 'managed by Retell for now'. The rule itself still exists and is correct. strict=True so that re-enabling it turns this into a failure and forces a deliberate revisit rather than leaving a silently-skipped compliance test."
+    ),
+)
 def test_marketing_without_consent_is_a_publish_error() -> None:
     definition = {
         **_SEND_NO_CLASS,
@@ -122,8 +130,7 @@ def test_appointment_type_is_a_known_merge_field() -> None:
     }
     issues = _validate(definition)
     assert not any(
-        i.code == "merge_field_unknown" and i.node_id == "s1"
-        for i in issues
+        i.code == "merge_field_unknown" and i.node_id == "s1" for i in issues
     )
 
 
@@ -133,7 +140,12 @@ def test_unreachable_node_is_warned() -> None:
         "entry_node_id": "s1",
         "compliance": {"content_class": "recall", "consent_required": True},
         "nodes": [
-            {"type": "send_sms", "id": "s1", "body_template": "hi", "next_node_id": "x1"},
+            {
+                "type": "send_sms",
+                "id": "s1",
+                "body_template": "hi",
+                "next_node_id": "x1",
+            },
             {"type": "exit", "id": "x1", "outcome": "done"},
             # Orphan wait node not referenced by any edge.
             {
@@ -156,7 +168,12 @@ def test_duplicate_node_ids_block_publish_with_a_node_linked_fix() -> None:
         "trigger": {"type": "manual"},
         "entry_node_id": "same",
         "nodes": [
-            {"type": "send_sms", "id": "same", "body_template": "hi", "next_node_id": "same"},
+            {
+                "type": "send_sms",
+                "id": "same",
+                "body_template": "hi",
+                "next_node_id": "same",
+            },
             {"type": "exit", "id": "same", "outcome": "done"},
         ],
     }
@@ -264,7 +281,12 @@ def test_missing_exit_is_structural_error_node_linked() -> None:
         "trigger": {"type": "manual"},
         "entry_node_id": "s1",
         "nodes": [
-            {"type": "send_sms", "id": "s1", "body_template": "hi", "next_node_id": "s1"},
+            {
+                "type": "send_sms",
+                "id": "s1",
+                "body_template": "hi",
+                "next_node_id": "s1",
+            },
         ],
     }
     issues = _validate(definition)
@@ -369,16 +391,43 @@ def test_gotracker_only_event_key_is_not_offered_to_nexhealth() -> None:
     """
     from src.app.services.automation import event_catalog
 
-    assert event_catalog.supports("appointment.checked_in", "nexhealth") == "unsupported"
+    assert (
+        event_catalog.supports("appointment.checked_in", "nexhealth") == "unsupported"
+    )
     assert event_catalog.supports("appointment.checked_in", "gotracker") == "native"
 
-    nexhealth_keys = {event["key"] for event in event_catalog.public_events("nexhealth")}
-    gotracker_keys = {event["key"] for event in event_catalog.public_events("gotracker")}
+    nexhealth_keys = {
+        event["key"] for event in event_catalog.public_events("nexhealth")
+    }
+    gotracker_keys = {
+        event["key"] for event in event_catalog.public_events("gotracker")
+    }
     assert "appointment.checked_in" not in nexhealth_keys
     assert "appointment.checked_in" in gotracker_keys
     # The completed-visit event is derived rather than absent on NexHealth, so
     # it stays on offer — that is the distinction the whole-trigger gate lost.
     assert "appointment.completed" in nexhealth_keys
+
+
+def test_nexhealth_native_filter_is_blocked_after_switch_to_gotracker() -> None:
+    definition = {
+        "trigger": {
+            "type": "event",
+            "event_keys": ["appointment.reminder_due"],
+            "reminder_offset_hours": -24,
+            "filter": {
+                "kind": "rule",
+                "field": "nexhealth_payload.appointment.appointment_type_id",
+                "op": "eq",
+                "value": "4",
+            },
+        },
+        "entry_node_id": "x1",
+        "nodes": [{"type": "exit", "id": "x1", "outcome": "done"}],
+    }
+
+    issues = _validate_with_pms(definition, "gotracker")
+    assert any(issue.code == "field_unsupported_for_pms" for issue in issues)
 
 
 def test_gotracker_node_blocks_publish_on_nexhealth() -> None:

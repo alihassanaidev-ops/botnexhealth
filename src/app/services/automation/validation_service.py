@@ -194,6 +194,9 @@ class WorkflowValidationService:
         issues += await self._pms_scope_issues(
             definition, institution_id=institution_id
         )
+        issues += await self._pms_native_field_issues(
+            definition_dict, institution_id=institution_id
+        )
         issues += await self._email_template_issues(
             definition, institution_id=institution_id
         )
@@ -569,6 +572,65 @@ class WorkflowValidationService:
                 )
         return issues
 
+    async def _pms_native_field_issues(
+        self,
+        definition: dict,
+        *,
+        institution_id: str,
+    ) -> list[ValidationIssue]:
+        """Block a workflow that references another PMS's native namespace."""
+        if self.session is None:
+            return []
+
+        from src.app.models.institution import Institution
+
+        institution = await self.session.get(Institution, institution_id)
+        if institution is None:
+            return []
+        pms_type = institution.pms_type
+        forbidden_prefix = {
+            "nexhealth": "gotracker_payload.",
+            "gotracker": "nexhealth_payload.",
+        }.get(pms_type)
+        if forbidden_prefix is None:
+            return []
+
+        issues: list[ValidationIssue] = []
+
+        def visit(value: object, *, node_id_value: str | None = None) -> None:
+            if isinstance(value, dict):
+                current_node_id = node_id_value
+                if isinstance(value.get("id"), str) and value.get("type"):
+                    current_node_id = value["id"]
+                for key, child in value.items():
+                    if (
+                        key in {"field", "dedupe_field", "source_path"}
+                        and isinstance(child, str)
+                        and child.startswith(forbidden_prefix)
+                    ):
+                        issues.append(
+                            ValidationIssue(
+                                severity="error",
+                                code="field_unsupported_for_pms",
+                                node_id=current_node_id,
+                                message=(
+                                    f'Field "{child}" belongs to a different practice '
+                                    "management system and is unavailable here."
+                                ),
+                                fix=(
+                                    "Choose a field from the current practice "
+                                    "management system's payload."
+                                ),
+                            )
+                        )
+                    visit(child, node_id_value=current_node_id)
+            elif isinstance(value, list):
+                for child in value:
+                    visit(child, node_id_value=node_id_value)
+
+        visit(definition)
+        return issues
+
     async def _pms_capability_issues(
         self,
         definition: WorkflowDefinition,
@@ -711,7 +773,6 @@ class WorkflowValidationService:
                 )
         return issues
 
-
     @staticmethod
     def _condition_field_issues(
         definition: WorkflowDefinition,
@@ -730,7 +791,9 @@ class WorkflowValidationService:
         from src.app.services.automation.event_catalog import fields_for_events
 
         issues: list[ValidationIssue] = []
-        known = {spec.path for spec in fields_for_events(_definition_event_keys(definition))}
+        known = {
+            spec.path for spec in fields_for_events(_definition_event_keys(definition))
+        }
         if not known:
             # Nothing declared for this trigger yet; do not invent errors.
             return issues
@@ -794,9 +857,7 @@ class WorkflowValidationService:
         from src.app.services.automation.event_catalog import fields_for_events
 
         event_keys = _definition_event_keys(definition)
-        canonical = {
-            spec.path: spec for spec in fields_for_events(event_keys)
-        }
+        canonical = {spec.path: spec for spec in fields_for_events(event_keys)}
 
         for node in definition.nodes:
             channel = _node_channel(node)
@@ -851,7 +912,7 @@ class WorkflowValidationService:
                                     f"'{{{{{token}}}}}' is not provided by this "
                                     f"trigger and would send blank. Pick a listed "
                                     f"field, or give it a fallback like "
-                                    f"{{{{{token} | \"...\"}}}}."
+                                    f'{{{{{token} | "..."}}}}.'
                                 ),
                                 node_id=node.id,
                                 field_path=[field_path],
@@ -903,7 +964,6 @@ class WorkflowValidationService:
                         )
 
         return issues
-
 
 
 def _guarded_token_names(template: str) -> set[str]:
