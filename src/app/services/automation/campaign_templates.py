@@ -2323,7 +2323,7 @@ _ALL_TEMPLATES: dict[str, CampaignTemplate] = {
     ),
     "surgery-pre-appointment-confirmation": CampaignTemplate(
         id="surgery-pre-appointment-confirmation",
-        name="Surgery Pre-Appointment Confirmation",
+        name="Pre-Appointment Confirmation",
         description=(
             "Call patients before major appointments to confirm whether they "
             "still plan to attend."
@@ -2390,7 +2390,7 @@ _ALL_TEMPLATES: dict[str, CampaignTemplate] = {
             setup_fields=[
                 {
                     "id": "voice_profile_id",
-                    "label": "Surgery confirmation voice profile",
+                    "label": "Confirmation voice profile",
                     "type": "voice_profile_select",
                     "required": True,
                     "placeholder": "Choose outbound voice profile",
@@ -2435,7 +2435,7 @@ _ALL_TEMPLATES: dict[str, CampaignTemplate] = {
                 max_per_rolling_7_days=3,
             ),
         ),
-        tags=["appointment", "surgery", "voice", "confirmation"],
+        tags=["appointment", "voice", "confirmation"],
     ),
     "post-op-followup-after-confirmation": CampaignTemplate(
         id="post-op-followup-after-confirmation",
@@ -2745,7 +2745,13 @@ def get_template(template_id: str) -> CampaignTemplate | None:
 
 
 def list_templates() -> list[CampaignTemplate]:
-    return list(TEMPLATES.values())
+    # Keep the old reminder addressable for backwards compatibility with
+    # existing links and callers, but no longer offer it in the template gallery.
+    return [
+        template
+        for template_id, template in TEMPLATES.items()
+        if template_id != "appointment-reminder-24h"
+    ]
 
 
 def template_pms_types(template: CampaignTemplate) -> frozenset[str]:

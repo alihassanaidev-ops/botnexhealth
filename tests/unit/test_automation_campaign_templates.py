@@ -79,8 +79,17 @@ def test_priority_dental_templates_present() -> None:
     }
 
 
-def test_list_templates_returns_all() -> None:
-    assert len(list_templates()) == 5
+def test_list_templates_hides_retired_appointment_reminder() -> None:
+    templates = list_templates()
+    assert len(templates) == 4
+    assert "appointment-reminder-24h" not in {template.id for template in templates}
+
+
+def test_pre_appointment_template_has_generic_visible_name() -> None:
+    template = get_template("surgery-pre-appointment-confirmation")
+    assert template is not None
+    assert template.name == "Pre-Appointment Confirmation"
+    assert "surgery" not in template.tags
 
 
 def test_get_template_known_id() -> None:
@@ -801,7 +810,7 @@ def test_campaign_template_response_from_template() -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_list_route_returns_all_templates() -> None:
+def test_list_route_returns_visible_templates() -> None:
     import unittest.mock as mock
 
     user = MagicMock()
@@ -810,7 +819,8 @@ def test_list_route_returns_all_templates() -> None:
         new=AsyncMock(return_value="gotracker"),
     ):
         result = asyncio.run(list_campaign_templates(user))
-    assert len(result) == 5
+    assert len(result) == 4
+    assert "appointment-reminder-24h" not in {template.id for template in result}
 
 
 def test_list_route_offers_every_launch_template_to_nexhealth() -> None:
@@ -818,7 +828,7 @@ def test_list_route_offers_every_launch_template_to_nexhealth() -> None:
 
     It used to be hidden because its trigger matched a Chair Flow state only
     GoTracker sends. It now starts from ``appointment.completed``, which
-    NexHealth derives, so a NexHealth clinic gets the same five templates.
+    NexHealth derives, so a NexHealth clinic gets the same visible templates.
     """
     import unittest.mock as mock
 
@@ -830,7 +840,7 @@ def test_list_route_offers_every_launch_template_to_nexhealth() -> None:
         result = asyncio.run(list_campaign_templates(user))
     ids = {t.id for t in result}
     assert "post-op-followup-after-confirmation" in ids
-    assert len(result) == 5
+    assert len(result) == 4
 
 
 def test_list_route_still_hides_a_template_whose_nodes_are_gotracker_only() -> None:
