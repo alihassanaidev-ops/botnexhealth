@@ -38,13 +38,16 @@ import messaging from "./svg/messaging.svg?raw"
 import operatories from "./svg/operatories.svg?raw"
 import passkey from "./svg/passkey-shield-v2.svg?raw"
 import patients from "./svg/patients-outlined.svg?raw"
+import revenueGenerated from "./svg/revenue-generated.svg?raw"
 import scheduling from "./svg/scheduling.svg?raw"
 import sendingAddress from "./svg/sending-address-v2.svg?raw"
 import settings from "./svg/settings.svg?raw"
+import staffCostSaved from "./svg/staff-cost-saved.svg?raw"
 import telephony from "./svg/telephony.svg?raw"
 import providers from "./svg/providers.svg?raw"
 import users from "./svg/users.svg?raw"
 import workflow from "./svg/workflow.svg?raw"
+import netValue from "./svg/net-value.svg?raw"
 
 export const pageArt = {
     admin,
@@ -72,13 +75,16 @@ export const pageArt = {
     operatories,
     passkey,
     patients,
+    revenueGenerated,
     scheduling,
     sendingAddress,
     settings,
+    staffCostSaved,
     telephony,
     providers,
     users,
     workflow,
+    netValue,
 } as const
 
 export type PageArtName = keyof typeof pageArt

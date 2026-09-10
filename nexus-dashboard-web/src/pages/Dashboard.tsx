@@ -206,6 +206,9 @@ const CARD_ART: Partial<Record<string, PageArtName>> = {
     "Needs Booking": "scheduling",
     "Needs Callback": "callbackQueue",
     "Avg Call Duration": "calls",
+    "Revenue Generated": "revenueGenerated",
+    "Staff Cost Saved": "staffCostSaved",
+    "Net Value": "netValue",
 }
 
 // ── Glass Card ───────────────────────────────────────────────────────────────

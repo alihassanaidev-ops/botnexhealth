@@ -421,3 +421,50 @@
   fill: hsl(var(--card)) !important;
   fill-opacity: 0.96 !important;
 }
+
+/* Sidebar scrollbar — present but invisible until the sidebar is hovered.
+ *
+ * The track keeps its width the whole time and only the thumb's colour
+ * changes, so revealing it cannot reflow the nav underneath. Hiding by
+ * collapsing the scrollbar's width would shift every label a few pixels on
+ * hover, which is worse than the bar it removes. */
+[data-sidebar="content"] {
+  scrollbar-width: thin;
+  scrollbar-color: transparent transparent;
+  transition: scrollbar-color 150ms ease;
+}
+
+[data-sidebar="content"]::-webkit-scrollbar {
+  width: 8px;
+}
+
+[data-sidebar="content"]::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+[data-sidebar="content"]::-webkit-scrollbar-thumb {
+  background-color: transparent;
+  border-radius: 9999px;
+  border: 2px solid transparent;
+  background-clip: content-box;
+  transition: background-color 150ms ease;
+}
+
+[data-sidebar="sidebar"]:hover [data-sidebar="content"] {
+  scrollbar-color: hsl(var(--sidebar-border)) transparent;
+}
+
+[data-sidebar="sidebar"]:hover [data-sidebar="content"]::-webkit-scrollbar-thumb {
+  background-color: hsl(var(--sidebar-border));
+}
+
+/* Keyboard users never hover, so a focused item inside the rail reveals it
+ * too — otherwise tabbing through a long nav scrolls with no indication of
+ * where you are in it. */
+[data-sidebar="content"]:focus-within {
+  scrollbar-color: hsl(var(--sidebar-border)) transparent;
+}
+
+[data-sidebar="content"]:focus-within::-webkit-scrollbar-thumb {
+  background-color: hsl(var(--sidebar-border));
+}

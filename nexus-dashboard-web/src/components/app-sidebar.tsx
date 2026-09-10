@@ -465,7 +465,14 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
                                         isActive={location.pathname.startsWith("/inbox")}
                                     />
                                 )}
-                                {(user?.role === "INSTITUTION_ADMIN" || user?.role === "LOCATION_ADMIN") && (
+                                {/* Institution-only. A sending address is a verified
+                                    domain identity for the whole tenant, and every
+                                    endpoint behind this page requires an institution or
+                                    super admin — so a location admin who followed this
+                                    link hit the route guard and was bounced to
+                                    /location-admin, which reads as the link opening the
+                                    wrong page. */}
+                                {user?.role === "INSTITUTION_ADMIN" && (
                                     <NavItem
                                         item={{
                                             title: "Sending Address",
