@@ -99,6 +99,7 @@ export default function InstitutionSettings() {
         monthly_subscription_cost: 0,
         staff_hourly_rate: 0,
         avg_call_duration_minutes: 0,
+        subscription_billing_mode: "institution",
     })
     const [roiSaving, setRoiSaving] = useState(false)
     const [billingEmail, setBillingEmail] = useState("")
@@ -431,6 +432,29 @@ export default function InstitutionSettings() {
                                 onChange={(e) => setRoiDraft((d) => ({ ...d, avg_new_patient_value: Number(e.target.value) }))}
                                 placeholder="e.g. 300"
                             />
+                        </div>
+                        <div className="space-y-1">
+                            <Label htmlFor="roi-billing-mode">Subscription Billed</Label>
+                            <select
+                                id="roi-billing-mode"
+                                className="h-9 w-full rounded-md border border-input bg-background px-3 text-sm"
+                                value={roiDraft.subscription_billing_mode}
+                                onChange={(e) =>
+                                    setRoiDraft({
+                                        ...roiDraft,
+                                        subscription_billing_mode:
+                                            e.target.value === "location" ? "location" : "institution",
+                                    })
+                                }
+                            >
+                                <option value="institution">Per institution (shared across locations)</option>
+                                <option value="location">Per location (each clinic priced separately)</option>
+                            </select>
+                            <p className="text-xs text-muted-foreground">
+                                {roiDraft.subscription_billing_mode === "location"
+                                    ? "Set each clinic's price on its own Location Settings page."
+                                    : "The figure below is split across locations by call volume."}
+                            </p>
                         </div>
                         <div className="space-y-1">
                             <Label htmlFor="roi-subscription">Monthly Subscription ($)</Label>

@@ -18,6 +18,7 @@ import {
     type InstitutionPortalLocation,
     type LocationROICalculation,
     type LocationROIConfigInput,
+    type SubscriptionBillingMode,
 } from "@/lib/institution-portal-api"
 
 const EMPTY_DRAFT: LocationROIConfigInput = {
@@ -25,6 +26,7 @@ const EMPTY_DRAFT: LocationROIConfigInput = {
     avg_new_patient_value: 0,
     staff_hourly_rate: 0,
     avg_call_duration_minutes: 4,
+    monthly_subscription_cost: null,
 }
 
 const FIELDS: { id: keyof LocationROIConfigInput; label: string; step: string }[] = [
@@ -50,6 +52,7 @@ export default function LocationSettings() {
     const [resetting, setResetting] = useState(false)
     const [draft, setDraft] = useState<LocationROIConfigInput>(EMPTY_DRAFT)
     const [source, setSource] = useState<"location" | "institution" | null>(null)
+    const [billingMode, setBillingMode] = useState<SubscriptionBillingMode>("institution")
     const [calculation, setCalculation] = useState<LocationROICalculation | null>(null)
 
     const selected = useMemo(
@@ -77,11 +80,13 @@ export default function LocationSettings() {
             const config = await getLocationROIConfig(locationSlug)
             if (config) {
                 setSource(config.source)
+                setBillingMode(config.subscription_billing_mode)
                 setDraft({
                     avg_appointment_value: config.avg_appointment_value,
                     avg_new_patient_value: config.avg_new_patient_value,
                     staff_hourly_rate: config.staff_hourly_rate,
                     avg_call_duration_minutes: config.avg_call_duration_minutes,
+                    monthly_subscription_cost: config.monthly_subscription_cost,
                 })
             } else {
                 setSource(null)
@@ -181,7 +186,9 @@ export default function LocationSettings() {
                     <CardDescription>
                         {source === "institution"
                             ? `These are ${selected?.name ?? "this location"}'s inherited institution-wide figures. Saving replaces them with numbers for this clinic only.`
-                            : "Your monthly subscription is billed once for the institution, so it is not entered here — it is shared across locations by call volume."}
+                            : billingMode === "location"
+                              ? "This tenant is billed per location, so the monthly price below is what this clinic is charged."
+                              : "This tenant is billed once for the institution, so the subscription is shared across locations by call volume rather than entered here."}
                     </CardDescription>
                 </CardHeader>
                 <CardContent className="space-y-4">
@@ -205,6 +212,30 @@ export default function LocationSettings() {
                             </div>
                         ))}
                     </div>
+                    {billingMode === "location" && (
+                        <div className="max-w-xs space-y-1">
+                            <Label htmlFor="roi-monthly_subscription_cost">
+                                Monthly Subscription for this Location ($)
+                            </Label>
+                            <Input
+                                id="roi-monthly_subscription_cost"
+                                type="number"
+                                min="0"
+                                step="1"
+                                value={draft.monthly_subscription_cost ?? ""}
+                                onChange={(event) =>
+                                    setDraft((current) => ({
+                                        ...current,
+                                        monthly_subscription_cost:
+                                            event.target.value === "" ? null : Number(event.target.value),
+                                    }))
+                                }
+                            />
+                            <p className="text-xs text-muted-foreground">
+                                Leave blank if this clinic is not billed separately.
+                            </p>
+                        </div>
+                    )}
                     <div className="flex flex-wrap gap-2">
                         <Button onClick={handleSave} disabled={saving || !slug}>
                             {saving ? (
@@ -243,6 +274,14 @@ export default function LocationSettings() {
                             <Stat label="Staff cost saved" value={money(calculation.staff_cost_saved)} />
                             <Stat label="Total value" value={money(calculation.total_value)} />
                             <Stat label="Net value" value={money(calculation.net_value)} />
+                            <Stat
+                                label="Return"
+                                value={
+                                    calculation.roi_percentage === null
+                                        ? "—"
+                                        : `${calculation.roi_percentage.toFixed(0)}%`
+                                }
+                            />
                         </div>
                         <p className="text-xs text-muted-foreground">
                             Subscription apportioned to this location: {money(calculation.monthly_cost_allocated)} —{" "}

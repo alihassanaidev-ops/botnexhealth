@@ -9,6 +9,8 @@ import pytest
 from src.app.api.routes.institution_portal import (
     LocationROIConfigRequest,
     _LOCATION_ROI_FIELDS,
+    _billing_mode,
+    _location_subscription_cost,
     _resolved_location_roi,
 )
 
@@ -82,14 +84,65 @@ def test_fall_through_is_whole_config_not_field_by_field() -> None:
     assert values["staff_hourly_rate"] == 0.0
 
 
-def test_subscription_cost_is_not_a_per_location_input() -> None:
-    """It is billed once per institution.
+def test_subscription_cost_is_settable_per_location() -> None:
+    """Both billing models are real deals, so the shape carries both."""
+    assert "monthly_subscription_cost" in LocationROIConfigRequest.model_fields
 
-    Accepting it here would let a two-location group subtract the same 900 twice
-    and report a worse ROI than it has.
+
+def test_subscription_cost_is_never_inherited_from_the_institution() -> None:
+    """The institution figure is the price of the whole group.
+
+    Charging it to one clinic as though it were that clinic's own would
+    overstate cost by the number of locations, so it is excluded from the
+    fall-through set and read separately.
     """
     assert "monthly_subscription_cost" not in _LOCATION_ROI_FIELDS
-    assert "monthly_subscription_cost" not in LocationROIConfigRequest.model_fields
+
+    # A location inheriting the institution's operational numbers still reports
+    # no subscription price of its own.
+    assert _location_subscription_cost(_location(None)) is None
+    values, source = _resolved_location_roi(
+        _location(None), _institution(INSTITUTION_CONFIG)
+    )
+    assert source == "institution"
+    assert "monthly_subscription_cost" not in values
+
+
+def test_location_reports_its_own_price_when_set() -> None:
+    location = _location({**LOCATION_CONFIG, "monthly_subscription_cost": 350.0})
+
+    assert _location_subscription_cost(location) == 350.0
+
+
+@pytest.mark.parametrize(
+    "config, expected",
+    [
+        (None, "institution"),
+        ({}, "institution"),
+        ({"subscription_billing_mode": "location"}, "location"),
+        ({"subscription_billing_mode": "institution"}, "institution"),
+        # Anything unrecognised bills the way it always did rather than
+        # inventing a third behaviour.
+        ({"subscription_billing_mode": "per-seat"}, "institution"),
+    ],
+)
+def test_billing_mode_is_read_from_the_institution(config, expected) -> None:
+    assert _billing_mode(_institution(config)) == expected
+
+
+def test_switching_mode_does_not_destroy_the_other_mode_s_price() -> None:
+    """A location keeps its price while the tenant is billed per institution.
+
+    Dropping it on switch would mean moving a tenant back and forth silently
+    re-zeroes what each clinic is charged.
+    """
+    location = _location({**LOCATION_CONFIG, "monthly_subscription_cost": 350.0})
+    institution = _institution(
+        {**INSTITUTION_CONFIG, "subscription_billing_mode": "institution"}
+    )
+
+    assert _billing_mode(institution) == "institution"
+    assert _location_subscription_cost(location) == 350.0
 
 
 def test_request_rejects_negative_money() -> None:

@@ -234,12 +234,16 @@ export async function updateBillingEmail(billing_email: string): Promise<Billing
 
 // ROI Configuration & Calculation
 
+export type SubscriptionBillingMode = "institution" | "location"
+
 export interface ROIConfig {
     avg_appointment_value: number
     avg_new_patient_value: number
+    /** The whole-group price. Ignored when billing per location. */
     monthly_subscription_cost: number
     staff_hourly_rate: number
     avg_call_duration_minutes: number
+    subscription_billing_mode: SubscriptionBillingMode
 }
 
 export interface ROICalculation {
@@ -273,8 +277,9 @@ export async function calculateROI(): Promise<ROICalculation> {
     return data
 }
 
-// Per-location ROI. The subscription cost is absent by design: it is billed once
-// per institution, so it is apportioned server-side rather than entered here.
+// Per-location ROI. Subscription cost is charged either per institution or per
+// location; the institution's subscription_billing_mode decides which, and the
+// calculation says which one produced the figure it returns.
 
 export interface LocationROIConfig {
     location_id: string
@@ -283,6 +288,9 @@ export interface LocationROIConfig {
     avg_new_patient_value: number
     staff_hourly_rate: number
     avg_call_duration_minutes: number
+    /** This clinic's own price. Null when unset; never inherited. */
+    monthly_subscription_cost: number | null
+    subscription_billing_mode: SubscriptionBillingMode
     /** "location" when set here, "institution" when inherited. */
     source: "location" | "institution"
 }
@@ -293,6 +301,7 @@ export type LocationROIConfigInput = Pick<
     | "avg_new_patient_value"
     | "staff_hourly_rate"
     | "avg_call_duration_minutes"
+    | "monthly_subscription_cost"
 >
 
 export interface LocationROICalculation {
@@ -309,7 +318,8 @@ export interface LocationROICalculation {
     monthly_cost_allocated: number
     cost_allocation_basis: string
     net_value: number
-    roi_percentage: number
+    /** Null when there is no cost to measure a return against. */
+    roi_percentage: number | null
 }
 
 export async function getLocationROIConfig(

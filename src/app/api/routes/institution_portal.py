@@ -6,7 +6,7 @@ from __future__ import annotations
 
 from datetime import time as dt_time
 import re
-from typing import Annotated, Any
+from typing import Annotated, Any, Literal
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
@@ -24,6 +24,7 @@ from src.app.api.models import AuditLogPaginatedResponse, AuditLogResponse
 from src.app.database import get_db_session
 from src.app.models.user import User, UserRole
 from src.app.models.audit_log import AuditLog
+from src.app.models.institution_location import InstitutionLocation
 from src.app.models.insurance_plan import InsurancePlan
 from src.app.models.location_break import LocationBreak
 from src.app.models.location_operating_hours import LocationOperatingHours
@@ -1568,6 +1569,13 @@ class ROIConfigRequest(BaseModel):
     avg_call_duration_minutes: float = Field(
         4.0, ge=0, description="Avg manual call handling time (minutes)"
     )
+    #: How this tenant is billed. "institution" charges once for the group and
+    #: apportions it across locations; "location" charges each clinic its own
+    #: price and ignores monthly_subscription_cost above. Both are real deals,
+    #: so neither is hard-coded.
+    subscription_billing_mode: Literal["institution", "location"] = Field(
+        "institution", description="Whether the subscription is billed per institution or per location"
+    )
 
 
 class ROIConfigResponse(BaseModel):
@@ -1576,6 +1584,7 @@ class ROIConfigResponse(BaseModel):
     monthly_subscription_cost: float
     staff_hourly_rate: float
     avg_call_duration_minutes: float
+    subscription_billing_mode: str = "institution"
 
 
 class ROICalculationResponse(BaseModel):
@@ -1702,6 +1711,22 @@ async def calculate_roi(
             )
         ).scalar_one()
 
+        billing_mode = _billing_mode(institution)
+        location_subscription_costs: list[float] = []
+        if billing_mode == "location":
+            rows = await session.execute(
+                select(InstitutionLocation).where(
+                    InstitutionLocation.institution_id == institution_id
+                )
+            )
+            location_subscription_costs = [
+                cost
+                for cost in (
+                    _location_subscription_cost(row) for row in rows.scalars().all()
+                )
+                if cost is not None
+            ]
+
     # Calculate ROI
     revenue_from_bookings = appointments_booked_month * config.avg_appointment_value
     revenue_from_new_patients = new_patients_month * config.avg_new_patient_value
@@ -1713,7 +1738,15 @@ async def calculate_roi(
     staff_cost_saved = round(staff_time_saved_hours * config.staff_hourly_rate, 2)
 
     total_value = round(total_revenue_generated + staff_cost_saved, 2)
-    monthly_cost = config.monthly_subscription_cost
+    # Under per-location billing the group's monthly cost is what its clinics
+    # are charged, not the institution field — which is the other model's price
+    # and is left in place so switching back does not lose it. Reading it here
+    # would make this page disagree with the sum of the location pages.
+    monthly_cost = (
+        round(sum(location_subscription_costs), 2)
+        if billing_mode == "location"
+        else config.monthly_subscription_cost
+    )
     net_value = round(total_value - monthly_cost, 2)
     roi_percentage = (
         round((net_value / monthly_cost) * 100, 2) if monthly_cost > 0 else 0.0
@@ -1743,15 +1776,16 @@ async def calculate_roi(
 # average appointment value for both, so a per-location number was worth more
 # than the average of the two.
 #
-# What is *not* per location: monthly_subscription_cost. That is billed once for
-# the institution, so repeating it on every location would let a two-location
-# group subtract it twice and report a worse ROI than it has. It stays on the
-# institution and is apportioned at calculation time by the location's share of
-# that month's calls, with the basis named in the response.
+# Subscription cost is charged both ways depending on the deal, so the shape has
+# to carry both rather than pick one. `subscription_billing_mode` on the
+# institution decides which, and it is stated rather than inferred from whether
+# a location happens to have a price on it: a tenant halfway through being moved
+# from one billing model to the other would otherwise produce a silent mix of
+# apportioned and direct costs that reconciles against no invoice.
 
 
 class LocationROIConfigRequest(BaseModel):
-    """Per-location value inputs. Deliberately excludes the subscription cost."""
+    """Per-location value inputs, including a per-location subscription price."""
 
     avg_appointment_value: float = Field(
         ..., ge=0, description="Average appointment revenue at this location ($)"
@@ -1765,6 +1799,12 @@ class LocationROIConfigRequest(BaseModel):
     avg_call_duration_minutes: float = Field(
         4.0, ge=0, description="Avg manual call handling time (minutes)"
     )
+    #: What this location is billed per month. Only consulted when the
+    #: institution bills per location; ignored (but kept) otherwise, so
+    #: switching billing mode does not destroy the other mode's numbers.
+    monthly_subscription_cost: float | None = Field(
+        None, ge=0, description="Monthly subscription for this location ($)"
+    )
 
 
 class LocationROIConfigResponse(BaseModel):
@@ -1774,6 +1814,13 @@ class LocationROIConfigResponse(BaseModel):
     avg_new_patient_value: float
     staff_hourly_rate: float
     avg_call_duration_minutes: float
+    #: None when this location has no price of its own. Meaningful only under
+    #: per-location billing; under per-institution billing it stays None and the
+    #: institution's cost is apportioned instead.
+    monthly_subscription_cost: float | None
+    #: "institution" or "location" — how this tenant is billed, so a reader can
+    #: tell an apportioned cost from a directly billed one.
+    subscription_billing_mode: str
     #: "location" when these numbers were set here, "institution" when the
     #: location has none of its own and the tenant-wide ones are standing in.
     #: Reported rather than smoothed over: a clinic reading a group average as
@@ -1792,20 +1839,44 @@ class LocationROICalculationResponse(BaseModel):
     staff_time_saved_hours: float
     staff_cost_saved: float
     total_value: float
-    #: The institution subscription apportioned to this location.
+    #: This location's monthly subscription — its own price under per-location
+    #: billing, the institution's apportioned share under per-institution.
     monthly_cost_allocated: float
-    #: How that apportionment was reached, so the number is auditable.
+    #: How that figure was reached, so it can be checked against an invoice.
     cost_allocation_basis: str
     net_value: float
-    roi_percentage: float
+    #: None when there is no cost to measure a return against. Reporting 0.0
+    #: there would read as a 0% return rather than an unanswerable question.
+    roi_percentage: float | None
 
 
+#: Inputs a location inherits from its institution when it has none of its own.
+#: Subscription cost is absent on purpose — see _location_subscription_cost.
 _LOCATION_ROI_FIELDS = (
     "avg_appointment_value",
     "avg_new_patient_value",
     "staff_hourly_rate",
     "avg_call_duration_minutes",
 )
+
+
+def _billing_mode(institution: Any) -> str:
+    """Whether this tenant is billed per institution or per location."""
+    raw = institution.roi_config if isinstance(institution.roi_config, dict) else {}
+    mode = raw.get("subscription_billing_mode")
+    return mode if mode in ("institution", "location") else "institution"
+
+
+def _location_subscription_cost(location: Any) -> float | None:
+    """This location's own monthly price, or None if it has not been set.
+
+    Never inherited from the institution. The institution's figure is the price
+    of the whole group; charging it to a single clinic as though it were that
+    clinic's own would overstate cost by the number of locations.
+    """
+    raw = location.roi_config if isinstance(location.roi_config, dict) else {}
+    value = raw.get("monthly_subscription_cost")
+    return None if value is None else float(value)
 
 
 def _resolved_location_roi(
@@ -1871,6 +1942,8 @@ async def get_location_roi_config(
             location_id=str(location.id),
             location_slug=location.slug,
             source=source,
+            monthly_subscription_cost=_location_subscription_cost(location),
+            subscription_billing_mode=_billing_mode(institution),
             **values,
         )
 
@@ -1895,15 +1968,19 @@ async def update_location_roi_config(
     _require_institution(current_user)
     config_dict = data.model_dump()
     async with get_db_session() as session:
-        location, _ = await _location_for_roi(session, loc_slug, current_user)
+        location, institution = await _location_for_roi(
+            session, loc_slug, current_user
+        )
         location.roi_config = config_dict
         location_id = str(location.id)
         slug = location.slug
+        mode = _billing_mode(institution)
 
     return LocationROIConfigResponse(
         location_id=location_id,
         location_slug=slug,
         source="location",
+        subscription_billing_mode=mode,
         **config_dict,
     )
 
@@ -1983,36 +2060,60 @@ async def calculate_location_roi(
             await session.execute(_count(Call.is_new_patient.is_(True)))
         ).scalar_one()
 
-        # Apportion the institution subscription by this location's share of the
-        # month's calls. Counting calls with no location at all in the
-        # denominator would shrink every location's share and make the group
-        # look more profitable than it is, so they are excluded from both sides.
-        institution_calls_month = (
-            await session.execute(
-                select(func.count(Call.id)).where(
-                    Call.institution_id == institution_id,
-                    Call.location_id.is_not(None),
-                    Call.call_date >= month_start,
-                )
-            )
-        ).scalar_one()
+        billing_mode = _billing_mode(institution)
+        own_cost = _location_subscription_cost(location)
 
-        subscription_cost = float(
+        if billing_mode == "location":
+            institution_calls_month = None
+        else:
+            # Apportion the institution subscription by this location's share of
+            # the month's calls. Counting calls with no location at all in the
+            # denominator would shrink every location's share and make the group
+            # look more profitable than it is, so they are excluded from both
+            # sides.
+            institution_calls_month = (
+                await session.execute(
+                    select(func.count(Call.id)).where(
+                        Call.institution_id == institution_id,
+                        Call.location_id.is_not(None),
+                        Call.call_date >= month_start,
+                    )
+                )
+            ).scalar_one()
+
+        institution_cost = float(
             (institution.roi_config or {}).get("monthly_subscription_cost") or 0.0
         )
 
-    if institution_calls_month > 0:
-        share = total_calls_month / institution_calls_month
+    if billing_mode == "location":
+        # Billed directly, so there is nothing to apportion. An unset price is
+        # said out loud rather than treated as free: a clinic reading a net
+        # value that silently omitted its own subscription would be reading a
+        # number no invoice agrees with.
+        monthly_cost_allocated = round(own_cost or 0.0, 2)
         cost_allocation_basis = (
-            f"{total_calls_month} of {institution_calls_month} located calls "
-            f"this month ({share:.1%} of the institution subscription)"
+            f"Billed per location: {monthly_cost_allocated:.2f} charged directly "
+            "to this clinic"
+            if own_cost is not None
+            else (
+                "Billed per location, but this location has no monthly price "
+                "set, so no subscription cost is included"
+            )
+        )
+    elif institution_calls_month:
+        share = total_calls_month / institution_calls_month
+        monthly_cost_allocated = round(institution_cost * share, 2)
+        cost_allocation_basis = (
+            f"Billed per institution: {total_calls_month} of "
+            f"{institution_calls_month} located calls this month "
+            f"({share:.1%} of the institution subscription)"
         )
     else:
-        share = 0.0
+        monthly_cost_allocated = 0.0
         cost_allocation_basis = (
-            "No located calls this month, so no subscription cost is apportioned"
+            "Billed per institution, but there were no located calls this "
+            "month, so no subscription cost is apportioned"
         )
-    monthly_cost_allocated = round(subscription_cost * share, 2)
 
     revenue_from_bookings = appointments_booked_month * values["avg_appointment_value"]
     revenue_from_new_patients = new_patients_month * values["avg_new_patient_value"]
@@ -2028,7 +2129,7 @@ async def calculate_location_roi(
     roi_percentage = (
         round((net_value / monthly_cost_allocated) * 100, 2)
         if monthly_cost_allocated > 0
-        else 0.0
+        else None
     )
 
     return LocationROICalculationResponse(
@@ -2036,6 +2137,8 @@ async def calculate_location_roi(
             location_id=location_id,
             location_slug=loc_slug,
             source=source,
+            monthly_subscription_cost=own_cost,
+            subscription_billing_mode=billing_mode,
             **values,
         ),
         total_calls_month=total_calls_month,
