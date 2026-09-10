@@ -37,15 +37,16 @@ interface TrendChartProps {
 }
 
 /**
- * The last few months of one headline metric.
+ * One headline metric across whatever window the caller asked for.
  *
- * The KPI tiles answer "how many"; nothing on the page answered "is that better
- * than before", which is the question an admin actually acts on. A month count
- * on its own cannot be judged — 128 bookings is good or bad only next to the
- * months either side of it.
+ * The KPI tiles answer "how many"; nothing else on the page answers "is that
+ * better than before", which is the question an admin acts on. A count on its
+ * own cannot be judged — 128 bookings is good or bad only next to the periods
+ * either side of it.
  *
- * The data has been served by /dashboard/monthly-metrics all along and nothing
- * was reading it.
+ * Buckets are whatever the server chose for the span (daily, weekly or
+ * monthly), so this speaks of "periods" rather than months: on the dashboard it
+ * follows the date-range picker, on the admin panel it is the last six months.
  */
 export function TrendChart({ points, loading = false }: TrendChartProps) {
     const [activeKey, setActiveKey] = useState<TrendMetric["key"]>(METRICS[0].key)
@@ -58,7 +59,7 @@ export function TrendChart({ points, loading = false }: TrendChartProps) {
     )
 
     // Change across the whole window, which is what the chart is being read for.
-    // Needs two real months; a single point has nothing to be a change from.
+    // Needs two real buckets; a single point has nothing to be a change from.
     const change = useMemo(() => {
         if (data.length < 2) return null
         const first = data[0].value
@@ -119,7 +120,7 @@ export function TrendChart({ points, loading = false }: TrendChartProps) {
                     <div className="flex flex-col items-center justify-center py-12 text-center gap-2">
                         <LineIcon className="h-7 w-7 text-muted-foreground/30" />
                         <p className="text-sm text-muted-foreground">
-                            Not enough history yet — a trend needs at least two months.
+                            Not enough data in this range — a trend needs at least two points.
                         </p>
                     </div>
                 ) : (

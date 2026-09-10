@@ -404,7 +404,7 @@ export default function InstitutionAdminPanel() {
                 getAggregateDashboard(range),
                 // Fixed six-month window on purpose: this answers "are we
                 // improving", which the page's date range has no bearing on.
-                getMonthlyMetrics(6).catch(() => ({ points: [], as_of: "" })),
+                getMonthlyMetrics({ months: 6 }).catch(() => ({ points: [], as_of: "" })),
                 // No location slug: institution-wide, matching the rest of the page.
                 getDashboardSummary(undefined, range).catch(() => null),
             ])

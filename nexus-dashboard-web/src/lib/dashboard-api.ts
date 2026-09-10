@@ -65,11 +65,14 @@ export interface DashboardMonthlyMetrics {
  * five months before it does.
  */
 export async function getMonthlyMetrics(
-    months = 6,
-    locationSlug?: string,
+    options: { months?: number; locationSlug?: string; range?: DashboardDateRange } = {},
 ): Promise<DashboardMonthlyMetrics> {
+    const { months = 6, locationSlug, range } = options;
     const params = new URLSearchParams({ months: String(months) });
     if (locationSlug) params.set("location_slug", locationSlug);
+    // A range wins over `months`: the server switches to adaptive bucketing
+    // across [start, end] when either bound is present.
+    appendRange(params, range);
     const { data } = await api.get<DashboardMonthlyMetrics>(
         `/institution/dashboard/monthly-metrics?${params.toString()}`,
     );

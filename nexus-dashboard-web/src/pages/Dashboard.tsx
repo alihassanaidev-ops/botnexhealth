@@ -14,7 +14,6 @@ import {
     Percent,
     Timer,
     MapPin,
-    Activity,
     Home,
 } from "lucide-react"
 
@@ -40,7 +39,9 @@ import { useSSE } from "@/hooks/useSSE"
 import type { DashboardSummary, CallbackQueueItem } from "@/types"
 import { callerLabel, getInitials } from "@/components/calls/format"
 import { cn } from "@/lib/utils"
-import { getDashboardSummary, getAggregateDashboard } from "@/lib/dashboard-api"
+import { getDashboardSummary, getAggregateDashboard, getMonthlyMetrics } from "@/lib/dashboard-api"
+import type { MonthlyMetricPoint } from "@/lib/dashboard-api"
+import { TrendChart } from "@/components/dashboard/TrendChart"
 import { resolveCallback } from "@/lib/calls-api"
 import { STATUS_OPTIONS } from "@/lib/constants"
 import { DateRangePicker } from "@/components/dashboard/DateRangePicker"
@@ -82,14 +83,6 @@ type RangeCardKey =
     | "emergency"
     | "new_patients"
     | "booking_rate"
-
-type MonthlyMetricKey =
-    | "appointments_booked_month"
-    | "needs_booking_month"
-    | "needs_callback_month"
-    | "emergency_month"
-    | "new_patients_month"
-    | "booking_rate_month"
     | "avg_call_duration_seconds"
 
 interface MetricCardConfig<TKey extends string> {
@@ -101,12 +94,22 @@ interface MetricCardConfig<TKey extends string> {
     suffix?: string
 }
 
-// Range-scoped cards — driven by the date-range picker, sourced from summary.range.
+// The cards. One row, every card scoped to the date-range picker.
+//
+// There used to be a second "Monthly Metrics" row underneath, fixed to the
+// calendar month regardless of the picker. Three of its four cards repeated the
+// row above with the same label, icon and colour, and on a no-PMS dashboard all
+// four did — so "Appointments Booked 14" sat directly above "Appointments
+// Booked 0" with nothing on screen explaining that the second ignored the
+// filter. Early in a month it always read near zero, which is indistinguishable
+// from a broken panel. Avg Call Duration was the one metric it added, and
+// summary.range has carried it all along.
 const RANGE_CARD_CONFIG: MetricCardConfig<RangeCardKey>[] = [
     { label: "Total Calls", key: "total_calls" as const, icon: Phone, accentColor: "violet", glowRgb: "139,92,246" },
     { label: "Appointments Booked", key: "appointments_booked" as const, icon: CalendarDays, accentColor: "emerald", glowRgb: "16,185,129" },
     { label: "New Patients", key: "new_patients" as const, icon: Users, accentColor: "sky", glowRgb: "14,165,233" },
     { label: "Booking Rate", key: "booking_rate" as const, icon: Percent, accentColor: "amber", glowRgb: "245,158,11", suffix: "%" },
+    { label: "Avg Call Duration", key: "avg_call_duration_seconds" as const, icon: Timer, accentColor: "violet", glowRgb: "139,92,246" },
 ]
 
 const NO_PMS_RANGE_CARD_CONFIG: MetricCardConfig<RangeCardKey>[] = [
@@ -114,68 +117,7 @@ const NO_PMS_RANGE_CARD_CONFIG: MetricCardConfig<RangeCardKey>[] = [
     { label: "Needs Callback", key: "needs_callback" as const, icon: Clock, accentColor: "amber", glowRgb: "245,158,11" },
     { label: "Emergency", key: "emergency" as const, icon: AlertCircle, accentColor: "red", glowRgb: "239,68,68" },
     { label: "New Patients", key: "new_patients" as const, icon: Users, accentColor: "sky", glowRgb: "14,165,233" },
-]
-
-const METRIC_CARDS_CONFIG: MetricCardConfig<MonthlyMetricKey>[] = [
-    {
-        label: "Appointments Booked",
-        key: "appointments_booked_month" as const,
-        icon: CalendarDays,
-        accentColor: "emerald",
-        glowRgb: "16,185,129",
-    },
-    {
-        label: "New Patients",
-        key: "new_patients_month" as const,
-        icon: Users,
-        accentColor: "sky",
-        glowRgb: "14,165,233",
-    },
-    {
-        label: "Booking Rate",
-        key: "booking_rate_month" as const,
-        icon: Percent,
-        accentColor: "amber",
-        glowRgb: "245,158,11",
-    },
-    {
-        label: "Avg Call Duration",
-        key: "avg_call_duration_seconds" as const,
-        icon: Timer,
-        accentColor: "violet",
-        glowRgb: "139,92,246",
-    },
-]
-
-const NO_PMS_METRIC_CARDS_CONFIG: MetricCardConfig<MonthlyMetricKey>[] = [
-    {
-        label: "Needs Booking",
-        key: "needs_booking_month" as const,
-        icon: CalendarDays,
-        accentColor: "emerald",
-        glowRgb: "16,185,129",
-    },
-    {
-        label: "Needs Callback",
-        key: "needs_callback_month" as const,
-        icon: Clock,
-        accentColor: "amber",
-        glowRgb: "245,158,11",
-    },
-    {
-        label: "Emergency",
-        key: "emergency_month" as const,
-        icon: AlertCircle,
-        accentColor: "red",
-        glowRgb: "239,68,68",
-    },
-    {
-        label: "New Patients",
-        key: "new_patients_month" as const,
-        icon: Users,
-        accentColor: "sky",
-        glowRgb: "14,165,233",
-    },
+    { label: "Avg Call Duration", key: "avg_call_duration_seconds" as const, icon: Timer, accentColor: "violet", glowRgb: "139,92,246" },
 ]
 
 const STATUS_COLOR_MAP = Object.fromEntries(
@@ -490,15 +432,7 @@ export default function Dashboard() {
     const [loading, setLoading] = useState(true)
     const [selectedLocationSlug, setSelectedLocationSlug] = useState<string>("all")
     const [locations, setLocations] = useState<{ slug: string; name: string }[]>([])
-    const [aggregateMetrics, setAggregateMetrics] = useState<{
-        appointments_booked_month: number
-        needs_booking_month: number
-        needs_callback_month: number
-        emergency_month: number
-        new_patients_month: number
-        booking_rate_month: number
-        avg_call_duration_seconds: number
-    } | null>(null)
+    const [trendPoints, setTrendPoints] = useState<MonthlyMetricPoint[]>([])
 
     const [range, setRange] = useState<DateRangeValue>(() => lastNDaysRange(7))
 
@@ -508,21 +442,17 @@ export default function Dashboard() {
             const summaryData = await getDashboardSummary(locationSlug, range)
             setSummary(summaryData)
 
-            // KPI cards are now sourced from /summary for ALL roles. The
-            // backend scopes them by extra_conditions (user.location_id
-            // for STAFF/LOCATION_ADMIN, the selected slug for
-            // INSTITUTION_ADMIN, or institution-wide when no slug is
-            // supplied), so a location admin sees real numbers instead
-            // of the hardcoded zeroes that were here before.
-            setAggregateMetrics({
-                appointments_booked_month: summaryData.appointments_booked_month ?? 0,
-                needs_booking_month: summaryData.needs_booking_month ?? 0,
-                needs_callback_month: summaryData.needs_callback_month ?? 0,
-                emergency_month: summaryData.emergency_month ?? 0,
-                new_patients_month: summaryData.new_patients_month ?? 0,
-                booking_rate_month: summaryData.booking_rate_month ?? 0,
-                avg_call_duration_seconds: summaryData.avg_call_duration_seconds ?? 0,
-            })
+            // The trend takes the same window as the cards, so the chart and
+            // the numbers above it can never describe different periods. The
+            // endpoint buckets adaptively — daily up to 31 days, then weekly,
+            // then monthly — and zero-fills, so a sparse range still charts a
+            // continuous axis.
+            try {
+                const trend = await getMonthlyMetrics({ locationSlug, range })
+                setTrendPoints(trend.points)
+            } catch {
+                setTrendPoints([])
+            }
 
             // The location switcher list still comes from the aggregate
             // endpoint (institution-admin only — it's the only place
@@ -572,7 +502,6 @@ export default function Dashboard() {
     const totalTagCount = tagCounts.reduce((sum, tc) => sum + tc.count, 0)
     const isNoPmsDashboard = !institutionLoading && (pmsType === "none" || !hasPms)
     const rangeCardConfig = isNoPmsDashboard ? NO_PMS_RANGE_CARD_CONFIG : RANGE_CARD_CONFIG
-    const metricCardConfig = isNoPmsDashboard ? NO_PMS_METRIC_CARDS_CONFIG : METRIC_CARDS_CONFIG
     const bookingQuickLink = isNoPmsDashboard
         ? { label: "Needs Booking", tags: ["needs_booking"] }
         : { label: "Booked Today", tags: ["appointment_booked"] }
@@ -639,30 +568,10 @@ export default function Dashboard() {
                     ))}
                 </div>
 
-                {/* Metric cards */}
-                {aggregateMetrics && (
-                    <div>
-                        <div className="flex items-center gap-2 mb-3">
-                            <Activity className="h-4 w-4 text-muted-foreground/50" />
-                            <span className="text-xs font-semibold uppercase tracking-widest text-muted-foreground/50">Monthly Metrics</span>
-                        </div>
-                        <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-4">
-                            {metricCardConfig.map(({ label, key, icon, accentColor, glowRgb }) => (
-                                <GlassCard
-                                    key={key}
-                                    label={label}
-                                    value={aggregateMetrics?.[key] ?? 0}
-                                    icon={icon}
-                                    accentColor={accentColor}
-                                    glowRgb={glowRgb}
-                                    loading={loading}
-                                    suffix={key === "booking_rate_month" ? "%" : ""}
-                                    formatValue={key === "avg_call_duration_seconds" ? formatDuration : undefined}
-                                />
-                            ))}
-                        </div>
-                    </div>
-                )}
+                {/* Trend over the selected range. The cards answer "how many";
+                    this answers "is that better than before", which is the
+                    question the date picker was there to ask. */}
+                <TrendChart points={trendPoints} loading={loading} />
 
                 {/* Bottom grid: tag breakdown + callback queue */}
                 <div className="grid gap-6 lg:grid-cols-2">
