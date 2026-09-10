@@ -245,3 +245,82 @@ def test_only_configured_clinics_carry_a_price_into_the_total() -> None:
     ]
 
     assert costs == [350.0]
+
+
+# ---------------------------------------------------------------------------
+# The route's own response, not just the arithmetic behind it.
+#
+# The helpers were unit-tested and correct while the endpoint 500'd for every
+# caller: a required response field had been added to the model but wired into
+# the wrong return statement, and nothing exercised the route itself. The
+# dashboard swallowed the 500 as "not configured" and showed no cards.
+# ---------------------------------------------------------------------------
+
+
+class _FakeResult:
+    def __init__(self, value):
+        self._value = value
+
+    def scalar_one(self):
+        return self._value
+
+
+class _FakeSession:
+    """Answers every count query with the same number."""
+
+    def __init__(self, count: int = 4):
+        self._count = count
+
+    async def execute(self, *_args, **_kwargs):
+        return _FakeResult(self._count)
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *_exc):
+        return False
+
+
+def test_calculate_location_roi_returns_a_valid_response(monkeypatch) -> None:
+    import asyncio
+    from datetime import date, timedelta
+
+    from src.app.api.routes import institution_portal as portal
+
+    location = _location({**LOCATION_CONFIG, "monthly_subscription_cost": None})
+    location.name = "Downtown"
+    institution = _institution(INSTITUTION_CONFIG)
+    institution.pms_type = "nexhealth"
+
+    class _Svc:
+        def __init__(self, _session):
+            pass
+
+        async def get_location_by_slug(self, _slug, _institution_id):
+            return location
+
+        async def get_by_id(self, _institution_id):
+            return institution
+
+    monkeypatch.setattr(portal, "InstitutionService", _Svc)
+    monkeypatch.setattr(portal, "get_db_session", lambda: _FakeSession(4))
+
+    user = SimpleNamespace(
+        id="u1", role="LOCATION_ADMIN", institution_id="inst-1", location_id="loc-1"
+    )
+    today = date.today()
+    result = asyncio.run(
+        portal.calculate_location_roi(
+            loc_slug="downtown",
+            current_user=user,
+            start_date=today - timedelta(days=6),
+            end_date=today,
+        )
+    )
+
+    # The window has to come back, or the response model rejects it at runtime.
+    assert result.period_start == today - timedelta(days=6)
+    assert result.period_end == today
+    # 4 bookings * 310 + 4 new patients * 700.
+    assert result.total_revenue_generated == 4 * 310.0 + 4 * 700.0
+    assert result.config.source == "location"

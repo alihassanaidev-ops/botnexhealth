@@ -2338,6 +2338,8 @@ async def calculate_location_roi(
             subscription_billing_mode=billing_mode,
             **values,
         ),
+        period_start=period_start,
+        period_end=period_end,
         total_calls_month=total_calls_month,
         appointments_booked_month=appointments_booked_month,
         new_patients_month=new_patients_month,
