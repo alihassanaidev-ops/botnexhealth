@@ -6,6 +6,10 @@ import { getWorkflow, listVersions } from "@/lib/workflow-api"
 import type { AutomationWorkflow } from "@/types"
 import type { WorkflowVersion } from "@/types/workflow"
 
+vi.mock("@/context/LocationContext", () => ({
+    useSelectedLocationId: () => "loc-1",
+}))
+
 vi.mock("@/lib/workflow-api", () => ({
     getWorkflow: vi.fn(),
     listVersions: vi.fn(),
@@ -88,7 +92,7 @@ describe("WorkflowVersions page", () => {
         // "Version 2" appears in both the list row and the selected-version card.
         expect((await screen.findAllByText("Version 2")).length).toBeGreaterThan(0)
         expect(screen.getByText("Version 1")).toBeInTheDocument()
-        expect(getVersions).toHaveBeenCalledWith("wf-1")
+        expect(getVersions).toHaveBeenCalledWith("wf-1", "loc-1")
         // Current badge + content classification label render.
         expect(screen.getByText(/current/i)).toBeInTheDocument()
         expect(screen.getByText("Recall")).toBeInTheDocument()

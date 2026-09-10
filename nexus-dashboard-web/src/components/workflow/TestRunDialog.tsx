@@ -79,7 +79,7 @@ export default function TestRunDialog({
         let cancelled = false
         setSearching(true)
         const timer = setTimeout(() => {
-            listContacts({ search: term, limit: 8 })
+            listContacts({ search: term, limit: 8, locationId: locationId ?? undefined })
                 .then((page) => {
                     if (!cancelled) setMatches(page.items)
                 })
@@ -94,7 +94,7 @@ export default function TestRunDialog({
             cancelled = true
             clearTimeout(timer)
         }
-    }, [open, search])
+    }, [locationId, open, search])
 
     useEffect(() => {
         if (!open) return

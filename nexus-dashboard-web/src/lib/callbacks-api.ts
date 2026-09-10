@@ -8,6 +8,7 @@ import api from "@/lib/api";
 import type { CallbacksListResponse } from "@/types";
 
 export interface CallbacksFilters {
+    locationId?: string;
     limit?: number;
     offset?: number;
     resolved?: boolean;
@@ -26,6 +27,7 @@ export async function listCallbacks(filters: CallbacksFilters = {}): Promise<Cal
     if (filters.date_from) params.set("date_from", filters.date_from);
     if (filters.date_to) params.set("date_to", filters.date_to);
     if (filters.sort) params.set("sort", filters.sort);
+    if (filters.locationId) params.set("location_id", filters.locationId);
 
     const q = params.toString() ? `?${params.toString()}` : "";
     const { data } = await api.get<CallbacksListResponse>(`/institution/callbacks${q}`);

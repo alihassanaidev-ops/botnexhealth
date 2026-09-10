@@ -13,6 +13,7 @@ import { Button } from "@/components/ui/button"
 import { Skeleton } from "@/components/ui/skeleton"
 import { cn } from "@/lib/utils"
 import { toast } from "sonner"
+import { useSelectedLocationId } from "@/context/LocationContext"
 import { getWorkflow, listVersions } from "@/lib/workflow-api"
 import { definitionToFlow } from "@/lib/workflow/graph"
 import WorkflowCanvas from "@/components/workflow/WorkflowCanvas"
@@ -33,6 +34,7 @@ function formatTimestamp(iso: string): string {
 
 export default function WorkflowVersions() {
     const { id } = useParams<{ id: string }>()
+    const locationId = useSelectedLocationId()
     const [workflow, setWorkflow] = useState<AutomationWorkflow | null>(null)
     const [versions, setVersions] = useState<WorkflowVersion[]>([])
     const [selectedId, setSelectedId] = useState<string | null>(null)
@@ -40,7 +42,7 @@ export default function WorkflowVersions() {
     const [loadError, setLoadError] = useState<string | null>(null)
 
     useEffect(() => {
-        if (!id || id === "undefined") {
+        if (!id || id === "undefined" || !locationId) {
             setLoadError("The campaign link is missing a valid workflow ID.")
             setLoading(false)
             return
@@ -49,7 +51,10 @@ export default function WorkflowVersions() {
             setLoading(true)
             setLoadError(null)
             try {
-                const [wf, vers] = await Promise.all([getWorkflow(id), listVersions(id)])
+                const [wf, vers] = await Promise.all([
+                    getWorkflow(id, locationId),
+                    listVersions(id, locationId),
+                ])
                 setWorkflow(wf)
                 setVersions(vers)
                 const current = vers.find((v) => v.is_current) ?? vers[0] ?? null
@@ -61,7 +66,7 @@ export default function WorkflowVersions() {
                 setLoading(false)
             }
         })()
-    }, [id])
+    }, [id, locationId])
 
     const selected = useMemo(
         () => versions.find((v) => v.id === selectedId) ?? null,

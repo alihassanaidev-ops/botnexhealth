@@ -130,6 +130,7 @@ async def list_callbacks(
     date_from: date | None = Query(None),
     date_to: date | None = Query(None),
     sort: str = Query("oldest", description="Sort order: 'oldest' or 'newest'"),
+    location_id: Annotated[str | None, Query()] = None,
 ) -> CallbacksListResponse:
     """
     List callback calls for the authenticated institution.
@@ -152,7 +153,9 @@ async def list_callbacks(
             ),
         ]
 
-        location_agent_id = await _location_agent_filter(session, current_user)
+        location_agent_id = await _location_agent_filter(
+            session, current_user, location_id
+        )
         if location_agent_id:
             conditions.append(Call.location_id == location_agent_id)
 

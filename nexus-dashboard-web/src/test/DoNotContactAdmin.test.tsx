@@ -7,15 +7,17 @@ import {
     listDoNotContact,
     releaseDoNotContact,
 } from "@/lib/do-not-contact-api"
-import { listInstitutionPortalLocations } from "@/lib/institution-portal-api"
 
 vi.mock("@/lib/do-not-contact-api", () => ({
     createDoNotContact: vi.fn(),
     listDoNotContact: vi.fn(),
     releaseDoNotContact: vi.fn(),
 }))
-vi.mock("@/lib/institution-portal-api", () => ({
-    listInstitutionPortalLocations: vi.fn(),
+vi.mock("@/context/LocationContext", () => ({
+    useLocationContext: () => ({
+        locations: [{ id: "loc-1", name: "Downtown", slug: "downtown" }],
+        selectedLocationId: "loc-1",
+    }),
 }))
 vi.mock("sonner", () => ({
     toast: { error: vi.fn(), success: vi.fn(), info: vi.fn() },
@@ -24,13 +26,11 @@ vi.mock("sonner", () => ({
 const list = listDoNotContact as ReturnType<typeof vi.fn>
 const create = createDoNotContact as ReturnType<typeof vi.fn>
 const release = releaseDoNotContact as ReturnType<typeof vi.fn>
-const listLocations = listInstitutionPortalLocations as ReturnType<typeof vi.fn>
 
 beforeEach(() => {
     list.mockReset()
     create.mockReset()
     release.mockReset()
-    listLocations.mockReset()
     list.mockResolvedValue([
         {
             id: "contact-1",
@@ -65,7 +65,6 @@ beforeEach(() => {
     ])
     release.mockResolvedValue(true)
     create.mockResolvedValue({ phone_masked: "+1******1234", scope: "institution" })
-    listLocations.mockResolvedValue([{ id: "loc-1", name: "Downtown" }])
 })
 
 describe("DNC Patients", () => {

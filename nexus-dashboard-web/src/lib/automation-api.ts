@@ -20,13 +20,21 @@ import type {
     WorkflowHaltResult,
 } from "@/types"
 
-export async function listCampaigns(): Promise<AutomationWorkflow[]> {
-    const { data } = await api.get<AutomationWorkflow[]>("/automation/workflows")
+export async function listCampaigns(locationId: string): Promise<AutomationWorkflow[]> {
+    const { data } = await api.get<AutomationWorkflow[]>("/automation/workflows", {
+        params: { location_id: locationId },
+    })
     return data
 }
 
-export async function getCampaign(id: string): Promise<AutomationWorkflow> {
-    const { data } = await api.get<AutomationWorkflow>(`/automation/workflows/${id}`)
+export async function getCampaign(
+    id: string,
+    locationId?: string,
+): Promise<AutomationWorkflow> {
+    const path = `/automation/workflows/${id}`
+    const { data } = locationId
+        ? await api.get<AutomationWorkflow>(path, { params: { location_id: locationId } })
+        : await api.get<AutomationWorkflow>(path)
     return data
 }
 

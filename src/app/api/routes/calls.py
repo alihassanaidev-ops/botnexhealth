@@ -280,33 +280,46 @@ def _call_to_record(
     )
 
 
-def _location_scope_id(current_user: User) -> str | None:
-    """For LOCATION_ADMIN / STAFF, return the location_id to filter by.
+def _location_scope_id(
+    current_user: User, requested_location_id: str | None = None
+) -> str | None:
+    """Return the effective location filter for the current user.
 
-    Returns None for INSTITUTION_ADMIN (no per-location filter — they see
-    all calls in their institution).
+    Location-scoped users are pinned to their assigned location. Institution
+    admins may explicitly select one location; omitting it preserves the
+    aggregate behavior for non-UI callers.
 
     Replaces the legacy `_location_agent_filter` that did a string match
     against InstitutionLocation.retell_agent_id. Calls now have a direct
     ``location_id`` foreign key (set at webhook time via the agent_id →
     location mapping) so we can scope authoritatively without a roundtrip.
     """
-    if current_user.role not in (UserRole.LOCATION_ADMIN.value, UserRole.STAFF.value):
-        return None
-    if not current_user.location_id:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Location assignment required",
-        )
-    return str(current_user.location_id)
+    if current_user.role in (UserRole.LOCATION_ADMIN.value, UserRole.STAFF.value):
+        if not current_user.location_id:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Location assignment required",
+            )
+        assigned_location_id = str(current_user.location_id)
+        if requested_location_id and str(requested_location_id) != assigned_location_id:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Not authorized for this location",
+            )
+        return assigned_location_id
+    if current_user.role == UserRole.INSTITUTION_ADMIN.value and requested_location_id:
+        return str(requested_location_id)
+    return None
 
 
 # Back-compat shim: callbacks.py imports this name. Keep it as a sync helper
 # returning the location_id (string) — callers should pair with
 # `Call.location_id == <id>`, not `Call.agent_used == <id>`.
-async def _location_agent_filter(session, current_user: User) -> str | None:  # noqa: ARG001
+async def _location_agent_filter(
+    session, current_user: User, requested_location_id: str | None = None
+) -> str | None:  # noqa: ARG001
     """Deprecated alias — returns the location_id filter for LOCATION_ADMIN/STAFF."""
-    return _location_scope_id(current_user)
+    return _location_scope_id(current_user, requested_location_id)
 
 
 def _reads_phi_inline(current_user: User) -> bool:
@@ -494,6 +507,7 @@ async def list_calls(
     ),
     date_from: date | None = Query(None),
     date_to: date | None = Query(None),
+    location_id: Annotated[str | None, Query()] = None,
 ) -> CallsListResponse:
     """
     List calls for the authenticated institution.
@@ -517,7 +531,9 @@ async def list_calls(
 
     async with get_db_session() as session:
         conditions = [Call.institution_id == current_user.institution_id]
-        location_agent_id = await _location_agent_filter(session, current_user)
+        location_agent_id = await _location_agent_filter(
+            session, current_user, location_id
+        )
         if location_agent_id:
             conditions.append(Call.location_id == location_agent_id)
 

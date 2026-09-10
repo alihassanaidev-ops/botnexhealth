@@ -911,6 +911,7 @@ async def _get_workflow_or_404(
     svc: AutomationWorkflowDefinitionService,
     workflow_id: str,
     current_user: User,
+    requested_location_id: str | None = None,
 ) -> Any:
     institution_id = _institution_id(current_user)
     wf = await svc.get_workflow(institution_id, workflow_id)
@@ -918,6 +919,12 @@ async def _get_workflow_or_404(
         own_location_id = _campaign_location_id(current_user, None)
         if wf is not None and str(wf.location_id or "") != own_location_id:
             wf = None
+    if (
+        wf is not None
+        and requested_location_id
+        and str(wf.location_id or "") != str(requested_location_id)
+    ):
+        wf = None
     if wf is None:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND, detail="Workflow not found"
@@ -1291,9 +1298,12 @@ async def dry_run_definition(
 
 
 @router.get("", response_model=list[WorkflowResponse])
-async def list_workflows(current_user: _CampaignManager) -> list[WorkflowResponse]:
+async def list_workflows(
+    current_user: _CampaignManager,
+    location_id: Annotated[str | None, Query()] = None,
+) -> list[WorkflowResponse]:
     inst_id = _institution_id(current_user)
-    location_id = _campaign_location_id(current_user, None)
+    location_id = _campaign_location_id(current_user, location_id)
     async with get_db_session() as session:
         svc = AutomationWorkflowDefinitionService(session)
         workflows = await svc.list_workflows(
@@ -1931,10 +1941,13 @@ async def enroll_audience(
 async def get_workflow(
     workflow_id: str,
     current_user: _InstitutionOrLocationAdmin,
+    location_id: Annotated[str | None, Query()] = None,
 ) -> WorkflowResponse:
     async with get_db_session() as session:
         svc = AutomationWorkflowDefinitionService(session)
-        wf = await _get_workflow_or_404(svc, workflow_id, current_user)
+        wf = await _get_workflow_or_404(
+            svc, workflow_id, current_user, location_id
+        )
         return WorkflowResponse.from_model(wf)
 
 
@@ -1942,6 +1955,7 @@ async def get_workflow(
 async def list_workflow_versions(
     workflow_id: str,
     current_user: _InstitutionOrLocationAdmin,
+    location_id: Annotated[str | None, Query()] = None,
 ) -> list[WorkflowVersionResponse]:
     """List every published version of a workflow, newest first.
 
@@ -1951,7 +1965,9 @@ async def list_workflow_versions(
     """
     async with get_db_session() as session:
         svc = AutomationWorkflowDefinitionService(session)
-        wf = await _get_workflow_or_404(svc, workflow_id, current_user)
+        wf = await _get_workflow_or_404(
+            svc, workflow_id, current_user, location_id
+        )
         result = await session.execute(
             sa_select(AutomationWorkflowVersion)
             .where(AutomationWorkflowVersion.workflow_id == wf.id)

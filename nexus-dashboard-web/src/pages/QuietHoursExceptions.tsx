@@ -11,7 +11,7 @@
  * refusal explains what happened and what to change, so that message is shown
  * verbatim rather than replaced with something generic.
  */
-import { useEffect, useMemo, useState } from "react"
+import { useEffect, useState } from "react"
 import { CalendarOff, Clock, Plus, Trash2, User } from "lucide-react"
 import { PageHeader } from "@/components/PageHeader"
 import { Badge } from "@/components/ui/badge"
@@ -45,10 +45,7 @@ import {
     TableHeader,
     TableRow,
 } from "@/components/ui/table"
-import {
-    listInstitutionPortalLocations,
-    type InstitutionPortalLocation,
-} from "@/lib/institution-portal-api"
+import { useLocationContext } from "@/context/LocationContext"
 import {
     createQuietHoursException,
     deleteQuietHoursException,
@@ -107,8 +104,8 @@ function describeWindow(row: QuietHoursException): string {
 }
 
 export default function QuietHoursExceptions() {
-    const [locations, setLocations] = useState<InstitutionPortalLocation[]>([])
-    const [locationId, setLocationId] = useState<string>("")
+    const { selectedLocationId, selectedLocation } = useLocationContext()
+    const locationId = selectedLocationId ?? ""
     const [rows, setRows] = useState<QuietHoursException[]>([])
     const [loading, setLoading] = useState(true)
     const [formOpen, setFormOpen] = useState(false)
@@ -117,20 +114,11 @@ export default function QuietHoursExceptions() {
     const [deleting, setDeleting] = useState<string | null>(null)
 
     useEffect(() => {
-        listInstitutionPortalLocations()
-            .then((found) => {
-                setLocations(found)
-                if (found.length > 0) setLocationId(String(found[0].id))
-                else setLoading(false)
-            })
-            .catch(() => {
-                setLocations([])
-                setLoading(false)
-            })
-    }, [])
-
-    useEffect(() => {
-        if (!locationId) return
+        if (!locationId) {
+            setRows([])
+            setLoading(false)
+            return
+        }
         let cancelled = false
         setLoading(true)
         listQuietHoursExceptions(locationId)
@@ -209,10 +197,7 @@ export default function QuietHoursExceptions() {
         }
     }
 
-    const locationName = useMemo(
-        () => locations.find((l) => String(l.id) === locationId)?.name ?? "",
-        [locations, locationId],
-    )
+    const locationName = selectedLocation?.name ?? ""
 
     return (
         <div className="space-y-6">
@@ -226,19 +211,10 @@ export default function QuietHoursExceptions() {
                 <CardContent className="space-y-4 pt-6">
                     <div className="flex flex-wrap items-end justify-between gap-3">
                         <div className="space-y-1">
-                            <Label htmlFor="qh-location">Location</Label>
-                            <Select value={locationId} onValueChange={setLocationId}>
-                                <SelectTrigger id="qh-location" className="w-[260px]">
-                                    <SelectValue placeholder="Select a location" />
-                                </SelectTrigger>
-                                <SelectContent>
-                                    {locations.map((location) => (
-                                        <SelectItem key={location.id} value={String(location.id)}>
-                                            {location.name}
-                                        </SelectItem>
-                                    ))}
-                                </SelectContent>
-                            </Select>
+                            <Label>Active location</Label>
+                            <p className="min-w-[260px] rounded-md border border-border bg-muted/30 px-3 py-2 text-sm">
+                                {locationName || "No active location"}
+                            </p>
                         </div>
                         <Button
                             onClick={() => {

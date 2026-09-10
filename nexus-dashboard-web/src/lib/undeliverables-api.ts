@@ -47,7 +47,12 @@ function basePath(scope: UndeliverableScope): string {
 
 export async function listUndeliverables(
     scope: UndeliverableScope,
-    options: { page?: number; size?: number; status?: UndeliverableStatus | "all" } = {},
+    options: {
+        page?: number
+        size?: number
+        status?: UndeliverableStatus | "all"
+        locationId?: string
+    } = {},
 ): Promise<UndeliverableListResponse> {
     const params = new URLSearchParams({
         page: String(options.page ?? 1),
@@ -58,6 +63,9 @@ export async function listUndeliverables(
     } else if (options.status === "all") {
         // The backend treats an explicit empty value as no status filter.
         params.set("status", "")
+    }
+    if (scope === "institution" && options.locationId) {
+        params.set("location_id", options.locationId)
     }
     const { data } = await api.get<UndeliverableListResponse>(
         `${basePath(scope)}?${params.toString()}`,

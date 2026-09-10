@@ -59,6 +59,18 @@ describe("workflow-api", () => {
         expect(wf).toMatchObject({ id: "w1" })
     })
 
+    it("scopes workflow and version reads to the active location", async () => {
+        get.mockResolvedValue({ data: [] })
+        await getWorkflow("w1", "loc-1")
+        await listVersions("w1", "loc-1")
+        expect(get).toHaveBeenNthCalledWith(1, "/automation/workflows/w1", {
+            params: { location_id: "loc-1" },
+        })
+        expect(get).toHaveBeenNthCalledWith(2, "/automation/workflows/w1/versions", {
+            params: { location_id: "loc-1" },
+        })
+    })
+
     it("createWorkflow POSTs name + definition", async () => {
         post.mockResolvedValue({ data: { id: "w2" } })
         await createWorkflow({ name: "Test", definition: DEF })

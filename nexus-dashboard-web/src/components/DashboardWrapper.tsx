@@ -4,9 +4,11 @@ import { AppSidebar } from "@/components/app-sidebar"
 import { TopNav } from "@/components/TopNav"
 import BrandLoader from "@/components/BrandLoader"
 import { useAuth } from "@/context/AuthContext"
+import { useSelectedLocationId } from "@/context/LocationContext"
 
 export default function DashboardWrapper() {
     const { user, isLoading } = useAuth();
+    const selectedLocationId = useSelectedLocationId();
     const location = useLocation();
 
     if (isLoading) {
@@ -24,7 +26,7 @@ export default function DashboardWrapper() {
                 <AppSidebar />
                 <main className="w-full">
                     <div className="p-4">
-                        <Outlet />
+                        <Outlet key={selectedLocationId ?? "no-location"} />
                     </div>
                 </main>
             </div>

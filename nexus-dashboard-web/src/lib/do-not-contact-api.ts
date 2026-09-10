@@ -20,8 +20,10 @@ interface LegacyDncRecord {
     scope: DncScope
 }
 
-export async function listDoNotContact(): Promise<DncPatientRecord[]> {
-    const { data } = await api.get<{ records: DncPatientRecord[] }>("/institution/do-not-contact")
+export async function listDoNotContact(locationId: string): Promise<DncPatientRecord[]> {
+    const { data } = await api.get<{ records: DncPatientRecord[] }>("/institution/do-not-contact", {
+        params: { location_id: locationId },
+    })
     return data.records
 }
 

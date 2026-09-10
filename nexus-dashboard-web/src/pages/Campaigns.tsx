@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react"
+import { useCallback, useEffect, useRef, useState } from "react"
 import { Link, useNavigate } from "react-router-dom"
 import {
     Megaphone,
@@ -81,26 +81,33 @@ export default function Campaigns() {
     const [acting, setActing] = useState<string | null>(null)
     const [deleteTarget, setDeleteTarget] = useState<AutomationWorkflow | null>(null)
     const [haltDialog, setHaltDialog] = useState<"activate" | "release" | null>(null)
+    const refreshRequestId = useRef(0)
 
     const refresh = useCallback(async () => {
+        const requestId = ++refreshRequestId.current
         setLoading(true)
         try {
             const [nextCampaigns, nextHalt] = await Promise.all([
-                listCampaigns(),
+                locationId ? listCampaigns(locationId) : Promise.resolve([]),
                 canControlInstitutionHalt
                     ? getOutboundHaltStatus()
                     : Promise.resolve(null),
             ])
+            if (requestId !== refreshRequestId.current) return
             setCampaigns(nextCampaigns)
             setHaltStatus(nextHalt)
         } catch {
+            if (requestId !== refreshRequestId.current) return
             toast.error("Failed to load campaigns")
         } finally {
-            setLoading(false)
+            if (requestId === refreshRequestId.current) setLoading(false)
         }
-    }, [canControlInstitutionHalt])
+    }, [canControlInstitutionHalt, locationId])
 
-    useEffect(() => { void refresh() }, [refresh])
+    useEffect(() => {
+        void refresh()
+        return () => { refreshRequestId.current += 1 }
+    }, [refresh])
 
     async function handlePause(wf: AutomationWorkflow) {
         setActing(wf.id)

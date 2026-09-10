@@ -15,7 +15,6 @@ import {
     Users,
     Percent,
     Timer,
-    MapPin,
     Home,
 } from "lucide-react"
 
@@ -27,28 +26,17 @@ import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
 import { Skeleton } from "@/components/ui/skeleton"
 import { Input } from "@/components/ui/input"
-import {
-    Select,
-    SelectContent,
-    SelectItem,
-    SelectTrigger,
-    SelectValue,
-} from "@/components/ui/select"
 import { toast } from "sonner"
-import { useAuth } from "@/context/AuthContext"
 import { useInstitution } from "@/context/InstitutionContext"
+import { useLocationContext } from "@/context/LocationContext"
 import { useSSE } from "@/hooks/useSSE"
 import type { DashboardSummary, CallbackQueueItem } from "@/types"
 import { callerLabel, getInitials } from "@/components/calls/format"
 import { cn } from "@/lib/utils"
-import { getDashboardSummary, getAggregateDashboard, getMonthlyMetrics } from "@/lib/dashboard-api"
+import { getDashboardSummary, getMonthlyMetrics } from "@/lib/dashboard-api"
 import type { MonthlyMetricPoint } from "@/lib/dashboard-api"
 import { TrendChart } from "@/components/dashboard/TrendChart"
-import {
-    calculateROI,
-    calculateLocationROI,
-    listInstitutionPortalLocations,
-} from "@/lib/institution-portal-api"
+import { calculateLocationROI } from "@/lib/institution-portal-api"
 import { resolveCallback } from "@/lib/calls-api"
 import { STATUS_OPTIONS } from "@/lib/constants"
 import { DateRangePicker } from "@/components/dashboard/DateRangePicker"
@@ -446,33 +434,27 @@ function TagBar({ tag, label, count, total, pct, colorClass, barColor }: TagBarP
 // ── Dashboard Page ────────────────────────────────────────────────────────────
 
 export default function Dashboard() {
-    const { user } = useAuth()
     const { hasPms, pmsType, isLoading: institutionLoading } = useInstitution()
+    const { selectedLocation } = useLocationContext()
     const { lastEvent } = useSSE()
     const [summary, setSummary] = useState<DashboardSummary | null>(null)
     const [loading, setLoading] = useState(true)
-    const [selectedLocationSlug, setSelectedLocationSlug] = useState<string>("all")
-    const [locations, setLocations] = useState<{ slug: string; name: string }[]>([])
     const [trendPoints, setTrendPoints] = useState<MonthlyMetricPoint[]>([])
     const [value, setValue] = useState<DashboardValue | null>(null)
 
     const [range, setRange] = useState<DateRangeValue>(() => lastNDaysRange(7))
 
     const fetchSummary = useCallback(async () => {
+        if (!selectedLocation) {
+            setSummary(null)
+            setTrendPoints([])
+            setValue(null)
+            setLoading(false)
+            return
+        }
+        setLoading(true)
         try {
-            const locationSlug = selectedLocationSlug === "all" ? undefined : selectedLocationSlug
-
-            // A location-pinned role gets exactly one location back here, and it
-            // is the only scope any per-location endpoint will serve them.
-            let ownLocationSlug: string | undefined
-            if (!locationSlug && user?.role !== "INSTITUTION_ADMIN") {
-                try {
-                    const own = await listInstitutionPortalLocations()
-                    ownLocationSlug = own.length === 1 ? own[0].slug : undefined
-                } catch {
-                    ownLocationSlug = undefined
-                }
-            }
+            const locationSlug = selectedLocation.slug
             const summaryData = await getDashboardSummary(locationSlug, range)
             setSummary(summaryData)
 
@@ -493,16 +475,11 @@ export default function Dashboard() {
             // rather than a row of zeroes. The endpoint says so with a 400.
             // Same window as everything else on the page.
             //
-            // Scope: a location-pinned role has no switcher and never sets
-            // selectedLocationSlug, so falling back to the institution endpoint
-            // here would 403 them and silently hide the cards — which is exactly
-            // what it did. Their own location is the only scope they can read.
+            // The sidebar's active location is authoritative for every card,
+            // trend point, and value calculation on this page.
             const roiWindow = { startDate: range.startDate, endDate: range.endDate }
-            const roiSlug = locationSlug ?? ownLocationSlug
             try {
-                const roi = roiSlug
-                    ? await calculateLocationROI(roiSlug, roiWindow)
-                    : await calculateROI(roiWindow)
+                const roi = await calculateLocationROI(locationSlug, roiWindow)
                 setValue({
                     revenue: roi.total_revenue_generated,
                     staffCostSaved: roi.staff_cost_saved ?? null,
@@ -513,33 +490,13 @@ export default function Dashboard() {
                 setValue(null)
             }
 
-            // The location switcher list still comes from the aggregate
-            // endpoint (institution-admin only — it's the only place
-            // that returns clinic_comparison). LOCATION_ADMIN/STAFF
-            // can't switch anyway.
-            const isInstitutionAdmin = user?.role === "INSTITUTION_ADMIN"
-            if (isInstitutionAdmin) {
-                try {
-                    const aggregateData = await getAggregateDashboard()
-                    setLocations(
-                        aggregateData.clinic_comparison.map((c) => ({
-                            slug: c.location_slug,
-                            name: c.location_name,
-                        }))
-                    )
-                } catch {
-                    /* keep prior locations on transient failure */
-                }
-            } else {
-                setLocations([])
-            }
         } catch (error: unknown) {
             const message = error instanceof Error ? error.message : "Failed to load dashboard"
             toast.error(message)
         } finally {
             setLoading(false)
         }
-    }, [selectedLocationSlug, user?.role, range])
+    }, [selectedLocation, range])
 
     useEffect(() => {
         fetchSummary()
@@ -580,22 +537,6 @@ export default function Dashboard() {
                     description={<>{todayStr} · Call activity overview.</>}
                     actions={
                         <>
-                            {user?.role === "INSTITUTION_ADMIN" && (
-                                <Select value={selectedLocationSlug} onValueChange={setSelectedLocationSlug}>
-                                    <SelectTrigger className="w-[180px] h-8 text-xs">
-                                        <MapPin className="mr-2 h-3.5 w-3.5" />
-                                        <SelectValue placeholder="Select location" />
-                                    </SelectTrigger>
-                                    <SelectContent>
-                                        <SelectItem value="all">All Locations</SelectItem>
-                                        {locations.map((loc) => (
-                                            <SelectItem key={loc.slug} value={loc.slug}>
-                                                {loc.name}
-                                            </SelectItem>
-                                        ))}
-                                    </SelectContent>
-                                </Select>
-                            )}
                             <DateRangePicker value={range} onChange={setRange} />
                             <Button
                                 variant="outline"

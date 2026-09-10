@@ -27,6 +27,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { TableSkeleton } from "@/components/ui/skeletons"
 import { Textarea } from "@/components/ui/textarea"
 import { useAuth } from "@/context/AuthContext"
+import { useSelectedLocationId } from "@/context/LocationContext"
 import {
     dismissUndeliverable,
     listUndeliverables,
@@ -110,6 +111,7 @@ function humanFailureMessage(item: UndeliverableEvent): string {
 
 export default function Undeliverables() {
     const { user } = useAuth()
+    const locationId = useSelectedLocationId()
     const scope: UndeliverableScope = user?.role === "SUPER_ADMIN" ? "platform" : "institution"
     const canReplay = user?.role === "SUPER_ADMIN" || user?.role === "INSTITUTION_ADMIN"
     const [items, setItems] = useState<UndeliverableEvent[]>([])
@@ -125,12 +127,20 @@ export default function Undeliverables() {
     const groupedItems = useMemo(() => groupIssues(items), [items])
 
     const load = useCallback(async (nextPage = page) => {
+        if (scope === "institution" && !locationId) {
+            setItems([])
+            setTotal(0)
+            setPages(0)
+            setLoading(false)
+            return
+        }
         setLoading(true)
         try {
             const result = await listUndeliverables(scope, {
                 page: nextPage,
                 size: PAGE_SIZE,
                 status: statusFilter,
+                ...(scope === "institution" ? { locationId } : {}),
             })
             setItems(result.items)
             setTotal(result.total)
@@ -141,14 +151,14 @@ export default function Undeliverables() {
         } finally {
             setLoading(false)
         }
-    }, [page, scope, statusFilter])
+    }, [locationId, page, scope, statusFilter])
 
     useEffect(() => {
         void load(1)
         // `page` is deliberately not a dependency: filter changes reset it,
         // while pagination calls load directly with the requested page.
         // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [scope, statusFilter])
+    }, [locationId, scope, statusFilter])
 
     async function retry(item: UndeliverableEvent) {
         if (busyId || !canReplay || !item.replay_supported) return

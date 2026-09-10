@@ -123,8 +123,11 @@ export async function listWorkflows(): Promise<AutomationWorkflow[]> {
     return data
 }
 
-export async function getWorkflow(id: string): Promise<AutomationWorkflow> {
-    const { data } = await api.get<AutomationWorkflow>(`/automation/workflows/${id}`)
+export async function getWorkflow(id: string, locationId?: string): Promise<AutomationWorkflow> {
+    const path = `/automation/workflows/${id}`
+    const { data } = locationId
+        ? await api.get<AutomationWorkflow>(path, { params: { location_id: locationId } })
+        : await api.get<AutomationWorkflow>(path)
     return data
 }
 
@@ -202,10 +205,14 @@ export async function deleteWorkflow(id: string): Promise<void> {
 // ---- Versions / validation / merge-field catalog ----
 
 /** List every published version, newest-first (`GET .../{id}/versions`). */
-export async function listVersions(workflowId: string): Promise<WorkflowVersion[]> {
-    const { data } = await api.get<WorkflowVersion[]>(
-        `/automation/workflows/${workflowId}/versions`,
-    )
+export async function listVersions(
+    workflowId: string,
+    locationId?: string,
+): Promise<WorkflowVersion[]> {
+    const path = `/automation/workflows/${workflowId}/versions`
+    const { data } = locationId
+        ? await api.get<WorkflowVersion[]>(path, { params: { location_id: locationId } })
+        : await api.get<WorkflowVersion[]>(path)
     return data
 }
 

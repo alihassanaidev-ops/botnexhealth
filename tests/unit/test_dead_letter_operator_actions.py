@@ -63,6 +63,36 @@ def test_response_does_not_treat_redacted_ids_as_real_workflow_ids() -> None:
 
 
 @pytest.mark.asyncio
+async def test_institution_issue_list_includes_global_and_active_location(monkeypatch) -> None:
+    session = AsyncMock()
+    count_result = MagicMock()
+    count_result.scalar.return_value = 0
+    rows_result = MagicMock()
+    rows_result.scalars.return_value.all.return_value = []
+    session.execute = AsyncMock(side_effect=[count_result, rows_result])
+
+    @asynccontextmanager
+    async def fake_session():
+        yield session
+
+    monkeypatch.setattr(route, "get_db_session", fake_session)
+
+    await route._list_dead_letter_events(
+        page=1,
+        size=50,
+        status_filter="open",
+        source=None,
+        include_resolution_note=True,
+        location_id="loc-1",
+    )
+
+    for call in session.execute.await_args_list:
+        statement = str(call.args[0])
+        assert "location_id IS NULL" in statement
+        assert "location_id =" in statement
+
+
+@pytest.mark.asyncio
 async def test_resolution_lookup_takes_a_row_lock() -> None:
     session = AsyncMock()
     result = MagicMock()

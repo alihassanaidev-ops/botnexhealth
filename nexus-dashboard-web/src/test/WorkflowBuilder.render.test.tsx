@@ -5,6 +5,10 @@ import WorkflowBuilder from "@/pages/WorkflowBuilder"
 import { getWorkflow, validateDefinition } from "@/lib/workflow-api"
 import type { AutomationWorkflow } from "@/types"
 
+vi.mock("@/context/LocationContext", () => ({
+    useSelectedLocationId: () => "loc-1",
+}))
+
 vi.mock("@/lib/workflow-api", () => ({
     getWorkflow: vi.fn(),
     updateWorkflow: vi.fn(),

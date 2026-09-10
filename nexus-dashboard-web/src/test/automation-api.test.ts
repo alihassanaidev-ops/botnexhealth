@@ -7,12 +7,14 @@ import {
     enrollContactInCampaign,
     emergencyHaltCampaign,
     getCampaignAnalytics,
+    getCampaign,
     getCampaignOperations,
     getCampaignOverview,
     getOutboundHaltStatus,
     getRunTimeline,
     getUsageByCampaign,
     getUsageSummary,
+    listCampaigns,
     listCampaignRuns,
     releaseOutboundHalt,
 } from "@/lib/automation-api"
@@ -36,6 +38,26 @@ beforeEach(() => {
 })
 
 describe("automation-api", () => {
+    it("scopes the campaign list to the selected location", async () => {
+        get.mockResolvedValue({ data: [] })
+
+        await listCampaigns("loc-1")
+
+        expect(get).toHaveBeenCalledWith("/automation/workflows", {
+            params: { location_id: "loc-1" },
+        })
+    })
+
+    it("scopes a campaign detail read to the selected location", async () => {
+        get.mockResolvedValue({ data: { id: "wf-1" } })
+
+        await getCampaign("wf-1", "loc-1")
+
+        expect(get).toHaveBeenCalledWith("/automation/workflows/wf-1", {
+            params: { location_id: "loc-1" },
+        })
+    })
+
     it("creates a draft campaign from scratch", async () => {
         post.mockResolvedValue({ data: { id: "wf-1", status: "draft" } })
         const wf = await createDraftCampaign("Untitled campaign", "loc-1")

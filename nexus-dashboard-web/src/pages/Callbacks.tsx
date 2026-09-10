@@ -43,6 +43,7 @@ import {
 } from "@/components/ui/dialog"
 import { toast } from "sonner"
 import { useSSE } from "@/hooks/useSSE"
+import { useSelectedLocationId } from "@/context/LocationContext"
 import { listCallbacks } from "@/lib/callbacks-api"
 import { resolveCallback } from "@/lib/calls-api"
 import { listWorkflowStatuses } from "@/lib/workflow-status-api"
@@ -290,6 +291,7 @@ function CallbackRow({ item, onResolve, onClick }: CallbackRowProps) {
 
 export default function Callbacks() {
     const { lastEvent } = useSSE()
+    const locationId = useSelectedLocationId()
     const navigate = useNavigate()
     const [searchParams, setSearchParams] = useSearchParams()
     const [data, setData] = useState<CallbacksListResponse | null>(null)
@@ -335,11 +337,17 @@ export default function Callbacks() {
     useEffect(() => { setPage(0) }, [debouncedSearch, resolvedFilter, dateFrom, dateTo, sortOrder])
 
     const fetchCallbacks = useCallback(async () => {
+        if (!locationId) {
+            setData(null)
+            setLoading(false)
+            return
+        }
         setLoading(true)
         try {
             const resolved = resolvedFilter === "all" ? undefined
                 : resolvedFilter === "resolved" ? true : false
             const result = await listCallbacks({
+                locationId,
                 limit: PAGE_SIZE,
                 offset: page * PAGE_SIZE,
                 resolved,
@@ -354,7 +362,7 @@ export default function Callbacks() {
         } finally {
             setLoading(false)
         }
-    }, [page, resolvedFilter, debouncedSearch, dateFrom, dateTo, sortOrder])
+    }, [locationId, page, resolvedFilter, debouncedSearch, dateFrom, dateTo, sortOrder])
 
     useEffect(() => { fetchCallbacks() }, [fetchCallbacks])
 

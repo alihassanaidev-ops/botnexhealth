@@ -22,6 +22,7 @@ import {
     XCircle,
 } from "lucide-react"
 import { toast } from "sonner"
+import { useSelectedLocationId } from "@/context/LocationContext"
 
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
@@ -191,7 +192,11 @@ function ManualEnrollDialog({ campaign, onClose, onEnrolled }: ManualEnrollDialo
         const t = setTimeout(async () => {
             setLoading(true)
             try {
-                const res = await listContacts({ limit: 10, search: search || undefined })
+                const res = await listContacts({
+                    limit: 10,
+                    search: search || undefined,
+                    locationId: campaign.location_id ?? undefined,
+                })
                 if (!cancelled) setResults(res.items)
             } catch {
                 if (!cancelled) setResults([])
@@ -203,7 +208,7 @@ function ManualEnrollDialog({ campaign, onClose, onEnrolled }: ManualEnrollDialo
             cancelled = true
             clearTimeout(t)
         }
-    }, [search])
+    }, [campaign.location_id, search])
 
     async function enroll(contact: ContactListItem) {
         setEnrolling(contact.id)
@@ -885,6 +890,7 @@ function RunFilters({
 
 export default function CampaignDetail() {
     const { id } = useParams<{ id: string }>()
+    const locationId = useSelectedLocationId()
     const navigate = useNavigate()
     const [campaign, setCampaign] = useState<AutomationWorkflow | null>(null)
     const [overview, setOverview] = useState<CampaignOverview | null>(null)
@@ -910,11 +916,11 @@ export default function CampaignDetail() {
     // Deliberately independent of `filters`: changing a run filter must refetch
     // runs only, not the overview / usage panels alongside them.
     const refreshAll = useCallback(async () => {
-        if (!id) return
+        if (!id || !locationId) return
         setLoading(true)
         try {
             const [wf, ov, byCampaign, outcomes, splits] = await Promise.all([
-                getCampaign(id),
+                getCampaign(id, locationId),
                 getCampaignOverview(id),
                 getUsageByCampaign(undefined, 1, { workflowId: id }),
                 // Outcome analytics read the daily rollup rather than live runs.
@@ -935,7 +941,7 @@ export default function CampaignDetail() {
         } finally {
             setLoading(false)
         }
-    }, [id])
+    }, [id, locationId])
 
     const refreshRuns = useCallback(async (next?: string | null) => {
         if (!id) return

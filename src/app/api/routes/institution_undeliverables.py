@@ -13,6 +13,7 @@ from typing import Annotated
 from fastapi import APIRouter, Depends, Query
 
 from src.app.api.deps import get_current_institution_or_location_admin
+from src.app.api.deps_scope import assert_location_scope
 from src.app.api.permissions import Permission, require_permission
 from src.app.api.routes.dead_letter import (
     DeadLetterListResponse,
@@ -23,7 +24,7 @@ from src.app.api.routes.dead_letter import (
     _replay_dead_letter_event,
 )
 from src.app.models.dead_letter_event import DeadLetterStatus
-from src.app.models.user import User
+from src.app.models.user import User, UserRole
 
 router = APIRouter(
     prefix="/institution/undeliverables",
@@ -33,19 +34,25 @@ router = APIRouter(
 
 @router.get("", response_model=DeadLetterListResponse)
 async def list_institution_undeliverables(
-    _: Annotated[User, Depends(get_current_institution_or_location_admin)],
+    current_user: Annotated[User, Depends(get_current_institution_or_location_admin)],
     page: int = Query(1, ge=1),
     size: int = Query(50, ge=1, le=200),
     status_filter: str = Query(DeadLetterStatus.OPEN.value, alias="status"),
     source: str | None = None,
+    location_id: Annotated[str | None, Query()] = None,
 ) -> DeadLetterListResponse:
     """List only the events visible through the caller's tenant RLS scope."""
+    effective_location_id = location_id
+    if current_user.role == UserRole.LOCATION_ADMIN.value:
+        effective_location_id = str(current_user.location_id) if current_user.location_id else None
+    assert_location_scope(current_user, effective_location_id)
     return await _list_dead_letter_events(
         page=page,
         size=size,
         status_filter=status_filter,
         source=source,
         include_resolution_note=True,
+        location_id=effective_location_id,
     )
 
 

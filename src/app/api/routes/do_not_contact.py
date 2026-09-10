@@ -22,7 +22,7 @@ from collections import defaultdict
 from datetime import datetime, timezone
 from typing import Annotated, Literal
 
-from fastapi import APIRouter, Depends, HTTPException, Request, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from pydantic import BaseModel, Field
 from sqlalchemy import or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -196,12 +196,15 @@ async def remove_do_not_contact(
 async def list_do_not_contact(
     request: Request,
     current_user: Annotated[User, Depends(get_current_institution_admin)],
+    location_id: Annotated[str | None, Query()] = None,
 ) -> DncListResponse:
     """Return active opt-outs grouped into patient rows with channel tags."""
     institution_id = _institution_id(current_user)
     async with get_db_session() as session:
         return DncListResponse(
-            records=await _list_patient_records(session, institution_id)
+            records=await _list_patient_records(
+                session, institution_id, location_id=location_id
+            )
         )
 
 
@@ -248,8 +251,25 @@ async def release_do_not_contact_entry(
 
 
 async def _list_patient_records(
-    session: AsyncSession, institution_id: str
+    session: AsyncSession,
+    institution_id: str,
+    location_id: str | None = None,
 ) -> list[DncPatientRecord]:
+    suppression_scope = []
+    consent_scope = []
+    legacy_scope = []
+    if location_id:
+        # Institution-wide opt-outs apply at every location. Location-scoped
+        # opt-outs only appear at the currently active location.
+        suppression_scope.append(
+            or_(SmsSuppression.location_id.is_(None), SmsSuppression.location_id == location_id)
+        )
+        consent_scope.append(
+            or_(ConsentRecord.location_id.is_(None), ConsentRecord.location_id == location_id)
+        )
+        legacy_scope.append(
+            or_(DoNotContact.location_id.is_(None), DoNotContact.location_id == location_id)
+        )
     suppressions = (
         (
             await session.execute(
@@ -258,6 +278,7 @@ async def _list_patient_records(
                     SmsSuppression.institution_id == institution_id,
                     SmsSuppression.channel == ConsentChannel.SMS.value,
                     SmsSuppression.is_active.is_(True),
+                    *suppression_scope,
                 )
                 .order_by(SmsSuppression.created_at.desc())
                 .limit(2000)
@@ -279,6 +300,7 @@ async def _list_patient_records(
                             ConsentChannel.EMAIL.value,
                         )
                     ),
+                    *consent_scope,
                 )
                 .order_by(ConsentRecord.created_at.desc(), ConsentRecord.id.desc())
                 .limit(5000)
@@ -294,6 +316,7 @@ async def _list_patient_records(
                 .where(
                     DoNotContact.institution_id == institution_id,
                     DoNotContact.is_active.is_(True),
+                    *legacy_scope,
                 )
                 .order_by(DoNotContact.created_at.desc())
                 .limit(2000)

@@ -20,6 +20,13 @@ vi.mock("@/lib/tenant-api", () => ({
     listReasons: vi.fn(),
 }))
 vi.mock("@/context/InstitutionContext", () => ({ usePmsType: vi.fn() }))
+vi.mock("@/context/LocationContext", () => ({
+    useLocationContext: () => ({
+        locations: [{ id: "loc-1", name: "Downtown", slug: "downtown" }],
+        selectedLocationId: "loc-1",
+        setSelectedLocationId: vi.fn(),
+    }),
+}))
 vi.mock("@/lib/outbound-voice-api", () => ({
     listOutboundVoiceProfiles: vi.fn(),
 }))

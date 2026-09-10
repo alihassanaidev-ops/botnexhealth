@@ -217,6 +217,22 @@ def test_list_groups_sms_and_voice_tags_for_same_patient():
     }
 
 
+def test_list_filters_each_dnc_source_to_global_or_active_location():
+    from src.app.api.routes.do_not_contact import _list_patient_records
+
+    session = AsyncMock()
+    session.execute = AsyncMock(side_effect=[_result([]), _result([]), _result([])])
+
+    records = asyncio.run(_list_patient_records(session, "inst-1", "loc-1"))
+
+    assert records == []
+    statements = [str(call.args[0]) for call in session.execute.await_args_list]
+    assert len(statements) == 3
+    for statement in statements:
+        assert "location_id IS NULL" in statement
+        assert "location_id =" in statement
+
+
 def test_effective_revocations_respect_newer_global_grant():
     from src.app.api.routes.do_not_contact import _effective_revoked_consents
 

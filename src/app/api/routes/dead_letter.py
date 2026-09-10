@@ -9,7 +9,7 @@ from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel, Field
-from sqlalchemy import func, select
+from sqlalchemy import func, or_, select
 
 from src.app.api.deps import get_current_admin
 from src.app.api.permissions import Permission, require_permission
@@ -91,6 +91,7 @@ async def _list_dead_letter_events(
     status_filter: str,
     source: str | None,
     include_resolution_note: bool,
+    location_id: str | None = None,
 ) -> DeadLetterListResponse:
     async with get_db_session() as session:
         filters = []
@@ -98,6 +99,13 @@ async def _list_dead_letter_events(
             filters.append(DeadLetterEvent.status == status_filter)
         if source:
             filters.append(DeadLetterEvent.source == source)
+        if location_id:
+            filters.append(
+                or_(
+                    DeadLetterEvent.location_id.is_(None),
+                    DeadLetterEvent.location_id == location_id,
+                )
+            )
 
         stmt = select(DeadLetterEvent)
         count_stmt = select(func.count()).select_from(DeadLetterEvent)

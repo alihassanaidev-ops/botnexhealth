@@ -14,6 +14,7 @@ import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Skeleton } from "@/components/ui/skeleton"
 import { toast } from "sonner"
+import { useSelectedLocationId } from "@/context/LocationContext"
 import { cn } from "@/lib/utils"
 import {
     deleteWorkflow,
@@ -85,6 +86,7 @@ const NEW_STEP_DROP = 170
 
 export default function WorkflowBuilder() {
     const { id } = useParams<{ id: string }>()
+    const selectedLocationId = useSelectedLocationId()
     const navigate = useNavigate()
     const [searchParams, setSearchParams] = useSearchParams()
 
@@ -150,11 +152,11 @@ export default function WorkflowBuilder() {
     }, [searchParams, setSearchParams])
 
     const load = useCallback(async () => {
-        if (!id) return
+        if (!id || !selectedLocationId) return
         setLoading(true)
         try {
             const [wf, capabilities] = await Promise.all([
-                getWorkflow(id),
+                getWorkflow(id, selectedLocationId),
                 listNodeCapabilities().catch(() => null),
             ])
             setWorkflow(wf)
@@ -194,7 +196,7 @@ export default function WorkflowBuilder() {
         } finally {
             setLoading(false)
         }
-    }, [id, resetHistory])
+    }, [id, resetHistory, selectedLocationId])
 
     useEffect(() => {
         void load()

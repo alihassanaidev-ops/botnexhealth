@@ -7,25 +7,23 @@ import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
 import { Textarea } from "@/components/ui/textarea"
 import { useAuth } from "@/context/AuthContext"
+import { useLocationContext } from "@/context/LocationContext"
 import {
     createInsurancePlan,
     deleteInsurancePlan,
     listInsurancePlans,
-    listInstitutionPortalLocations,
     updateInsurancePlan,
     type InsurancePlan,
-    type InstitutionPortalLocation,
 } from "@/lib/institution-portal-api"
 
 export default function InsurancePlans() {
     const { user } = useAuth()
+    const { selectedLocation } = useLocationContext()
+    const selectedSlug = selectedLocation?.slug ?? ""
     const [loading, setLoading] = useState(true)
-    const [locations, setLocations] = useState<InstitutionPortalLocation[]>([])
-    const [selectedSlug, setSelectedSlug] = useState("")
     const [plans, setPlans] = useState<InsurancePlan[]>([])
     const [saving, setSaving] = useState(false)
     const [deletingId, setDeletingId] = useState<string | null>(null)
@@ -37,22 +35,6 @@ export default function InsurancePlans() {
     const [formDescription, setFormDescription] = useState("")
 
     const canManage = user?.role === "INSTITUTION_ADMIN" || user?.role === "LOCATION_ADMIN"
-
-    useEffect(() => {
-        async function loadLocations() {
-            try {
-                const locs = await listInstitutionPortalLocations()
-                setLocations(locs)
-                if (locs.length > 0) {
-                    setSelectedSlug(locs[0].slug)
-                }
-            } catch (err: unknown) {
-                const error = err as { response?: { data?: { detail?: string } } };
-                toast.error(error?.response?.data?.detail || "Failed to load locations")
-            }
-        }
-        void loadLocations()
-    }, [])
 
     const loadPlans = useCallback(async () => {
         if (!selectedSlug) return
@@ -134,8 +116,6 @@ export default function InsurancePlans() {
         }
     }
 
-    const showLocationPicker = user?.role === "INSTITUTION_ADMIN" && locations.length > 1
-
     return (
         <div className="relative space-y-6 bg-background">
             <div className="fixed inset-0 overflow-hidden pointer-events-none"><div className="absolute -top-32 -right-32 w-[420px] h-[420px] bg-transparent dark:bg-violet-700/20 rounded-full blur-[100px]" /></div>
@@ -159,24 +139,6 @@ export default function InsurancePlans() {
                     </>
                 }
             />
-
-            {showLocationPicker && (
-                <div className="max-w-xs space-y-2">
-                    <Label>Location</Label>
-                    <Select value={selectedSlug} onValueChange={setSelectedSlug}>
-                        <SelectTrigger>
-                            <SelectValue placeholder="Select location" />
-                        </SelectTrigger>
-                        <SelectContent>
-                            {locations.map((loc) => (
-                                <SelectItem key={loc.slug} value={loc.slug}>
-                                    {loc.name}
-                                </SelectItem>
-                            ))}
-                        </SelectContent>
-                    </Select>
-                </div>
-            )}
 
             {showForm && (
                 <Card>
@@ -233,7 +195,7 @@ export default function InsurancePlans() {
                         Accepted Insurance Plans
                     </CardTitle>
                     <CardDescription>
-                        {locations.find((l) => l.slug === selectedSlug)?.name || "Select a location"}
+                        {selectedLocation?.name || "Select a location"}
                     </CardDescription>
                 </CardHeader>
                 <CardContent>

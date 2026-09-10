@@ -80,6 +80,7 @@ export interface ContactPhoneReveal {
 }
 
 export interface ContactsFilters {
+    locationId?: string
     limit?: number
     offset?: number
     search?: string
@@ -144,6 +145,7 @@ export async function listContacts(filters: ContactsFilters = {}): Promise<Conta
     if (filters.search) params.set("search", filters.search)
     if (filters.directory) params.set("directory", filters.directory)
     if (filters.lifecycle) params.set("lifecycle", filters.lifecycle)
+    if (filters.locationId) params.set("location_id", filters.locationId)
     const q = params.toString() ? `?${params.toString()}` : ""
     const { data } = await api.get<ContactsListResponse>(`/institution/contacts${q}`)
     return data

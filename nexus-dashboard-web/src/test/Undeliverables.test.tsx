@@ -6,6 +6,9 @@ import { useAuth } from "@/context/AuthContext"
 import { dismissUndeliverable, listUndeliverables, retryUndeliverable } from "@/lib/undeliverables-api"
 
 vi.mock("@/context/AuthContext", () => ({ useAuth: vi.fn() }))
+vi.mock("@/context/LocationContext", () => ({
+    useSelectedLocationId: () => "loc-1",
+}))
 vi.mock("@/lib/undeliverables-api", () => ({
     listUndeliverables: vi.fn(),
     retryUndeliverable: vi.fn(),

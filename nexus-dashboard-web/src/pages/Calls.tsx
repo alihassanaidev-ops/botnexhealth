@@ -73,6 +73,7 @@ import { listWorkflowStatuses, assignCallStatus } from "@/lib/workflow-status-ap
 import { callStatusFilterOptions, DIRECTION_OPTIONS } from "@/lib/constants"
 import { cn } from "@/lib/utils"
 import { useInstitution } from "@/context/InstitutionContext"
+import { useSelectedLocationId } from "@/context/LocationContext"
 import type { CallRecord, CallDetail, CallsListResponse, WorkflowStatus } from "@/types"
 
 // ── Constants ────────────────────────────────────────────────────────────────
@@ -428,6 +429,7 @@ function SkeletonRows() {
 
 export default function Calls() {
     const { lastEvent } = useSSE()
+    const locationId = useSelectedLocationId()
     const [searchParams, setSearchParams] = useSearchParams()
     const [data, setData] = useState<CallsListResponse | null>(null)
     const [loading, setLoading] = useState(true)
@@ -493,9 +495,15 @@ export default function Calls() {
     useEffect(() => { setPage(0) }, [debouncedSearch, selectedTags, selectedStatusIds, directionFilter, dateFrom, dateTo])
 
     const fetchCalls = useCallback(async () => {
+        if (!locationId) {
+            setData(null)
+            setLoading(false)
+            return
+        }
         setLoading(true)
         try {
             const result = await listCalls({
+                locationId,
                 limit: PAGE_SIZE,
                 offset: page * PAGE_SIZE,
                 tags: selectedTags.length ? selectedTags : undefined,
@@ -511,7 +519,7 @@ export default function Calls() {
         } finally {
             setLoading(false)
         }
-    }, [page, selectedTags, selectedStatusIds, directionFilter, debouncedSearch, dateFrom, dateTo])
+    }, [locationId, page, selectedTags, selectedStatusIds, directionFilter, debouncedSearch, dateFrom, dateTo])
 
     useEffect(() => { fetchCalls() }, [fetchCalls])
 

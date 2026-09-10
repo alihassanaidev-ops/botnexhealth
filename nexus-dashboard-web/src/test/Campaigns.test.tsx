@@ -1,5 +1,5 @@
 import { describe, expect, it, beforeEach, vi } from "vitest"
-import { render, screen, waitFor } from "@testing-library/react"
+import { act, render, screen, waitFor } from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
 import { MemoryRouter, Route, Routes } from "react-router-dom"
 import Campaigns from "@/pages/Campaigns"
@@ -23,10 +23,13 @@ vi.mock("@/lib/automation-api", () => ({
 vi.mock("sonner", () => ({
     toast: { error: vi.fn(), success: vi.fn() },
 }))
-vi.mock("@/context/LocationContext", () => ({
-    useSelectedLocationId: () => "loc-1",
+const { auth, selectedLocation } = vi.hoisted(() => ({
+    auth: vi.fn(),
+    selectedLocation: vi.fn(),
 }))
-const { auth } = vi.hoisted(() => ({ auth: vi.fn() }))
+vi.mock("@/context/LocationContext", () => ({
+    useSelectedLocationId: () => selectedLocation(),
+}))
 vi.mock("@/context/AuthContext", () => ({
     useAuth: () => auth(),
 }))
@@ -38,6 +41,7 @@ const remove = deleteCampaign as ReturnType<typeof vi.fn>
 
 beforeEach(() => {
     auth.mockReturnValue({ user: { role: "INSTITUTION_ADMIN" } })
+    selectedLocation.mockReturnValue("loc-1")
     list.mockReset()
     halt.mockReset()
     create.mockReset()
@@ -47,6 +51,99 @@ beforeEach(() => {
 })
 
 describe("Campaigns page", () => {
+    it("does not make an unscoped campaign request while location selection loads", async () => {
+        selectedLocation.mockReturnValue(undefined)
+
+        render(
+            <MemoryRouter initialEntries={["/institution-admin/campaigns"]}>
+                <Routes>
+                    <Route path="/institution-admin/campaigns" element={<Campaigns />} />
+                </Routes>
+            </MemoryRouter>,
+        )
+
+        expect(await screen.findByText("No campaigns yet")).toBeInTheDocument()
+        expect(list).not.toHaveBeenCalled()
+    })
+
+    it("reloads campaigns when an institution admin switches locations", async () => {
+        const view = render(
+            <MemoryRouter initialEntries={["/institution-admin/campaigns"]}>
+                <Routes>
+                    <Route path="/institution-admin/campaigns" element={<Campaigns />} />
+                </Routes>
+            </MemoryRouter>,
+        )
+
+        await waitFor(() => {
+            expect(list).toHaveBeenCalledWith("loc-1")
+        })
+
+        selectedLocation.mockReturnValue("loc-2")
+        view.rerender(
+            <MemoryRouter initialEntries={["/institution-admin/campaigns"]}>
+                <Routes>
+                    <Route path="/institution-admin/campaigns" element={<Campaigns />} />
+                </Routes>
+            </MemoryRouter>,
+        )
+
+        await waitFor(() => {
+            expect(list).toHaveBeenCalledWith("loc-2")
+        })
+    })
+
+    it("ignores a stale campaign response from the previously selected location", async () => {
+        const oldCampaigns = [{
+            id: "wf-old",
+            name: "Old location campaign",
+            status: "active",
+            trigger_type: "manual",
+            definition: null,
+            location_id: "loc-1",
+            current_version_id: null,
+            created_at: "2026-09-01T00:00:00Z",
+            updated_at: "2026-09-01T00:00:00Z",
+        }]
+        const newCampaigns = [{
+            ...oldCampaigns[0],
+            id: "wf-new",
+            name: "New location campaign",
+            location_id: "loc-2",
+        }]
+        let resolveOld!: (campaigns: typeof oldCampaigns) => void
+        const oldRequest = new Promise<typeof oldCampaigns>((resolve) => {
+            resolveOld = resolve
+        })
+        list.mockImplementation((locationId: string) =>
+            locationId === "loc-1" ? oldRequest : Promise.resolve(newCampaigns),
+        )
+
+        const view = render(
+            <MemoryRouter initialEntries={["/institution-admin/campaigns"]}>
+                <Routes>
+                    <Route path="/institution-admin/campaigns" element={<Campaigns />} />
+                </Routes>
+            </MemoryRouter>,
+        )
+        await waitFor(() => expect(list).toHaveBeenCalledWith("loc-1"))
+
+        selectedLocation.mockReturnValue("loc-2")
+        view.rerender(
+            <MemoryRouter initialEntries={["/institution-admin/campaigns"]}>
+                <Routes>
+                    <Route path="/institution-admin/campaigns" element={<Campaigns />} />
+                </Routes>
+            </MemoryRouter>,
+        )
+
+        expect(await screen.findByText("New location campaign")).toBeInTheDocument()
+        await act(async () => resolveOld(oldCampaigns))
+
+        expect(screen.queryByText("Old location campaign")).not.toBeInTheDocument()
+        expect(screen.getByText("New location campaign")).toBeInTheDocument()
+    })
+
     it("loads for a location admin without requesting institution halt controls", async () => {
         auth.mockReturnValue({ user: { role: "LOCATION_ADMIN", location_id: "loc-1" } })
 

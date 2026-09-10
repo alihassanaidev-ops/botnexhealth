@@ -245,9 +245,11 @@ def _item(
     )
 
 
-async def _location_contact_ids_subq(current_user: User):
+async def _location_contact_ids_subq(
+    current_user: User, requested_location_id: str | None = None
+):
     """Subquery of contact_ids visible to a location-scoped user, or None."""
-    loc_id = _location_scope_id(current_user)
+    loc_id = _location_scope_id(current_user, requested_location_id)
     if not loc_id:
         return None
     return select(ContactLocationAccess.contact_id).where(
@@ -315,6 +317,7 @@ async def list_contacts(
         pattern=r"^[^%_]*$",
         description="Filter by person name (partial, case-insensitive). Wildcards not allowed.",
     ),
+    location_id: Annotated[str | None, Query()] = None,
 ) -> ContactsListResponse:
     """List primary person records for the authenticated institution.
 
@@ -384,7 +387,7 @@ async def list_contacts(
                     Contact.lead_status.is_(None),
                 ]
             )
-        loc_subq = await _location_contact_ids_subq(current_user)
+        loc_subq = await _location_contact_ids_subq(current_user, location_id)
         if loc_subq is not None:
             base_filters.append(Contact.id.in_(loc_subq))
         if search:

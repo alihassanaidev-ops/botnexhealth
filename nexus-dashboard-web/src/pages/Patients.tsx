@@ -237,6 +237,7 @@ interface MergePickerProps {
 }
 
 function MergePicker({ primary, onClose, onMerged }: MergePickerProps) {
+    const locationId = useSelectedLocationId()
     const [search, setSearch] = useState("")
     const [results, setResults] = useState<ContactListItem[]>([])
     const [loading, setLoading] = useState(false)
@@ -248,6 +249,7 @@ function MergePicker({ primary, onClose, onMerged }: MergePickerProps) {
             setLoading(true)
             try {
                 const res = await listContacts({
+                    locationId,
                     limit: 10,
                     search: search || undefined,
                     directory: "contacts",
@@ -260,7 +262,7 @@ function MergePicker({ primary, onClose, onMerged }: MergePickerProps) {
             }
         }, 300)
         return () => { cancelled = true; clearTimeout(t) }
-    }, [search, primary.id])
+    }, [locationId, search, primary.id])
 
     async function handleMerge(aliasId: string) {
         setMerging(aliasId)
@@ -890,6 +892,7 @@ function SkeletonRows() {
 function LocalPeopleDirectory({ mode }: { mode: DirectoryMode }) {
     const { user } = useAuth()
     const { hasPms, pmsType } = useInstitution()
+    const locationId = useSelectedLocationId()
     const canManage = user?.role === "INSTITUTION_ADMIN" || user?.role === "LOCATION_ADMIN"
     const [data, setData] = useState<ContactsListResponse | null>(null)
     const [loading, setLoading] = useState(true)
@@ -910,9 +913,15 @@ function LocalPeopleDirectory({ mode }: { mode: DirectoryMode }) {
     useEffect(() => { setPage(0) }, [debouncedSearch, contactFilter, mode])
 
     const fetchContacts = useCallback(async () => {
+        if (!locationId) {
+            setData(null)
+            setLoading(false)
+            return
+        }
         setLoading(true)
         try {
             setData(await listContacts({
+                locationId,
                 limit: PAGE_SIZE,
                 offset: page * PAGE_SIZE,
                 search: debouncedSearch || undefined,
@@ -924,7 +933,7 @@ function LocalPeopleDirectory({ mode }: { mode: DirectoryMode }) {
         } finally {
             setLoading(false)
         }
-    }, [page, debouncedSearch, mode, contactFilter])
+    }, [locationId, page, debouncedSearch, mode, contactFilter])
 
     useEffect(() => { fetchContacts() }, [fetchContacts])
 

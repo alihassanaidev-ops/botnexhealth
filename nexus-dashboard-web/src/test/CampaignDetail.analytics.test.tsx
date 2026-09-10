@@ -4,6 +4,10 @@ import userEvent from "@testing-library/user-event"
 import { MemoryRouter, Route, Routes, useLocation } from "react-router-dom"
 import { toast } from "sonner"
 import CampaignDetail from "@/pages/CampaignDetail"
+
+vi.mock("@/context/LocationContext", () => ({
+    useSelectedLocationId: () => "loc-1",
+}))
 import {
     deleteCampaign,
     enrollContactInCampaign,

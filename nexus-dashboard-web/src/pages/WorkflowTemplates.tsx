@@ -27,15 +27,15 @@ import {
 import { toast } from "sonner"
 import { createWorkflowFromTemplate, listTemplates, type CampaignTemplate } from "@/lib/workflow-api"
 import { triggerTypeLabel } from "@/lib/workflow/catalog"
-import { listAppointmentTypes, listLocations, listProviders, listReasons } from "@/lib/tenant-api"
+import { listAppointmentTypes, listProviders, listReasons } from "@/lib/tenant-api"
 import { listOutboundVoiceProfiles } from "@/lib/outbound-voice-api"
 import { listRetellSmsChatProfiles } from "@/lib/retell-sms-api"
 import { usePmsType } from "@/context/InstitutionContext"
+import { useLocationContext } from "@/context/LocationContext"
 import type {
     CachedAppointmentType,
     CachedDescriptor,
     CachedProvider,
-    LocationInfo,
     OutboundVoiceProfile,
     RetellSmsChatProfile,
 } from "@/types"
@@ -140,8 +140,9 @@ function isPositiveWholeNumber(value: string): boolean {
 export default function WorkflowTemplates() {
     const navigate = useNavigate()
     const pmsType = usePmsType()
+    const { selectedLocation, selectedLocationId: activeLocationId } = useLocationContext()
+    const selectedLocationId = activeLocationId ?? ""
     const [templates, setTemplates] = useState<CampaignTemplate[]>([])
-    const [locations, setLocations] = useState<LocationInfo[]>([])
     const [appointmentTypes, setAppointmentTypes] = useState<CachedAppointmentType[]>([])
     const [appointmentClassifications, setAppointmentClassifications] = useState<
         Array<CachedAppointmentType | CachedDescriptor>
@@ -160,7 +161,6 @@ export default function WorkflowTemplates() {
     const [loading, setLoading] = useState(true)
     const [picked, setPicked] = useState<CampaignTemplate | null>(null)
     const [name, setName] = useState("")
-    const [selectedLocationId, setSelectedLocationId] = useState("")
     const [audienceSource, setAudienceSource] = useState("")
     const [channelSequence, setChannelSequence] = useState("")
     const [copyVariant, setCopyVariant] = useState("")
@@ -185,28 +185,11 @@ export default function WorkflowTemplates() {
     const [creating, setCreating] = useState(false)
 
     useEffect(() => {
-        ;(async () => {
-            setLoading(true)
-            let waitsForLocationTemplates = false
-            try {
-                const locationRows = await listLocations().catch(() => [])
-                setLocations(locationRows)
-                if (locationRows.length > 0) {
-                    waitsForLocationTemplates = true
-                    setSelectedLocationId((current) => current || locationRows[0].id)
-                } else {
-                    setTemplates(await listTemplates())
-                }
-            } catch {
-                toast.error("Failed to load templates")
-            } finally {
-                if (!waitsForLocationTemplates) setLoading(false)
-            }
-        })()
-    }, [])
-
-    useEffect(() => {
-        if (!selectedLocationId) return
+        if (!selectedLocationId) {
+            setTemplates([])
+            setLoading(false)
+            return
+        }
         let active = true
         ;(async () => {
             setLoading(true)
@@ -774,19 +757,10 @@ export default function WorkflowTemplates() {
                                 </div>
                                 <div className="grid gap-4 sm:grid-cols-2">
                                     <div className="space-y-2">
-                                        <Label>Location</Label>
-                                        <Select value={selectedLocationId} onValueChange={setSelectedLocationId}>
-                                            <SelectTrigger>
-                                                <SelectValue placeholder="Select location" />
-                                            </SelectTrigger>
-                                            <SelectContent>
-                                                {locations.map((location) => (
-                                                    <SelectItem key={location.id} value={location.id}>
-                                                        {location.name}
-                                                    </SelectItem>
-                                                ))}
-                                            </SelectContent>
-                                        </Select>
+                                        <Label>Active location</Label>
+                                        <p className="rounded-md border border-border bg-muted/30 px-3 py-2 text-sm">
+                                            {selectedLocation?.name ?? "No active location"}
+                                        </p>
                                     </div>
                                     <div className="space-y-2">
                                         <Label htmlFor="audience-source">Audience source</Label>

@@ -39,10 +39,7 @@ import {
     TableHeader,
     TableRow,
 } from "@/components/ui/table"
-import {
-    listInstitutionPortalLocations,
-    type InstitutionPortalLocation,
-} from "@/lib/institution-portal-api"
+import { useLocationContext } from "@/context/LocationContext"
 import {
     createDoNotContact,
     listDoNotContact,
@@ -57,14 +54,12 @@ type ChannelFilter = "all" | Exclude<DncChannel, "all">
 interface CreateFormState {
     phone: string
     scope: DncScope
-    locationId: string
     reason: string
 }
 
 const EMPTY_FORM: CreateFormState = {
     phone: "",
     scope: "institution",
-    locationId: "",
     reason: "",
 }
 
@@ -145,8 +140,8 @@ function ChannelTag({
 }
 
 export default function DoNotContactAdmin() {
+    const { locations, selectedLocationId } = useLocationContext()
     const [records, setRecords] = useState<DncPatientRecord[]>([])
-    const [locations, setLocations] = useState<InstitutionPortalLocation[]>([])
     const [loading, setLoading] = useState(true)
     const [search, setSearch] = useState("")
     const [channel, setChannel] = useState<ChannelFilter>("all")
@@ -160,9 +155,14 @@ export default function DoNotContactAdmin() {
     const [releasing, setReleasing] = useState(false)
 
     async function refresh() {
+        if (!selectedLocationId) {
+            setRecords([])
+            setLoading(false)
+            return
+        }
         setLoading(true)
         try {
-            setRecords(await listDoNotContact())
+            setRecords(await listDoNotContact(selectedLocationId))
         } catch (error) {
             toast.error(errorDetail(error, "Failed to load DNC patients"))
         } finally {
@@ -172,10 +172,10 @@ export default function DoNotContactAdmin() {
 
     useEffect(() => {
         void refresh()
-        listInstitutionPortalLocations()
-            .then(setLocations)
-            .catch(() => setLocations([]))
-    }, [])
+        // The route outlet remounts on location changes, so refresh always
+        // belongs to the active location and no prior-location state survives.
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [selectedLocationId])
 
     const locationNames = useMemo(
         () => new Map(locations.map((location) => [location.id, location.name])),
@@ -207,7 +207,7 @@ export default function DoNotContactAdmin() {
             toast.error("Phone is required")
             return
         }
-        if (form.scope === "location" && !form.locationId) {
+        if (form.scope === "location" && !selectedLocationId) {
             toast.error("Location scope requires a location")
             return
         }
@@ -216,7 +216,7 @@ export default function DoNotContactAdmin() {
             await createDoNotContact({
                 phone,
                 scope: form.scope,
-                location_id: form.scope === "location" ? form.locationId : null,
+                location_id: form.scope === "location" ? selectedLocationId : null,
                 reason: form.reason.trim() || null,
             })
             toast.success("All-channel DNC recorded")
@@ -416,18 +416,11 @@ export default function DoNotContactAdmin() {
                         </div>
                         {form.scope === "location" && (
                             <div>
-                                <label className="mb-1 block text-xs font-medium text-muted-foreground">Location</label>
-                                <Select
-                                    value={form.locationId}
-                                    onValueChange={(value) => setForm((state) => ({ ...state, locationId: value }))}
-                                >
-                                    <SelectTrigger><SelectValue placeholder="Select location" /></SelectTrigger>
-                                    <SelectContent>
-                                        {locations.map((location) => (
-                                            <SelectItem key={location.id} value={location.id}>{location.name}</SelectItem>
-                                        ))}
-                                    </SelectContent>
-                                </Select>
+                                <label className="mb-1 block text-xs font-medium text-muted-foreground">Active location</label>
+                                <p className="rounded-md border border-border bg-muted/30 px-3 py-2 text-sm">
+                                    {locations.find((location) => location.id === selectedLocationId)?.name
+                                        ?? "No active location"}
+                                </p>
                             </div>
                         )}
                         <div>

@@ -35,8 +35,10 @@ describe("do-not-contact-api", () => {
                 }],
             },
         })
-        const records = await listDoNotContact()
-        expect(get).toHaveBeenCalledWith("/institution/do-not-contact")
+        const records = await listDoNotContact("location-1")
+        expect(get).toHaveBeenCalledWith("/institution/do-not-contact", {
+            params: { location_id: "location-1" },
+        })
         expect(records).toHaveLength(1)
         expect(records[0].phone_masked).toBe("+1555***4567")
     })

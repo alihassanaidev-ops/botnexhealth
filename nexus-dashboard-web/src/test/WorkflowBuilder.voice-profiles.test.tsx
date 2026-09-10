@@ -6,6 +6,10 @@ import { getChannelReadiness, getWorkflow, previewLaunchChecklist } from "@/lib/
 import { listOutboundVoiceProfiles } from "@/lib/outbound-voice-api"
 import type { AutomationWorkflow, OutboundVoiceProfile } from "@/types"
 
+vi.mock("@/context/LocationContext", () => ({
+    useSelectedLocationId: () => "loc-1",
+}))
+
 vi.mock("@/lib/workflow-api", () => ({
     getWorkflow: vi.fn(),
     updateWorkflow: vi.fn(),
