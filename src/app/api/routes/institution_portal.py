@@ -1736,6 +1736,324 @@ async def calculate_roi(
     )
 
 
+# ── Per-location ROI ─────────────────────────────────────────────────────────
+#
+# The institution-level inputs above assume one set of economics per tenant. A
+# group whose downtown and suburban practices bill differently had to pick one
+# average appointment value for both, so a per-location number was worth more
+# than the average of the two.
+#
+# What is *not* per location: monthly_subscription_cost. That is billed once for
+# the institution, so repeating it on every location would let a two-location
+# group subtract it twice and report a worse ROI than it has. It stays on the
+# institution and is apportioned at calculation time by the location's share of
+# that month's calls, with the basis named in the response.
+
+
+class LocationROIConfigRequest(BaseModel):
+    """Per-location value inputs. Deliberately excludes the subscription cost."""
+
+    avg_appointment_value: float = Field(
+        ..., ge=0, description="Average appointment revenue at this location ($)"
+    )
+    avg_new_patient_value: float = Field(
+        ..., ge=0, description="Average new patient first-visit revenue here ($)"
+    )
+    staff_hourly_rate: float = Field(
+        ..., ge=0, description="Front desk staff hourly rate at this location ($)"
+    )
+    avg_call_duration_minutes: float = Field(
+        4.0, ge=0, description="Avg manual call handling time (minutes)"
+    )
+
+
+class LocationROIConfigResponse(BaseModel):
+    location_id: str
+    location_slug: str
+    avg_appointment_value: float
+    avg_new_patient_value: float
+    staff_hourly_rate: float
+    avg_call_duration_minutes: float
+    #: "location" when these numbers were set here, "institution" when the
+    #: location has none of its own and the tenant-wide ones are standing in.
+    #: Reported rather than smoothed over: a clinic reading a group average as
+    #: its own performance is the failure this field exists to prevent.
+    source: str
+
+
+class LocationROICalculationResponse(BaseModel):
+    config: LocationROIConfigResponse
+    total_calls_month: int
+    appointments_booked_month: int
+    new_patients_month: int
+    revenue_from_bookings: float
+    revenue_from_new_patients: float
+    total_revenue_generated: float
+    staff_time_saved_hours: float
+    staff_cost_saved: float
+    total_value: float
+    #: The institution subscription apportioned to this location.
+    monthly_cost_allocated: float
+    #: How that apportionment was reached, so the number is auditable.
+    cost_allocation_basis: str
+    net_value: float
+    roi_percentage: float
+
+
+_LOCATION_ROI_FIELDS = (
+    "avg_appointment_value",
+    "avg_new_patient_value",
+    "staff_hourly_rate",
+    "avg_call_duration_minutes",
+)
+
+
+def _resolved_location_roi(
+    location: Any, institution: Any
+) -> tuple[dict[str, float], str] | None:
+    """This location's inputs and where they came from, or None if unset.
+
+    Falls through to the institution only as a whole: mixing a location's
+    appointment value with the institution's hourly rate would produce a figure
+    that is neither, and no caller could tell which parts were which.
+    """
+    if isinstance(location.roi_config, dict) and location.roi_config:
+        raw, source = location.roi_config, "location"
+    elif isinstance(institution.roi_config, dict) and institution.roi_config:
+        raw, source = institution.roi_config, "institution"
+    else:
+        return None
+    return {key: float(raw.get(key) or 0.0) for key in _LOCATION_ROI_FIELDS}, source
+
+
+async def _location_for_roi(session, loc_slug: str, current_user: User):
+    svc = InstitutionService(session)
+    location = await svc.get_location_by_slug(loc_slug, current_user.institution_id)
+    if not location:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Location not found"
+        )
+    institution = await svc.get_by_id(current_user.institution_id)
+    if not institution:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Institution not found"
+        )
+    return location, institution
+
+
+def _require_institution(current_user: User) -> str:
+    if not current_user.institution_id:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail="No institution assignment"
+        )
+    return str(current_user.institution_id)
+
+
+@router.get(
+    "/locations/{loc_slug}/roi/config",
+    response_model=LocationROIConfigResponse | None,
+    dependencies=[Depends(require_location_scope())],
+)
+async def get_location_roi_config(
+    loc_slug: str,
+    current_user: Annotated[User, Depends(get_current_institution_or_location_admin)],
+):
+    _require_institution(current_user)
+    async with get_db_session() as session:
+        location, institution = await _location_for_roi(
+            session, loc_slug, current_user
+        )
+        resolved = _resolved_location_roi(location, institution)
+        if resolved is None:
+            return None
+        values, source = resolved
+        return LocationROIConfigResponse(
+            location_id=str(location.id),
+            location_slug=location.slug,
+            source=source,
+            **values,
+        )
+
+
+@router.put(
+    "/locations/{loc_slug}/roi/config",
+    response_model=LocationROIConfigResponse,
+    dependencies=[Depends(require_location_scope())],
+)
+@audit(
+    AuditAction.LOCATION_UPDATE,
+    resource=lambda *args, **kwargs: (
+        f"location:{kwargs.get('loc_slug') or 'unknown'}:roi_config"
+    ),
+    actor=AuditActor.ADMIN,
+)
+async def update_location_roi_config(
+    loc_slug: str,
+    data: LocationROIConfigRequest,
+    current_user: Annotated[User, Depends(get_current_institution_or_location_admin)],
+):
+    _require_institution(current_user)
+    config_dict = data.model_dump()
+    async with get_db_session() as session:
+        location, _ = await _location_for_roi(session, loc_slug, current_user)
+        location.roi_config = config_dict
+        location_id = str(location.id)
+        slug = location.slug
+
+    return LocationROIConfigResponse(
+        location_id=location_id,
+        location_slug=slug,
+        source="location",
+        **config_dict,
+    )
+
+
+@router.delete(
+    "/locations/{loc_slug}/roi/config",
+    status_code=status.HTTP_204_NO_CONTENT,
+    dependencies=[Depends(require_location_scope())],
+)
+@audit(
+    AuditAction.LOCATION_UPDATE,
+    resource=lambda *args, **kwargs: (
+        f"location:{kwargs.get('loc_slug') or 'unknown'}:roi_config"
+    ),
+    actor=AuditActor.ADMIN,
+)
+async def clear_location_roi_config(
+    loc_slug: str,
+    current_user: Annotated[User, Depends(get_current_institution_or_location_admin)],
+):
+    """Drop this location's own numbers and go back to the institution's."""
+    _require_institution(current_user)
+    async with get_db_session() as session:
+        location, _ = await _location_for_roi(session, loc_slug, current_user)
+        location.roi_config = None
+    return None
+
+
+@router.get(
+    "/locations/{loc_slug}/roi/calculate",
+    response_model=LocationROICalculationResponse,
+    dependencies=[Depends(require_location_scope())],
+)
+async def calculate_location_roi(
+    loc_slug: str,
+    current_user: Annotated[User, Depends(get_current_institution_or_location_admin)],
+):
+    from datetime import datetime, timezone as tz
+
+    from src.app.models.call import Call, CallStatus
+
+    institution_id = _require_institution(current_user)
+    today = datetime.now(tz.utc).date()
+    month_start = today.replace(day=1)
+
+    async with get_db_session() as session:
+        location, institution = await _location_for_roi(
+            session, loc_slug, current_user
+        )
+        resolved = _resolved_location_roi(location, institution)
+        if resolved is None:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=(
+                    "ROI configuration not set for this location or its "
+                    "institution. Please configure ROI settings first."
+                ),
+            )
+        values, source = resolved
+        location_id = str(location.id)
+
+        def _count(*extra):
+            return select(func.count(Call.id)).where(
+                Call.institution_id == institution_id,
+                Call.location_id == location_id,
+                Call.call_date >= month_start,
+                *extra,
+            )
+
+        total_calls_month = (await session.execute(_count())).scalar_one()
+        appointments_booked_month = (
+            await session.execute(
+                _count(Call.call_status == CallStatus.APPOINTMENT_BOOKED.value)
+            )
+        ).scalar_one()
+        new_patients_month = (
+            await session.execute(_count(Call.is_new_patient.is_(True)))
+        ).scalar_one()
+
+        # Apportion the institution subscription by this location's share of the
+        # month's calls. Counting calls with no location at all in the
+        # denominator would shrink every location's share and make the group
+        # look more profitable than it is, so they are excluded from both sides.
+        institution_calls_month = (
+            await session.execute(
+                select(func.count(Call.id)).where(
+                    Call.institution_id == institution_id,
+                    Call.location_id.is_not(None),
+                    Call.call_date >= month_start,
+                )
+            )
+        ).scalar_one()
+
+        subscription_cost = float(
+            (institution.roi_config or {}).get("monthly_subscription_cost") or 0.0
+        )
+
+    if institution_calls_month > 0:
+        share = total_calls_month / institution_calls_month
+        cost_allocation_basis = (
+            f"{total_calls_month} of {institution_calls_month} located calls "
+            f"this month ({share:.1%} of the institution subscription)"
+        )
+    else:
+        share = 0.0
+        cost_allocation_basis = (
+            "No located calls this month, so no subscription cost is apportioned"
+        )
+    monthly_cost_allocated = round(subscription_cost * share, 2)
+
+    revenue_from_bookings = appointments_booked_month * values["avg_appointment_value"]
+    revenue_from_new_patients = new_patients_month * values["avg_new_patient_value"]
+    total_revenue_generated = revenue_from_bookings + revenue_from_new_patients
+
+    staff_time_saved_hours = round(
+        (total_calls_month * values["avg_call_duration_minutes"]) / 60, 2
+    )
+    staff_cost_saved = round(staff_time_saved_hours * values["staff_hourly_rate"], 2)
+
+    total_value = round(total_revenue_generated + staff_cost_saved, 2)
+    net_value = round(total_value - monthly_cost_allocated, 2)
+    roi_percentage = (
+        round((net_value / monthly_cost_allocated) * 100, 2)
+        if monthly_cost_allocated > 0
+        else 0.0
+    )
+
+    return LocationROICalculationResponse(
+        config=LocationROIConfigResponse(
+            location_id=location_id,
+            location_slug=loc_slug,
+            source=source,
+            **values,
+        ),
+        total_calls_month=total_calls_month,
+        appointments_booked_month=appointments_booked_month,
+        new_patients_month=new_patients_month,
+        revenue_from_bookings=round(revenue_from_bookings, 2),
+        revenue_from_new_patients=round(revenue_from_new_patients, 2),
+        total_revenue_generated=round(total_revenue_generated, 2),
+        staff_time_saved_hours=staff_time_saved_hours,
+        staff_cost_saved=staff_cost_saved,
+        total_value=total_value,
+        monthly_cost_allocated=monthly_cost_allocated,
+        cost_allocation_basis=cost_allocation_basis,
+        net_value=net_value,
+        roi_percentage=roi_percentage,
+    )
+
+
 @router.get("/audit-logs", response_model=AuditLogPaginatedResponse)
 async def get_my_audit_logs(
     current_user: Annotated[User, Depends(get_current_institution_admin)],

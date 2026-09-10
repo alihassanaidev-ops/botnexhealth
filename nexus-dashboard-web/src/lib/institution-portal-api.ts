@@ -273,6 +273,80 @@ export async function calculateROI(): Promise<ROICalculation> {
     return data
 }
 
+// Per-location ROI. The subscription cost is absent by design: it is billed once
+// per institution, so it is apportioned server-side rather than entered here.
+
+export interface LocationROIConfig {
+    location_id: string
+    location_slug: string
+    avg_appointment_value: number
+    avg_new_patient_value: number
+    staff_hourly_rate: number
+    avg_call_duration_minutes: number
+    /** "location" when set here, "institution" when inherited. */
+    source: "location" | "institution"
+}
+
+export type LocationROIConfigInput = Pick<
+    LocationROIConfig,
+    | "avg_appointment_value"
+    | "avg_new_patient_value"
+    | "staff_hourly_rate"
+    | "avg_call_duration_minutes"
+>
+
+export interface LocationROICalculation {
+    config: LocationROIConfig
+    total_calls_month: number
+    appointments_booked_month: number
+    new_patients_month: number
+    revenue_from_bookings: number
+    revenue_from_new_patients: number
+    total_revenue_generated: number
+    staff_time_saved_hours: number
+    staff_cost_saved: number
+    total_value: number
+    monthly_cost_allocated: number
+    cost_allocation_basis: string
+    net_value: number
+    roi_percentage: number
+}
+
+export async function getLocationROIConfig(
+    locSlug: string,
+): Promise<LocationROIConfig | null> {
+    const { data } = await api.get<LocationROIConfig | null>(
+        `/institution/locations/${encodeURIComponent(locSlug)}/roi/config`,
+    )
+    return data
+}
+
+export async function updateLocationROIConfig(
+    locSlug: string,
+    config: LocationROIConfigInput,
+): Promise<LocationROIConfig> {
+    const { data } = await api.put<LocationROIConfig>(
+        `/institution/locations/${encodeURIComponent(locSlug)}/roi/config`,
+        config,
+    )
+    return data
+}
+
+export async function clearLocationROIConfig(locSlug: string): Promise<void> {
+    await api.delete(
+        `/institution/locations/${encodeURIComponent(locSlug)}/roi/config`,
+    )
+}
+
+export async function calculateLocationROI(
+    locSlug: string,
+): Promise<LocationROICalculation> {
+    const { data } = await api.get<LocationROICalculation>(
+        `/institution/locations/${encodeURIComponent(locSlug)}/roi/calculate`,
+    )
+    return data
+}
+
 // Insurance Plans
 
 export interface InsurancePlan {

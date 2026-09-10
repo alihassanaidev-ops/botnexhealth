@@ -39,6 +39,7 @@ const AdminUserManagement = lazy(() => import("./pages/AdminUserManagement"));
 const TwilioPhoneNumbers = lazy(() => import("./pages/TwilioPhoneNumbers"));
 const InstitutionAdminPanel = lazy(() => import("./pages/InstitutionAdminPanel"));
 const LocationAdminPanel = lazy(() => import("./pages/LocationAdminPanel"));
+const LocationSettings = lazy(() => import("./pages/LocationSettings"));
 const InstitutionUserManagement = lazy(() => import("./pages/InstitutionUserManagement"));
 const InstitutionSettings = lazy(() => import("./pages/InstitutionSettings"));
 const WorkflowStatuses = lazy(() => import("./pages/WorkflowStatuses"));
@@ -305,6 +306,18 @@ export const router = createBrowserRouter([
                         element: (
                             <RoleGuard allowed={["LOCATION_ADMIN"]}>
                                 <S><LocationAdminPanel /></S>
+                            </RoleGuard>
+                        ),
+                    },
+                    {
+                        // Institution admins reach the same page to set numbers
+                        // for any of their clinics; the picker only appears when
+                        // more than one location comes back, so a location admin
+                        // sees their own and nothing else.
+                        path: "location-admin/settings",
+                        element: (
+                            <RoleGuard allowed={["LOCATION_ADMIN", "INSTITUTION_ADMIN"]}>
+                                <S><LocationSettings /></S>
                             </RoleGuard>
                         ),
                     },

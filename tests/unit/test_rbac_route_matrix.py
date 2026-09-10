@@ -364,6 +364,16 @@ ROUTES_BY_BOUNDARY: dict[str, tuple[str, ...]] = {
     INSTITUTION_OR_LOCATION_ADMIN: (
         # Campaign managers share one named campaign:configure permission.
         # Handlers and RLS additionally pin location admins to their clinic.
+        # Per-location value inputs. Wider than the institution-level ROI
+        # routes above on purpose: these are the numbers a single clinic knows
+        # and the institution does not — its own appointment value and front
+        # desk rate. require_location_scope pins a location admin to their own
+        # clinic, so the wider boundary does not widen what any one of them can
+        # reach.
+        "GET /api/institution/locations/{loc_slug}/roi/config",
+        "PUT /api/institution/locations/{loc_slug}/roi/config",
+        "DELETE /api/institution/locations/{loc_slug}/roi/config",
+        "GET /api/institution/locations/{loc_slug}/roi/calculate",
         "GET /api/compliance/quiet-hours/exceptions",
         "POST /api/compliance/quiet-hours/exceptions",
         "PATCH /api/compliance/quiet-hours/exceptions/{exception_id}",

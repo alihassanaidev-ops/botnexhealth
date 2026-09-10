@@ -6,7 +6,7 @@ from datetime import datetime
 from uuid import uuid4
 
 from sqlalchemy import Boolean, DateTime, ForeignKey, String, Text, UniqueConstraint, func
-from sqlalchemy.dialects.postgresql import UUID
+from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
 from src.app.database import Base
@@ -76,6 +76,13 @@ class InstitutionLocation(Base):
 
     # Configuration
     timezone: Mapped[str] = mapped_column(String(50), default="UTC", nullable=False)
+
+    #: Per-location inputs for the value calculator. NULL means this location has
+    #: not set its own, and the institution's are used — a distinction the API
+    #: reports rather than hides, so nobody reads a number as location-specific
+    #: when it is a group-wide average. The subscription cost is not here: it is
+    #: billed once per institution and is apportioned at calculation time.
+    roi_config: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
 
     # Address
     address: Mapped[str | None] = mapped_column(String(500), nullable=True)

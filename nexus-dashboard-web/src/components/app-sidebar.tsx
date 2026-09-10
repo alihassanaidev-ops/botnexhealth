@@ -54,6 +54,7 @@ const NAV_ART: Record<string, PageArtName> = {
     "/institution-admin/users": "users",
     "/institutions": "admin",
     "/location-admin": "admin",
+    "/location-admin/settings": "settings",
     "/notification-preferences": "emailPreferences",
     "/patients": "patients",
     "/setup": "settings",
@@ -201,6 +202,10 @@ const locationAdminNav: NavItemDef[] = [
     {
         title: "Automation issues",
         url: "/undeliverables",
+    },
+    {
+        title: "Settings",
+        url: "/location-admin/settings",
     },
 ]
 
