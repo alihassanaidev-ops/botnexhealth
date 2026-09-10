@@ -541,14 +541,25 @@ export default function InstitutionAdminPanel() {
                                         <div>
                                             <p className="text-xs text-muted-foreground font-medium uppercase tracking-wide">Monthly ROI</p>
                                             <div className="flex items-center gap-1.5 mt-1">
-                                                {roiCalculation.roi_percentage >= 0 ? (
-                                                    <ArrowUp className="h-4 w-4 text-emerald-600" />
+                                                {/* No subscription cost recorded means there is
+                                                    nothing to measure a return against — an em
+                                                    dash, not a 0% return. */}
+                                                {roiCalculation.roi_percentage === null ? (
+                                                    <span className="text-3xl font-extralight tabular-nums text-muted-foreground">
+                                                        —
+                                                    </span>
                                                 ) : (
-                                                    <ArrowDown className="h-4 w-4 text-rose-600" />
+                                                    <>
+                                                        {roiCalculation.roi_percentage >= 0 ? (
+                                                            <ArrowUp className="h-4 w-4 text-emerald-600" />
+                                                        ) : (
+                                                            <ArrowDown className="h-4 w-4 text-rose-600" />
+                                                        )}
+                                                        <span className={`text-3xl font-extralight tabular-nums ${roiCalculation.roi_percentage >= 0 ? "text-emerald-600" : "text-rose-600"}`}>
+                                                            {roiCalculation.roi_percentage}%
+                                                        </span>
+                                                    </>
                                                 )}
-                                                <span className={`text-3xl font-extralight tabular-nums ${roiCalculation.roi_percentage >= 0 ? "text-emerald-600" : "text-rose-600"}`}>
-                                                    {roiCalculation.roi_percentage}%
-                                                </span>
                                             </div>
                                         </div>
                                         <div className="text-right">
@@ -564,7 +575,7 @@ export default function InstitutionAdminPanel() {
                                             { label: "Bookings", value: roiCalculation.appointments_booked_month, icon: CalendarCheck },
                                             { label: "Booking Revenue", value: `$${roiCalculation.revenue_from_bookings.toLocaleString()}`, up: true, icon: DollarSign },
                                             { label: "New Patient Rev.", value: `$${roiCalculation.revenue_from_new_patients.toLocaleString()}`, up: true, icon: UserPlus },
-                                            { label: "Staff Saved", value: `${roiCalculation.staff_time_saved_hours}h`, up: true, sub: `$${roiCalculation.staff_cost_saved.toLocaleString()}`, icon: Clock },
+                                            { label: "Staff Saved", value: `${roiCalculation.staff_time_saved_hours}h`, up: true, sub: roiCalculation.staff_cost_saved === null ? "—" : `$${roiCalculation.staff_cost_saved.toLocaleString()}`, icon: Clock },
                                             { label: "Sub. Cost", value: `$${roiCalculation.monthly_cost.toLocaleString()}`, up: false, icon: CreditCard },
                                         ].map((m) => (
                                             <div key={m.label} className="flex items-center gap-3 rounded-xl border border-border p-3">

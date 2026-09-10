@@ -247,7 +247,8 @@ export interface ROIConfig {
 }
 
 export interface ROICalculation {
-    config: ROIConfig
+    /** Null when the totals were summed from per-location figures. */
+    config: ROIConfig | null
     total_calls_month: number
     appointments_booked_month: number
     new_patients_month: number
@@ -255,11 +256,14 @@ export interface ROICalculation {
     revenue_from_new_patients: number
     total_revenue_generated: number
     staff_time_saved_hours: number
-    staff_cost_saved: number
+    /** Null when no hourly rate is configured — unknown, not zero. */
+    staff_cost_saved: number | null
     total_value: number
     monthly_cost: number
     net_value: number
-    roi_percentage: number
+    /** Null when there is no cost to measure a return against. */
+    roi_percentage: number | null
+    revenue_basis: string
 }
 
 export async function getROIConfig(): Promise<ROIConfig | null> {

@@ -192,3 +192,56 @@ def test_hourly_rate_is_optional_on_the_request() -> None:
     )
 
     assert request.staff_hourly_rate is None
+
+
+# ---------------------------------------------------------------------------
+# Institution totals summed from per-location figures.
+#
+# A group that priced each clinic has answered the question, just not in one
+# place, so the institution view sums them instead of refusing.
+# ---------------------------------------------------------------------------
+
+
+def test_a_location_only_group_still_resolves_each_clinic() -> None:
+    """Each clinic is valued with its own numbers, not an average of them."""
+    downtown = _location({**LOCATION_CONFIG, "monthly_subscription_cost": 350.0})
+    suburb = _location(
+        {
+            "avg_appointment_value": 150.0,
+            "avg_new_patient_value": 300.0,
+            "staff_hourly_rate": 18.0,
+            "avg_call_duration_minutes": 4.0,
+        }
+    )
+    # No institution config at all — the aggregate branch's precondition.
+    uncofigured_institution = _institution(None)
+
+    a, a_source = _resolved_location_roi(downtown, uncofigured_institution)
+    b, b_source = _resolved_location_roi(suburb, uncofigured_institution)
+
+    assert (a_source, b_source) == ("location", "location")
+    assert a["avg_appointment_value"] == 310.0
+    assert b["avg_appointment_value"] == 150.0
+    # Averaging the two would value every booking at 230 and match neither.
+    assert a["avg_appointment_value"] != b["avg_appointment_value"]
+
+
+def test_a_location_with_no_figures_contributes_nothing() -> None:
+    """It is skipped, not counted at zero, so it cannot dilute the total."""
+    assert _resolved_location_roi(_location(None), _institution(None)) is None
+
+
+def test_only_configured_clinics_carry_a_price_into_the_total() -> None:
+    priced = _location({**LOCATION_CONFIG, "monthly_subscription_cost": 350.0})
+    unpriced = _location(LOCATION_CONFIG)
+
+    costs = [
+        cost
+        for cost in (
+            _location_subscription_cost(priced),
+            _location_subscription_cost(unpriced),
+        )
+        if cost is not None
+    ]
+
+    assert costs == [350.0]

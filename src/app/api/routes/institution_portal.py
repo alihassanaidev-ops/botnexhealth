@@ -1589,8 +1589,9 @@ class ROIConfigResponse(BaseModel):
 
 
 class ROICalculationResponse(BaseModel):
-    # Inputs used
-    config: ROIConfigResponse
+    # Inputs used. None when the figures were summed from locations that each
+    # have their own — there is no single set of inputs to name.
+    config: ROIConfigResponse | None
     #: The window these figures cover.
     period_start: date_type | None = None
     period_end: date_type | None = None
@@ -1603,11 +1604,16 @@ class ROICalculationResponse(BaseModel):
     revenue_from_new_patients: float
     total_revenue_generated: float
     staff_time_saved_hours: float
-    staff_cost_saved: float
+    #: None when no hourly rate is configured — unknown, not zero.
+    staff_cost_saved: float | None
     total_value: float
     monthly_cost: float
     net_value: float
-    roi_percentage: float
+    #: None when there is no cost to measure a return against.
+    roi_percentage: float | None
+    #: Where these figures came from, so a summed total is never mistaken for
+    #: one the institution itself was configured with.
+    revenue_basis: str = "Institution-wide figures"
 
 
 @router.get("/roi/config", response_model=ROIConfigResponse | None)
@@ -1682,10 +1688,21 @@ async def calculate_roi(
     async with get_db_session() as session:
         svc = InstitutionService(session)
         institution = await svc.get_by_id(current_user.institution_id)
-        if not institution or not institution.roi_config:
+        if not institution:
             raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="ROI configuration not set. Please configure ROI settings first.",
+                status_code=status.HTTP_404_NOT_FOUND, detail="Institution not found"
+            )
+        if not institution.roi_config:
+            # No tenant-wide figures, but its clinics may each have their own.
+            # A group's revenue *is* the sum of its locations', so sum them
+            # rather than refusing: a two-clinic group that priced both of them
+            # has answered the question, just not in one place.
+            return await _aggregated_institution_roi(
+                session,
+                institution=institution,
+                institution_id=str(current_user.institution_id),
+                period_start=period_start,
+                period_end=period_end,
             )
 
         config = ROIConfigResponse(**institution.roi_config)
@@ -1747,7 +1764,7 @@ async def calculate_roi(
     )
     net_value = round(total_value - monthly_cost, 2)
     roi_percentage = (
-        round((net_value / monthly_cost) * 100, 2) if monthly_cost > 0 else 0.0
+        round((net_value / monthly_cost) * 100, 2) if monthly_cost > 0 else None
     )
 
     return ROICalculationResponse(
@@ -1766,6 +1783,136 @@ async def calculate_roi(
         monthly_cost=monthly_cost,
         net_value=net_value,
         roi_percentage=roi_percentage,
+    )
+
+
+async def _aggregated_institution_roi(
+    session,
+    *,
+    institution: Any,
+    institution_id: str,
+    period_start: Any,
+    period_end: Any,
+) -> "ROICalculationResponse":
+    """Institution totals summed from the locations that carry their own figures.
+
+    Each location is valued with its own numbers rather than an average of
+    them, because that is the only way a group whose clinics bill differently
+    gets a total that matches the sum of its location pages.
+
+    Counts are restricted to the contributing locations. Reporting the group's
+    whole call volume beside revenue earned by a subset would put a booking
+    rate and a revenue figure side by side that were measured over different
+    sets of clinics.
+    """
+    from src.app.models.call import Call, CallStatus
+
+    rows = await session.execute(
+        select(InstitutionLocation).where(
+            InstitutionLocation.institution_id == institution_id
+        )
+    )
+    locations = list(rows.scalars().all())
+
+    contributing: list[Any] = []
+    totals = {
+        "calls": 0,
+        "booked": 0,
+        "new_patients": 0,
+        "revenue_bookings": 0.0,
+        "revenue_new_patients": 0.0,
+        "staff_hours": 0.0,
+        "staff_cost": 0.0,
+    }
+    #: None until some location supplies a rate; stays None when none do, so an
+    #: unmeasured saving is not reported as a saving of nothing.
+    staff_cost: float | None = None
+
+    for location in locations:
+        resolved = _resolved_location_roi(location, institution)
+        if resolved is None:
+            continue
+        values, _ = resolved
+        contributing.append(location)
+
+        def _count(*extra):
+            return select(func.count(Call.id)).where(
+                Call.institution_id == institution_id,
+                Call.location_id == str(location.id),
+                Call.call_date >= period_start,
+                Call.call_date <= period_end,
+                *extra,
+            )
+
+        calls = (await session.execute(_count())).scalar_one()
+        booked = (
+            await session.execute(
+                _count(Call.call_status == CallStatus.APPOINTMENT_BOOKED.value)
+            )
+        ).scalar_one()
+        new_patients = (
+            await session.execute(_count(Call.is_new_patient.is_(True)))
+        ).scalar_one()
+
+        hours = (calls * (values["avg_call_duration_minutes"] or 0.0)) / 60
+        totals["calls"] += calls
+        totals["booked"] += booked
+        totals["new_patients"] += new_patients
+        totals["revenue_bookings"] += booked * values["avg_appointment_value"]
+        totals["revenue_new_patients"] += new_patients * values["avg_new_patient_value"]
+        totals["staff_hours"] += hours
+        rate = values["staff_hourly_rate"]
+        if rate is not None:
+            staff_cost = (staff_cost or 0.0) + hours * rate
+
+    if not contributing:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=(
+                "ROI configuration not set for this institution or any of its "
+                "locations. Please configure ROI settings first."
+            ),
+        )
+
+    total_revenue = totals["revenue_bookings"] + totals["revenue_new_patients"]
+    staff_cost = None if staff_cost is None else round(staff_cost, 2)
+    total_value = round(total_revenue + (staff_cost or 0.0), 2)
+
+    # With no institution-level config there is no institution-level price, so
+    # a cost only exists where the clinics are billed individually.
+    monthly_cost = round(
+        sum(
+            cost
+            for cost in (_location_subscription_cost(loc) for loc in contributing)
+            if cost is not None
+        ),
+        2,
+    )
+    net_value = round(total_value - monthly_cost, 2)
+
+    names = ", ".join(sorted(str(loc.name) for loc in contributing))
+    return ROICalculationResponse(
+        config=None,
+        period_start=period_start,
+        period_end=period_end,
+        total_calls_month=totals["calls"],
+        appointments_booked_month=totals["booked"],
+        new_patients_month=totals["new_patients"],
+        revenue_from_bookings=round(totals["revenue_bookings"], 2),
+        revenue_from_new_patients=round(totals["revenue_new_patients"], 2),
+        total_revenue_generated=round(total_revenue, 2),
+        staff_time_saved_hours=round(totals["staff_hours"], 2),
+        staff_cost_saved=staff_cost,
+        total_value=total_value,
+        monthly_cost=monthly_cost,
+        net_value=net_value,
+        roi_percentage=(
+            round((net_value / monthly_cost) * 100, 2) if monthly_cost > 0 else None
+        ),
+        revenue_basis=(
+            f"Summed from {len(contributing)} location"
+            f"{'' if len(contributing) == 1 else 's'} with their own figures: {names}"
+        ),
     )
 
 
