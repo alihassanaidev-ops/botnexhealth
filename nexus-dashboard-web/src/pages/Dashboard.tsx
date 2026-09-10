@@ -44,7 +44,11 @@ import { cn } from "@/lib/utils"
 import { getDashboardSummary, getAggregateDashboard, getMonthlyMetrics } from "@/lib/dashboard-api"
 import type { MonthlyMetricPoint } from "@/lib/dashboard-api"
 import { TrendChart } from "@/components/dashboard/TrendChart"
-import { calculateROI, calculateLocationROI } from "@/lib/institution-portal-api"
+import {
+    calculateROI,
+    calculateLocationROI,
+    listInstitutionPortalLocations,
+} from "@/lib/institution-portal-api"
 import { resolveCallback } from "@/lib/calls-api"
 import { STATUS_OPTIONS } from "@/lib/constants"
 import { DateRangePicker } from "@/components/dashboard/DateRangePicker"
@@ -457,6 +461,18 @@ export default function Dashboard() {
     const fetchSummary = useCallback(async () => {
         try {
             const locationSlug = selectedLocationSlug === "all" ? undefined : selectedLocationSlug
+
+            // A location-pinned role gets exactly one location back here, and it
+            // is the only scope any per-location endpoint will serve them.
+            let ownLocationSlug: string | undefined
+            if (!locationSlug && user?.role !== "INSTITUTION_ADMIN") {
+                try {
+                    const own = await listInstitutionPortalLocations()
+                    ownLocationSlug = own.length === 1 ? own[0].slug : undefined
+                } catch {
+                    ownLocationSlug = undefined
+                }
+            }
             const summaryData = await getDashboardSummary(locationSlug, range)
             setSummary(summaryData)
 
@@ -476,10 +492,16 @@ export default function Dashboard() {
             // appointment is worth, so an unconfigured tenant gets no cards
             // rather than a row of zeroes. The endpoint says so with a 400.
             // Same window as everything else on the page.
+            //
+            // Scope: a location-pinned role has no switcher and never sets
+            // selectedLocationSlug, so falling back to the institution endpoint
+            // here would 403 them and silently hide the cards — which is exactly
+            // what it did. Their own location is the only scope they can read.
             const roiWindow = { startDate: range.startDate, endDate: range.endDate }
+            const roiSlug = locationSlug ?? ownLocationSlug
             try {
-                const roi = locationSlug
-                    ? await calculateLocationROI(locationSlug, roiWindow)
+                const roi = roiSlug
+                    ? await calculateLocationROI(roiSlug, roiWindow)
                     : await calculateROI(roiWindow)
                 setValue({
                     revenue: roi.total_revenue_generated,
