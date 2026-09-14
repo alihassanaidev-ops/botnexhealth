@@ -77,6 +77,14 @@ class InstitutionLocation(Base):
     # Configuration
     timezone: Mapped[str] = mapped_column(String(50), default="UTC", nullable=False)
 
+    #: When this location's timezone was last compared against the practice
+    #: software's own answer. Paces that pull to once a day, because background
+    #: PMS traffic shares a small per-key allowance. NULL means never checked,
+    #: so a newly configured location is picked up on the next sweep.
+    timezone_checked_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+
     #: Per-location inputs for the value calculator. NULL means this location has
     #: not set its own, and the institution's are used — a distinction the API
     #: reports rather than hides, so nobody reads a number as location-specific

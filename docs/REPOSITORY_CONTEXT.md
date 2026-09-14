@@ -947,7 +947,17 @@ for its date, time, provider, and operatory.
 GoTracker appointment and slot payloads can carry both Tracker's wall-clock
 fields and unambiguous instant fields. Nexus consumers must prefer
 `start_time`/`end_time` for automation and booking comparisons, while preserving
-wall-clock fields for writeback to Tracker. Internal GoTracker slot searches do
+wall-clock fields for writeback to Tracker.
+
+When only the wall-clock pair arrives, `AppointmentDate` + `AppointmentTime` are
+resolved in the clinic's zone — the payload's own `Timezone` where it has one,
+since the Synchronizer produced those values and so defines what they mean, else
+the location's stored zone. They were previously concatenated and given a `"Z"`,
+which declared the practice's own clock to be UTC and moved every appointment
+built that way by the clinic's offset: 10:00 at a Toronto clinic became 06:00
+local, and its reminder went out four hours from where it belonged. A value that
+already carries an offset is passed through verbatim, because rewriting it would
+change the appointment's projection and its webhook dedup key for no gain. Internal GoTracker slot searches do
 not send `tz_offset`; the Synchronizer resolves per-day offsets from the
 location's IANA timezone so daylight-saving transitions do not force a stale
 fixed offset across the requested range.

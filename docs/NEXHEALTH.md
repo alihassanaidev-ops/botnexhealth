@@ -125,6 +125,63 @@ and active state but preserves that local visibility preference; hidden
 operatories remain visible on the Operatories setup page and are filtered out of
 appointment-type and scheduling selections.
 
+## Location timezone
+
+`InstitutionLocation.timezone` decides when scheduled campaigns fire, which
+sends quiet hours holds, and what "in 3 days at 09:00" means. It defaults to
+`"UTC"`, and a genuinely-UTC clinic is indistinguishable from one nobody
+configured, so the failure is silent: a 2pm call held as if it were the evening.
+
+GoTracker reports the zone on every appointment webhook, so that integration
+learns it for free. **NexHealth's appointment webhook carries no zone** — only
+`start_time`, whose UTC offset describes one instant and can neither name a zone
+nor supply its DST rules. The practice's location record does carry one, so the
+value has to be pulled: `NexHealthSyncStatusService.learn_timezone` calls
+`GET /locations/{id}` and adopts the result via
+`src/app/services/location_timezone.py`.
+
+**The field is `tz`, not `timezone`.** Verified against the live API: a location
+record carries `tz: "America/Los_Angeles"` and has no `timezone` key at all. The
+mapper read `timezone` and so returned None for every location, which is why the
+value looked absent rather than misread and nothing downstream ever complained.
+The subdomain is *not* required by the endpoint — the id alone resolves — but it
+is sent anyway, because a platform-wide API key can see every tenant and an
+unscoped lookup on a stale location id would return another practice's record.
+
+It hangs off the `poll-nexhealth-sync-statuses` beat (15 minutes) because that
+sweep already walks exactly the right rows — NexHealth locations with both a
+subdomain and a location id. One request per location, ever: a location no
+longer on the default is skipped. `View location` is supported by every backing
+PMS NexHealth fronts (see `docs/Supported_API_Per_PMS_Nexhealth/`), so this is
+not a per-PMS gamble.
+
+Two rules are load-bearing. A zone that is not a resolvable IANA name is
+discarded rather than stored, because a bad value reads back as UTC on every
+lookup and blocks the retry. And only a location still on `"UTC"` is written —
+an administrator's choice, made at `/institution-admin/settings`, always wins.
+
+A configured location is still **compared**, once a day, and a disagreement is
+logged as `nexhealth timezone drift location=… configured=… pms_reports=…`. It
+is never corrected automatically: an administrator working around a bad PMS
+record and one who made a typo at onboarding are indistinguishable from here,
+and silently overruling the first would be worse than reporting both. The pace
+comes from `TIMEZONE_CHECK_INTERVAL` and is stamped on
+`institution_locations.timezone_checked_at`, because the sweep this rides runs
+every 15 minutes while background PMS traffic shares only 60 requests/minute per
+key with reconciliation and backfill. The stamp is written even when the answer
+is unusable, so a practice whose record carries no zone costs one request a day
+rather than four an hour, for ever.
+
+**Correcting the zone is not enough on its own.** A `workflow_schedules` row
+caches the timezone its cron is read in so the beat can claim due rows by
+comparing UTC, and that cache is rewritten only on publish/pause/resume. Every
+path that changes a location's timezone therefore calls
+`WorkflowScheduleService.resync_for_location`, or campaigns published while the
+clinic said UTC keep firing on UTC while the setting reads as fixed.
+
+Appointment *times* were never affected: NexHealth's `start_time` carries a real
+offset, so reminders anchored to an appointment have always been correct.
+
 ## Live patient directory
 
 The clinic-facing Patients page is a bounded server-to-server read, not a full

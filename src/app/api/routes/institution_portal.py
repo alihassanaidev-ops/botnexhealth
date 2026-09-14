@@ -602,8 +602,22 @@ async def update_location_timezone(
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND, detail="Location not found"
             )
+        previous_timezone = location.timezone
         location.timezone = timezone_value
         await session.flush()
+
+        # A published campaign's schedule row caches the zone its cron fires in,
+        # and is only rewritten on publish/pause/resume. Without this the
+        # setting reads as corrected while every already-published campaign
+        # keeps firing on the old zone.
+        if previous_timezone != timezone_value:
+            from src.app.services.automation.schedule_service import (
+                WorkflowScheduleService,
+            )
+
+            await WorkflowScheduleService(session).resync_for_location(
+                str(location.id)
+            )
 
     log_audit_background(
         actor=AuditActor.ADMIN,

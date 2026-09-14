@@ -8,6 +8,7 @@ import logging
 import time
 from datetime import datetime, timezone
 from typing import Any
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from fastapi import APIRouter, HTTPException, Request, status
 from sqlalchemy import select
@@ -231,7 +232,9 @@ async def _process_appointment_event(
     raw_patient_id = _clean_str(
         _first(appointment, "patient_id", "PatientId", "ContactId", "contact_id")
     )
-    start_time = _appointment_start_time(appointment)
+    start_time = _appointment_start_time(
+        appointment, timezone_name=location.timezone
+    )
     if not raw_appointment_id:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -437,11 +440,24 @@ async def _process_appointment_event(
                 # by hand, or a concurrent delivery, must win over this.
                 if row is not None and is_timezone_unset(row):
                     row.timezone = learned_timezone
+                    # A published campaign's schedule row caches the zone its
+                    # cron fires in and is only rewritten on publish; without
+                    # this the location reads as corrected while every
+                    # already-published campaign stays on UTC.
+                    from src.app.services.automation.schedule_service import (
+                        WorkflowScheduleService,
+                    )
+
+                    resynced = await WorkflowScheduleService(
+                        session
+                    ).resync_for_location(location_id)
                     await session.commit()
                     logger.info(
-                        "gotracker_webhook: location=%s timezone learned as %s",
+                        "gotracker_webhook: location=%s timezone learned as %s "
+                        "campaigns_resynced=%s",
                         location_id,
                         learned_timezone,
+                        resynced,
                     )
             if patient_id:
                 result = await session.execute(
@@ -1366,33 +1382,92 @@ def _appointment_payloads(payload: dict[str, Any]) -> list[dict[str, Any]]:
     return []
 
 
-def _appointment_start_time(appointment: dict[str, Any]) -> str | None:
+def _wall_clock_zone(name: str | None) -> ZoneInfo:
+    """The zone a Tracker wall-clock time should be read in.
+
+    UTC when the name is missing or unknown, because an appointment read an
+    hour out is recoverable and a webhook rejected over a mistyped zone is not.
+    """
+    try:
+        return ZoneInfo(name or "UTC")
+    except (ZoneInfoNotFoundError, ValueError):
+        logger.warning("unknown timezone %r on appointment payload; reading as UTC", name)
+        return ZoneInfo("UTC")
+
+
+def _as_instant(value: str, timezone_name: str | None) -> str | None:
+    """One GoTracker datetime as an unambiguous instant, or None.
+
+    A value that already carries an offset is returned **verbatim**: it is
+    already an instant, and rewriting it would change the appointment's
+    projection and its dedup key for no gain. Only a naive value is converted,
+    because that one is Tracker's wall clock and means nothing until it is read
+    in the clinic's zone.
+    """
+    try:
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if parsed.tzinfo is not None:
+        return value
+    localised = parsed.replace(tzinfo=_wall_clock_zone(timezone_name))
+    return localised.astimezone(timezone.utc).isoformat()
+
+
+def _appointment_start_time(
+    appointment: dict[str, Any],
+    *,
+    timezone_name: str | None = None,
+) -> str | None:
+    """The appointment's start as a UTC instant, or None.
+
+    Tracker payloads carry both unambiguous instant fields and wall-clock
+    fields, and consumers must prefer the instants — see the GoTracker section
+    of ``docs/REPOSITORY_CONTEXT.md``. Only the instants mean the same thing
+    regardless of who reads them.
+
+    The wall-clock fallback is what used to be wrong. Gluing ``AppointmentDate``
+    to ``AppointmentTime`` and appending ``"Z"`` declared the clinic's own clock
+    to be UTC, so every appointment built that way moved by the clinic's UTC
+    offset: 3:20pm at an Eastern clinic became 11:20am, and its reminder went
+    out four hours from where it belonged. Those fields are now resolved in the
+    clinic's zone.
+
+    The payload's own zone wins over the stored one, because it is the
+    Synchronizer that produced these wall-clock values and so the Synchronizer
+    that says what they mean.
+    """
+    zone = extract_timezone(appointment) or timezone_name
+
+    # A bare "15:20:00" is not a start time, so the time-only keys are not
+    # consulted here — they are the wall-clock half below, and returning one
+    # alone produced a start time with no date at all.
     direct = _clean_str(
         _first(
             appointment,
             "start_time",
             "StartTime",
-            "time",
-            "appointment_time",
             "AppointmentTimeStamp",
             "AppointmentDateTime",
         )
     )
     if direct:
-        return direct
+        instant = _as_instant(direct, zone)
+        if instant:
+            return instant
 
     appointment_date = _clean_str(
-        _first(appointment, "AppointmentDate", "date", "Date")
+        _first(appointment, "AppointmentDate", "appointment_date", "date", "Date")
     )
     appointment_time = _clean_str(
-        _first(appointment, "AppointmentTime", "time", "Time")
+        _first(appointment, "AppointmentTime", "appointment_time", "time", "Time")
     )
     if not appointment_date or not appointment_time:
         return None
 
     date_part = appointment_date.split("T", 1)[0]
     time_part = appointment_time.split("T", 1)[-1].removesuffix("Z")
-    return f"{date_part}T{time_part}Z"
+    return _as_instant(f"{date_part}T{time_part}", zone)
 
 
 def _patient_payloads(payload: dict[str, Any]) -> list[dict[str, Any]]:

@@ -21,6 +21,11 @@ from src.app.models.nexhealth_webhook_subscription import (
     NexHealthWebhookSubscriptionStatus,
 )
 from src.app.nexhealth.rate_limit import nexhealth_background_traffic
+from src.app.services.location_timezone import (
+    extract_timezone,
+    is_timezone_unset,
+    learn_location_timezone,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -31,6 +36,11 @@ UNHEALTHY_SYNC_STATUSES = frozenset(
     {"red", "down", "error", "failed", "disconnected", "inactive"}
 )
 SYNC_STATUS_STALE_AFTER = timedelta(hours=24)
+
+#: How often a location's timezone is re-read from NexHealth. Background PMS
+#: traffic shares 60 requests/minute per API key with reconciliation and
+#: backfill, so this cannot ride the 15-minute sweep it hangs off.
+TIMEZONE_CHECK_INTERVAL = timedelta(hours=24)
 
 _LOCATION_PACING_MIN_SECONDS = 0.15
 _LOCATION_PACING_MAX_SECONDS = 0.75
@@ -50,6 +60,7 @@ class SyncStatusSummary:
     failed_locations: int = 0
     read_unhealthy: int = 0
     write_unhealthy: int = 0
+    timezones_learned: int = 0
 
 
 class NexHealthSyncStatusService:
@@ -156,6 +167,22 @@ class NexHealthSyncStatusService:
                         _LOCATION_PACING_MIN_SECONDS, _LOCATION_PACING_MAX_SECONDS
                     )
                 )
+            # Independent of the sync-status poll below: a clinic whose
+            # timezone we cannot read is not an unhealthy integration, and a
+            # sync-status failure should not stop us learning the zone.
+            try:
+                if await self.learn_timezone(
+                    institution=row.institution, location=row.location
+                ):
+                    summary.timezones_learned += 1
+            except Exception:  # noqa: BLE001
+                logger.warning(
+                    "nexhealth timezone learn failed institution=%s location=%s",
+                    row.institution.id,
+                    row.location.id,
+                    exc_info=True,
+                )
+
             try:
                 updated = await self.poll_location(
                     institution=row.institution,
@@ -186,6 +213,96 @@ class NexHealthSyncStatusService:
                     type(exc).__name__,
                 )
         return summary
+
+    async def learn_timezone(
+        self, *, institution: Institution, location: InstitutionLocation
+    ) -> str | None:
+        """Reconcile this location's timezone with NexHealth's. Returns the zone
+        newly adopted, or None when nothing was written.
+
+        GoTracker reports the clinic's zone on every appointment webhook, so
+        that integration learns it for free. NexHealth's appointment payload
+        carries no zone at all — only ``start_time``, whose UTC offset says what
+        the offset was at one instant and cannot name a zone or its DST rules.
+        The practice's location record does carry one, so this has to be a pull.
+
+        Two outcomes, and only the first writes anything:
+
+        * a location still on the ``"UTC"`` default adopts what NexHealth says;
+        * a location already configured is **compared, not corrected**. An
+          administrator's choice stands, but a disagreement is logged, because
+          the alternative is a typo made once at onboarding that silently
+          mistimes every send for the life of the clinic.
+
+        Paced to once a day per location: the sweep this hangs off already makes
+        one NexHealth call per location every 15 minutes, and background traffic
+        shares an allowance of 60 requests/minute per key with reconciliation
+        and backfill. ``timezone_checked_at`` is stamped on every attempt, so a
+        practice whose record carries no zone is retried tomorrow rather than
+        four times an hour forever.
+        """
+        if not location.nexhealth_location_id:
+            return None
+
+        now = datetime.now(timezone.utc)
+        last_checked = location.timezone_checked_at
+        if last_checked is not None:
+            if last_checked.tzinfo is None:
+                last_checked = last_checked.replace(tzinfo=timezone.utc)
+            if now - last_checked < TIMEZONE_CHECK_INTERVAL:
+                return None
+
+        from src.app.pms.nexhealth.adapter import NexHealthAdapter
+
+        adapter = await NexHealthAdapter.create(institution, location)
+        try:
+            with nexhealth_background_traffic():
+                record = await adapter.get_location(str(location.nexhealth_location_id))
+        finally:
+            await adapter.close()
+
+        # Stamped even when the answer is unusable, so an unreachable or
+        # zone-less location costs one request a day rather than every sweep.
+        location.timezone_checked_at = now
+
+        if record is None:
+            return None
+
+        if not is_timezone_unset(location):
+            reported = extract_timezone({"timezone": record.timezone})
+            if reported is not None and reported != location.timezone:
+                # Deliberately not corrected: we cannot tell an administrator
+                # working around a bad PMS record from one who made a typo, and
+                # silently overruling the first would be worse than reporting
+                # both.
+                logger.warning(
+                    "nexhealth timezone drift location=%s configured=%s pms_reports=%s",
+                    location.id,
+                    location.timezone,
+                    reported,
+                )
+            return None
+
+        learned = learn_location_timezone(location, {"timezone": record.timezone})
+        if learned is None:
+            return None
+
+        # A published campaign's schedule row caches the zone it fires in, so
+        # correcting the location alone would leave those campaigns on UTC.
+        from src.app.services.automation.schedule_service import (
+            WorkflowScheduleService,
+        )
+
+        resynced = await WorkflowScheduleService(self.session).resync_for_location(
+            str(location.id)
+        )
+        logger.info(
+            "nexhealth timezone learned location=%s zone=%s campaigns_resynced=%s",
+            location.id,
+            learned,
+            resynced,
+        )
+        return learned
 
     async def poll_location(
         self, *, institution: Institution, location: InstitutionLocation

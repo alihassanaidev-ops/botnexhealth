@@ -2031,7 +2031,22 @@ async def update_location(
                     institution,
                     twilio_from_number,
                 )
+        previous_timezone = location.timezone
         location = await institution_service.update_location(location, **updates)
+
+        # A published campaign's schedule row caches the zone its cron fires in
+        # and is only rewritten on publish/pause/resume, so correcting a
+        # location here would otherwise leave every already-published campaign
+        # on the old zone while this page reads as fixed.
+        if "timezone" in updates and previous_timezone != location.timezone:
+            from src.app.services.automation.schedule_service import (
+                WorkflowScheduleService,
+            )
+
+            await WorkflowScheduleService(session).resync_for_location(
+                str(location.id)
+            )
+
         gotracker_subscription = await _ensure_gotracker_webhook_after_location_save(
             session,
             institution=institution,

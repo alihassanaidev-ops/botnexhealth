@@ -42,8 +42,10 @@ def _make_request(payload: dict, signature: str | None = None):
     return request
 
 
-def _location():
-    return SimpleNamespace(id="loc-1", institution_id="inst-1")
+def _location(timezone: str = "America/Toronto"):
+    # The real column is non-nullable and defaults to "UTC"; a stub without it
+    # hid that the webhook needs the clinic's zone to read a wall-clock time.
+    return SimpleNamespace(id="loc-1", institution_id="inst-1", timezone=timezone)
 
 
 def _session_with_scalar(value):
@@ -346,6 +348,14 @@ async def test_appointment_created_upserts_embedded_patient_when_contact_missing
 
 @pytest.mark.asyncio
 async def test_appointment_created_accepts_tracker_date_and_time_fields():
+    """A payload carrying only Tracker's wall clock is read in the clinic's zone.
+
+    ``AppointmentDate`` + ``AppointmentTime`` are the practice's own clock, and
+    this payload has no instant field to prefer. Gluing them together and
+    appending "Z" declared 10am Toronto to be 10am UTC, so the appointment
+    landed four hours early and its reminder went out four hours off. 10:00
+    America/Toronto is 14:00 UTC on this date, and that is what must be stored.
+    """
     payload = {
         "id": "webhook-created-900000004",
         "event": "appointment.created",
@@ -443,7 +453,7 @@ async def test_appointment_created_accepts_tracker_date_and_time_fields():
     projection.upsert_appointment.assert_awaited_once()
     upsert_kwargs = projection.upsert_appointment.await_args.kwargs
     assert upsert_kwargs["appointment_id"] == "gt-900000004"
-    assert upsert_kwargs["start_time"] == "2026-07-28T10:00:00Z"
+    assert upsert_kwargs["start_time"] == "2026-07-28T14:00:00+00:00"
     assert upsert_kwargs["gotracker_status_id"] == 1
     assert upsert_kwargs["is_confirmed"] is False
     assert upsert_kwargs["is_preconfirmed"] is False
@@ -465,7 +475,7 @@ async def test_appointment_created_accepts_tracker_date_and_time_fields():
     assert metadata["appointment_status_id"] == "1"
     assert metadata["appointment_date"] == "2026-07-28T00:00:00.000Z"
     assert metadata["appointment_time"] == "10:00:00"
-    assert metadata["appointment_datetime"] == "2026-07-28T10:00:00Z"
+    assert metadata["appointment_datetime"] == "2026-07-28T14:00:00+00:00"
     state_task.delay.assert_called_once()
     state_kwargs = state_task.delay.call_args.kwargs
     assert state_kwargs["appointment_id"] == "gt-900000004"
@@ -491,7 +501,7 @@ async def test_appointment_created_accepts_tracker_date_and_time_fields():
     assert metadata["gotracker_payload"]["appointment"]["time"] == "10:00:00"
     assert (
         metadata["gotracker_payload"]["appointment"]["datetime"]
-        == "2026-07-28T10:00:00Z"
+        == "2026-07-28T14:00:00+00:00"
     )
     assert metadata["gotracker_payload"]["appointment"]["status_id"] == "1"
     assert metadata["gotracker_payload"]["appointment"]["is_confirmed"] is False

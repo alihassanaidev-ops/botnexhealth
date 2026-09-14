@@ -381,7 +381,12 @@ def to_location(raw: dict, subdomain: str | None = None) -> UniversalLocation:
         address=raw.get("address") or raw.get("street_address"),
         city=raw.get("city"),
         phone=raw.get("phone"),
-        timezone=raw.get("timezone"),
+        # NexHealth names this "tz", and returns a real IANA zone in it
+        # ("America/Los_Angeles"). There is no "timezone" key on the location
+        # record at all, so reading that name yielded None for every location
+        # and the value looked absent rather than misread. "timezone" is kept
+        # as a fallback only because the v3 payloads are not all verified.
+        timezone=raw.get("tz") or raw.get("timezone"),
         hours=raw.get("hours"),
     )
 

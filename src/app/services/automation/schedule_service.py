@@ -9,6 +9,12 @@ Two halves:
 * **Claim.** One beat task takes the due rows with ``FOR UPDATE SKIP LOCKED``,
   the same way workflow timers are claimed, and advances each cursor before
   doing any work.
+
+A row caches the timezone its cron is read in, so the claim can compare UTC
+without joining back to the location every beat. That cache makes
+``resync_for_location`` necessary: correcting a clinic's timezone has to reach
+campaigns that were published while it was wrong, which would otherwise keep
+firing on the old zone until someone republished them by hand.
 """
 
 from __future__ import annotations
@@ -179,6 +185,44 @@ class WorkflowScheduleService:
 
         await self.session.flush()
         return active
+
+    async def resync_for_location(
+        self,
+        location_id: str,
+        *,
+        now: datetime | None = None,
+    ) -> int:
+        """Re-sync every campaign scheduled at this location. Returns how many.
+
+        A schedule row caches the zone its cron is read in, because the claim
+        query compares UTC and must not join back to the location on every
+        beat. That cache is only rewritten on publish/pause/resume, so a
+        location whose timezone is corrected afterwards keeps firing published
+        campaigns on the old zone — the setting looks fixed and the campaigns
+        are still wrong.
+
+        Delegates to :meth:`sync_for_workflow` rather than updating rows here,
+        so a campaign that pinned a fixed timezone keeps it: deciding between
+        the pinned zone and the location's belongs in one place.
+        """
+        workflow_ids = list(
+            (
+                await self.session.execute(
+                    select(WorkflowSchedule.workflow_id)
+                    .where(WorkflowSchedule.location_id == str(location_id))
+                    .distinct()
+                )
+            ).scalars()
+        )
+
+        resynced = 0
+        for workflow_id in workflow_ids:
+            workflow = await self.session.get(AutomationWorkflow, workflow_id)
+            if workflow is None:
+                continue
+            await self.sync_for_workflow(workflow, now=now)
+            resynced += 1
+        return resynced
 
     async def _target_locations(
         self, workflow: AutomationWorkflow

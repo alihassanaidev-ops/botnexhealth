@@ -1506,13 +1506,35 @@ class NexHealthAdapter(
         return locations
 
     async def get_location(self, location_id: str) -> UniversalLocation | None:
+        """The practice's own record for one location, including its timezone.
+
+        The subdomain is not required by the endpoint — the id alone resolves.
+        It is sent because a platform-wide API key can see every tenant, so an
+        unscoped lookup on a stale or mistyped ``nexhealth_location_id`` would
+        quietly return another practice's location rather than nothing.
+        """
+        params: dict[str, Any] = {}
+        if self._subdomain:
+            params["subdomain"] = self._subdomain
         try:
             raw = await handle_nexhealth_request(
-                self._client, "GET", f"/locations/{_strip(location_id)}"
+                self._client,
+                "GET",
+                f"/locations/{_strip(location_id)}",
+                params=params,
             )
             loc = raw.get("data", {})
             return mappers.to_location(loc, subdomain=self._subdomain) if loc else None
         except Exception:
+            # Still None rather than raising: every caller is a background
+            # sweep that must carry on to the next location. Logged so a
+            # persistently failing subdomain is visible.
+            logger.warning(
+                "nexhealth get_location failed subdomain=%s location_id=%s",
+                self._subdomain,
+                location_id,
+                exc_info=True,
+            )
             return None
 
     # ── Setup ────────────────────────────────────────────────────────────
