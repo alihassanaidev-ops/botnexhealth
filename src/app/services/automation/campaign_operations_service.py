@@ -551,7 +551,8 @@ class CampaignOperationsService:
                 blocked_reason=run.blocked_reason,
                 contact_id=str(run.contact_id) if run.contact_id else None,
                 contact_name=_contact_name(contact_by_id.get(str(run.contact_id))),
-                next_due_at=next_due.get(str(run.id)),
+                next_due_at=next_due.get(str(run.id))
+                or _scheduled_enrollment_at(run),
                 latest_event_at=latest_event.get(str(run.id)),
                 started_at=run.started_at,
                 completed_at=run.completed_at,
@@ -1034,6 +1035,20 @@ def _current_step_type(
         if node.id == run.current_step_id:
             return node.type
     return None
+
+
+def _scheduled_enrollment_at(run: AutomationWorkflowRun) -> datetime | None:
+    metadata = run.trigger_metadata if isinstance(run.trigger_metadata, dict) else {}
+    value = metadata.get("scheduled_enrollment_at")
+    if not isinstance(value, str) or not value.strip():
+        return None
+    try:
+        parsed = datetime.fromisoformat(value)
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        return parsed.replace(tzinfo=timezone.utc)
+    return parsed
 
 
 def _contact_name(contact: Contact | None) -> str | None:

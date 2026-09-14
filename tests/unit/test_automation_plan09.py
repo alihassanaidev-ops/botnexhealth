@@ -18,7 +18,7 @@ from src.app.services.automation.appointment_trigger_service import (
     workflow_matches_appointment,
 )
 from src.app.services.automation.trigger_lookup import TRIGGER_EVENT_KEYS
-from src.app.models.automation_workflow import AutomationWorkflowStatus
+from src.app.models.automation_workflow import AutomationRunStatus, AutomationWorkflowStatus
 from src.app.tasks.automation_workflow import (
     _enroll_and_start_async,
     _trigger_appointment_async,
@@ -295,6 +295,10 @@ async def test_nexhealth_event_facts_win_over_stale_projection_for_filtering():
         patch(
             "src.app.tasks.automation_workflow.enroll_and_start_workflow_run"
         ) as mock_task,
+        patch(
+            "src.app.tasks.automation_workflow._pre_enroll_scheduled_workflow_run",
+            new=AsyncMock(return_value=("run-1", True)),
+        ) as pre_enroll,
     ):
         instance = AsyncMock()
         instance.find_active_appointment_workflows = AsyncMock(return_value=[wf])
@@ -334,6 +338,16 @@ async def test_nexhealth_event_facts_win_over_stale_projection_for_filtering():
         )
 
     assert result["scheduled"] == 1
+    pre_enroll.assert_awaited_once()
+    pre_enroll_kwargs = pre_enroll.await_args.kwargs
+    assert pre_enroll_kwargs["trigger_metadata"]["appointment_status"] == "booked"
+    assert pre_enroll_kwargs["trigger_metadata"]["appointment_reason"] == "Surgery"
+    assert (
+        pre_enroll_kwargs["trigger_metadata"]["nexhealth_payload"]["appointment"][
+            "appointment_type_id"
+        ]
+        == "4"
+    )
     metadata = mock_task.apply_async.call_args.kwargs["kwargs"]["trigger_metadata"]
     assert metadata["appointment_status"] == "booked"
     assert metadata["appointment_reason"] == "Surgery"
@@ -1145,6 +1159,7 @@ async def test_scan_recall_skips_workflows_bound_to_another_location():
 async def test_enroll_and_start_duplicate_key_skips():
     existing_run = MagicMock()
     existing_run.id = "run-existing"
+    existing_run.status = "waiting"
 
     mock_enroll_svc = AsyncMock()
     mock_enroll_svc.enroll = AsyncMock(return_value=(existing_run, False))
@@ -1176,6 +1191,75 @@ async def test_enroll_and_start_duplicate_key_skips():
 
     assert result["created"] is False
     assert result["run_id"] == "run-existing"
+
+
+@pytest.mark.asyncio
+async def test_enroll_and_start_starts_pre_enrolled_pending_run():
+    existing_run = SimpleNamespace(
+        id="run-existing",
+        status=AutomationRunStatus.PENDING.value,
+        current_step_id=None,
+        trigger_metadata={},
+    )
+    version = SimpleNamespace(
+        id="ver-1",
+        definition={
+            "trigger": {"type": "manual"},
+            "entry_node_id": "exit-1",
+            "nodes": [{"type": "exit", "id": "exit-1", "outcome": "done"}],
+        },
+    )
+
+    mock_enroll_svc = AsyncMock()
+    mock_enroll_svc.enroll = AsyncMock(return_value=(existing_run, False))
+
+    mock_session = _make_session()
+    mock_session.get = AsyncMock(return_value=version)
+
+    dispatcher = SimpleNamespace(
+        runtime=SimpleNamespace(start_run=AsyncMock()),
+        advance=AsyncMock(
+            return_value=SimpleNamespace(
+                status="completed",
+                outcome="done",
+                steps_advanced=1,
+                patient_status_event_ids=[],
+            )
+        ),
+    )
+
+    with (
+        patch(
+            "src.app.tasks.automation_workflow.get_system_db_session",
+            return_value=mock_session,
+        ),
+        patch(
+            "src.app.tasks.automation_workflow.AutomationWorkflowEnrollmentService",
+            return_value=mock_enroll_svc,
+        ),
+        patch(
+            "src.app.tasks.automation_workflow.build_dispatcher",
+            new=AsyncMock(return_value=(dispatcher, "UTC")),
+        ),
+    ):
+        result = await _enroll_and_start_async(
+            institution_id="inst-1",
+            workflow_id="wf-1",
+            workflow_version_id="ver-1",
+            contact_id="c-1",
+            location_id=None,
+            trigger_type="appointment_offset",
+            trigger_ref_type="appointment",
+            trigger_ref_id="appt-1",
+            idempotency_key="appt:ver-1:appt-1",
+            trigger_metadata={},
+        )
+
+    dispatcher.runtime.start_run.assert_awaited_once_with(existing_run)
+    dispatcher.advance.assert_awaited_once()
+    assert result["created"] is False
+    assert result["started"] is True
+    assert result["dispatch_status"] == "completed"
 
 
 # ---------------------------------------------------------------------------

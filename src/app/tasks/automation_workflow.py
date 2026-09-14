@@ -1230,12 +1230,19 @@ async def _enroll_and_start_async(
         )
 
         if not created:
+            if run.status != AutomationRunStatus.PENDING.value:
+                logger.info(
+                    "enroll_and_start: duplicate idempotency_key=%s status=%s — skipping",
+                    idempotency_key,
+                    run.status,
+                )
+                await session.commit()
+                return {"run_id": str(run.id), "created": False}
             logger.info(
-                "enroll_and_start: duplicate idempotency_key=%s — skipping",
+                "enroll_and_start: starting pre-enrolled run=%s idempotency_key=%s",
+                run.id,
                 idempotency_key,
             )
-            await session.commit()
-            return {"run_id": str(run.id), "created": False}
 
         version = await session.get(AutomationWorkflowVersion, workflow_version_id)
         if version is None:
@@ -1311,11 +1318,59 @@ async def _enroll_and_start_async(
     )
     return {
         "run_id": str(run.id),
-        "created": True,
+        "created": created,
+        "started": True,
         "dispatch_status": result.status,
         "steps_advanced": result.steps_advanced,
         "outcome": result.outcome,
     }
+
+
+async def _pre_enroll_scheduled_workflow_run(
+    *,
+    institution_id: str,
+    workflow_id: str,
+    workflow_version_id: str,
+    contact_id: str | None,
+    location_id: str | None,
+    trigger_type: str | None,
+    trigger_ref_type: str | None,
+    trigger_ref_id: str | None,
+    idempotency_key: str,
+    trigger_metadata: dict,
+    scheduled_for: datetime,
+) -> tuple[str, bool]:
+    """Create the pending run row now for a workflow that starts later.
+
+    The delayed Celery task remains responsible for actually starting and
+    advancing the run. This row exists so operators can see matched future
+    executions immediately in the campaign Executions UI, and so cancellations
+    before the due time have a durable run target to cancel.
+    """
+    visible_metadata = {
+        **trigger_metadata,
+        "scheduled_enrollment_at": scheduled_for.isoformat(),
+    }
+    async with get_system_db_session(
+        "celery",
+        institution_id=institution_id,
+        location_id=location_id,
+        external_id=idempotency_key,
+    ) as session:
+        run, created = await AutomationWorkflowEnrollmentService(session).enroll(
+            institution_id=institution_id,
+            workflow_id=workflow_id,
+            workflow_version_id=workflow_version_id,
+            contact_id=contact_id,
+            location_id=location_id,
+            trigger_type=trigger_type,
+            trigger_ref_type=trigger_ref_type,
+            trigger_ref_id=trigger_ref_id,
+            trigger_metadata=visible_metadata,
+            idempotency_key=idempotency_key,
+        )
+        await session.commit()
+        return str(run.id), created
 
 
 # ---------------------------------------------------------------------------
@@ -1439,6 +1494,9 @@ async def _trigger_appointment_async(
                 wf.id,
             )
             continue
+        idempotency_key = make_appointment_idempotency_key(
+            str(wf.current_version_id), appointment_id, appointment_at_iso
+        )
         eta = compute_enrollment_eta(wf, appointment_at)
         if eta is None:
             skipped += 1
@@ -1449,8 +1507,18 @@ async def _trigger_appointment_async(
             )
             continue
 
-        idempotency_key = make_appointment_idempotency_key(
-            str(wf.current_version_id), appointment_id, appointment_at_iso
+        await _pre_enroll_scheduled_workflow_run(
+            institution_id=institution_id,
+            workflow_id=str(wf.id),
+            workflow_version_id=str(wf.current_version_id),
+            contact_id=effective_contact_id,
+            location_id=effective_location_id,
+            trigger_type="appointment_offset",
+            trigger_ref_type="appointment",
+            trigger_ref_id=appointment_id,
+            idempotency_key=idempotency_key,
+            trigger_metadata=enriched_metadata,
+            scheduled_for=eta,
         )
         enroll_and_start_workflow_run.apply_async(
             kwargs={
@@ -2141,6 +2209,30 @@ async def _trigger_callback_async(
         idempotency_key = make_callback_idempotency_key(
             str(wf.current_version_id), call_id
         )
+        workflow_metadata = merge_canonical_context(
+            {
+                **trigger_metadata,
+                "call_id": call_id,
+                "call_direction": "inbound",
+                "call_outcome": "needs_callback",
+                "preferred_callback_at": preferred_callback_at_iso,
+            },
+            event_key="call.inbound.completed",
+        )
+        if eta is not None:
+            await _pre_enroll_scheduled_workflow_run(
+                institution_id=institution_id,
+                workflow_id=str(wf.id),
+                workflow_version_id=str(wf.current_version_id),
+                contact_id=contact_id,
+                location_id=location_id,
+                trigger_type="callback_requested",
+                trigger_ref_type="call",
+                trigger_ref_id=call_id,
+                idempotency_key=idempotency_key,
+                trigger_metadata=workflow_metadata,
+                scheduled_for=eta,
+            )
         enroll_and_start_workflow_run.apply_async(
             kwargs={
                 "institution_id": institution_id,
@@ -2152,16 +2244,7 @@ async def _trigger_callback_async(
                 "trigger_ref_type": "call",
                 "trigger_ref_id": call_id,
                 "idempotency_key": idempotency_key,
-                "trigger_metadata": merge_canonical_context(
-                    {
-                        **trigger_metadata,
-                        "call_id": call_id,
-                        "call_direction": "inbound",
-                        "call_outcome": "needs_callback",
-                        "preferred_callback_at": preferred_callback_at_iso,
-                    },
-                    event_key="call.inbound.completed",
-                ),
+                "trigger_metadata": workflow_metadata,
             },
             eta=eta,  # None → runs immediately
             queue="workflow",
