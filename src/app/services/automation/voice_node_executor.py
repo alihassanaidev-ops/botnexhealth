@@ -94,6 +94,34 @@ def _voice_config_metadata(
     }
 
 
+def _normalize_outbound_to_number(raw_to_number: str | None, node: SendVoiceNode) -> str:
+    """Normalize a workflow contact phone for Retell outbound dialing.
+
+    When a workflow explicitly enables a country/region override, honor it for
+    local-format numbers. Otherwise require an already international number, with
+    one compatibility fallback for NexHealth/OpenDental NANP patients: those PMS
+    integrations commonly store patient phones as ten digits, while Retell still
+    requires E.164.
+    """
+    configured_region = (
+        node.phone_country_region
+        if node.phone_country_code_enabled and node.phone_country_region
+        else None
+    )
+    if configured_region:
+        return normalize_phone(raw_to_number, default_region=configured_region)
+
+    strict = normalize_phone(raw_to_number, default_region=None)
+    if strict:
+        return strict
+
+    digits = "".join(ch for ch in str(raw_to_number or "") if ch.isdigit())
+    if len(digits) == 10:
+        return normalize_phone(raw_to_number)
+
+    return ""
+
+
 @dataclass(frozen=True)
 class VoiceParked:
     """Signal to the dispatcher: the call was placed and the run should PARK
@@ -211,12 +239,7 @@ class VoiceNodeExecutor:
             await self.runtime.fail_step(step, result_code="no_phone")
             await self.runtime.fail_run(run, reason="send_voice: contact has no phone number")
             return node.next_node_id
-        default_phone_region = (
-            node.phone_country_region
-            if node.phone_country_code_enabled and node.phone_country_region
-            else None
-        )
-        to_number = normalize_phone(raw_to_number, default_region=default_phone_region)
+        to_number = _normalize_outbound_to_number(raw_to_number, node)
         if not to_number:
             await self.runtime.fail_step(
                 step,
