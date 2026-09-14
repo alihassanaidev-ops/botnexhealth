@@ -157,7 +157,8 @@ _ADVANCEABLE_STATUSES = frozenset(
     }
 )
 
-_APPOINTMENT_SYNC_LOOKAHEAD_DAYS = 90
+_APPOINTMENT_BACKFILL_LOOKAHEAD_DAYS = 90
+_APPOINTMENT_RECONCILIATION_LOOKAHEAD_DAYS = 30
 _RETELL_OUTCOME_POLL_BATCH = 25
 _RETELL_OUTCOME_MIN_AGE_SECONDS = 30
 _RETELL_TERMINAL_CALL_STATUSES = frozenset({"ended", "not_connected", "error"})
@@ -1910,12 +1911,12 @@ async def _poll_nexhealth_sync_statuses_async() -> dict:
 
 
 async def _sync_nexhealth_patients_async(*, mode: str) -> dict:
-    async with get_system_db_session(
-        "celery", external_id=f"nexhealth_patient_{mode}_target_scan"
+    async with _superadmin_system_session(
+        f"nexhealth_patient_{mode}_target_scan"
     ) as session:
         targets = await NexHealthSubscriptionLifecycleService(
             session
-        ).active_or_pending_targets()
+        ).sync_eligible_targets()
 
     total = PatientSyncSummary()
     for institution_id, subscription_id in targets:
@@ -1952,12 +1953,10 @@ async def _sync_nexhealth_patients_async(*, mode: str) -> dict:
 
 
 async def _sync_nexhealth_appointments_async(*, mode: str) -> dict:
-    async with get_system_db_session(
-        "celery", external_id=f"nexhealth_{mode}_target_scan"
-    ) as session:
+    async with _superadmin_system_session(f"nexhealth_{mode}_target_scan") as session:
         targets = await NexHealthSubscriptionLifecycleService(
             session
-        ).active_or_pending_targets()
+        ).sync_eligible_targets()
 
     total = AppointmentSyncSummary()
     for institution_id, subscription_id in targets:
@@ -1970,7 +1969,11 @@ async def _sync_nexhealth_appointments_async(*, mode: str) -> dict:
             part = await svc.sync_subscription(
                 subscription_id=subscription_id,
                 mode="backfill" if mode == "backfill" else "reconciliation",
-                lookahead_days=_APPOINTMENT_SYNC_LOOKAHEAD_DAYS,
+                lookahead_days=(
+                    _APPOINTMENT_BACKFILL_LOOKAHEAD_DAYS
+                    if mode == "backfill"
+                    else _APPOINTMENT_RECONCILIATION_LOOKAHEAD_DAYS
+                ),
             )
             await session.commit()
             _merge_sync_summary(total, part)

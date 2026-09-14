@@ -144,7 +144,7 @@ async def test_health_check_marks_active_subscription_failed_when_no_events_seen
 
 
 @pytest.mark.asyncio
-async def test_active_or_pending_targets_returns_subscription_ids():
+async def test_sync_eligible_targets_returns_subscription_ids():
     rows = [
         SimpleNamespace(institution_id="inst-1", id="sub-1"),
         SimpleNamespace(institution_id="inst-2", id="sub-2"),
@@ -154,11 +154,15 @@ async def test_active_or_pending_targets_returns_subscription_ids():
     session = _session(result)
     svc = NexHealthSubscriptionLifecycleService(session)
 
-    assert await svc.active_or_pending_targets() == [
+    assert await svc.sync_eligible_targets() == [
         ("inst-1", "sub-1"),
         ("inst-2", "sub-2"),
     ]
-    _assert_nexhealth_pms_filter(session.execute.await_args.args[0])
+    statement = session.execute.await_args.args[0]
+    _assert_nexhealth_pms_filter(statement)
+    sql = _compiled_sql(statement)
+    assert "'failed'" in sql
+    assert "'disabled'" not in sql
 
 
 @pytest.mark.asyncio
@@ -252,11 +256,14 @@ async def test_live_signature_secret_rejects_unknown_subscription():
     result = MagicMock()
     result.scalars.return_value.all.return_value = []
 
-    assert await live_signature_secrets_for_subscription(
-        _session(result),
-        provider_subscription_id="unknown",
-        subdomain="practice",
-    ) == []
+    assert (
+        await live_signature_secrets_for_subscription(
+            _session(result),
+            provider_subscription_id="unknown",
+            subdomain="practice",
+        )
+        == []
+    )
 
 
 @pytest.mark.asyncio

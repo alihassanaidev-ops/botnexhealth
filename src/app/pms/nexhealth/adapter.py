@@ -332,9 +332,10 @@ class NexHealthAdapter(
     ) -> NexHealthAdapter:
         """Build a NexHealth adapter scoped to an institution + location.
 
-        Hybrid credential mode is supported: if the institution stores a
-        NexHealth API key, use it; otherwise fall back to the platform key.
-        Location scoping still comes from ``location.nexhealth_subdomain`` and
+        Hybrid credential mode is explicit: ``institution`` mode uses only the
+        institution's stored key, while ``platform`` mode uses only the shared
+        platform key. A missing selected credential fails closed. Location
+        scoping still comes from ``location.nexhealth_subdomain`` and
         ``location.nexhealth_location_id``.
         """
         from src.app.config import settings as global_settings

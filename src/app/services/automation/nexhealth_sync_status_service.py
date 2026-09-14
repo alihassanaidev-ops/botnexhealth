@@ -20,11 +20,16 @@ from src.app.models.nexhealth_webhook_subscription import (
     NexHealthWebhookSubscription,
     NexHealthWebhookSubscriptionStatus,
 )
+from src.app.nexhealth.rate_limit import nexhealth_background_traffic
 
 logger = logging.getLogger(__name__)
 
-HEALTHY_SYNC_STATUSES = frozenset({"green", "ok", "healthy", "connected", "active", "success"})
-UNHEALTHY_SYNC_STATUSES = frozenset({"red", "down", "error", "failed", "disconnected", "inactive"})
+HEALTHY_SYNC_STATUSES = frozenset(
+    {"green", "ok", "healthy", "connected", "active", "success"}
+)
+UNHEALTHY_SYNC_STATUSES = frozenset(
+    {"red", "down", "error", "failed", "disconnected", "inactive"}
+)
 SYNC_STATUS_STALE_AFTER = timedelta(hours=24)
 
 _LOCATION_PACING_MIN_SECONDS = 0.15
@@ -71,7 +76,8 @@ class NexHealthSyncStatusService:
             row = (
                 await self.session.execute(
                     select(NexHealthSyncStatus).where(
-                        NexHealthSyncStatus.institution_id == str(location.institution_id),
+                        NexHealthSyncStatus.institution_id
+                        == str(location.institution_id),
                         NexHealthSyncStatus.location_id == str(location.id),
                     )
                 )
@@ -91,7 +97,9 @@ class NexHealthSyncStatusService:
             row.sync_source_type = _clean_str(status_payload.get("sync_source_type"))
             row.sync_source_name = _clean_str(status_payload.get("sync_source_name"))
             row.emr_payload = (
-                status_payload.get("emr") if isinstance(status_payload.get("emr"), dict) else None
+                status_payload.get("emr")
+                if isinstance(status_payload.get("emr"), dict)
+                else None
             )
             row.locations_payload = _locations_payload(status_payload)
             row.read_status = _clean_str(status_payload.get("read_status"))
@@ -119,7 +127,9 @@ class NexHealthSyncStatusService:
             )
         )
         if location_ids:
-            stmt = stmt.where(InstitutionLocation.nexhealth_location_id.in_(location_ids))
+            stmt = stmt.where(
+                InstitutionLocation.nexhealth_location_id.in_(location_ids)
+            )
         result = await self.session.execute(stmt)
         return list(result.scalars().all())
 
@@ -142,7 +152,9 @@ class NexHealthSyncStatusService:
         for idx, row in enumerate(rows):
             if idx > 0:
                 await asyncio.sleep(
-                    random.uniform(_LOCATION_PACING_MIN_SECONDS, _LOCATION_PACING_MAX_SECONDS)
+                    random.uniform(
+                        _LOCATION_PACING_MIN_SECONDS, _LOCATION_PACING_MAX_SECONDS
+                    )
                 )
             try:
                 updated = await self.poll_location(
@@ -154,8 +166,13 @@ class NexHealthSyncStatusService:
                 row.subscription.last_health_check_at = datetime.now(timezone.utc)
                 row.subscription.updated_at = row.subscription.last_health_check_at
                 row.subscription.error_metadata = None
-                if row.subscription.status == NexHealthWebhookSubscriptionStatus.PENDING.value:
-                    row.subscription.status = NexHealthWebhookSubscriptionStatus.ACTIVE.value
+                if (
+                    row.subscription.status
+                    == NexHealthWebhookSubscriptionStatus.PENDING.value
+                ):
+                    row.subscription.status = (
+                        NexHealthWebhookSubscriptionStatus.ACTIVE.value
+                    )
             except Exception as exc:  # noqa: BLE001
                 summary.failed_locations += 1
                 row.subscription.error_metadata = {
@@ -178,12 +195,13 @@ class NexHealthSyncStatusService:
 
         adapter = await NexHealthAdapter.create(institution, location)
         try:
-            raw = await handle_nexhealth_request(
-                adapter._client,  # noqa: SLF001
-                "GET",
-                "/sync_status",
-                params=adapter._default_params(),  # noqa: SLF001
-            )
+            with nexhealth_background_traffic():
+                raw = await handle_nexhealth_request(
+                    adapter._client,  # noqa: SLF001
+                    "GET",
+                    "/sync_status",
+                    params=adapter._default_params(),  # noqa: SLF001
+                )
         finally:
             await adapter.close()
         payloads = _sync_status_payloads(raw)
@@ -213,7 +231,10 @@ class NexHealthSyncStatusService:
                 Institution,
                 InstitutionLocation,
             )
-            .join(Institution, Institution.id == NexHealthWebhookSubscription.institution_id)
+            .join(
+                Institution,
+                Institution.id == NexHealthWebhookSubscription.institution_id,
+            )
             .join(
                 InstitutionLocation,
                 InstitutionLocation.id == NexHealthWebhookSubscription.location_id,

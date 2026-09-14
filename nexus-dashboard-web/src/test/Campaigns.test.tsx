@@ -51,6 +51,39 @@ beforeEach(() => {
 })
 
 describe("Campaigns page", () => {
+    it("renders a labelled action column on the same fixed grid as campaign rows", async () => {
+        list.mockResolvedValue([
+            {
+                id: "wf-alignment",
+                name: "Alignment campaign",
+                status: "active",
+                trigger_type: "event",
+                definition: null,
+                location_id: "loc-1",
+                current_version_id: "version-1",
+                created_at: "2026-09-01T00:00:00Z",
+                updated_at: "2026-09-01T00:00:00Z",
+            },
+        ])
+
+        render(
+            <MemoryRouter initialEntries={["/institution-admin/campaigns"]}>
+                <Routes>
+                    <Route path="/institution-admin/campaigns" element={<Campaigns />} />
+                </Routes>
+            </MemoryRouter>,
+        )
+
+        const campaignLink = await screen.findByRole("link", { name: "Alignment campaign" })
+        const actionsHeader = screen.getByText("Actions")
+        expect(actionsHeader.parentElement).toHaveClass(
+            "grid-cols-[minmax(0,1fr)_120px_160px_104px]",
+        )
+        expect(campaignLink.closest("li")).toHaveClass(
+            "grid-cols-[minmax(0,1fr)_120px_160px_104px]",
+        )
+    })
+
     it("does not make an unscoped campaign request while location selection loads", async () => {
         selectedLocation.mockReturnValue(undefined)
 

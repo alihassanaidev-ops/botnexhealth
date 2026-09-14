@@ -24,9 +24,10 @@ async def get_adapter_for_institution_location(
 ) -> PMSAdapter:
     """Create a fresh PMS adapter scoped to a specific location.
 
-    NexHealth uses the shared platform API key plus location subdomain/id.
-    GoTracker uses a Synchronizer product key scoped to the location. Either
-    way, a location is mandatory so calls cannot leak across clinics.
+    NexHealth uses the institution's explicitly selected platform or clinic-owned
+    key plus location subdomain/id. GoTracker uses a Synchronizer product key
+    scoped to the location. Either way, a location is mandatory so calls cannot
+    leak across clinics.
     """
     from src.app.config import settings
 
@@ -62,7 +63,9 @@ async def get_adapter_for_institution_location(
 
     logger.info(
         "Created %s adapter for institution '%s' location '%s'",
-        adapter.source, institution.slug, location.slug,
+        adapter.source,
+        institution.slug,
+        location.slug,
     )
     return adapter
 
@@ -79,7 +82,9 @@ async def get_institution_pms(
     from src.app.models.institution_location import InstitutionLocation
 
     if not current_user.institution_id:
-        raise HTTPException(status_code=400, detail="User is not associated with an institution")
+        raise HTTPException(
+            status_code=400, detail="User is not associated with an institution"
+        )
 
     scoped_location_id = str(loc_id) if loc_id else None
     path_location_id = request.path_params.get("location_id")
@@ -88,13 +93,20 @@ async def get_institution_pms(
 
     if current_user.role in (UserRole.LOCATION_ADMIN.value, UserRole.STAFF.value):
         if not current_user.location_id:
-            raise HTTPException(status_code=403, detail="Location-scoped account is missing location assignment")
+            raise HTTPException(
+                status_code=403,
+                detail="Location-scoped account is missing location assignment",
+            )
 
         user_location_id = str(current_user.location_id)
         if scoped_location_id and scoped_location_id != user_location_id:
-            raise HTTPException(status_code=403, detail="Not authorized for this location")
+            raise HTTPException(
+                status_code=403, detail="Not authorized for this location"
+            )
         if path_location_id and path_location_id != user_location_id:
-            raise HTTPException(status_code=403, detail="Not authorized for this location")
+            raise HTTPException(
+                status_code=403, detail="Not authorized for this location"
+            )
 
         scoped_location_id = user_location_id
     elif not scoped_location_id and path_location_id:

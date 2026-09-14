@@ -29,10 +29,10 @@ Design choices:
     bounded — at worst we send 2x the limit across a window boundary,
     and NexHealth's own 429 + ``Retry-After`` is the safety net.
 
-  - **Fail-open on Redis errors**: if Redis is unreachable the limiter
-    logs a warning and lets the request through. We refuse to make a
-    Redis outage cascade into "no NexHealth traffic at all"; the
-    existing reactive 429 handler in ``http_client.py`` still applies.
+  - **Priority-aware Redis failures**: interactive calls fail open so a Redis
+    outage does not take voice agents offline. Background maintenance fails
+    closed, because reconciliation is optional and must not create an
+    unmetered burst while the coordinator is unavailable.
 
   - **API key never lands in Redis keys**: we hash the key (SHA-256,
     first 16 hex chars) so the namespace is tenant-scoped without
@@ -46,10 +46,33 @@ import hashlib
 import logging
 import random
 import time
+from contextlib import contextmanager
+from contextvars import ContextVar
 from dataclasses import dataclass
-from typing import Any
+from collections.abc import Iterator
+from typing import Any, Literal
 
 logger = logging.getLogger(__name__)
+
+NexHealthTrafficClass = Literal["interactive", "background"]
+_TRAFFIC_CLASS: ContextVar[NexHealthTrafficClass] = ContextVar(
+    "nexhealth_traffic_class", default="interactive"
+)
+
+
+@contextmanager
+def nexhealth_background_traffic() -> Iterator[None]:
+    """Mark NexHealth calls in this context as low-priority maintenance.
+
+    Context variables are task-local under asyncio, so a reconciliation call can
+    be throttled without accidentally downgrading a concurrent voice-agent
+    request handled by the same process.
+    """
+    token = _TRAFFIC_CLASS.set("background")
+    try:
+        yield
+    finally:
+        _TRAFFIC_CLASS.reset(token)
 
 
 # ── Endpoint classification ──────────────────────────────────────────────
@@ -65,6 +88,7 @@ class EndpointPolicy:
     """
 
     class_name: str
+    minute_class_name: str
     global_per_s: int
     class_per_s: int
     class_per_min: int
@@ -78,6 +102,8 @@ _GLOBAL_PER_S = 100
 _SLOW_READ_PER_S = 10
 _PATIENTS_APPTS_PER_M = 1000
 _OTHER_PER_M = 2000
+_BACKGROUND_PER_S = 1
+_BACKGROUND_PER_M = 60
 
 
 def classify_endpoint(method: str, path: str) -> EndpointPolicy:
@@ -98,6 +124,7 @@ def classify_endpoint(method: str, path: str) -> EndpointPolicy:
         # Documented 10 req/s sub-cap (appointment + slot reads).
         return EndpointPolicy(
             class_name="appts_read",
+            minute_class_name="patients_appts",
             global_per_s=_GLOBAL_PER_S,
             class_per_s=_SLOW_READ_PER_S,
             class_per_min=_PATIENTS_APPTS_PER_M,
@@ -106,12 +133,14 @@ def classify_endpoint(method: str, path: str) -> EndpointPolicy:
         # Patients + non-GET appointments share the 1000/min budget.
         return EndpointPolicy(
             class_name="patients_appts",
+            minute_class_name="patients_appts",
             global_per_s=_GLOBAL_PER_S,
             class_per_s=_GLOBAL_PER_S,
             class_per_min=_PATIENTS_APPTS_PER_M,
         )
     return EndpointPolicy(
         class_name="other",
+        minute_class_name="other",
         global_per_s=_GLOBAL_PER_S,
         class_per_s=_GLOBAL_PER_S,
         class_per_min=_OTHER_PER_M,
@@ -217,21 +246,38 @@ class NexHealthRateLimiter:
         path: str,
         *,
         max_wait_ms: int | None = None,
+        traffic_class: NexHealthTrafficClass | None = None,
     ) -> None:
         """Block until the request is allowed, or raise after the deadline.
 
-        On Redis errors the call is fail-open: a warning is logged and the
-        request is allowed through. The reactive 429 handler in
-        ``NexHealthHTTPClient.request`` is the safety net.
+        On Redis errors interactive calls fail open and background calls fail
+        closed. The reactive 429 handler in ``NexHealthHTTPClient.request`` is
+        the interactive safety net.
         """
         policy = classify_endpoint(method, path)
+        resolved_traffic_class = traffic_class or _TRAFFIC_CLASS.get()
         deadline_ms = self._clock() + (max_wait_ms or self._max_wait_ms)
         total_waited_ms = 0
 
         while True:
             try:
-                wait_ms = await self._try_acquire(api_key_id, policy)
-            except Exception as exc:  # noqa: BLE001 — fail-open is intentional
+                wait_ms = await self._try_acquire(
+                    api_key_id, policy, resolved_traffic_class
+                )
+            except Exception as exc:  # noqa: BLE001 — priority decides fail mode
+                if resolved_traffic_class == "background":
+                    logger.warning(
+                        "NexHealth rate limiter unreachable; blocking background "
+                        "traffic: tenant=%s class=%s err=%s",
+                        api_key_id,
+                        policy.class_name,
+                        type(exc).__name__,
+                    )
+                    raise NexHealthLocalRateLimitExceeded(
+                        api_key_id=api_key_id,
+                        class_name=policy.class_name,
+                        waited_ms=total_waited_ms,
+                    ) from exc
                 logger.warning(
                     "NexHealth rate limiter unreachable (failing open): "
                     "tenant=%s class=%s err=%s",
@@ -261,7 +307,10 @@ class NexHealthRateLimiter:
             total_waited_ms += sleep_ms
 
     async def _try_acquire(
-        self, api_key_id: str, policy: EndpointPolicy
+        self,
+        api_key_id: str,
+        policy: EndpointPolicy,
+        traffic_class: NexHealthTrafficClass,
     ) -> int:
         now_ms = self._clock()
         sec_window = now_ms // 1000
@@ -273,16 +322,38 @@ class NexHealthRateLimiter:
             f"{self._key_prefix}:{api_key_id}:{policy.class_name}:s:{sec_window}"
         )
         class_m_key = (
-            f"{self._key_prefix}:{api_key_id}:{policy.class_name}:m:{min_window}"
+            f"{self._key_prefix}:{api_key_id}:{policy.minute_class_name}:m:{min_window}"
         )
 
         keys = [global_s_key, class_s_key, class_m_key]
         # ARGV layout: (limit, ttl_ms) per key.
         argv = [
-            str(policy.global_per_s), "1000",
-            str(policy.class_per_s), "1000",
-            str(policy.class_per_min), "60000",
+            str(policy.global_per_s),
+            "1000",
+            str(policy.class_per_s),
+            "1000",
+            str(policy.class_per_min),
+            "60000",
         ]
+        if traffic_class == "background":
+            # Background traffic receives a deliberately small, shared slice of
+            # each API key's allowance. It still increments the provider-wide
+            # buckets above, so interactive traffic sees the true total while
+            # retaining almost all capacity for voice and operator requests.
+            keys.extend(
+                [
+                    f"{self._key_prefix}:{api_key_id}:background:s:{sec_window}",
+                    f"{self._key_prefix}:{api_key_id}:background:m:{min_window}",
+                ]
+            )
+            argv.extend(
+                [
+                    str(_BACKGROUND_PER_S),
+                    "1000",
+                    str(_BACKGROUND_PER_M),
+                    "60000",
+                ]
+            )
         result = await self._redis.eval(_RATE_LIMIT_LUA, len(keys), *keys, *argv)
         return int(result)
 

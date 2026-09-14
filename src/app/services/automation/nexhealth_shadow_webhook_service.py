@@ -453,15 +453,24 @@ class NexHealthWebhookShadowSubscriptionService:
     ) -> None:
         from src.app.api.helpers import handle_nexhealth_request
         from src.app.config import settings
+        from src.app.dependencies import (
+            NexHealthCredentialError,
+            resolve_nexhealth_credential,
+        )
         from src.app.nexhealth.client import NexHealthClient
 
-        if not settings.nexhealth_api_key:
+        try:
+            credential = resolve_nexhealth_credential(institution)
+        except NexHealthCredentialError as exc:
             row.status = NexHealthWebhookShadowSubscriptionStatus.FAILED.value
-            row.error_metadata = {"reason": "missing_nexhealth_api_key"}
+            row.error_metadata = {
+                "type": type(exc).__name__,
+                "reason": "nexhealth_credential_unavailable",
+            }
             return
 
         config = _StableV3NexHealthConfig(
-            api_key=settings.nexhealth_api_key,
+            api_key=credential.api_key,
             base_url=settings.nexhealth_base_url,
             nexhealth_max_keepalive_connections=settings.nexhealth_max_keepalive_connections,
             nexhealth_max_connections=settings.nexhealth_max_connections,

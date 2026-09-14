@@ -48,6 +48,11 @@ const STATUS_STYLES: Record<string, string> = {
     draft: "bg-blue-50 text-blue-700 border-blue-200 dark:bg-blue-950/40 dark:text-blue-400 dark:border-blue-800",
 }
 
+// Header and rows are separate CSS grids, so the final column cannot be `auto`:
+// the empty header cell would resolve to zero width while row action buttons
+// would make the same track wider, shifting Status and Trigger out of alignment.
+const CAMPAIGN_GRID_COLUMNS = "grid-cols-[minmax(0,1fr)_120px_160px_104px]"
+
 function StatusBadge({ status }: { status: string }) {
     return (
         <span
@@ -288,11 +293,18 @@ export default function Campaigns() {
                         </div>
                     ) : (
                         <>
-                            <div className="grid grid-cols-[1fr_120px_160px_auto] gap-x-4 border-b border-border px-4 py-2">
+                            <div
+                                className={cn(
+                                    "grid gap-x-4 border-b border-border px-4 py-2",
+                                    CAMPAIGN_GRID_COLUMNS,
+                                )}
+                            >
                                 <span className="text-xs font-medium text-muted-foreground">Name</span>
                                 <span className="text-xs font-medium text-muted-foreground">Status</span>
                                 <span className="text-xs font-medium text-muted-foreground">Trigger</span>
-                                <span />
+                                <span className="text-right text-xs font-medium text-muted-foreground">
+                                    Actions
+                                </span>
                             </div>
                             <ul className="divide-y divide-border">
                                 {campaigns.map((wf) => {
@@ -301,7 +313,8 @@ export default function Campaigns() {
                                         <li
                                             key={wf.id}
                                             className={cn(
-                                                "grid grid-cols-[1fr_120px_160px_auto] items-center gap-x-4 px-4 py-3",
+                                                "grid items-center gap-x-4 px-4 py-3",
+                                                CAMPAIGN_GRID_COLUMNS,
                                                 wf.status === "archived" && "opacity-60",
                                             )}
                                         >
@@ -313,7 +326,7 @@ export default function Campaigns() {
                                             </Link>
                                             <StatusBadge status={wf.status} />
                                             <TriggerLabel triggerType={wf.trigger_type} />
-                                            <div className="flex items-center gap-1">
+                                            <div className="flex items-center justify-end gap-1">
                                                 {wf.status === "active" && (
                                                     <Button
                                                         variant="ghost"

@@ -415,10 +415,11 @@ async def test_shadow_signature_secrets_decrypts_active_route_rows(monkeypatch):
 @pytest.mark.asyncio
 async def test_shadow_remote_create_persists_endpoint_secret(monkeypatch):
     monkeypatch.setattr(settings, "encryption_key", "shadow-test-encryption-secret")
-    monkeypatch.setattr(settings, "nexhealth_api_key", "test-api-key")
+    monkeypatch.setattr(settings, "nexhealth_api_key", "platform-api-key")
     monkeypatch.setattr(settings, "nexhealth_base_url", "https://nexhealth.test")
     monkeypatch.setattr(settings, "nexhealth_max_keepalive_connections", 1)
     monkeypatch.setattr(settings, "nexhealth_max_connections", 1)
+    captured_configs = []
 
     async def fake_request(client, method, path, params=None, json=None):
         if path == "/webhook_endpoints":
@@ -428,6 +429,7 @@ async def test_shadow_remote_create_persists_endpoint_secret(monkeypatch):
     class FakeNexHealthClient:
         def __init__(self, config):
             self.config = config
+            captured_configs.append(config)
 
         async def __aenter__(self):
             return self
@@ -444,6 +446,12 @@ async def test_shadow_remote_create_persists_endpoint_secret(monkeypatch):
         event_types=["appointment_updated"],
     )
     service = NexHealthWebhookShadowSubscriptionService(AsyncMock())
+    institution = SimpleNamespace(
+        id="inst-1",
+        nexhealth_credential_mode="institution",
+        nexhealth_api_key_encrypted="encrypted-institution-key",
+        nexhealth_api_key="institution-api-key",
+    )
 
     with (
         patch("src.app.api.helpers.handle_nexhealth_request", new=fake_request),
@@ -454,7 +462,7 @@ async def test_shadow_remote_create_persists_endpoint_secret(monkeypatch):
     ):
         await service._try_remote_create(
             row=row,
-            institution=SimpleNamespace(id="inst-1"),
+            institution=institution,
             location=_location(),
             callback_url="https://api.example.com/api/v1/nexhealth/webhooks/shadow/appointments",
             event_types=["appointment_updated"],
@@ -465,6 +473,40 @@ async def test_shadow_remote_create_persists_endpoint_secret(monkeypatch):
     assert row.secret_key == "shadow-secret"
     assert row.secret_key_encrypted != "shadow-secret"
     assert row.status == NexHealthWebhookShadowSubscriptionStatus.ACTIVE.value
+    assert captured_configs[0].api_key == "institution-api-key"
+
+
+@pytest.mark.asyncio
+async def test_shadow_remote_create_never_falls_back_for_missing_institution_key(
+    monkeypatch,
+):
+    monkeypatch.setattr(settings, "nexhealth_api_key", "platform-api-key")
+    row = NexHealthWebhookShadowSubscription(
+        institution_id="11111111-1111-1111-1111-111111111111",
+        location_id="22222222-2222-2222-2222-222222222222",
+        route_family=SHADOW_ROUTE_APPOINTMENTS,
+        subdomain="demo-subdomain",
+        nexhealth_location_id="nexloc-1",
+        event_types=["appointment_updated"],
+    )
+
+    await NexHealthWebhookShadowSubscriptionService(AsyncMock())._try_remote_create(
+        row=row,
+        institution=SimpleNamespace(
+            id="inst-1",
+            nexhealth_credential_mode="institution",
+            nexhealth_api_key_encrypted=None,
+        ),
+        location=_location(),
+        callback_url="https://api.example.com/api/v1/nexhealth/webhooks/shadow/appointments",
+        event_types=["appointment_updated"],
+    )
+
+    assert row.status == NexHealthWebhookShadowSubscriptionStatus.FAILED.value
+    assert row.error_metadata == {
+        "type": "NexHealthCredentialError",
+        "reason": "nexhealth_credential_unavailable",
+    }
 
 
 def test_shadow_callback_url_uses_distinct_shadow_routes():

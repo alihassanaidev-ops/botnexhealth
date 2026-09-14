@@ -183,8 +183,13 @@ class NexHealthSubscriptionLifecycleService:
             for location in result.scalars().all()
         ]
 
-    async def active_or_pending_targets(self) -> list[tuple[str, str]]:
-        """Return (institution_id, subscription_id) for rows due for sync."""
+    async def sync_eligible_targets(self) -> list[tuple[str, str]]:
+        """Return configured rows that should receive safety-net synchronization.
+
+        A failed webhook-health row is deliberately eligible: stale or missing
+        webhook delivery is exactly when reconciliation is needed most. Only an
+        explicitly disabled subscription opts a location out.
+        """
         result = await self.session.execute(
             select(NexHealthWebhookSubscription)
             .join(
@@ -197,6 +202,7 @@ class NexHealthSubscriptionLifecycleService:
                     [
                         NexHealthWebhookSubscriptionStatus.ACTIVE.value,
                         NexHealthWebhookSubscriptionStatus.PENDING.value,
+                        NexHealthWebhookSubscriptionStatus.FAILED.value,
                     ]
                 ),
             )
@@ -816,7 +822,9 @@ async def live_signature_secrets_for_subscription(
     secrets: list[str] = []
     seen: set[str] = set()
     for row in result.scalars().all():
-        subscription_ids = {str(value) for value in (row.provider_subscription_ids or [])}
+        subscription_ids = {
+            str(value) for value in (row.provider_subscription_ids or [])
+        }
         # provider_subscription_id historically stores the provider endpoint id;
         # retain it as a compatibility match for older local rows.
         if str(row.provider_subscription_id or "") != str(provider_subscription_id):

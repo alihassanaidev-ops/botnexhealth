@@ -5,6 +5,7 @@ from __future__ import annotations
 import logging
 
 from celery import Celery
+from celery.schedules import crontab
 from celery.signals import worker_process_init
 from kombu import Queue
 
@@ -123,13 +124,15 @@ def _build_celery_app() -> Celery:
             "reconcile-nexhealth-appointments": {
                 "task": "src.app.tasks.automation_workflow.reconcile_nexhealth_appointments",
                 # Low-frequency repair sweep; initial backfill is task-triggered
-                # after subscription setup or manually by operators.
-                "schedule": 6 * 3600.0,
+                # after subscription setup or manually by operators. The fixed
+                # UTC offset keeps it away from the patient sweep.
+                "schedule": crontab(minute=17, hour="*/6"),
             },
             "reconcile-nexhealth-patients": {
                 "task": "src.app.tasks.automation_workflow.reconcile_nexhealth_patients",
-                # Repairs missed patient webhooks and keeps contact hints fresh.
-                "schedule": 6 * 3600.0,
+                # Repairs missed patient webhooks and keeps contact hints fresh;
+                # staggered 30 minutes after appointment reconciliation.
+                "schedule": crontab(minute=47, hour="*/6"),
             },
             "poll-nexhealth-sync-statuses": {
                 "task": "src.app.tasks.automation_workflow.poll_nexhealth_sync_statuses",

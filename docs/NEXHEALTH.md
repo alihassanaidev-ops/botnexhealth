@@ -26,9 +26,20 @@ NexHealth runs in hybrid credential mode:
 
 - **Platform key** — the default path. Clinics use the platform-level
   NexHealth developer account/API key from `NEXHEALTH_API_KEY`.
-- **Institution key** — optional. If `institutions.nexhealth_api_key_encrypted`
-  is present, all NexHealth traffic for that institution uses the clinic/DSO
-  key instead of the platform key.
+- **Institution key** — optional. A Super Admin explicitly selects
+  `nexhealth_credential_mode=institution` and stores the clinic/DSO key in
+  `institutions.nexhealth_api_key_encrypted`; all NexHealth traffic for that
+  institution then uses that key.
+
+Credential selection never falls back silently. Institution mode with a
+missing or undecryptable institution key fails closed, and platform mode ignores
+any stale institution key. This prevents a clinic that pays NexHealth directly
+from accidentally consuming the shared platform account or owning webhooks
+under the wrong NexHealth account.
+
+Primary and shadow/cutover webhook provisioning use this same explicit
+credential selection, so endpoints are created in the NexHealth account that
+owns the institution's locations.
 
 Per-clinic routing still comes from two values on each `InstitutionLocation`:
 
@@ -71,16 +82,24 @@ NexHealth's documented limits: 100 req/s global per key, 10 req/s for
 `GET /available_slots` on stable v3), 1000 req/min for patient/appointment
 endpoints, 2000 req/min otherwise.
 
-Since the whole fleet shares one key, limiting must be cluster-wide:
+Since the whole fleet can share a platform key, limiting must be cluster-wide:
 `src/app/nexhealth/rate_limit.py` classifies each request into an endpoint
-class and atomically checks three Redis fixed-window counters (global/s,
-class/s, class/min) in one Lua script. Notes:
+class and atomically checks Redis fixed-window counters (global/s, class/s,
+shared endpoint-family/min) in one Lua script. Patient calls and appointment
+reads share the same 1000/min family bucket. Clinic-owned keys have completely
+separate counter namespaces.
+
+Reconciliation, backfill, and sync-status polling are marked as background
+traffic. They receive an additional shared allowance of only 1 request/second
+and 60 requests/minute per API key, leaving the remainder for live voice-agent
+and operator traffic. Notes:
 
 - Keys use `SHA256(api_key)[:16]`, never the key itself.
 - Fixed windows allow up to 2x burst at window boundaries; the reactive 429
   handler in the HTTP client is the backstop.
 - Waiters add 10–80ms jitter so a blocked burst doesn't stampede the next window.
-- Fail-open on Redis errors, same rationale as the token cache.
+- Interactive calls fail open on Redis errors to preserve live calls;
+  background maintenance fails closed rather than creating an unmetered sweep.
 
 ## HTTP client behavior
 
@@ -191,6 +210,18 @@ Backfill/reconciliation scans fetch active and cancelled/deleted rows as two
 separate filtered reads (`cancelled=false` then `cancelled=true`) so stable v3's
 broader omitted-filter default cannot silently change workflow behavior.
 
+Webhooks are the primary projection path. The repair sweeps are staggered in
+UTC so appointment and patient scans do not start together: appointments run at
+minute 17 every six hours and patients at minute 47. Initial appointment
+backfill remains bounded to 90 future days; recurring reconciliation repairs a
+30-day campaign-relevant window. Patient reconciliation uses an overlapping
+`updated_since` watermark after its initial bounded backfill. Global target
+discovery runs under the trusted Super Admin system context, then each actual
+location sync switches back to an institution-scoped Celery database context.
+Rows marked failed because webhook delivery is stale remain reconciliation
+eligible—the safety net is most important during webhook trouble. Only an
+explicitly disabled subscription is excluded.
+
 ## Caveats and edge cases
 
 Everything below was discovered the hard way and is encoded in the adapter
@@ -281,11 +312,11 @@ onboarding for a reason (`slot_filter.py:202-204`).
 numeric for some PMSs, alphanumeric for others; we coerce to `int` when
 possible and pass strings through otherwise (`adapter.py:509-516`).
 
-**Token/limit infrastructure is fail-open by design.** Both the token cache
-and the rate limiter treat Redis errors as "proceed". The deliberate trade:
-a Redis outage must not take down all PMS traffic; NexHealth's own 429s plus
-the client retry are the real enforcement. If you see elevated 429s and
-re-auth calls together, check Redis before checking NexHealth.
+**Token/limit infrastructure has traffic-aware failure behavior.** The token
+cache and interactive rate limiter treat Redis errors as "proceed" so a Redis
+outage does not take voice agents offline. Background NexHealth maintenance
+fails closed until Redis recovers. If you see elevated 429s and re-auth calls
+together, check Redis before checking NexHealth.
 
 ## Failure handling summary
 
@@ -294,7 +325,7 @@ re-auth calls together, check Redis before checking NexHealth.
 | NexHealth 429 | Sleep per `Retry-After`, retry up to 3x, then `NexHealthRateLimitError` |
 | NexHealth 5xx / timeout | Linear-backoff retries, then error to caller |
 | `{"code": false}` body | `NexHealthAPIError` with their error list (validation, conflicts) |
-| Redis down | Token cache + limiter fail open; expect extra auth calls and some 429s |
+| Redis down | Token cache and interactive calls fail open; background NexHealth maintenance stops |
 | Booking race (slot taken) | Surfaces as a `code:false` validation error from NexHealth; agent offers another slot |
 | Reschedule: new booking fails | Old appointment untouched, error returned |
 | Reschedule: cancel-old fails | Success + warning; old appointment may need manual cleanup |

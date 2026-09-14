@@ -19,6 +19,7 @@ from src.app.models.nexhealth_webhook_subscription import (
     NexHealthWebhookSubscription,
     NexHealthWebhookSubscriptionStatus,
 )
+from src.app.nexhealth.rate_limit import nexhealth_background_traffic
 from src.app.services.automation.nexhealth_projection_service import (
     NexHealthProjectionService,
 )
@@ -193,11 +194,12 @@ class NexHealthAppointmentSyncService:
         end = today + timedelta(days=lookahead_days)
         adapter = await NexHealthAdapter.create(institution, location)
         try:
-            appointments = await adapter.list_appointments(
-                start_date=today.isoformat(),
-                end_date=end.isoformat(),
-                cancellation_mode="active_and_cancelled",
-            )
+            with nexhealth_background_traffic():
+                appointments = await adapter.list_appointments(
+                    start_date=today.isoformat(),
+                    end_date=end.isoformat(),
+                    cancellation_mode="active_and_cancelled",
+                )
         finally:
             await adapter.close()
 
@@ -439,9 +441,10 @@ class NexHealthPatientSyncService:
         )
         adapter = await NexHealthAdapter.create(institution, location)
         try:
-            patients = await adapter.list_patients(
-                updated_since=updated_since.isoformat() if updated_since else None
-            )
+            with nexhealth_background_traffic():
+                patients = await adapter.list_patients(
+                    updated_since=updated_since.isoformat() if updated_since else None
+                )
         finally:
             await adapter.close()
 

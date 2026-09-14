@@ -23,6 +23,7 @@ from src.app.nexhealth.rate_limit import (
     NexHealthLocalRateLimitExceeded,
     NexHealthRateLimiter,
     classify_endpoint,
+    nexhealth_background_traffic,
 )
 
 
@@ -33,6 +34,7 @@ def test_classify_get_appointments_uses_slow_read_per_second() -> None:
     """GET appointment/slot endpoints get the documented 10/s sub-cap."""
     policy = classify_endpoint("GET", "/appointments")
     assert policy.class_name == "appts_read"
+    assert policy.minute_class_name == "patients_appts"
     assert policy.class_per_s == 10
     assert policy.class_per_min == 1000
 
@@ -58,6 +60,7 @@ def test_classify_patients_endpoint_is_patients_appts_class() -> None:
     for method in ("GET", "POST", "PATCH", "DELETE"):
         policy = classify_endpoint(method, "/patients/123")
         assert policy.class_name == "patients_appts"
+        assert policy.minute_class_name == "patients_appts"
         assert policy.class_per_min == 1000
 
 
@@ -121,12 +124,46 @@ async def test_acquire_keys_separate_per_tenant_and_class() -> None:
     keys_call_one = redis.calls[0][:3]
     keys_call_two = redis.calls[1][:3]
 
-    # Tenant A shows up with the appts_read class; tenant B with patients_appts.
+    # Tenant A has the 10/s appointment-read key and the shared
+    # patient/appointment minute key; tenant B uses that shared family for both.
     assert all("tenant-A" in k for k in keys_call_one)
-    assert all("appts_read" in k for k in keys_call_one[1:])
+    assert "appts_read" in keys_call_one[1]
+    assert "patients_appts" in keys_call_one[2]
     assert all("tenant-B" in k for k in keys_call_two)
     assert all("patients_appts" in k for k in keys_call_two[1:])
     assert keys_call_one[0] != keys_call_two[0], "Global keys must be tenant-scoped"
+
+
+@pytest.mark.asyncio
+async def test_appointment_reads_and_patient_calls_share_minute_bucket() -> None:
+    """NexHealth documents one combined 1000/min patient+appointment budget."""
+    redis = _FakeRedis([0, 0])
+    limiter = NexHealthRateLimiter(redis, max_wait_ms=1000)
+
+    await limiter.acquire("tenant-A", "GET", "/appointments")
+    await limiter.acquire("tenant-A", "GET", "/patients")
+
+    assert redis.calls[0][2] == redis.calls[1][2]
+    assert ":patients_appts:m:" in redis.calls[0][2]
+
+
+@pytest.mark.asyncio
+async def test_background_context_adds_small_shared_budget() -> None:
+    redis = _FakeRedis([0, 0])
+    limiter = NexHealthRateLimiter(redis, max_wait_ms=1000)
+
+    with nexhealth_background_traffic():
+        await limiter.acquire("tenant-A", "GET", "/appointments")
+    await limiter.acquire("tenant-A", "GET", "/appointments")
+
+    args = redis.calls[0]
+    keys = args[:5]
+    limits_and_ttls = args[5:]
+    assert ":background:s:" in keys[3]
+    assert ":background:m:" in keys[4]
+    assert limits_and_ttls[-4:] == ("1", "1000", "60", "60000")
+    assert len(redis.calls[1][:3]) == 3
+    assert not any("background" in value for value in redis.calls[1][:3])
 
 
 @pytest.mark.asyncio
@@ -186,7 +223,24 @@ async def test_acquire_is_fail_open_when_redis_errors(caplog) -> None:
 
     redis.eval.assert_awaited_once()
     assert any(
-        "rate limiter unreachable" in rec.getMessage().lower()
+        "rate limiter unreachable" in rec.getMessage().lower() for rec in caplog.records
+    )
+
+
+@pytest.mark.asyncio
+async def test_background_traffic_fails_closed_when_redis_errors(caplog) -> None:
+    """Maintenance must stop rather than risk exhausting voice-agent capacity."""
+    redis = AsyncMock()
+    redis.eval = AsyncMock(side_effect=ConnectionError("redis down"))
+    limiter = NexHealthRateLimiter(redis, max_wait_ms=1000)
+
+    with caplog.at_level("WARNING", logger="src.app.nexhealth.rate_limit"):
+        with nexhealth_background_traffic():
+            with pytest.raises(NexHealthLocalRateLimitExceeded):
+                await limiter.acquire("tenant-A", "GET", "/appointments")
+
+    assert any(
+        "blocking background traffic" in rec.getMessage().lower()
         for rec in caplog.records
     )
 
