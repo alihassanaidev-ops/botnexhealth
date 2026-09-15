@@ -1098,6 +1098,14 @@ export function normalizeDefinition(def: WorkflowDefinition): WorkflowDefinition
                 next_node_id: String(node.next_node_id ?? ""),
             }
         }
+        if (node.type === "booking_link") {
+            return {
+                ...node,
+                appointment_type_ids: Array.isArray(node.appointment_type_ids)
+                    ? node.appointment_type_ids
+                    : [],
+            } as unknown as WorkflowNode
+        }
         return raw as WorkflowNode
     })
 

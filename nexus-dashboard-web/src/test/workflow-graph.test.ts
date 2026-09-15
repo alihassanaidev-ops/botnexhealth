@@ -264,6 +264,28 @@ describe("workflow graph — factories", () => {
             next_node_id: "exit-1",
         })
     })
+    it("fills the unrestricted booking-link type list when older templates omit it", () => {
+        const legacy = {
+            ...LINEAR,
+            entry_node_id: "booking-1",
+            nodes: [
+                {
+                    type: "booking_link",
+                    id: "booking-1",
+                    actions: ["book"],
+                    window_days: 30,
+                    identity_check: "sensitive",
+                    next_node_id: "exit-1",
+                },
+                { type: "exit", id: "exit-1", outcome: "done" },
+            ],
+        } as unknown as WorkflowDefinition
+
+        expect(normalizeDefinition(legacy).nodes[0]).toMatchObject({
+            type: "booking_link",
+            appointment_type_ids: [],
+        })
+    })
     it("createTrigger yields sensible defaults", () => {
         // A fresh event trigger must already be publishable, so it names a key
         // that needs no further configuration.

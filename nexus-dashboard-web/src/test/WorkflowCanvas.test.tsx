@@ -20,6 +20,29 @@ function flow() {
 }
 
 describe("WorkflowCanvas — Auto layout control", () => {
+    it("renders booking links from templates that omit optional appointment type ids", () => {
+        const legacyBookingLink: WorkflowDefinition = {
+            ...DEF,
+            entry_node_id: "booking-1",
+            nodes: [
+                {
+                    type: "booking_link",
+                    id: "booking-1",
+                    actions: ["book"],
+                    window_days: 30,
+                    identity_check: "sensitive",
+                    next_node_id: "exit-1",
+                } as unknown as WorkflowDefinition["nodes"][number],
+                { type: "exit", id: "exit-1", outcome: "done" },
+            ],
+        }
+        const { nodes, edges } = definitionToFlow(legacyBookingLink)
+
+        render(<WorkflowCanvas nodes={nodes} edges={edges} />)
+
+        expect(screen.getByText(/any type/)).toBeInTheDocument()
+    })
+
     // Was "shows the Chair Flow state in a post-op trigger card". Chair Flow
     // states belonged to the retired `appointment_state_changed` trigger; the
     // same card now summarises the canonical event the campaign subscribes to.

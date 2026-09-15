@@ -78,9 +78,10 @@ function stepSummary(node: WfNode): string {
         case "update_gotracker_appointment":
             return node.status_id ? `GoTracker StatusId: ${node.status_id}` : "GoTracker writeback"
         case "booking_link": {
+            const appointmentTypeIds = node.appointment_type_ids ?? []
             const scope =
-                node.appointment_type_ids.length > 0
-                    ? `${node.appointment_type_ids.length} type(s)`
+                appointmentTypeIds.length > 0
+                    ? `${appointmentTypeIds.length} type(s)`
                     : "any type"
             return `${node.actions.join(", ")} · ${scope} · ${node.window_days}d`
         }

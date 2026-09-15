@@ -986,6 +986,7 @@ _RECALL_SMS_6MONTH: dict[str, Any] = {
             "type": "booking_link",
             "id": "configure-recall-booking-link",
             "actions": ["book"],
+            "appointment_type_ids": [],
             "window_days": 30,
             "identity_check": "sensitive",
             "next_node_id": "sms-recall-1",

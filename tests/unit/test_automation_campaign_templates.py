@@ -278,6 +278,7 @@ def test_overdue_recall_template_is_launchable_with_item25_eligibility() -> None
     link = nodes["configure-recall-booking-link"]
     assert link["type"] == "booking_link"
     assert link["actions"] == ["book"]
+    assert link["appointment_type_ids"] == []
     assert link["window_days"] == 30
 
     sms_nodes = [node for node in nodes.values() if node["type"] == "send_sms"]
