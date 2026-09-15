@@ -13,6 +13,7 @@ from dataclasses import dataclass, field
 from src.app.services.automation.definition_schema import (
     ConditionNode,
     BookAppointmentNode,
+    BookingLinkNode,
     DripNode,
     ExitNode,
     JsonMapperNode,
@@ -295,6 +296,24 @@ def simulate_run(
                 )
             )
             current = node.booked_next_node_id
+        elif isinstance(node, BookingLinkNode):
+            type_scope = (
+                f"{len(node.appointment_type_ids)} appointment type(s)"
+                if node.appointment_type_ids
+                else "any appointment type"
+            )
+            result.steps.append(
+                DryRunStep(
+                    node.id,
+                    node.type,
+                    "Configure booking link",
+                    (
+                        f"Actions: {', '.join(node.actions)}; {type_scope}; "
+                        f"{node.window_days}-day window; identity check: {node.identity_check}"
+                    ),
+                )
+            )
+            current = node.next_node_id
         elif isinstance(node, JsonMapperNode):
             mapped: dict[str, object] = {}
             for mapping in node.mappings:

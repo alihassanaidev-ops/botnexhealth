@@ -165,6 +165,31 @@ def test_dry_run_supports_campaign_booking_node() -> None:
     assert result.outcome == "booked"
 
 
+def test_dry_run_supports_booking_link_node() -> None:
+    definition = _defn(
+        [
+            {
+                "type": "booking_link",
+                "id": "link-1",
+                "actions": ["book"],
+                "appointment_type_ids": [],
+                "window_days": 30,
+                "identity_check": "sensitive",
+                "next_node_id": "exit-1",
+            },
+            {"type": "exit", "id": "exit-1", "outcome": "ready"},
+        ],
+        "link-1",
+    )
+
+    result = simulate_run(definition)
+
+    assert [step.node_type for step in result.steps] == ["booking_link", "exit"]
+    assert result.steps[0].summary == "Configure booking link"
+    assert "any appointment type" in (result.steps[0].detail or "")
+    assert result.outcome == "ready"
+
+
 # --- contact preview: blank merge fields are reported, not papered over -------
 
 
