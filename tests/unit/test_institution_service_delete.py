@@ -10,7 +10,13 @@ from src.app.services.institution_service import InstitutionService
 
 
 def _location() -> SimpleNamespace:
-    return SimpleNamespace(id="loc-1", slug="downtown", is_active=True)
+    return SimpleNamespace(
+        id="loc-1",
+        slug="downtown",
+        is_active=True,
+        nexhealth_subdomain="silora-demo-practice",
+        nexhealth_location_id="358579",
+    )
 
 
 def _location_user(email: str, role: str = UserRole.LOCATION_ADMIN.value) -> User:
@@ -95,3 +101,45 @@ async def test_get_location_by_retell_agent_id_falls_back_to_outbound_voice_prof
 
     assert resolved == (location, institution)
     assert session.execute.await_count == 2
+
+
+@pytest.mark.asyncio
+async def test_soft_delete_location_releases_nexhealth_mapping() -> None:
+    """A deleted location must not keep holding its practice-software site.
+
+    The unique index over (nexhealth_subdomain, nexhealth_location_id) covers
+    inactive rows, so a mapping left behind blocks re-importing that clinic
+    under any new location — and fails on a constraint the UI cannot show.
+    """
+    location = _location()
+
+    result = MagicMock()
+    result.scalars.return_value.all.return_value = []
+    session = AsyncMock()
+    session.execute = AsyncMock(return_value=result)
+    session.flush = AsyncMock()
+
+    await InstitutionService(session).delete_location(location, hard=False)
+
+    assert location.is_active is False
+    assert location.nexhealth_subdomain is None
+    assert location.nexhealth_location_id is None
+
+
+@pytest.mark.asyncio
+async def test_soft_delete_without_mapping_is_a_noop() -> None:
+    location = _location()
+    location.nexhealth_subdomain = None
+    location.nexhealth_location_id = None
+
+    result = MagicMock()
+    result.scalars.return_value.all.return_value = []
+    session = AsyncMock()
+    session.execute = AsyncMock(return_value=result)
+    session.flush = AsyncMock()
+
+    await InstitutionService(session).delete_location(location, hard=False)
+
+    assert location.is_active is False
+    assert location.nexhealth_subdomain is None
+    assert location.nexhealth_location_id is None

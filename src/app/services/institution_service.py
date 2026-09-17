@@ -195,6 +195,19 @@ class InstitutionService:
             from src.app.models.user import User, UserRole
 
             location.is_active = False
+
+            # Release the practice-software mapping. The unique index over
+            # (nexhealth_subdomain, nexhealth_location_id) covers inactive
+            # rows too, so a soft-deleted location that keeps its mapping
+            # holds that site hostage: the clinic can never be re-imported
+            # under a new location, and the insert fails on a constraint the
+            # operator cannot see from the UI. Deleted means disconnected.
+            released_mapping = bool(
+                location.nexhealth_subdomain or location.nexhealth_location_id
+            )
+            location.nexhealth_subdomain = None
+            location.nexhealth_location_id = None
+
             result = await self.session.execute(
                 select(User).where(
                     User.location_id == location.id,
@@ -207,9 +220,11 @@ class InstitutionService:
                 user.mark_deleted()
             await self.session.flush()
             logger.info(
-                "Soft deleted location: %s and removed %s scoped users",
+                "Soft deleted location: %s, removed %s scoped users, "
+                "released_nexhealth_mapping=%s",
                 location.slug,
                 len(users),
+                released_mapping,
             )
 
     async def list_locations(
@@ -231,11 +246,11 @@ class InstitutionService:
     ) -> InstitutionLocation | None:
         """Get a location by slug, scoped to a specific institution.
 
-        Slug is globally unique today, but the institution_id predicate is
-        defense-in-depth: if a future migration changes slug uniqueness to
-        per-institution, callers don't silently start matching wrong-tenant
-        rows. For platform-admin "is this slug taken anywhere?" checks, use
-        ``find_any_location_by_slug`` instead.
+        Slugs are unique per institution, not globally
+        (uq_institution_locations_inst_slug), so the institution_id predicate
+        is required for correctness and not merely defensive: two groups can
+        each own a "downtown". This is also the right check before creating a
+        location — a cross-tenant one would reject slugs the database allows.
         """
         result = await self.session.execute(
             select(InstitutionLocation).where(
@@ -245,18 +260,31 @@ class InstitutionService:
         )
         return result.scalar_one_or_none()
 
-    async def find_any_location_by_slug(self, slug: str) -> InstitutionLocation | None:
-        """Look up a location by slug across ALL institutions.
+    async def find_location_by_nexhealth_mapping(
+        self,
+        subdomain: str,
+        nexhealth_location_id: str,
+        *,
+        exclude_location_id: str | None = None,
+    ) -> InstitutionLocation | None:
+        """Find the location already bound to a practice-software site.
 
-        Use this only for cross-tenant uniqueness checks (e.g. before
-        creating a new location with a candidate slug). Routes that serve
-        tenant-scoped data must use ``get_location_by_slug`` instead so the
-        institution_id predicate is in the WHERE clause.
+        Deliberately cross-tenant and inclusive of inactive rows, because the
+        unique index enforcing this mapping is too: a caller that filtered
+        either out would report the mapping as free and then fail on the
+        insert. Pass ``exclude_location_id`` when updating a location so it
+        does not collide with its own mapping.
         """
+        conditions = [
+            InstitutionLocation.nexhealth_subdomain == subdomain,
+            InstitutionLocation.nexhealth_location_id == nexhealth_location_id,
+        ]
+        if exclude_location_id is not None:
+            conditions.append(InstitutionLocation.id != exclude_location_id)
         result = await self.session.execute(
-            select(InstitutionLocation).where(InstitutionLocation.slug == slug)
+            select(InstitutionLocation).where(*conditions).limit(1)
         )
-        return result.scalar_one_or_none()
+        return result.scalars().first()
 
     async def get_location_by_retell_agent_id(
         self, agent_id: str

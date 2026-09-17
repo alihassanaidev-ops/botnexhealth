@@ -13,7 +13,7 @@ from twilio.base.exceptions import TwilioException
 from fastapi import APIRouter, Depends, HTTPException, Request, status, Query
 from pydantic import BaseModel, Field
 
-from src.app.database import get_db_session
+from src.app.database import get_db_session, integrity_error_constraint
 from src.app.api.deps import get_current_admin
 from src.app.config import settings
 from src.app.models.audit_log import AuditAction, AuditActor, AuditOutcome
@@ -1695,6 +1695,105 @@ async def _configure_location_twilio_webhook(
 # =============================================================================
 
 
+_LOCATION_SLUG_CONSTRAINT = "uq_institution_locations_inst_slug"
+_LOCATION_NEXHEALTH_CONSTRAINT = "uq_institution_locations_nexhealth_mapping"
+
+
+def _describe_location_holder(holder: InstitutionLocation) -> str:
+    """Describe the location holding a mapping, including whether it is live."""
+    state = "active" if holder.is_active else "deleted"
+    return f"'{holder.slug}' ({state})"
+
+
+async def _assert_nexhealth_mapping_available(
+    institution_service: InstitutionService,
+    *,
+    subdomain: str | None,
+    nexhealth_location_id: str | None,
+    exclude_location_id: str | None = None,
+) -> None:
+    """Reject a practice-software mapping another location already holds.
+
+    The database enforces this with a unique index, but a constraint failure
+    cannot say which location is holding the site or offer a way forward, so
+    check it here where both are known.
+    """
+    if not subdomain or not nexhealth_location_id:
+        return
+
+    holder = await institution_service.find_location_by_nexhealth_mapping(
+        subdomain,
+        nexhealth_location_id,
+        exclude_location_id=exclude_location_id,
+    )
+    if holder is None:
+        return
+
+    # A deleted holder is the recoverable case and the one that reads as a
+    # phantom conflict, so say what to do about it.
+    if holder.is_active:
+        hint = ""
+    else:
+        hint = (
+            " Reactivate that location instead, or delete it permanently to "
+            "free the mapping."
+        )
+
+    raise HTTPException(
+        status_code=status.HTTP_409_CONFLICT,
+        detail=(
+            f"NexHealth location {nexhealth_location_id} on subdomain "
+            f"'{subdomain}' is already connected to location "
+            f"{_describe_location_holder(holder)}.{hint}"
+        ),
+    )
+
+
+def _location_integrity_conflict(
+    exc: IntegrityError,
+    *,
+    slug: str,
+    subdomain: str | None,
+    nexhealth_location_id: str | None,
+) -> HTTPException:
+    """Translate a location IntegrityError into an accurate 409.
+
+    Only the constraint name distinguishes these, so report it rather than
+    assuming the slug lost: this table also carries a unique NexHealth
+    mapping index and a trigger guarding cross-tenant subdomain reuse, and
+    naming the wrong field sends the reader off renaming a slug that was
+    never the problem.
+    """
+    constraint = integrity_error_constraint(exc)
+    logger.warning(
+        "Location save rejected by the database: constraint=%s slug=%s",
+        constraint or "unknown",
+        slug,
+    )
+
+    if constraint == _LOCATION_NEXHEALTH_CONSTRAINT:
+        detail = (
+            f"NexHealth location {nexhealth_location_id} on subdomain "
+            f"'{subdomain}' is already connected to another location."
+        )
+    elif constraint == _LOCATION_SLUG_CONSTRAINT:
+        detail = f"Location with slug '{slug}' already exists in this institution"
+    elif subdomain and "subdomain" in str(exc.orig or exc).lower():
+        # The subdomain guard trigger raises unique_violation without naming
+        # a constraint, so its own message is the only identifying signal.
+        detail = (
+            f"NexHealth subdomain '{subdomain}' is already bound to a "
+            "different institution."
+        )
+    else:
+        detail = (
+            "This location conflicts with an existing one. Check its slug and "
+            "NexHealth subdomain/location ID."
+        )
+
+    return HTTPException(status_code=status.HTTP_409_CONFLICT, detail=detail)
+
+
 @router.post(
     "/{slug}/locations",
     response_model=LocationResponse,
@@ -1722,12 +1821,23 @@ async def create_location(
                 detail=f"Institution '{slug}' not found",
             )
 
-        existing = await institution_service.find_any_location_by_slug(data.slug)
+        # Scoped to this institution to match uq_institution_locations_inst_slug.
+        # A global check would reject a slug the database accepts, so one group
+        # taking "downtown" would stop every other group from using it.
+        existing = await institution_service.get_location_by_slug(
+            data.slug, institution.id
+        )
         if existing:
             raise HTTPException(
                 status_code=status.HTTP_409_CONFLICT,
                 detail=f"Location with slug '{data.slug}' already exists",
             )
+
+        await _assert_nexhealth_mapping_available(
+            institution_service,
+            subdomain=data.nexhealth_subdomain,
+            nexhealth_location_id=data.nexhealth_location_id,
+        )
 
         location_data = data.model_dump(
             exclude={"gotracker_webhook_subscription_id", "gotracker_webhook_secret"}
@@ -1743,11 +1853,13 @@ async def create_location(
             location = await institution_service.create_location(
                 institution.id, **location_data
             )
-        except IntegrityError:
-            raise HTTPException(
-                status_code=status.HTTP_409_CONFLICT,
-                detail=f"Location with slug '{data.slug}' already exists (race condition)",
-            )
+        except IntegrityError as exc:
+            raise _location_integrity_conflict(
+                exc,
+                slug=data.slug,
+                subdomain=data.nexhealth_subdomain,
+                nexhealth_location_id=data.nexhealth_location_id,
+            ) from exc
 
         gotracker_subscription = await _ensure_gotracker_webhook_after_location_save(
             session,
@@ -2031,8 +2143,35 @@ async def update_location(
                     institution,
                     twilio_from_number,
                 )
+
+        # Editing either half of the mapping can collide with another
+        # location, so check the pair this update would leave behind.
+        if "nexhealth_subdomain" in updates or "nexhealth_location_id" in updates:
+            await _assert_nexhealth_mapping_available(
+                institution_service,
+                subdomain=updates.get(
+                    "nexhealth_subdomain", location.nexhealth_subdomain
+                ),
+                nexhealth_location_id=updates.get(
+                    "nexhealth_location_id", location.nexhealth_location_id
+                ),
+                exclude_location_id=str(location.id),
+            )
+
         previous_timezone = location.timezone
-        location = await institution_service.update_location(location, **updates)
+        try:
+            location = await institution_service.update_location(location, **updates)
+        except IntegrityError as exc:
+            raise _location_integrity_conflict(
+                exc,
+                slug=updates.get("slug", location.slug),
+                subdomain=updates.get(
+                    "nexhealth_subdomain", location.nexhealth_subdomain
+                ),
+                nexhealth_location_id=updates.get(
+                    "nexhealth_location_id", location.nexhealth_location_id
+                ),
+            ) from exc
 
         # A published campaign's schedule row caches the zone its cron fires in
         # and is only rewritten on publish/pause/resume, so correcting a

@@ -100,6 +100,34 @@ class RlsContext:
         )
 
 
+def integrity_error_constraint(error: BaseException) -> str | None:
+    """Return the database constraint name an IntegrityError violated.
+
+    Callers that catch ``IntegrityError`` need to know *which* rule the
+    database rejected: a handler that assumes the one constraint it happens
+    to know about will report an unrelated violation as that one, sending
+    whoever reads the message after the wrong field.
+
+    asyncpg raises its own exception type, which SQLAlchemy wraps twice, so
+    the constraint name can sit on the DBAPI wrapper or on the asyncpg error
+    beneath it. Triggers that ``RAISE`` without naming a constraint report
+    none at all, so a null return means "unknown", never "no violation".
+    """
+    seen: set[int] = set()
+    candidate: BaseException | None = error
+    while candidate is not None and id(candidate) not in seen:
+        seen.add(id(candidate))
+        name = getattr(candidate, "constraint_name", None)
+        if name:
+            return str(name)
+        diag = getattr(candidate, "diag", None)
+        name = getattr(diag, "constraint_name", None)
+        if name:
+            return str(name)
+        candidate = getattr(candidate, "orig", None) or candidate.__cause__
+    return None
+
+
 def is_database_initialized() -> bool:
     """Return True when the SQLAlchemy session factory has been initialized."""
     return _session_factory is not None

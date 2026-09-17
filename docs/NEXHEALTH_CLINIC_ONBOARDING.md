@@ -96,6 +96,21 @@ For multi-location institutions, repeat this for every physical office. Nexus
 requires explicit `location_id` on PMS-touching routes so it does not route a
 booking into the wrong clinic.
 
+#### One NexHealth site maps to one location
+
+The pair (`nexhealth_subdomain`, `nexhealth_location_id`) is unique across the
+whole platform, enforced by `uq_institution_locations_nexhealth_mapping`, so
+webhook resolution always has a single winner. A second migration-installed
+trigger also rejects a subdomain bound to two different institutions.
+
+Creating or editing a location checks this before saving and names the
+location already holding the site. Deleting a location releases its mapping,
+so the same clinic can be re-imported afterwards — including a soft delete,
+which keeps the row for audit but clears both NexHealth fields.
+
+Location slugs are unique **per institution**, not globally: two dental groups
+can each have a `downtown`.
+
 ### 5. Verify NexHealth Access
 
 In Super Admin:
@@ -198,3 +213,4 @@ projection/reconciliation readiness check passes.
 | Booking returns 403 | Request is using a key without access to that location | Check credential mode and location mapping |
 | Webhook ensure returns 403/404 | Endpoint/subscription was created under another API key | Manage it with the owning key or create a new subscription under the selected key |
 | 429 rate limits continue | Clinic is still using platform key or NexHealth did not issue a separate key | Confirm credential mode and API-key ownership with NexHealth |
+| Saving a location reports the NexHealth location is already connected | Another location — often one that was deleted before this behaviour shipped — still holds that (subdomain, location ID) pair | Reactivate that location, delete it again to release the mapping, or delete it permanently |
