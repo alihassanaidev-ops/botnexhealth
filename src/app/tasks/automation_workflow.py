@@ -15,6 +15,7 @@ from src.app.database import (
     init_database,
     is_database_initialized,
 )
+from src.app.dependencies import scoped_nexhealth_clients
 from src.app.models.automation_workflow import (
     AutomationRunStatus,
     AutomationTimerStatus,
@@ -105,6 +106,16 @@ from src.app.services.patient_communication import (
 from src.app.worker import celery_app
 
 logger = logging.getLogger(__name__)
+
+
+def _run_workflow_async(coro: Any) -> Any:
+    """Run a workflow coroutine with NexHealth clients scoped to this task loop."""
+
+    async def _runner() -> Any:
+        async with scoped_nexhealth_clients():
+            return await coro
+
+    return asyncio.run(_runner())
 
 
 _OUTBOUND_LIMITS = None
@@ -218,7 +229,7 @@ def poll_workflow_timers(self) -> dict:
     """Claim due workflow timers and enqueue a dispatch task per timer."""
     _ensure_db()
     try:
-        return asyncio.run(_claim_and_enqueue_async())
+        return _run_workflow_async(_claim_and_enqueue_async())
     except Exception as exc:
         logger.exception("poll_workflow_timers failed: %s", exc)
         raise self.retry(exc=exc, countdown=15)
@@ -308,7 +319,7 @@ def dispatch_workflow_timer(
     """Load a claimed timer and advance its run through the workflow definition."""
     _ensure_db()
     try:
-        return asyncio.run(
+        return _run_workflow_async(
             _dispatch_timer_async(
                 timer_id=timer_id,
                 institution_id=institution_id,
@@ -323,7 +334,7 @@ def dispatch_workflow_timer(
         if self.request.retries >= self.max_retries:
             # Retries exhausted — route to the dead-letter queue for operator replay
             # (payload is ids only, PHI-free).
-            asyncio.run(
+            _run_workflow_async(
                 capture_dead_letter(
                     source="workflow_dispatch",
                     event_type="dispatch_workflow_timer",
@@ -465,7 +476,7 @@ def recover_stale_workflow_timers(self) -> dict:
     """
     _ensure_db()
     try:
-        return asyncio.run(_recover_stale_async())
+        return _run_workflow_async(_recover_stale_async())
     except Exception as exc:
         logger.exception("recover_stale_workflow_timers failed: %s", exc)
         raise self.retry(exc=exc, countdown=15)
@@ -506,7 +517,7 @@ def sweep_nexhealth_completed_visits(self) -> dict:
     """
     _ensure_db()
     try:
-        return asyncio.run(_sweep_nexhealth_completed_visits_async())
+        return _run_workflow_async(_sweep_nexhealth_completed_visits_async())
     except Exception as exc:
         logger.exception("sweep_nexhealth_completed_visits failed: %s", exc)
         raise self.retry(exc=exc, countdown=30)
@@ -652,7 +663,7 @@ def sweep_gotracker_appointment_writebacks(self) -> dict:
     """
     _ensure_db()
     try:
-        return asyncio.run(_sweep_gotracker_writebacks_async())
+        return _run_workflow_async(_sweep_gotracker_writebacks_async())
     except Exception as exc:
         logger.exception("sweep_gotracker_appointment_writebacks failed: %s", exc)
         raise self.retry(exc=exc, countdown=15)
@@ -1113,7 +1124,7 @@ def publish_workflow_metrics(self) -> dict:
             publish_workflow_metrics as _publish,
         )
 
-        return asyncio.run(_publish())
+        return _run_workflow_async(_publish())
     except Exception as exc:
         logger.exception("publish_workflow_metrics failed: %s", exc)
         raise self.retry(exc=exc, countdown=15)
@@ -1155,7 +1166,7 @@ def enroll_and_start_workflow_run(
     """
     _ensure_db()
     try:
-        return asyncio.run(
+        return _run_workflow_async(
             _enroll_and_start_async(
                 institution_id=institution_id,
                 workflow_id=workflow_id,
@@ -1177,7 +1188,7 @@ def enroll_and_start_workflow_run(
             exc,
         )
         if self.request.retries >= self.max_retries:
-            asyncio.run(
+            _run_workflow_async(
                 capture_dead_letter(
                     source="workflow_enroll",
                     event_type="enroll_and_start_workflow_run",
@@ -1402,7 +1413,7 @@ def trigger_appointment_workflows(
     """
     _ensure_db()
     try:
-        return asyncio.run(
+        return _run_workflow_async(
             _trigger_appointment_async(
                 institution_id=institution_id,
                 appointment_id=appointment_id,
@@ -1582,7 +1593,7 @@ def trigger_appointment_state_workflows(
     """Enroll workflows that trigger from cached GoTracker appointment state."""
     _ensure_db()
     try:
-        return asyncio.run(
+        return _run_workflow_async(
             _trigger_appointment_state_async(
                 institution_id=institution_id,
                 appointment_id=appointment_id,
@@ -1757,7 +1768,7 @@ def ensure_nexhealth_webhook_subscriptions(self) -> dict:
     """Ensure local subscription lifecycle rows and refresh health status."""
     _ensure_db()
     try:
-        return asyncio.run(_ensure_nexhealth_webhook_subscriptions_async())
+        return _run_workflow_async(_ensure_nexhealth_webhook_subscriptions_async())
     except Exception as exc:
         logger.exception("ensure_nexhealth_webhook_subscriptions failed: %s", exc)
         raise self.retry(exc=exc, countdown=_retry_countdown(self.request.retries))
@@ -1807,7 +1818,7 @@ def ensure_nexhealth_shadow_webhook_subscriptions(self) -> dict:
     """
     _ensure_db()
     try:
-        return asyncio.run(_ensure_nexhealth_shadow_webhook_subscriptions_async())
+        return _run_workflow_async(_ensure_nexhealth_shadow_webhook_subscriptions_async())
     except Exception as exc:
         logger.exception(
             "ensure_nexhealth_shadow_webhook_subscriptions failed: %s", exc
@@ -1848,7 +1859,7 @@ def ensure_gotracker_webhook_subscriptions(self) -> dict:
     """Ensure GoTracker Synchronizer webhook subscriptions and refresh health."""
     _ensure_db()
     try:
-        return asyncio.run(_ensure_gotracker_webhook_subscriptions_async())
+        return _run_workflow_async(_ensure_gotracker_webhook_subscriptions_async())
     except Exception as exc:
         logger.exception("ensure_gotracker_webhook_subscriptions failed: %s", exc)
         raise self.retry(exc=exc, countdown=_retry_countdown(self.request.retries))
@@ -1888,7 +1899,7 @@ def backfill_nexhealth_appointments(self) -> dict:
     """Initial REST backfill for configured NexHealth appointment subscriptions."""
     _ensure_db()
     try:
-        return asyncio.run(_sync_nexhealth_appointments_async(mode="backfill"))
+        return _run_workflow_async(_sync_nexhealth_appointments_async(mode="backfill"))
     except Exception as exc:
         logger.exception("backfill_nexhealth_appointments failed: %s", exc)
         raise self.retry(exc=exc, countdown=_retry_countdown(self.request.retries))
@@ -1904,7 +1915,7 @@ def reconcile_nexhealth_appointments(self) -> dict:
     """Paced reconciliation sweep repairing stale/missing appointment projection rows."""
     _ensure_db()
     try:
-        return asyncio.run(_sync_nexhealth_appointments_async(mode="reconciliation"))
+        return _run_workflow_async(_sync_nexhealth_appointments_async(mode="reconciliation"))
     except Exception as exc:
         logger.exception("reconcile_nexhealth_appointments failed: %s", exc)
         raise self.retry(exc=exc, countdown=_retry_countdown(self.request.retries))
@@ -1920,7 +1931,7 @@ def backfill_nexhealth_patients(self) -> dict:
     """Initial REST backfill for configured NexHealth patient/contact projections."""
     _ensure_db()
     try:
-        return asyncio.run(_sync_nexhealth_patients_async(mode="backfill"))
+        return _run_workflow_async(_sync_nexhealth_patients_async(mode="backfill"))
     except Exception as exc:
         logger.exception("backfill_nexhealth_patients failed: %s", exc)
         raise self.retry(exc=exc, countdown=_retry_countdown(self.request.retries))
@@ -1936,7 +1947,7 @@ def reconcile_nexhealth_patients(self) -> dict:
     """Paced reconciliation sweep repairing stale/missing patient projections."""
     _ensure_db()
     try:
-        return asyncio.run(_sync_nexhealth_patients_async(mode="reconciliation"))
+        return _run_workflow_async(_sync_nexhealth_patients_async(mode="reconciliation"))
     except Exception as exc:
         logger.exception("reconcile_nexhealth_patients failed: %s", exc)
         raise self.retry(exc=exc, countdown=_retry_countdown(self.request.retries))
@@ -1952,7 +1963,7 @@ def poll_nexhealth_sync_statuses(self) -> dict:
     """Poll NexHealth PMS read/write sync health for configured locations."""
     _ensure_db()
     try:
-        return asyncio.run(_poll_nexhealth_sync_statuses_async())
+        return _run_workflow_async(_poll_nexhealth_sync_statuses_async())
     except Exception as exc:
         logger.exception("poll_nexhealth_sync_statuses failed: %s", exc)
         raise self.retry(exc=exc, countdown=_retry_countdown(self.request.retries))
@@ -2099,7 +2110,7 @@ def trigger_callback_workflows(
     """
     _ensure_db()
     try:
-        return asyncio.run(
+        return _run_workflow_async(
             _trigger_callback_async(
                 institution_id=institution_id,
                 call_id=call_id,
@@ -2296,7 +2307,7 @@ def trigger_internal_status_workflows(
     """Enroll workflows watching a status field this platform owns."""
     _ensure_db()
     try:
-        return asyncio.run(
+        return _run_workflow_async(
             _trigger_internal_status_async(
                 institution_id=institution_id,
                 status_event_id=status_event_id,
@@ -2418,7 +2429,7 @@ def trigger_patient_status_workflows(
     """Enroll workflows that listen for a recorded patient workflow status."""
     _ensure_db()
     try:
-        return asyncio.run(
+        return _run_workflow_async(
             _trigger_patient_status_async(
                 institution_id=institution_id,
                 status_event_id=status_event_id,
@@ -2581,7 +2592,7 @@ def poll_retell_voice_outcomes(self) -> dict:
     """
     _ensure_db()
     try:
-        return asyncio.run(_poll_retell_voice_outcomes_async())
+        return _run_workflow_async(_poll_retell_voice_outcomes_async())
     except Exception as exc:
         logger.exception("poll_retell_voice_outcomes failed: %s", exc)
         raise self.retry(exc=exc, countdown=_retry_countdown(self.request.retries))
@@ -2735,7 +2746,7 @@ def resume_voice_outcome(
     """
     _ensure_db()
     try:
-        return asyncio.run(
+        return _run_workflow_async(
             _resume_voice_outcome_async(
                 institution_id=institution_id,
                 retell_call_id=retell_call_id,
@@ -2951,7 +2962,7 @@ def resume_sms_confirmation(
     """Resume a WAITING confirmation run from a patient's inbound SMS reply."""
     _ensure_db()
     try:
-        return asyncio.run(
+        return _run_workflow_async(
             _resume_sms_confirmation_async(
                 institution_id=institution_id,
                 location_id=location_id,
@@ -3157,7 +3168,7 @@ def resume_reactivation_booking(
     """Resume WAITING reactivation runs when NexHealth reports a new booking."""
     _ensure_db()
     try:
-        return asyncio.run(
+        return _run_workflow_async(
             _resume_reactivation_booking_async(
                 institution_id=institution_id,
                 location_id=location_id,
@@ -3480,7 +3491,7 @@ def tick_workflow_schedules(self) -> dict:
     """
     _ensure_db()
     try:
-        return asyncio.run(_tick_workflow_schedules_async())
+        return _run_workflow_async(_tick_workflow_schedules_async())
     except Exception as exc:
         logger.exception("tick_workflow_schedules failed: %s", exc)
         raise self.retry(exc=exc, countdown=_retry_countdown(self.request.retries))
@@ -3606,7 +3617,7 @@ def scan_recall_workflows(self) -> dict:
     """
     _ensure_db()
     try:
-        return asyncio.run(_scan_recall_async())
+        return _run_workflow_async(_scan_recall_async())
     except Exception as exc:
         logger.exception("scan_recall_workflows failed: %s", exc)
         raise self.retry(exc=exc, countdown=_retry_countdown(self.request.retries))

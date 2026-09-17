@@ -1,8 +1,10 @@
 """FastAPI dependencies for dependency injection."""
 
+from contextlib import asynccontextmanager
 from dataclasses import dataclass
 import logging
-from typing import Any
+from contextvars import ContextVar
+from typing import Any, AsyncIterator
 
 from src.app.config import settings
 from src.app.nexhealth.client import NexHealthClient
@@ -17,6 +19,9 @@ _nexhealth_clients_by_key: dict[str, NexHealthClient] = {}
 _nexhealth_rate_limiter: NexHealthRateLimiter | None = None
 _nexhealth_rate_limiter_redis: Any | None = None
 _nexhealth_token_redis_by_key: dict[str, Any] = {}
+_nexhealth_client_scope: ContextVar[dict[str, Any] | None] = ContextVar(
+    "nexhealth_client_scope", default=None
+)
 
 
 @dataclass(frozen=True)
@@ -185,6 +190,40 @@ async def get_nexhealth_client_for_credential(
     """Return a process-local NexHealth client for a selected API key."""
     global _nexhealth_rate_limiter, _nexhealth_rate_limiter_redis
 
+    scope = _nexhealth_client_scope.get()
+    if scope is not None:
+        scoped_clients = scope["clients_by_key"]
+        client = scoped_clients.get(credential.api_key_hash)
+        if client is not None:
+            return client
+
+        if scope["rate_limiter"] is None:
+            rate_limiter, rate_limiter_redis = _build_nexhealth_rate_limiter()
+            scope["rate_limiter"] = rate_limiter
+            scope["rate_limiter_redis"] = rate_limiter_redis
+
+        token_manager, token_redis = _build_nexhealth_token_manager(
+            credential.api_key_hash
+        )
+        if token_redis is not None:
+            scope["token_redis_by_key"][credential.api_key_hash] = token_redis
+
+        config = NexHealthClientConfig(
+            api_key=credential.api_key,
+            base_url=settings.nexhealth_base_url,
+            nexhealth_api_contract=settings.nexhealth_api_contract,
+            nexhealth_max_keepalive_connections=settings.nexhealth_max_keepalive_connections,
+            nexhealth_max_connections=settings.nexhealth_max_connections,
+        )
+        client = NexHealthClient(
+            config=config,
+            token_manager=token_manager,
+            rate_limiter=scope["rate_limiter"],
+        )
+        await client.__aenter__()
+        scoped_clients[credential.api_key_hash] = client
+        return client
+
     if _nexhealth_rate_limiter is None:
         (
             _nexhealth_rate_limiter,
@@ -214,6 +253,50 @@ async def get_nexhealth_client_for_credential(
     await client.__aenter__()
     _nexhealth_clients_by_key[credential.api_key_hash] = client
     return client
+
+
+@asynccontextmanager
+async def scoped_nexhealth_clients() -> AsyncIterator[None]:
+    """Use NexHealth clients scoped to the current async context.
+
+    Celery workflow tasks are executed with ``asyncio.run()``, which creates
+    and closes a fresh event loop for each task. ``httpx.AsyncClient``,
+    ``redis.asyncio`` clients and ``asyncio.Lock`` objects are loop-bound, so a
+    process-global NexHealth client created by one task can crash a later task
+    with ``RuntimeError`` before the provider request is sent. This scope gives
+    a task local clients/caches/limiters and closes them before that task's
+    event loop is closed, while preserving process-level pooling for FastAPI.
+    """
+
+    existing_scope = _nexhealth_client_scope.get()
+    if existing_scope is not None:
+        yield
+        return
+
+    scope: dict[str, Any] = {
+        "clients_by_key": {},
+        "rate_limiter": None,
+        "rate_limiter_redis": None,
+        "token_redis_by_key": {},
+    }
+    token = _nexhealth_client_scope.set(scope)
+    try:
+        yield
+    finally:
+        for client in list(scope["clients_by_key"].values()):
+            await client.__aexit__(None, None, None)
+        rate_limiter_redis = scope.get("rate_limiter_redis")
+        if rate_limiter_redis is not None:
+            try:
+                await rate_limiter_redis.aclose()
+            except Exception:  # noqa: BLE001 — best-effort teardown
+                logger.debug("Ignoring scoped nexhealth rate limiter redis close error")
+        for redis_client in list(scope["token_redis_by_key"].values()):
+            try:
+                await redis_client.aclose()
+            except Exception:  # noqa: BLE001 — best-effort teardown
+                logger.debug("Ignoring scoped nexhealth token redis close error")
+        _nexhealth_client_scope.reset(token)
 
 
 async def get_nexhealth_client_for_institution(institution: Any) -> NexHealthClient:
