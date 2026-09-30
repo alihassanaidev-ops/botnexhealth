@@ -156,6 +156,11 @@ class EnvironmentConfig:
     # next `cdk deploy` regenerated that definition and silently dropped it,
     # reverting staging to v2 while the deploy looked successful.
     nexhealth_api_version: str | None = None
+    # Opt-in switch that lets SUPER_ADMIN enrol an authenticator app (TOTP)
+    # and use an emailed sign-in code, instead of being forced to a passkey.
+    # Off unless a deployment's config sets `allowSuperAdminTotp: true`, so
+    # production stays passkey-only by default.
+    allow_super_admin_totp: bool = False
 
 
 def _read_json(path: Path) -> dict[str, Any]:
@@ -297,6 +302,7 @@ def load_config(path: str | Path) -> EnvironmentConfig:
         external_secrets=dict(raw.get("externalSecrets", {})),
         optional_secrets=dict(raw.get("optionalSecrets", {})),
         alarm_email=raw.get("alarmEmail") or None,
+        allow_super_admin_totp=bool(raw.get("allowSuperAdminTotp", False)),
         waf_rate_limit_per_5min=int(raw.get("wafRateLimitPer5Min", 2000)),
         waf_count_oversize_body_requests=bool(
             raw.get("wafCountOversizeBodyRequests", False)

@@ -1434,13 +1434,12 @@ class NexHealthPlatformStack(Stack):
             public_api_url = f"https://{self.config.api.domain_name}"
             environment["PUBLIC_API_URL"] = public_api_url
             environment["GOTRACKER_WEBHOOK_CALLBACK_BASE_URL"] = public_api_url
-        # Non-prod only: let SUPER_ADMIN enrol a TOTP authenticator app (the
-        # "use authenticator app" flow) instead of requiring a passkey — needed
-        # for QA on machines without a platform authenticator. The app property
-        # `allow_super_admin_totp` is hard-gated to non-production, so this env
-        # is inert if ever set on prod; we still only emit it off-prod.
-        if self.config.app_env != "production":
-            environment["DEV_ALLOW_SUPER_ADMIN_TOTP"] = "true"
+        # Opt-in: let SUPER_ADMIN enrol a TOTP authenticator app and use an
+        # emailed sign-in code instead of being forced to a passkey. Driven by
+        # the deployment config so it can be turned on or off without a code
+        # change; absent -> the app default (off) keeps production passkey-only.
+        if self.config.allow_super_admin_totp:
+            environment["ENABLE_SUPER_ADMIN_TOTP"] = "true"
         return environment
 
     def _build_app_runtime_secrets(

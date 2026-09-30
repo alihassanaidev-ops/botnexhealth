@@ -65,9 +65,10 @@ make down        # stop stack
 The Compose file overrides local container settings such as `DATABASE_URL`,
 Redis URLs, CORS, and cookie security. Edit `.env` for real vendor credentials
 or local `JWT_SECRET` / `ENCRYPTION_KEY` changes. It also enables
-`DEV_ALLOW_SUPER_ADMIN_TOTP=true` so local super admins can use an
-authenticator app instead of a passkey. Production ignores that local-dev
-escape hatch. Create an admin after migrations with
+`ENABLE_SUPER_ADMIN_TOTP=true` so local super admins can use an
+authenticator app instead of a passkey. Deployed environments drive the same
+switch from the CDK config `allowSuperAdminTotp`; production leaves it off by
+default. Create an admin after migrations with
 `docker compose -f docker-compose.dev.yml run --rm api python -m
 src.app.scripts.create_super_admin`.
 

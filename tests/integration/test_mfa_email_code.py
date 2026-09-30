@@ -191,7 +191,7 @@ async def test_send_refuses_super_admin_in_production(
     async_client: AsyncClient, staff_user: User, stub_db_session, monkeypatch
 ):
     monkeypatch.setattr(settings, "app_env", "production")
-    monkeypatch.setattr(settings, "dev_allow_super_admin_totp", True)
+    monkeypatch.setattr(settings, "enable_super_admin_totp", False)
     staff_user.role = UserRole.SUPER_ADMIN.value
     ticket = _ticket(staff_user.id, role=UserRole.SUPER_ADMIN.value)
 

@@ -4,6 +4,7 @@
   "account": "287553036543",
   "region": "ca-central-1",
   "appEnv": "staging",
+  "allowSuperAdminTotp": true,
   "logLevel": "info",
   "refreshTokenTtlMinutes": 480,
   "alarmEmail": "zulkhaifahmed@gmail.com",

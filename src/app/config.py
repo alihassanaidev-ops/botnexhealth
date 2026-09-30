@@ -284,9 +284,11 @@ class Settings(BaseSettings):
     # PREFERRED, which accepts a bare presence tap. Keep True for any
     # environment with modern devices.
     webauthn_user_verification_strict: bool = True
-    # Local-dev escape hatch for machines without a configured passkey provider.
-    # Ignored in production; SUPER_ADMIN remains passkey-only there.
-    dev_allow_super_admin_totp: bool = False
+    # Opt-in switch that lets SUPER_ADMIN enrol an authenticator app (TOTP)
+    # and use an emailed sign-in code, instead of being forced to a passkey.
+    # Defaults off; production stays passkey-only until a deployment flips it
+    # via the CDK config (`allowSuperAdminTotp`).
+    enable_super_admin_totp: bool = False
 
     # ── Email sign-in codes ──────────────────────────────────────────────
     # A one-time code mailed to the account's own address, offered as an
@@ -607,7 +609,7 @@ class Settings(BaseSettings):
 
     @property
     def allow_super_admin_totp(self) -> bool:
-        return not self.is_production and self.dev_allow_super_admin_totp
+        return self.enable_super_admin_totp
 
     @property
     def allowed_auth_redirect_netlocs(self) -> frozenset[str]:

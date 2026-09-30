@@ -136,8 +136,8 @@ class MfaStatus:
 
         Requires a strong factor to already be enrolled: the email method
         is an alternative *at* the MFA step, never a way to skip
-        enrollment. SUPER_ADMIN is excluded on the same terms as TOTP —
-        that tier stays passkey-only in production.
+        enrollment. SUPER_ADMIN is excluded on the same terms as TOTP,
+        unless the opt-in ``enable_super_admin_totp`` switch is on.
         """
         if not settings.mfa_email_code_enabled:
             return False
