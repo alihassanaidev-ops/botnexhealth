@@ -140,6 +140,52 @@ export async function listAvailabilities(
     return unwrapArray<CachedAvailability>(data, `${BASE}/availabilities`);
 }
 
+export interface BulkLinkRangePreview {
+    start_date: string;
+    end_date: string;
+    day_count: number;
+    matched_count: number;
+    windows: CachedAvailability[];
+    batch_size: number;
+    batch_pause_seconds: number;
+}
+
+/** Preview the dated work windows a range link would change. */
+export async function previewBulkLinkRange(
+    payload: {
+        provider_id: string;
+        start_date: string;
+        end_date: string;
+        operatory_ids?: string[] | null;
+    },
+    locationId?: string
+): Promise<BulkLinkRangePreview> {
+    const { data } = await api.post<BulkLinkRangePreview>(
+        `${BASE}/availabilities/bulk-link-range/preview${qs(locationId)}`,
+        payload
+    );
+    return data;
+}
+
+/** Apply one server-bounded batch from a range preview. */
+export async function applyBulkLinkRange(
+    payload: {
+        availability_ids: string[];
+        appointment_type_ids: string[];
+    },
+    locationId?: string
+): Promise<{
+    updated_count: number;
+    updated_ids: string[];
+    errors: string[];
+}> {
+    const { data } = await api.post(
+        `${BASE}/availabilities/bulk-link-range/apply${qs(locationId)}`,
+        payload
+    );
+    return data;
+}
+
 export async function createAvailability(
     payload: {
         provider_id: string;

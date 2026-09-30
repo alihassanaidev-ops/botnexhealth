@@ -7,12 +7,14 @@ Proxies mutations to PMS and refreshes the local cache.
 
 from __future__ import annotations
 
+import asyncio
 import logging
-from datetime import datetime
+from datetime import date, datetime, timedelta
 from typing import Annotated, Any
+from zoneinfo import ZoneInfo
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -284,6 +286,114 @@ def _availability_response_from_raw(
     )
 
 
+def _today_for_location(location: InstitutionLocation) -> str:
+    timezone_name = location.timezone or "UTC"
+    try:
+        return datetime.now(ZoneInfo(timezone_name)).date().isoformat()
+    except Exception:
+        return datetime.utcnow().date().isoformat()
+
+
+# Bulk range linking is throttled so a wide selection cannot exhaust the
+# NexHealth request quota. Both values are returned by the preview endpoint so
+# the client and server share one pacing policy.
+BULK_LINK_MAX_RANGE_DAYS = 15
+BULK_LINK_BATCH_SIZE = 10
+BULK_LINK_BATCH_PAUSE_SECONDS = 30
+
+
+def _strip_source_prefix(value: Any) -> str | None:
+    if value in (None, ""):
+        return None
+    text = str(value)
+    if "-" in text:
+        prefix, rest = text.split("-", 1)
+        if prefix in {"nh", "gt"}:
+            return rest
+    return text
+
+
+def _same_source_id(left: Any, right: Any) -> bool:
+    left_id = _strip_source_prefix(left)
+    right_id = _strip_source_prefix(right)
+    return bool(left_id and right_id and left_id == right_id)
+
+
+def _parse_range_dates(
+    location: InstitutionLocation,
+    start_date: str,
+    end_date: str,
+) -> list[str]:
+    """Validate and expand a forward-looking inclusive date range."""
+    try:
+        start = date.fromisoformat(start_date)
+        end = date.fromisoformat(end_date)
+    except ValueError:
+        raise HTTPException(
+            status.HTTP_400_BAD_REQUEST,
+            "start_date and end_date must be YYYY-MM-DD dates",
+        ) from None
+
+    if end < start:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "end_date must not be before start_date")
+
+    today = date.fromisoformat(_today_for_location(location))
+    if start < today:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "start_date must not be in the past")
+
+    day_count = (end - start).days + 1
+    if day_count > BULK_LINK_MAX_RANGE_DAYS:
+        raise HTTPException(
+            status.HTTP_400_BAD_REQUEST,
+            f"Date range must not exceed {BULK_LINK_MAX_RANGE_DAYS} days",
+        )
+
+    return [(start + timedelta(days=offset)).isoformat() for offset in range(day_count)]
+
+
+def _availability_matches_dates(item: dict[str, Any], dates: set[str]) -> bool:
+    if item.get("active") is False:
+        return False
+    specific_date = item.get("specific_date")
+    return bool(specific_date and str(specific_date) in dates)
+
+
+def _match_availabilities_in_range(
+    raw_items: list[dict[str, Any]],
+    *,
+    dates: set[str],
+    operatory_ids: set[str] | None,
+) -> list[dict[str, Any]]:
+    """Return dated work windows in the range, never recurring rules."""
+    return [
+        item
+        for item in raw_items
+        if item.get("id") not in (None, "")
+        and _availability_matches_dates(item, dates)
+        and (
+            operatory_ids is None
+            or any(
+                _same_source_id(item.get("operatory_id"), operatory_id)
+                for operatory_id in operatory_ids
+            )
+        )
+    ]
+
+
+def _bulk_preview_operatory_ids(req: "BulkLinkRangePreviewRequest") -> set[str] | None:
+    if req.operatory_ids is not None:
+        cleaned = {operatory_id for operatory_id in req.operatory_ids if operatory_id}
+        if not cleaned:
+            raise HTTPException(
+                status.HTTP_400_BAD_REQUEST,
+                "operatory_ids must not be empty when provided",
+            )
+        return cleaned
+    if req.operatory_id:
+        return {req.operatory_id}
+    return None
+
+
 class LocationInfoResponse(BaseModel):
     id: str
     name: str
@@ -334,6 +444,36 @@ class UpdateAvailabilityRequest(BaseModel):
     end_time: str | None = None
     operatory_id: str | None = None
     active: bool | None = None
+
+
+class BulkLinkRangePreviewRequest(BaseModel):
+    provider_id: str
+    start_date: str
+    end_date: str
+    operatory_ids: list[str] | None = None
+    # Retained for compatibility with the first staging client.
+    operatory_id: str | None = None
+
+
+class BulkLinkRangePreviewResponse(BaseModel):
+    start_date: str
+    end_date: str
+    day_count: int
+    matched_count: int
+    windows: list[CachedAvailabilityResponse]
+    batch_size: int
+    batch_pause_seconds: int
+
+
+class BulkLinkRangeApplyRequest(BaseModel):
+    availability_ids: list[str] = Field(min_length=1, max_length=BULK_LINK_BATCH_SIZE)
+    appointment_type_ids: list[str] = Field(min_length=1)
+
+
+class BulkLinkRangeApplyResponse(BaseModel):
+    updated_count: int
+    updated_ids: list[str] = []
+    errors: list[str] = []
 
 
 # ── Overview ─────────────────────────────────────────────────────────────
@@ -833,6 +973,114 @@ async def list_availabilities(
         for item in raw_items:
             results.append(_availability_response_from_raw(item))
         return results
+
+
+@router.post(
+    "/availabilities/bulk-link-range/preview",
+    response_model=BulkLinkRangePreviewResponse,
+)
+async def preview_bulk_link_range_availabilities(
+    req: BulkLinkRangePreviewRequest,
+    current_user: Annotated[User, Depends(get_current_institution_or_location_admin)],
+    location_id: str | None = Query(None),
+):
+    """Preview matching PMS work windows without writing anything."""
+    async with get_db_session() as session:
+        institution, location = await _resolve_institution_location(current_user, session, location_id)
+        adapter = await _get_adapter(institution, location)
+
+        if not isinstance(adapter, SupportsAvailabilityLinking):
+            raise HTTPException(400, "This PMS does not support availability updates")
+
+        range_dates = _parse_range_dates(location, req.start_date, req.end_date)
+        selected_operatory_ids = _bulk_preview_operatory_ids(req)
+        raw_items = await adapter.list_availabilities(
+            provider_id=req.provider_id,
+            ignore_past_dates=False,
+        )
+        matched_items = _match_availabilities_in_range(
+            raw_items,
+            dates=set(range_dates),
+            operatory_ids=selected_operatory_ids,
+        )
+
+    return BulkLinkRangePreviewResponse(
+        start_date=range_dates[0],
+        end_date=range_dates[-1],
+        day_count=len(range_dates),
+        matched_count=len(matched_items),
+        windows=[_availability_response_from_raw(item) for item in matched_items],
+        batch_size=BULK_LINK_BATCH_SIZE,
+        batch_pause_seconds=BULK_LINK_BATCH_PAUSE_SECONDS,
+    )
+
+
+@router.post(
+    "/availabilities/bulk-link-range/apply",
+    response_model=BulkLinkRangeApplyResponse,
+)
+async def apply_bulk_link_range_availabilities(
+    req: BulkLinkRangeApplyRequest,
+    current_user: Annotated[User, Depends(get_current_institution_or_location_admin)],
+    location_id: str | None = Query(None),
+):
+    """Link appointment types to one bounded batch of PMS work windows."""
+    async with get_db_session() as session:
+        institution, location = await _resolve_institution_location(current_user, session, location_id)
+        adapter = await _get_adapter(institution, location)
+
+        if not isinstance(adapter, SupportsAvailabilityLinking):
+            raise HTTPException(400, "This PMS does not support availability updates")
+
+        async def _link_one(availability_id: str) -> str | Exception:
+            try:
+                await adapter.update_availability(
+                    availability_id=availability_id,
+                    appointment_type_ids=req.appointment_type_ids,
+                )
+                return availability_id
+            except Exception as exc:
+                return exc
+
+        outcomes = await asyncio.gather(
+            *(_link_one(availability_id) for availability_id in req.availability_ids)
+        )
+        loc_slug = location.slug
+        institution_id = institution.id
+
+    updated_ids = [
+        availability_id
+        for availability_id, outcome in zip(req.availability_ids, outcomes)
+        if not isinstance(outcome, Exception)
+    ]
+    errors = [
+        f"{availability_id}: {safe_error_summary(outcome)}"
+        for availability_id, outcome in zip(req.availability_ids, outcomes)
+        if isinstance(outcome, Exception)
+    ]
+
+    log_audit_background(
+        actor=AuditActor.ADMIN,
+        user_id=str(current_user.id),
+        action=AuditAction.LOCATION_UPDATE,
+        target_resource=f"location:{loc_slug}/availabilities:range_batch",
+        outcome=AuditOutcome.SUCCESS if not errors else AuditOutcome.FAILURE_EXTERNAL_API,
+        metadata={
+            "actor_role": current_user.role,
+            "action": "apply_bulk_link_range_availabilities",
+            "appointment_type_ids": req.appointment_type_ids,
+            "availability_ids": req.availability_ids,
+            "requested_count": len(req.availability_ids),
+            "updated_count": len(updated_ids),
+            "failed_count": len(errors),
+        },
+        institution_id=institution_id,
+    )
+    return BulkLinkRangeApplyResponse(
+        updated_count=len(updated_ids),
+        updated_ids=updated_ids,
+        errors=errors,
+    )
 
 
 @router.post("/availabilities", response_model=CachedAvailabilityResponse, status_code=201)
