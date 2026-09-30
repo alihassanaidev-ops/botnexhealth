@@ -173,6 +173,48 @@ def test_super_admin_requires_passkey_even_when_totp_exists() -> None:
     assert status.setup_methods_for_role(UserRole.SUPER_ADMIN.value) == ["webauthn"]
 
 
+def test_super_admin_totp_can_be_enabled(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(settings, "enable_super_admin_totp", True)
+    status = MfaStatus(webauthn_count=0, totp_enabled=True, recovery_codes_remaining=2)
+
+    assert status.enrolled_for_role(UserRole.SUPER_ADMIN.value) is True
+    # The opt-in switch unblocks TOTP for SUPER_ADMIN, and with a factor
+    # now enrolled the email fallback rides along on the same switch.
+    assert status.available_methods_for_role(UserRole.SUPER_ADMIN.value) == [
+        "totp",
+        "email",
+        "recovery_code",
+    ]
+    assert status.setup_methods_for_role(UserRole.SUPER_ADMIN.value) == [
+        "webauthn",
+        "totp",
+    ]
+
+
+def test_super_admin_totp_opt_in_applies_in_production(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(settings, "app_env", "production")
+    monkeypatch.setattr(settings, "enable_super_admin_totp", True)
+    status = MfaStatus(webauthn_count=0, totp_enabled=True, recovery_codes_remaining=2)
+
+    assert status.enrolled_for_role(UserRole.SUPER_ADMIN.value) is True
+    assert status.setup_methods_for_role(UserRole.SUPER_ADMIN.value) == [
+        "webauthn",
+        "totp",
+    ]
+
+
+def test_super_admin_totp_stays_off_in_production_by_default(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(settings, "app_env", "production")
+    monkeypatch.setattr(settings, "enable_super_admin_totp", False)
+    status = MfaStatus(webauthn_count=0, totp_enabled=True, recovery_codes_remaining=2)
+
+    assert status.enrolled_for_role(UserRole.SUPER_ADMIN.value) is False
+    assert status.available_methods_for_role(UserRole.SUPER_ADMIN.value) == ["recovery_code"]
+    assert status.setup_methods_for_role(UserRole.SUPER_ADMIN.value) == ["webauthn"]
+
+
 @pytest.mark.asyncio
 async def test_totp_accepts_one_code_once_only() -> None:
     secret = pyotp.random_base32()
@@ -571,13 +613,24 @@ def test_email_code_excluded_for_super_admin_in_production(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr(settings, "app_env", "production")
-    monkeypatch.setattr(settings, "dev_allow_super_admin_totp", True)
+    monkeypatch.setattr(settings, "enable_super_admin_totp", False)
     status = MfaStatus(webauthn_count=1, totp_enabled=True, recovery_codes_remaining=2)
 
     assert status.email_code_allowed_for_role(UserRole.SUPER_ADMIN.value) is False
     assert "email" not in status.available_methods_for_role(UserRole.SUPER_ADMIN.value)
     # Other roles are unaffected by the super-admin carve-out.
     assert "email" in status.available_methods_for_role(UserRole.STAFF.value)
+
+
+def test_email_code_allowed_for_super_admin_when_opt_in_enabled(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(settings, "app_env", "production")
+    monkeypatch.setattr(settings, "enable_super_admin_totp", True)
+    status = MfaStatus(webauthn_count=0, totp_enabled=True, recovery_codes_remaining=2)
+
+    assert status.email_code_allowed_for_role(UserRole.SUPER_ADMIN.value) is True
+    assert "email" in status.available_methods_for_role(UserRole.SUPER_ADMIN.value)
 
 
 def test_email_code_kill_switch(monkeypatch: pytest.MonkeyPatch) -> None:

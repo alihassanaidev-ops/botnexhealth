@@ -125,6 +125,11 @@ class EnvironmentConfig:
     # SNS topic without subscribers — operators can add a subscription
     # manually in the console without redeploying.
     alarm_email: str | None = None
+    # Opt-in switch that lets SUPER_ADMIN enrol an authenticator app (TOTP)
+    # and use an emailed sign-in code, instead of being forced to a passkey.
+    # Off unless a deployment's config sets `allowSuperAdminTotp: true`, so
+    # production stays passkey-only by default.
+    allow_super_admin_totp: bool = False
     # Per-IP edge rate limit (requests / 5-minute window). Layered on top of
     # slowapi (per-process) so a flood at the edge gets blocked before it
     # touches the application. AWS default minimum is 100; raise as traffic
@@ -243,5 +248,6 @@ def load_config(path: str | Path) -> EnvironmentConfig:
         external_secrets=dict(raw.get("externalSecrets", {})),
         optional_secrets=dict(raw.get("optionalSecrets", {})),
         alarm_email=raw.get("alarmEmail") or None,
+        allow_super_admin_totp=bool(raw.get("allowSuperAdminTotp", False)),
         waf_rate_limit_per_5min=int(raw.get("wafRateLimitPer5Min", 2000)),
     )

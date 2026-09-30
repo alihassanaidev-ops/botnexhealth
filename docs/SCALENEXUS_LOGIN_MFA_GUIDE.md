@@ -83,3 +83,16 @@ does not accept an email code.
 
 Email codes need no setup and appear on the sign-in screen automatically, so
 there is nothing to manage for them here.
+
+## For ScaleNexus administrators
+
+Super-admin accounts (`SUPER_ADMIN`) are passkey-only unless the opt-in switch
+`ENABLE_SUPER_ADMIN_TOTP` is turned on. When it is on, a super admin may also
+enrol an authenticator app at setup and use an emailed sign-in code at login —
+the same options already available to clinic roles. The switch is off by default;
+in deployed environments it is driven by the CDK config key
+`allowSuperAdminTotp` (`staging.json` = on, `production.json` = off), so it can
+be enabled or reverted per deployment without a code change.
+
+Email codes remain a login-only fallback: they never appear during setup and
+never substitute for the MFA check that guards security-setting changes.

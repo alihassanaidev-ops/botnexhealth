@@ -127,7 +127,7 @@ class MfaStatus:
     recovery_codes_remaining: int
 
     def enrolled_for_role(self, role: str) -> bool:
-        if role == UserRole.SUPER_ADMIN.value:
+        if role == UserRole.SUPER_ADMIN.value and not settings.allow_super_admin_totp:
             return self.webauthn_count > 0
         return self.webauthn_count > 0 or self.totp_enabled
 
@@ -136,8 +136,8 @@ class MfaStatus:
 
         Requires a strong factor to already be enrolled: the email method
         is an alternative *at* the MFA step, never a way to skip
-        enrollment. SUPER_ADMIN is excluded on the same terms as TOTP —
-        that tier stays passkey-only in production.
+        enrollment. SUPER_ADMIN is excluded on the same terms as TOTP,
+        unless the opt-in ``enable_super_admin_totp`` switch is on.
         """
         if not settings.mfa_email_code_enabled:
             return False
@@ -149,7 +149,9 @@ class MfaStatus:
         methods: list[str] = []
         if self.webauthn_count > 0:
             methods.append("webauthn")
-        if self.totp_enabled and role != UserRole.SUPER_ADMIN.value:
+        if self.totp_enabled and (
+            role != UserRole.SUPER_ADMIN.value or settings.allow_super_admin_totp
+        ):
             methods.append("totp")
         if self.email_code_allowed_for_role(role):
             methods.append("email")
@@ -158,7 +160,7 @@ class MfaStatus:
         return methods
 
     def setup_methods_for_role(self, role: str) -> list[str]:
-        if role == UserRole.SUPER_ADMIN.value:
+        if role == UserRole.SUPER_ADMIN.value and not settings.allow_super_admin_totp:
             return ["webauthn"]
         return ["webauthn", "totp"]
 
