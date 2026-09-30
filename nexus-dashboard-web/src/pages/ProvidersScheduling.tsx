@@ -3,21 +3,28 @@ import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
 import { Checkbox } from "@/components/ui/checkbox"
+import { Calendar as CalendarPicker } from "@/components/ui/calendar"
+import { Progress } from "@/components/ui/progress"
 import { Alert, AlertDescription } from "@/components/ui/alert"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog"
 import { toast } from "sonner"
-import { RefreshCcw, AlertTriangle, Clock, Calendar, MapPin, UserCog, ChevronLeft, ChevronRight, Repeat } from "lucide-react"
+import { addDays, differenceInCalendarDays, format, startOfDay } from "date-fns"
+import type { DateRange } from "react-day-picker"
+import { RefreshCcw, AlertTriangle, Clock, Calendar, CalendarDays, MapPin, UserCog, ChevronLeft, ChevronRight, Repeat } from "lucide-react"
 import { PageHeader } from "@/components/PageHeader"
 import type { CachedProvider, CachedAvailability, CachedAppointmentType, CachedOperatory } from "@/types"
 import { Input } from "@/components/ui/input"
 import {
+    getSetupOverview,
     listProviders,
     listAvailabilities,
     listAppointmentTypes,
     listOperatories,
     createAvailability,
     updateAvailability,
+    previewBulkLinkRange,
+    applyBulkLinkRange,
     updateProvider,
     triggerSync,
 } from "@/lib/tenant-api"
@@ -39,6 +46,17 @@ import {
 
 /** Dated work windows per page. Matches the Patients table's page size. */
 const PAGE_SIZE = 25
+
+const ISO_DATE = "yyyy-MM-dd"
+const BULK_RANGE_MAX_DAYS = 15
+const BULK_RANGE_DEFAULT_DAYS = 7
+
+interface BulkProgress {
+    batch: number
+    batches: number
+    done: number
+    total: number
+}
 
 export default function ProvidersScheduling() {
     const { user } = useAuth()
@@ -95,6 +113,23 @@ export default function ProvidersScheduling() {
     const [maxAge, setMaxAge] = useState<number | "">("")
     const [isHidden, setIsHidden] = useState(false)
     const [savingSettings, setSavingSettings] = useState(false)
+    const [canLinkAvailability, setCanLinkAvailability] = useState(false)
+    const [bulkDialogOpen, setBulkDialogOpen] = useState(false)
+    const [bulkTypeIds, setBulkTypeIds] = useState<string[]>([])
+    const [bulkOperatoryIds, setBulkOperatoryIds] = useState<string[]>([])
+    const bulkRangeMin = useMemo(() => startOfDay(new Date()), [])
+    const bulkRangeMax = useMemo(
+        () => addDays(bulkRangeMin, BULK_RANGE_MAX_DAYS - 1),
+        [bulkRangeMin],
+    )
+    const [bulkRange, setBulkRange] = useState<DateRange | undefined>(() => ({
+        from: startOfDay(new Date()),
+        to: addDays(startOfDay(new Date()), BULK_RANGE_DEFAULT_DAYS - 1),
+    }))
+    const [bulkRunning, setBulkRunning] = useState(false)
+    const [bulkProgress, setBulkProgress] = useState<BulkProgress | null>(null)
+    const [bulkPauseRemaining, setBulkPauseRemaining] = useState(0)
+    const bulkCancelledRef = useRef(false)
 
     // Load providers + appointment types once on mount
     const fetchData = useCallback(async () => {
@@ -102,11 +137,13 @@ export default function ProvidersScheduling() {
         setLoading(true)
         setError(null)
         try {
-            const [p, at, ops] = await Promise.all([
+            const [overview, p, at, ops] = await Promise.all([
+                getSetupOverview(locationId),
                 listProviders(locationId),
                 listAppointmentTypes(locationId),
                 listOperatories(locationId),
             ])
+            setCanLinkAvailability(overview.can_link_availability)
             setProviders(p)
             setAppointmentTypes(at)
             setOperatories(ops)
@@ -147,6 +184,8 @@ export default function ProvidersScheduling() {
         fetchAvailabilities()
     }, [fetchAvailabilities])
 
+    useEffect(() => () => { bulkCancelledRef.current = true }, [])
+
     // Reset appointment type/operatory filters + sync settings when provider changes
     useEffect(() => {
         setSelectedApptTypeId("all")
@@ -160,6 +199,14 @@ export default function ProvidersScheduling() {
     }, [selectedProviderId, providers])
 
     const selectedProvider = providers.find((p) => p.source_id === selectedProviderId)
+
+    const bulkRangeDayCount =
+        bulkRange?.from && bulkRange?.to
+            ? differenceInCalendarDays(bulkRange.to, bulkRange.from) + 1
+            : 0
+    const bulkRangeLabel = bulkRangeDayCount
+        ? `${format(bulkRange!.from!, "MMM d")} - ${format(bulkRange!.to!, "MMM d, yyyy")} (${bulkRangeDayCount} day${bulkRangeDayCount === 1 ? "" : "s"})`
+        : "Pick a start and end day"
 
     const handleSync = async () => {
         if (!canManage || !locationId) return
@@ -229,6 +276,114 @@ export default function ProvidersScheduling() {
                 ? prev.filter((id) => id !== typeId)
                 : [...prev, typeId]
         )
+    }
+
+    const toggleBulkTypeId = (typeId: string) => {
+        setBulkTypeIds((prev) =>
+            prev.includes(typeId)
+                ? prev.filter((id) => id !== typeId)
+                : [...prev, typeId]
+        )
+    }
+
+    const toggleBulkOperatoryId = (operatoryId: string) => {
+        setBulkOperatoryIds((prev) =>
+            prev.includes(operatoryId)
+                ? prev.filter((id) => id !== operatoryId)
+                : [...prev, operatoryId]
+        )
+    }
+
+    const pauseBetweenBatches = (seconds: number) =>
+        new Promise<void>((resolve) => {
+            let remaining = seconds
+            setBulkPauseRemaining(remaining)
+            const timer = window.setInterval(() => {
+                remaining -= 1
+                if (remaining <= 0 || bulkCancelledRef.current) {
+                    window.clearInterval(timer)
+                    setBulkPauseRemaining(0)
+                    resolve()
+                    return
+                }
+                setBulkPauseRemaining(remaining)
+            }, 1000)
+        })
+
+    const handleBulkLinkRange = async () => {
+        if (!canManage || !selectedProviderId || !locationId) return
+        if (bulkTypeIds.length === 0) {
+            toast.error("Please select at least one appointment type")
+            return
+        }
+        if (bulkOperatoryIds.length === 0) {
+            toast.error("Please select at least one operatory")
+            return
+        }
+        if (!bulkRange?.from || !bulkRange?.to) {
+            toast.error("Please select a date range")
+            return
+        }
+
+        bulkCancelledRef.current = false
+        setBulkRunning(true)
+        setBulkProgress(null)
+        setBulkPauseRemaining(0)
+        try {
+            const preview = await previewBulkLinkRange({
+                provider_id: selectedProviderId,
+                start_date: format(bulkRange.from, ISO_DATE),
+                end_date: format(bulkRange.to, ISO_DATE),
+                operatory_ids: bulkOperatoryIds,
+            }, locationId)
+
+            const ids = preview.windows.map((window) => window.source_id).filter(Boolean)
+            if (ids.length === 0) {
+                toast.warning("No dated work windows matched the selected provider, operatories, and range")
+                return
+            }
+
+            const batches: string[][] = []
+            for (let index = 0; index < ids.length; index += preview.batch_size) {
+                batches.push(ids.slice(index, index + preview.batch_size))
+            }
+
+            let updated = 0
+            const errors: string[] = []
+            for (let index = 0; index < batches.length; index++) {
+                if (bulkCancelledRef.current) break
+                setBulkProgress({ batch: index + 1, batches: batches.length, done: updated, total: ids.length })
+                const result = await applyBulkLinkRange({
+                    availability_ids: batches[index],
+                    appointment_type_ids: bulkTypeIds,
+                }, locationId)
+                updated += result.updated_count
+                errors.push(...result.errors)
+                setBulkProgress({ batch: index + 1, batches: batches.length, done: updated, total: ids.length })
+                if (index < batches.length - 1 && !bulkCancelledRef.current) {
+                    await pauseBetweenBatches(preview.batch_pause_seconds)
+                }
+            }
+
+            if (bulkCancelledRef.current) return
+            if (updated > 0) {
+                toast.success(`Linked ${updated} work window${updated === 1 ? "" : "s"} across ${preview.day_count} day${preview.day_count === 1 ? "" : "s"}`)
+            }
+            if (errors.length > 0) {
+                toast.error(`${errors.length} work window${errors.length === 1 ? "" : "s"} failed to update`)
+            }
+            setBulkDialogOpen(false)
+            setBulkTypeIds([])
+            setBulkOperatoryIds([])
+            await fetchAvailabilities()
+        } catch (error: unknown) {
+            const message = error instanceof Error ? error.message : "Failed to link the selected date range"
+            toast.error(message)
+        } finally {
+            setBulkRunning(false)
+            setBulkProgress(null)
+            setBulkPauseRemaining(0)
+        }
     }
 
     const handleSaveEdit = async () => {
@@ -427,6 +582,29 @@ export default function ProvidersScheduling() {
         [operatories]
     )
 
+    const allBulkOperatoriesSelected =
+        relevantOperatories.length > 0 &&
+        relevantOperatories.every((op) => bulkOperatoryIds.includes(op.source_id))
+
+    const bulkOperatoryLabel =
+        bulkOperatoryIds.length === 0
+            ? "None selected"
+            : allBulkOperatoriesSelected
+                ? "All visible operatories"
+                : bulkOperatoryIds.length === 1
+                    ? operatoryNameBySourceId.get(bulkOperatoryIds[0]) ?? bulkOperatoryIds[0]
+                    : `${bulkOperatoryIds.length} operatories selected`
+
+    const openBulkDialog = () => {
+        const visibleIds = relevantOperatories.map((op) => op.source_id)
+        setBulkOperatoryIds(
+            selectedOperatoryId !== "all" && visibleIds.includes(selectedOperatoryId)
+                ? [selectedOperatoryId]
+                : visibleIds
+        )
+        setBulkDialogOpen(true)
+    }
+
     // One row, rendered by both the recurring section and the paginated dated
     // list. Defined once so the two can't drift apart visually.
     const renderWindow = (av: CachedAvailability) => {
@@ -559,6 +737,16 @@ export default function ProvidersScheduling() {
                         )}
                         {canManage && view === "list" && (
                             <>
+                                {canLinkAvailability && (
+                                    <Button
+                                        variant="outline"
+                                        onClick={openBulkDialog}
+                                        disabled={loading || !selectedProviderId}
+                                    >
+                                        <CalendarDays className="h-4 w-4" />
+                                        Link date range
+                                    </Button>
+                                )}
                                 <Button variant="default" onClick={() => setCreateDialogOpen(true)} disabled={loading || !selectedProviderId}>
                                     Create Work Window
                                 </Button>
@@ -772,7 +960,7 @@ export default function ProvidersScheduling() {
                                     {totalShown} schedule{totalShown !== 1 ? "s" : ""} shown
                                     {hasNarrowingFilter ? " (filtered)" : ""}.
                                     {canManage
-                                        ? ' Click "Edit Linking" to associate appointment types, or create a custom Work Window.'
+                                        ? ' Click "Edit Linking" for one window, or use "Link date range" to update matching windows in bulk.'
                                         : " Read-only view."}
                                 </CardDescription>
                             </div>
@@ -893,6 +1081,161 @@ export default function ProvidersScheduling() {
 
             {canManage && (
                 <>
+                    {canLinkAvailability && (
+                        <Dialog
+                            open={bulkDialogOpen}
+                            onOpenChange={(next) => { if (!bulkRunning) setBulkDialogOpen(next) }}
+                        >
+                            <DialogContent className="max-w-2xl max-h-[85vh] overflow-y-auto">
+                                <DialogHeader>
+                                    <DialogTitle>Link Date Range</DialogTitle>
+                                    <DialogDescription>
+                                        Apply appointment types to dated PMS work windows from today up to {BULK_RANGE_MAX_DAYS} days ahead.
+                                    </DialogDescription>
+                                </DialogHeader>
+                                <div className="space-y-3 py-2">
+                                    <div className="rounded-md border border-border/70 p-3 text-sm text-muted-foreground">
+                                        <div>Provider: {selectedProvider?.name || `${selectedProvider?.first_name} ${selectedProvider?.last_name}`}</div>
+                                        <div>Operatories: {bulkOperatoryLabel}</div>
+                                        <div>Range: {bulkRangeLabel}</div>
+                                    </div>
+                                    <div className="grid gap-4 sm:grid-cols-2">
+                                        <div className="space-y-1">
+                                            <div className="flex items-center justify-between">
+                                                <p className="text-sm font-medium">Days to link</p>
+                                                <Button
+                                                    variant="ghost"
+                                                    size="sm"
+                                                    className="h-7 px-2 text-xs"
+                                                    onClick={() => setBulkRange(undefined)}
+                                                    disabled={bulkRunning || !bulkRange?.from}
+                                                >
+                                                    Clear
+                                                </Button>
+                                            </div>
+                                            <CalendarPicker
+                                                mode="range"
+                                                max={BULK_RANGE_MAX_DAYS - 1}
+                                                selected={bulkRange}
+                                                onSelect={setBulkRange}
+                                                defaultMonth={bulkRangeMin}
+                                                startMonth={bulkRangeMin}
+                                                endMonth={bulkRangeMax}
+                                                disabled={bulkRunning || { before: bulkRangeMin, after: bulkRangeMax }}
+                                                className="rounded-md border"
+                                            />
+                                            <p className="text-xs text-muted-foreground">
+                                                Select a start day and an end day. Recurring weekly rules are not changed.
+                                            </p>
+                                        </div>
+                                        <div className="space-y-4">
+                                            <div className="space-y-1">
+                                                <div className="flex items-center justify-between gap-2">
+                                                    <p className="text-sm font-medium">Operatories</p>
+                                                    <Button
+                                                        variant="ghost"
+                                                        size="sm"
+                                                        className="h-7 px-2 text-xs"
+                                                        onClick={() => setBulkOperatoryIds(
+                                                            allBulkOperatoriesSelected
+                                                                ? []
+                                                                : relevantOperatories.map((op) => op.source_id)
+                                                        )}
+                                                        disabled={bulkRunning || relevantOperatories.length === 0}
+                                                    >
+                                                        {allBulkOperatoriesSelected ? "Clear" : "Select all"}
+                                                    </Button>
+                                                </div>
+                                                {relevantOperatories.length === 0 ? (
+                                                    <p className="text-sm text-muted-foreground">No operatories found for this provider.</p>
+                                                ) : (
+                                                    <div className="border rounded-md max-h-36 overflow-y-auto">
+                                                        {relevantOperatories.map((op) => (
+                                                            <label
+                                                                key={op.source_id}
+                                                                className="flex items-center gap-2 px-3 py-2 hover:bg-muted/50 cursor-pointer border-b last:border-b-0"
+                                                            >
+                                                                <Checkbox
+                                                                    checked={bulkOperatoryIds.includes(op.source_id)}
+                                                                    onCheckedChange={() => toggleBulkOperatoryId(op.source_id)}
+                                                                    disabled={bulkRunning}
+                                                                />
+                                                                <span className="min-w-0 flex-1 truncate text-sm">{op.name}</span>
+                                                                <span className="shrink-0 text-xs text-muted-foreground">{op.source_id}</span>
+                                                            </label>
+                                                        ))}
+                                                    </div>
+                                                )}
+                                            </div>
+                                            <div className="space-y-1">
+                                                <p className="text-sm font-medium">Appointment types</p>
+                                                {appointmentTypes.length === 0 ? (
+                                                    <p className="text-sm text-muted-foreground">No appointment types configured.</p>
+                                                ) : (
+                                                    <div className="border rounded-md max-h-64 overflow-y-auto">
+                                                        {appointmentTypes.map((at) => (
+                                                            <label
+                                                                key={at.source_id}
+                                                                className="flex items-center gap-2 px-3 py-2 hover:bg-muted/50 cursor-pointer border-b last:border-b-0"
+                                                            >
+                                                                <Checkbox
+                                                                    checked={bulkTypeIds.includes(at.source_id)}
+                                                                    onCheckedChange={() => toggleBulkTypeId(at.source_id)}
+                                                                    disabled={bulkRunning}
+                                                                />
+                                                                <span className="text-sm">{at.name}</span>
+                                                                {at.duration_minutes && (
+                                                                    <span className="text-xs text-muted-foreground ml-auto">{at.duration_minutes} min</span>
+                                                                )}
+                                                            </label>
+                                                        ))}
+                                                    </div>
+                                                )}
+                                            </div>
+                                        </div>
+                                    </div>
+                                    {bulkRunning && (
+                                        <div className="space-y-2 rounded-md border border-border/70 p-3">
+                                            {bulkProgress ? (
+                                                <>
+                                                    <div className="flex items-center justify-between text-sm">
+                                                        <span>Batch {bulkProgress.batch} of {bulkProgress.batches}</span>
+                                                        <span className="text-muted-foreground">{bulkProgress.done} / {bulkProgress.total} linked</span>
+                                                    </div>
+                                                    <Progress value={(bulkProgress.done / bulkProgress.total) * 100} />
+                                                </>
+                                            ) : (
+                                                <p className="text-sm">Checking matching work windows...</p>
+                                            )}
+                                            <p className="text-xs text-muted-foreground">
+                                                {bulkPauseRemaining > 0
+                                                    ? `Pausing ${bulkPauseRemaining}s before the next batch to stay inside the PMS API quota.`
+                                                    : "Keep this dialog open until the run finishes."}
+                                            </p>
+                                        </div>
+                                    )}
+                                </div>
+                                <DialogFooter>
+                                    <Button variant="outline" onClick={() => setBulkDialogOpen(false)} disabled={bulkRunning}>
+                                        Cancel
+                                    </Button>
+                                    <Button
+                                        onClick={handleBulkLinkRange}
+                                        disabled={
+                                            bulkRunning ||
+                                            bulkOperatoryIds.length === 0 ||
+                                            bulkTypeIds.length === 0 ||
+                                            !bulkRange?.from ||
+                                            !bulkRange?.to
+                                        }
+                                    >
+                                        {bulkRunning ? "Linking..." : "Apply"}
+                                    </Button>
+                                </DialogFooter>
+                            </DialogContent>
+                        </Dialog>
+                    )}
+
                     {/* Edit Linking Dialog */}
                     <Dialog open={!!editTarget} onOpenChange={() => setEditTarget(null)}>
                         <DialogContent className="max-w-md">

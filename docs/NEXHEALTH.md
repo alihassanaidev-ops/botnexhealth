@@ -149,6 +149,15 @@ support request. Factor the turnaround into clinic onboarding timelines; a
 clinic whose window sync silently no-ops is usually one where this was never
 enabled.
 
+**Bulk appointment-type linking is deliberately bounded.** In Providers &
+Scheduling, an institution or location admin can preview dated work windows
+for selected operatories and a forward-looking range of at most 15 days, then
+link appointment types in batches of at most 10 windows. The browser waits 30
+seconds between batches and reports per-window failures. Recurring weekly rules
+are excluded so a date-range action cannot silently change every future week.
+The preview is read-only; writes occur only through the apply endpoint and are
+recorded in the audit log.
+
 **`cancelled` vs `canceled`.** Appointment payloads use either spelling
 depending on the path that produced them; we check both
 (`adapter.py:300`). Similarly "already cancelled" errors on cancel are detected

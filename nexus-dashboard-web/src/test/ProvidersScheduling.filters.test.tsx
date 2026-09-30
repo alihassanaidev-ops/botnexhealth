@@ -100,11 +100,14 @@ function recurringWindows(count: number): CachedAvailability[] {
     )
 }
 
-function mountWith(availabilities: CachedAvailability[]) {
+function mountWith(availabilities: CachedAvailability[], canLinkAvailability = false) {
     const apiGet = api.get as ReturnType<typeof vi.fn>
     apiGet.mockImplementation((url: string) => {
         if (url === "/auth/users/me") return Promise.resolve({ data: USER })
         if (url.startsWith("/institution/setup/locations")) return Promise.resolve({ data: [LOCATION] })
+        if (url.startsWith("/institution/setup/overview")) {
+            return Promise.resolve({ data: { can_link_availability: canLinkAvailability } })
+        }
         if (url.startsWith("/institution/setup/providers")) return Promise.resolve({ data: [PROVIDER] })
         if (url.startsWith("/institution/setup/appointment-types")) return Promise.resolve({ data: [APPT_TYPE] })
         if (url.startsWith("/institution/setup/operatories")) return Promise.resolve({ data: [OPERATORY] })
@@ -122,6 +125,28 @@ function mountWith(availabilities: CachedAvailability[]) {
         </MemoryRouter>
     )
 }
+
+describe("Bulk appointment-type linking", () => {
+    it("is capability-gated and opens with the provider's visible operatories selected", async () => {
+        const user = userEvent.setup()
+        mountWith(datedWindows(2), true)
+
+        const openButton = await screen.findByRole("button", { name: /link date range/i })
+        await user.click(openButton)
+
+        expect(screen.getByRole("heading", { name: /link date range/i })).toBeInTheDocument()
+        expect(screen.getByText("Operatories: All visible operatories")).toBeInTheDocument()
+        expect(screen.getByRole("button", { name: "Apply" })).toBeDisabled()
+        expect(screen.getByText(/recurring weekly rules are not changed/i)).toBeInTheDocument()
+    })
+
+    it("stays hidden when the PMS does not support availability linking", async () => {
+        mountWith(datedWindows(2), false)
+
+        await waitFor(() => expect(rowCount()).toBe(2))
+        expect(screen.queryByRole("button", { name: /link date range/i })).not.toBeInTheDocument()
+    })
+})
 
 /** Work-window rows are identified by their "Edit Linking" button. */
 function rowCount() {
