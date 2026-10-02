@@ -105,6 +105,7 @@ export default function ProvidersScheduling() {
     const [cutoffTime, setCutoffTime] = useState<string>("")
     const [minAge, setMinAge] = useState<number | "">("")
     const [maxAge, setMaxAge] = useState<number | "">("")
+    const [isHidden, setIsHidden] = useState(false)
     const [savingSettings, setSavingSettings] = useState(false)
     const [canLinkAvailability, setCanLinkAvailability] = useState(false)
     const [pmsSource, setPmsSource] = useState<string | null>(null)
@@ -205,6 +206,7 @@ export default function ProvidersScheduling() {
         setCutoffTime(p?.same_day_cutoff_time ?? "")
         setMinAge(p?.min_age ?? "")
         setMaxAge(p?.max_age ?? "")
+        setIsHidden(p?.is_hidden ?? false)
     }, [selectedProviderId, providers])
 
     const selectedProvider = providers.find((p) => p.source_id === selectedProviderId)
@@ -253,6 +255,7 @@ export default function ProvidersScheduling() {
                 same_day_cutoff_time: cutoffTime || null,
                 min_age: minAge === "" ? null : minAge,
                 max_age: maxAge === "" ? null : maxAge,
+                is_hidden: isHidden,
             }, locationId)
             // Merge the server-confirmed provider instead of refetching every
             // provider/type/operatory — the PATCH already returns the fresh row.
@@ -270,7 +273,8 @@ export default function ProvidersScheduling() {
         bufferMinutes !== (selectedProvider?.buffer_minutes ?? 0) ||
         cutoffTime !== (selectedProvider?.same_day_cutoff_time ?? "") ||
         minAge !== (selectedProvider?.min_age ?? "") ||
-        maxAge !== (selectedProvider?.max_age ?? "")
+        maxAge !== (selectedProvider?.max_age ?? "") ||
+        isHidden !== (selectedProvider?.is_hidden ?? false)
 
     const openEditDialog = (av: CachedAvailability) => {
         setEditTarget(av)
@@ -1024,6 +1028,31 @@ export default function ProvidersScheduling() {
                                         disabled={!canManage}
                                     />
                                     <span className="text-sm text-muted-foreground">years</span>
+                                </div>
+                            </div>
+
+                            {/* Voice agent visibility */}
+                            <div className="space-y-1">
+                                <label className="text-sm font-medium">Voice Agent Visibility</label>
+                                <p className="text-xs text-muted-foreground">
+                                    Hide providers the practice does not book over the phone. The PMS
+                                    reports every provider on record, including ones no longer seeing
+                                    patients; hidden providers are never offered to callers. This does
+                                    not change anything in the PMS.
+                                </p>
+                                <div className="flex items-center gap-2 pt-1">
+                                    <Checkbox
+                                        id="provider-hidden"
+                                        checked={isHidden}
+                                        onCheckedChange={(checked) => setIsHidden(checked === true)}
+                                        disabled={!canManage}
+                                    />
+                                    <label
+                                        htmlFor="provider-hidden"
+                                        className="text-sm text-muted-foreground"
+                                    >
+                                        Hide this provider from the voice agent
+                                    </label>
                                 </div>
                             </div>
 

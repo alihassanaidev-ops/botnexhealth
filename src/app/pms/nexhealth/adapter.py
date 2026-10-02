@@ -1726,6 +1726,15 @@ class NexHealthAdapter(
     # before it. Hitting it means something is wrong, not that a clinic is big.
     _WORKING_HOURS_MAX_ITEMS = 1_000_000
 
+    # Work windows are the slowest read we make: NexHealth pre-expands them into
+    # one row per date, and the provider-embedded fallback pulls every
+    # provider's set in one go. Give them more headroom than the 30s client
+    # default, and no retries — a call that already blew a 60s budget will blow
+    # it again, and the default 3 retries would turn one slow load into four.
+    # The Retell appointment-type check reads these too, so this also bounds
+    # how long a caller can wait on a hung NexHealth.
+    _AVAILABILITY_TIMEOUT_SECONDS = 60.0
+
     async def list_availabilities(self, **kwargs: Any) -> list[dict]:
         provider_id = kwargs.pop("provider_id", None)
         ignore_past_dates = bool(kwargs.get("ignore_past_dates", False))
@@ -1748,6 +1757,8 @@ class NexHealthAdapter(
                 "GET",
                 self._api_contract.working_windows_path,
                 params=p,
+                timeout=self._AVAILABILITY_TIMEOUT_SECONDS,
+                max_retries=0,
             )
 
         direct_items = await fetch_all_pages(
@@ -1830,7 +1841,12 @@ class NexHealthAdapter(
                 "include[]": ["availabilities", "appointment_types"],
             }
             return await handle_nexhealth_request(
-                self._client, "GET", "/providers", params=p
+                self._client,
+                "GET",
+                "/providers",
+                params=p,
+                timeout=self._AVAILABILITY_TIMEOUT_SECONDS,
+                max_retries=0,
             )
 
         providers = await fetch_all_pages(
