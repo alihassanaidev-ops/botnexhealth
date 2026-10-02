@@ -308,7 +308,7 @@ def _availability_response_from_raw(
         # time: Lunch fills the gap between working windows, NOTE annotates one.
         # GoTracker's derived closed periods are likewise display-only.
         is_bookable_window=(
-            item.get("label_name") is None and item.get("status", "open") != "closed"
+            _is_bookable_raw_window(item)
         ),
         types_overridden=bool(item.get("types_overridden")),
         source_metadata={
@@ -406,6 +406,16 @@ def _parse_range_dates(
         )
 
     return [(start + timedelta(days=offset)).isoformat() for offset in range(day_count)]
+
+
+def _is_bookable_raw_window(item: dict[str, Any]) -> bool:
+    """A genuine working window, as opposed to a PMS note, a break or a closed period.
+
+    v3 labels notes ("NOTE") and breaks ("Lunch"); a derived closed period
+    carries status "closed". Only an unlabelled, open window is bookable time.
+    On v2 nothing is labelled, so every row reports as bookable.
+    """
+    return item.get("label_name") is None and item.get("status", "open") != "closed"
 
 
 def _availability_matches_dates(item: dict[str, Any], dates: set[str]) -> bool:
@@ -621,6 +631,9 @@ class BulkLinkRangePreviewRequest(BaseModel):
     operatory_ids: list[str] | None = None
     # Backward-compatible single-operatory field used by older clients.
     operatory_id: str | None = None
+    # Notes, lunch breaks and closed periods are left out unless asked for, so
+    # a range-link cannot attach appointment types to time that is not bookable.
+    include_non_bookable: bool = False
 
 
 class BulkLinkRangePreviewResponse(BaseModel):
@@ -1331,6 +1344,7 @@ async def preview_bulk_link_range_availabilities(
             item
             for item in matched_items
             if not _raw_operatory_id_is_hidden(item.get("operatory_id"), hidden_operatory_ids)
+            and (req.include_non_bookable or _is_bookable_raw_window(item))
         ]
 
     return BulkLinkRangePreviewResponse(

@@ -45,6 +45,10 @@ import {
     type UpcomingRange,
 } from "@/lib/availability-filter"
 
+// The calendar view is hidden for now; the list is the only view. Its code is
+// kept intact — set this to true to bring the calendar/list switch back.
+const SHOW_CALENDAR_VIEW = false
+
 /** Dated work windows per page. Matches the Patients table's page size. */
 const PAGE_SIZE = 25
 
@@ -113,12 +117,16 @@ export default function ProvidersScheduling() {
     const [canClearWorkingWindowOverride, setCanClearWorkingWindowOverride] = useState(false)
     // NexHealth returns PMS notes and lunch breaks in the same collection as
     // real working windows. Only v3 labels them, so on v2 every row reports as
-    // bookable and this toggle is inert. Shown by default: seeing "Lunch" on a
-    // row is what tells an operator it is not bookable time.
-    const [showNonBookable, setShowNonBookable] = useState(true)
+    // bookable and this toggle is inert. Hidden by default, so the list shows
+    // bookable time only and nobody links a lunch break by mistake; ticking the
+    // box brings the labelled rows back for inspection.
+    const [showNonBookable, setShowNonBookable] = useState(false)
     const [bulkDialogOpen, setBulkDialogOpen] = useState(false)
     const [bulkTypeIds, setBulkTypeIds] = useState<string[]>([])
     const [bulkOperatoryIds, setBulkOperatoryIds] = useState<string[]>([])
+    // Range-links skip notes, breaks and closed periods unless this is ticked;
+    // the server applies the same rule to the preview it builds the batches from.
+    const [bulkIncludeNonBookable, setBulkIncludeNonBookable] = useState(false)
     const bulkRangeMin = useMemo(() => startOfDay(new Date()), [])
     const bulkRangeMax = useMemo(
         () => addDays(bulkRangeMin, BULK_RANGE_MAX_DAYS - 1),
@@ -350,11 +358,16 @@ export default function ProvidersScheduling() {
                 start_date: format(bulkRange.from, ISO_DATE),
                 end_date: format(bulkRange.to, ISO_DATE),
                 operatory_ids: bulkOperatoryIds,
+                include_non_bookable: bulkIncludeNonBookable,
             }, locationId)
 
             const ids = preview.windows.map((w) => w.source_id).filter(Boolean)
             if (ids.length === 0) {
-                toast.warning("No dated work windows in that range matched the selected provider and operatories")
+                toast.warning(
+                    bulkIncludeNonBookable
+                        ? "No dated work windows in that range matched the selected provider and operatories"
+                        : "No bookable work windows in that range matched the selected provider and operatories (notes, breaks and closed periods are skipped)"
+                )
                 return
             }
 
@@ -691,6 +704,7 @@ export default function ProvidersScheduling() {
                 ? [selectedOperatoryId]
                 : visibleIds
         )
+        setBulkIncludeNonBookable(false)
         setBulkDialogOpen(true)
     }
 
@@ -839,6 +853,7 @@ export default function ProvidersScheduling() {
                 }
                 actions={
                     <>
+                        {SHOW_CALENDAR_VIEW && (
                         <div className="inline-flex overflow-hidden rounded-md border">
                             {(["calendar", "list"] as const).map((v) => (
                                 <button
@@ -850,6 +865,7 @@ export default function ProvidersScheduling() {
                                 </button>
                             ))}
                         </div>
+                        )}
                         {canManage && view === "list" && (
                             <>
                                 {canLinkAvailability && (
@@ -907,7 +923,7 @@ export default function ProvidersScheduling() {
                         </p>
                     </CardContent>
                 </Card>
-            ) : view === "calendar" ? (
+            ) : SHOW_CALENDAR_VIEW && view === "calendar" ? (
                 <SchedulerCalendar
                     locationId={locationId}
                     operatories={operatories}
@@ -1360,6 +1376,20 @@ export default function ProvidersScheduling() {
                                         </div>
                                     </div>
                                 </div>
+                                <label className="flex items-start gap-2 rounded-md border border-border/70 p-3 text-sm cursor-pointer">
+                                    <Checkbox
+                                        checked={bulkIncludeNonBookable}
+                                        onCheckedChange={(checked) => setBulkIncludeNonBookable(checked === true)}
+                                        disabled={bulkRunning}
+                                        className="mt-0.5"
+                                    />
+                                    <span>
+                                        <span className="font-medium">Include closed periods, notes &amp; breaks</span>
+                                        <span className="block text-xs text-muted-foreground">
+                                            Off by default, so lunch breaks and PMS notes are never linked by mistake.
+                                        </span>
+                                    </span>
+                                </label>
                                 {bulkRunning && (
                                     <div className="space-y-2 rounded-md border border-border/70 p-3">
                                         {bulkProgress ? (
