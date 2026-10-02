@@ -133,6 +133,63 @@ async def test_handler_returns_400_on_unparseable_body():
 # ── process_retell_call_analyzed_event helper ───────────────────────
 
 
+def test_retell_call_webhook_uses_scrubbed_metadata_when_raw_metadata_absent():
+    call = webhooks.RetellCallWebhook.model_validate(
+        {
+            "call_id": "call-scrubbed",
+            "scrubbed_metadata": {
+                "workflow_run_id": "run-1",
+                "workflow_id": "workflow-1",
+            },
+            "scrubbed_retell_llm_dynamic_variables": {
+                "appointment_id": "gt-900000004",
+            },
+        }
+    )
+
+    assert call.effective_metadata["workflow_run_id"] == "run-1"
+    assert call.effective_dynamic_variables["appointment_id"] == "gt-900000004"
+
+
+def test_campaign_voice_outcome_prefers_scrubbed_custom_call_outcome():
+    call = webhooks.RetellCallWebhook.model_validate(
+        {
+            "call_id": "call-confirmed",
+            "call_status": "ended",
+            "disconnection_reason": "agent_hangup",
+            "scrubbed_call_analysis": {
+                "call_summary": "confirmed",
+                "custom_analysis_data": {"call_outcome": "confirmed"},
+            },
+        }
+    )
+
+    assert webhooks._campaign_voice_outcome(call) == "confirmed"
+
+
+def test_campaign_voice_context_only_forwards_supported_workflow_fields():
+    call = webhooks.RetellCallWebhook.model_validate(
+        {
+            "call_id": "call-callback",
+            "call_analysis": {
+                "custom_analysis_data": {
+                    "call_outcome": "callback_requested",
+                    "callback_at": "2026-08-08T15:00:00",
+                    "reschedule_start_time": "2026-08-12T14:30:00",
+                    "reschedule_end_time": "2026-08-12T14:45:00",
+                    "untrusted_extra": "must-not-enter-workflow-context",
+                }
+            },
+        }
+    )
+
+    assert webhooks._campaign_voice_context(call) == {
+        "callback_at": "2026-08-08T15:00:00",
+        "reschedule_start_time": "2026-08-12T14:30:00",
+        "reschedule_end_time": "2026-08-12T14:45:00",
+    }
+
+
 @pytest.mark.asyncio
 async def test_helper_returns_success_and_finalizes_completed_when_no_institution():
     """If the agent_id doesn't resolve to an institution, that's a
@@ -142,7 +199,7 @@ async def test_helper_returns_success_and_finalizes_completed_when_no_institutio
     with (
         patch.object(
             webhooks,
-            "_resolve_institution_location_from_agent",
+            "_resolve_institution_location_from_call",
             new=AsyncMock(return_value=(None, None)),
         ),
         patch.object(webhooks, "_finish_webhook_processing", new=finish),
@@ -177,7 +234,7 @@ async def test_helper_marks_failed_and_reraises_on_lookup_error():
     with (
         patch.object(
             webhooks,
-            "_resolve_institution_location_from_agent",
+            "_resolve_institution_location_from_call",
             new=AsyncMock(side_effect=lookup_err),
         ),
         patch.object(webhooks, "_finish_webhook_processing", new=finish),
@@ -197,3 +254,101 @@ async def test_helper_marks_failed_and_reraises_on_lookup_error():
     assert finish.await_args.kwargs["status"] == "FAILED"
     assert "Retell agent lookup failed" in finish.await_args.kwargs["error"]
     capture_dead_letter.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_outbound_call_resolution_prefers_voice_attempt_over_agent_mapping():
+    """Outbound profiles must not require a duplicate location agent mapping."""
+    location = object()
+    institution = object()
+    attempt_lookup = AsyncMock(return_value=(location, institution))
+    agent_lookup = AsyncMock(return_value=(None, None))
+    call = webhooks.RetellCallWebhook.model_validate(
+        {
+            "call_id": "call-outbound-1",
+            "agent_id": "agent-profile-only",
+            "direction": "outbound",
+            "scrubbed_metadata": {"institution_id": "institution-1"},
+        }
+    )
+
+    with (
+        patch.object(
+            webhooks,
+            "_resolve_institution_location_from_outbound_attempt",
+            new=attempt_lookup,
+        ),
+        patch.object(
+            webhooks,
+            "_resolve_institution_location_from_agent",
+            new=agent_lookup,
+        ),
+    ):
+        result = await webhooks._resolve_institution_location_from_call(call)
+
+    assert result == (location, institution)
+    attempt_lookup.assert_awaited_once_with("call-outbound-1", "institution-1")
+    agent_lookup.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_outbound_attempt_lookup_uses_tenant_scoped_worker_context():
+    """The signed outbound metadata supplies the tenant boundary, while the
+    Retell call id identifies the exact workflow attempt inside that tenant."""
+    location = object()
+    institution = object()
+    result_proxy = MagicMock()
+    result_proxy.first.return_value = (location, institution)
+    mock_session = AsyncMock()
+    mock_session.__aenter__ = AsyncMock(return_value=mock_session)
+    mock_session.__aexit__ = AsyncMock(return_value=False)
+    mock_session.execute = AsyncMock(return_value=result_proxy)
+
+    with patch(
+        "src.app.database.get_system_db_session",
+        return_value=mock_session,
+    ) as get_session:
+        result = await webhooks._resolve_institution_location_from_outbound_attempt(
+            "call-outbound-1",
+            "institution-1",
+        )
+
+    assert result == (location, institution)
+    get_session.assert_called_once_with(
+        "celery",
+        institution_id="institution-1",
+        external_id="call-outbound-1",
+    )
+
+
+@pytest.mark.asyncio
+async def test_inbound_call_resolution_uses_agent_mapping_directly():
+    location = object()
+    institution = object()
+    attempt_lookup = AsyncMock()
+    agent_lookup = AsyncMock(return_value=(location, institution))
+    call = webhooks.RetellCallWebhook.model_validate(
+        {
+            "call_id": "call-inbound-1",
+            "agent_id": "agent-inbound",
+            "direction": "inbound",
+        }
+    )
+
+    with (
+        patch.object(
+            webhooks,
+            "_resolve_institution_location_from_outbound_attempt",
+            new=attempt_lookup,
+        ),
+        patch.object(
+            webhooks,
+            "_resolve_institution_location_from_agent",
+            new=agent_lookup,
+        ),
+    ):
+        result = await webhooks._resolve_institution_location_from_call(call)
+
+    assert result == (location, institution)
+    attempt_lookup.assert_not_awaited()
+    agent_lookup.assert_awaited_once_with("agent-inbound")

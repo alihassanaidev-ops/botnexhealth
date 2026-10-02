@@ -1,0 +1,134 @@
+"""Disposable appointment projection (Plan 09 D-3 core).
+
+A thin, per-tenant working set of the appointment state we've most recently seen
+from NexHealth (webhook or reconciliation). It exists so the engine can:
+
+  * detect a **reschedule** (stored start_time != incoming) to re-enroll at the
+    new time — Plan 09 D-1;
+  * serve a **freshness window** so dispatch-time revalidation can trust a
+    recently-synced row instead of calling NexHealth live on every send — D-2.
+
+It is NOT the system of record — NexHealth is. Rows are cheap to rebuild from a
+backfill/reconciliation sweep, and carry only scheduling-relevant, non-clinical
+fields. One row per (institution_id, nexhealth_appointment_id).
+"""
+
+from __future__ import annotations
+
+from datetime import datetime
+
+from sqlalchemy import (
+    Boolean,
+    DateTime,
+    ForeignKey,
+    Index,
+    Integer,
+    String,
+    UniqueConstraint,
+    func,
+    text,
+)
+from sqlalchemy.dialects.postgresql import UUID
+from sqlalchemy.orm import Mapped, mapped_column
+
+from src.app.database import Base
+
+
+class AppointmentWorkingSet(Base):
+    """Last-seen scheduling state for a NexHealth appointment (per tenant)."""
+
+    __tablename__ = "appointment_working_set"
+    __table_args__ = (
+        UniqueConstraint(
+            "institution_id",
+            "nexhealth_appointment_id",
+            name="uq_appointment_working_set_appt",
+        ),
+        Index(
+            "ix_appointment_working_set_synced",
+            "institution_id",
+            "last_synced_at",
+        ),
+    )
+
+    id: Mapped[str] = mapped_column(UUID(as_uuid=False), primary_key=True)
+    institution_id: Mapped[str] = mapped_column(
+        UUID(as_uuid=False),
+        ForeignKey("institutions.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    location_id: Mapped[str | None] = mapped_column(
+        UUID(as_uuid=False),
+        ForeignKey("institution_locations.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+
+    nexhealth_appointment_id: Mapped[str] = mapped_column(String(160), nullable=False)
+    nexhealth_patient_id: Mapped[str | None] = mapped_column(String(160), nullable=True)
+    contact_id: Mapped[str | None] = mapped_column(
+        UUID(as_uuid=False),
+        ForeignKey("contacts.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    provider_id: Mapped[str | None] = mapped_column(String(160), nullable=True, index=True)
+    appointment_type_id: Mapped[str | None] = mapped_column(String(160), nullable=True, index=True)
+    appointment_reason: Mapped[str | None] = mapped_column(String(500), nullable=True)
+
+    # Scheduling state we compare against to detect a reschedule.
+    start_time: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    # 'scheduled' | 'cancelled' — mirrors the appointment's live disposition.
+    status: Mapped[str] = mapped_column(
+        String(20), nullable=False, default="scheduled", server_default=text("'scheduled'")
+    )
+    gotracker_status_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    gotracker_status_label: Mapped[str | None] = mapped_column(String(40), nullable=True)
+    is_confirmed: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
+    is_preconfirmed: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
+    last_status_source: Mapped[str | None] = mapped_column(String(40), nullable=True)
+    last_status_synced_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    last_writeback_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    # Visit-progress state. Unlike StatusId, this records how far through the
+    # visit the patient is; post-op enrollment is driven by a terminal state such
+    # as "Completed".
+    #
+    # Populated by both PMS paths, despite the Tracker-flavoured naming.
+    # GoTracker writes real Chair Flow transitions. NexHealth has no completion
+    # event, so `sweep_nexhealth_completed_visits` derives it once the
+    # appointment's start time plus its type duration has passed, and sets
+    # flow_changed_at to the computed end of the visit rather than sweep time.
+    flow_state: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    flow_changed_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    checked_in_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    in_chair_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    out_chair_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    checked_out_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    last_event: Mapped[str | None] = mapped_column(String(64), nullable=True)
+
+    # When we last refreshed this row from NexHealth (webhook or reconciliation).
+    # The freshness window compares against this.
+    last_synced_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )

@@ -2,8 +2,8 @@
  * Holds the active institution's profile for institution-scoped users.
  *
  * Why this exists: the dashboard needs the tenant's PMS mode (`has_pms`) to
- * decide whether to show the Practice Setup nav/routes (PMS tenants) or the
- * call-intelligence Patients view (no-PMS tenants). The mode lives on the
+ * decide whether to show PMS-only setup and the synchronized Patients view.
+ * Every tenant still has the relationship-oriented Contacts view. The mode lives on the
  * institution and is served by `GET /institution/me`. SUPER_ADMIN and
  * unauthenticated users have no institution; the provider returns
  * `hasPms = true` (the PMS default) for them so platform-level views are
@@ -84,6 +84,16 @@ export function InstitutionProvider({ children }: { children: ReactNode }) {
             {children}
         </InstitutionContext.Provider>
     )
+}
+
+/**
+ * The institution's PMS type, or null when unknown — outside the provider
+ * (tests, super-admin surfaces) or while the profile is loading. Callers gate
+ * PMS-owned UI on an exact match, so null fails closed.
+ */
+// eslint-disable-next-line react-refresh/only-export-components
+export function usePmsType(): string | null {
+    return useContext(InstitutionContext)?.pmsType ?? null
 }
 
 // eslint-disable-next-line react-refresh/only-export-components

@@ -1,17 +1,24 @@
 /* eslint-disable react-refresh/only-export-components */
 import { lazy, Suspense } from "react";
-import { createBrowserRouter } from "react-router-dom";
+import { createBrowserRouter, Navigate } from "react-router-dom";
 import DashboardWrapper from "./components/DashboardWrapper";
 import RoleRedirect from "./components/RoleRedirect";
 import RoleGuard from "./components/RoleGuard";
 import PmsGuard from "./components/PmsGuard";
 import NoPmsGuard from "./components/NoPmsGuard";
+import NoPmsLocationAdminGuard from "./components/NoPmsLocationAdminGuard";
 import AppLayout from "./components/AppLayout";
 import RouteError from "./components/RouteError";
 import BrandLoader from "@/components/BrandLoader";
 
 // Auth pages — eagerly loaded (small, needed immediately)
 import Login from "./pages/Login";
+import BookingLink from "./pages/BookingLink";
+import CancelLink from "./pages/CancelLink";
+import LeadCapture from "./pages/LeadCapture";
+import FormIntegrationsCallback from "./pages/FormIntegrationsCallback";
+import IdentifyPatient from "./pages/IdentifyPatient";
+import RegisterPatient from "./pages/RegisterPatient";
 import SetPassword from "./pages/SetPassword";
 
 // All other pages — lazy loaded
@@ -21,6 +28,7 @@ const SetupOverview = lazy(() => import("./pages/SetupOverview"));
 const Institutions = lazy(() => import("./pages/Tenants"));
 const InstitutionDetailPage = lazy(() => import("./pages/TenantDetail"));
 const AppointmentTypes = lazy(() => import("./pages/AppointmentTypes"));
+const Reasons = lazy(() => import("./pages/Reasons"));
 const ProvidersScheduling = lazy(() => import("./pages/ProvidersScheduling"));
 const Operatories = lazy(() => import("./pages/Operatories"));
 const Calls = lazy(() => import("./pages/Calls"));
@@ -31,18 +39,32 @@ const AdminUserManagement = lazy(() => import("./pages/AdminUserManagement"));
 const TwilioPhoneNumbers = lazy(() => import("./pages/TwilioPhoneNumbers"));
 const InstitutionAdminPanel = lazy(() => import("./pages/InstitutionAdminPanel"));
 const LocationAdminPanel = lazy(() => import("./pages/LocationAdminPanel"));
+const LocationSettings = lazy(() => import("./pages/LocationSettings"));
 const InstitutionUserManagement = lazy(() => import("./pages/InstitutionUserManagement"));
 const InstitutionSettings = lazy(() => import("./pages/InstitutionSettings"));
 const WorkflowStatuses = lazy(() => import("./pages/WorkflowStatuses"));
+const DoNotContactAdmin = lazy(() => import("./pages/DoNotContactAdmin"));
+const QuietHoursExceptions = lazy(() => import("@/pages/QuietHoursExceptions"))
 const InsurancePlans = lazy(() => import("./pages/InsurancePlans"));
-const EmailTemplates = lazy(() => import("./pages/EmailTemplates"));
+const EmailTemplatesPage = lazy(() => import("./pages/EmailTemplatesPage"));
+const EmailSendingIdentity = lazy(() => import("./pages/EmailSendingIdentity"));
+const EmailInboxSettings = lazy(() => import("./pages/EmailInboxSettings"));
+const Inbox = lazy(() => import("./pages/Inbox"));
 const NotificationPreferences = lazy(() => import("./pages/NotificationPreferences"));
 const SmsPreferences = lazy(() => import("./pages/SmsPreferences"));
 const SmsTemplates = lazy(() => import("./pages/SmsTemplates"));
 const Security = lazy(() => import("./pages/Security"));
 const Patients = lazy(() => import("./pages/Patients"));
+const Contacts = lazy(() => import("./pages/Contacts"));
+const AppointmentSync = lazy(() => import("./pages/AppointmentSync"));
 const GroupDashboard = lazy(() => import("./pages/GroupDashboard"));
 const Groups = lazy(() => import("./pages/Groups"));
+const Campaigns = lazy(() => import("./pages/Campaigns"));
+const Undeliverables = lazy(() => import("./pages/Undeliverables"));
+const CampaignDetail = lazy(() => import("./pages/CampaignDetail"));
+const WorkflowTemplates = lazy(() => import("./pages/WorkflowTemplates"));
+const WorkflowBuilder = lazy(() => import("./pages/WorkflowBuilder"));
+const WorkflowVersions = lazy(() => import("./pages/WorkflowVersions"));
 
 function LazyFallback() {
     return <BrandLoader />;
@@ -53,6 +75,39 @@ function S({ children }: { children: React.ReactNode }) {
 }
 
 export const router = createBrowserRouter([
+    {
+        // Patient-facing, opened from a text message. Deliberately outside
+        // AppLayout: those providers assume a signed-in user and would fire
+        // authenticated calls (and a redirect to /login) for someone who has no
+        // session and is not meant to have one. The signed token in the URL is
+        // the whole of the authentication here.
+        path: "/book/:action",
+        element: <BookingLink />,
+        errorElement: <RouteError />,
+    },
+    {
+        // Cancelling is its own page: it asks a question rather than offering
+        // times, and it must never act just because the link was opened.
+        path: "/book/cancel",
+        element: <CancelLink />,
+        errorElement: <RouteError />,
+    },
+    {
+        // The identity step. Sits in front of an action that would disclose an
+        // appointment or destroy one, and sends the patient on to ?next= once
+        // they are through.
+        path: "/book/identify",
+        element: <IdentifyPatient />,
+        errorElement: <RouteError />,
+    },
+    {
+        // Registering a lead as a patient. Public for the same reason as the
+        // pages above — opened straight from a message, no session — and kept
+        // outside AppLayout for the same one.
+        path: "/book/register",
+        element: <RegisterPatient />,
+        errorElement: <RouteError />,
+    },
     {
         element: <AppLayout />,
         errorElement: <RouteError />,
@@ -116,21 +171,106 @@ export const router = createBrowserRouter([
                         ),
                     },
                     {
+                        // Staff and campaign templates share this page. The
+                        // guard admits both roles; the page itself shows a super
+                        // admin only the campaign half, which is all they had.
                         path: "institution-admin/email-templates",
                         element: (
-                            <RoleGuard allowed={["INSTITUTION_ADMIN"]}>
-                                <S><EmailTemplates /></S>
+                            <RoleGuard allowed={["INSTITUTION_ADMIN", "SUPER_ADMIN"]}>
+                                <S><EmailTemplatesPage /></S>
                             </RoleGuard>
                         ),
                     },
                     {
-                        // SMS templates are patient-facing acknowledgements that
-                        // only no-PMS clinics send, so the page is guarded on both
-                        // the role and the tenant type.
+                        path: "contacts",
+                        element: (
+                            <RoleGuard allowed={["INSTITUTION_ADMIN", "LOCATION_ADMIN", "STAFF"]}>
+                                <S><Contacts /></S>
+                            </RoleGuard>
+                        ),
+                    },
+                    {
+                        // Compatibility for bookmarks from the old third
+                        // people screen. Enquiries are contacts with a lead
+                        // lifecycle, not a separate user-facing object.
+                        path: "enquiries",
+                        element: (
+                            <RoleGuard allowed={["INSTITUTION_ADMIN", "LOCATION_ADMIN"]}>
+                                <Navigate to="/contacts" replace />
+                            </RoleGuard>
+                        ),
+                    },
+                    {
+                        // Both intake routes now live on one page. The old path
+                        // is kept as a redirect: it was linked from the sidebar
+                        // and is in people's bookmarks.
+                        path: "institution-admin/enquiry-forms",
+                        element: <Navigate to="/institution-admin/lead-forms?tab=direct" replace />,
+                    },
+                    {
+                        path: "institution-admin/lead-forms",
+                        element: (
+                            <RoleGuard allowed={["INSTITUTION_ADMIN"]}>
+                                <S><LeadCapture /></S>
+                            </RoleGuard>
+                        ),
+                    },
+                    {
+                        // Both providers redirect here after authorisation. One
+                        // route for both: the provider is named inside the
+                        // signed state, so only a single redirect URI has to be
+                        // registered in each provider's app settings.
+                        path: "institution-admin/form-integrations/callback",
+                        element: (
+                            <RoleGuard allowed={["INSTITUTION_ADMIN"]}>
+                                <S><FormIntegrationsCallback /></S>
+                            </RoleGuard>
+                        ),
+                    },
+                    {
                         path: "institution-admin/sms-templates",
                         element: (
                             <RoleGuard allowed={["INSTITUTION_ADMIN"]}>
                                 <NoPmsGuard><S><SmsTemplates /></S></NoPmsGuard>
+                            </RoleGuard>
+                        ),
+                    },
+                    {
+                        // A super admin administers any practice's templates and
+                        // sending address; the page asks which practice, and the
+                        // API refuses the request if one is not named.
+                        path: "institution-admin/campaign-email-templates",
+                        element: (
+                            <Navigate
+                                to="/institution-admin/email-templates?tab=campaign"
+                                replace
+                            />
+                        ),
+                    },
+                    {
+                        path: "institution-admin/email-sending-address",
+                        element: (
+                            <RoleGuard allowed={["INSTITUTION_ADMIN", "SUPER_ADMIN"]}>
+                                <S><EmailSendingIdentity /></S>
+                            </RoleGuard>
+                        ),
+                    },
+                    {
+                        path: "institution-admin/email-inbox",
+                        element: (
+                            <RoleGuard allowed={["INSTITUTION_ADMIN", "LOCATION_ADMIN", "SUPER_ADMIN"]}>
+                                <S><EmailInboxSettings /></S>
+                            </RoleGuard>
+                        ),
+                    },
+                    {
+                        // Every signed-in role reaches the inbox; the API narrows
+                        // what each one may see, and refuses conversation content
+                        // to group admins entirely.
+                        path: "inbox",
+                        element: (
+                            <RoleGuard allowed={["SUPER_ADMIN", "GROUP_ADMIN", "INSTITUTION_ADMIN", "LOCATION_ADMIN", "STAFF"]}>
+                                <NoPmsLocationAdminGuard><S><Inbox /></S></NoPmsLocationAdminGuard>
                             </RoleGuard>
                         ),
                     },
@@ -166,6 +306,18 @@ export const router = createBrowserRouter([
                         element: (
                             <RoleGuard allowed={["LOCATION_ADMIN"]}>
                                 <S><LocationAdminPanel /></S>
+                            </RoleGuard>
+                        ),
+                    },
+                    {
+                        // Institution admins reach the same page to set numbers
+                        // for any of their clinics; the picker only appears when
+                        // more than one location comes back, so a location admin
+                        // sees their own and nothing else.
+                        path: "location-admin/settings",
+                        element: (
+                            <RoleGuard allowed={["LOCATION_ADMIN", "INSTITUTION_ADMIN"]}>
+                                <S><LocationSettings /></S>
                             </RoleGuard>
                         ),
                     },
@@ -227,6 +379,14 @@ export const router = createBrowserRouter([
                         ),
                     },
                     {
+                        path: "setup/reasons",
+                        element: (
+                            <RoleGuard allowed={["INSTITUTION_ADMIN", "LOCATION_ADMIN", "STAFF"]}>
+                                <PmsGuard><S><Reasons /></S></PmsGuard>
+                            </RoleGuard>
+                        ),
+                    },
+                    {
                         path: "setup/providers",
                         element: (
                             <RoleGuard allowed={["INSTITUTION_ADMIN", "LOCATION_ADMIN", "STAFF"]}>
@@ -283,10 +443,82 @@ export const router = createBrowserRouter([
                         ),
                     },
                     {
+                        path: "institution-admin/quiet-hours-exceptions",
+                        element: (
+                            <RoleGuard allowed={["INSTITUTION_ADMIN", "LOCATION_ADMIN"]}>
+                                <S><QuietHoursExceptions /></S>
+                            </RoleGuard>
+                        ),
+                    },
+                    {
+                        path: "institution-admin/do-not-contact",
+                        element: (
+                            <RoleGuard allowed={["INSTITUTION_ADMIN"]}>
+                                <S><DoNotContactAdmin /></S>
+                            </RoleGuard>
+                        ),
+                    },
+                    {
+                        path: "institution-admin/campaigns",
+                        element: (
+                            <RoleGuard allowed={["INSTITUTION_ADMIN", "LOCATION_ADMIN"]}>
+                                <S><Campaigns /></S>
+                            </RoleGuard>
+                        ),
+                    },
+                    {
+                        path: "institution-admin/campaigns/templates",
+                        element: (
+                            <RoleGuard allowed={["INSTITUTION_ADMIN", "LOCATION_ADMIN"]}>
+                                <S><WorkflowTemplates /></S>
+                            </RoleGuard>
+                        ),
+                    },
+                    {
+                        path: "institution-admin/campaigns/:id",
+                        element: (
+                            <RoleGuard allowed={["INSTITUTION_ADMIN", "LOCATION_ADMIN"]}>
+                                <S><CampaignDetail /></S>
+                            </RoleGuard>
+                        ),
+                    },
+                    {
+                        path: "institution-admin/campaigns/:id/builder",
+                        element: (
+                            <RoleGuard allowed={["INSTITUTION_ADMIN", "LOCATION_ADMIN"]}>
+                                <S><WorkflowBuilder /></S>
+                            </RoleGuard>
+                        ),
+                    },
+                    {
+                        path: "institution-admin/campaigns/:id/versions",
+                        element: (
+                            <RoleGuard allowed={["INSTITUTION_ADMIN", "LOCATION_ADMIN"]}>
+                                <S><WorkflowVersions /></S>
+                            </RoleGuard>
+                        ),
+                    },
+                    {
+                        path: "undeliverables",
+                        element: (
+                            <RoleGuard allowed={["SUPER_ADMIN", "INSTITUTION_ADMIN", "LOCATION_ADMIN"]}>
+                                <S><Undeliverables /></S>
+                            </RoleGuard>
+                        ),
+                    },
+                    {
+                        path: "institution-admin/appointment-sync",
+                        element: (
+                            <RoleGuard allowed={["INSTITUTION_ADMIN", "LOCATION_ADMIN", "STAFF"]}>
+                                <PmsGuard><S><AppointmentSync /></S></PmsGuard>
+                            </RoleGuard>
+                        ),
+                    },
+                    {
                         path: "patients",
                         element: (
                             <RoleGuard allowed={["INSTITUTION_ADMIN", "LOCATION_ADMIN", "STAFF"]}>
-                                <S><Patients /></S>
+                                <PmsGuard redirectTo="/contacts"><S><Patients /></S></PmsGuard>
                             </RoleGuard>
                         ),
                     },

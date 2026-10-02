@@ -10,16 +10,14 @@ import logging
 from typing import Any
 from uuid import uuid4
 
-from jinja2 import BaseLoader, Environment, TemplateSyntaxError
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.app.models.email_template import EmailTemplate, EmailTemplateType
+from src.app.services.template_engine import render_html
+from src.app.services.template_engine import validate as validate_template_syntax
 
 logger = logging.getLogger(__name__)
-
-# Jinja2 environment with sandboxed rendering (no file access)
-_jinja_env = Environment(loader=BaseLoader(), autoescape=True)
 
 
 # ---------------------------------------------------------------------------
@@ -580,18 +578,19 @@ class EmailTemplateService:
 
     @staticmethod
     def render(template_str: str, variables: dict[str, Any]) -> str:
-        """Render a Jinja2 template string with the given variables."""
-        tpl = _jinja_env.from_string(template_str)
-        return tpl.render(**variables)
+        """Render a template string with the given variables.
+
+        These templates are HTML-bearing, so this uses the escaping environment.
+        Delegates to ``services.template_engine`` so the notification and
+        campaign stacks share one sandboxed engine rather than each keeping
+        their own.
+        """
+        return render_html(template_str, variables)
 
     @staticmethod
     def validate_template(template_str: str) -> str | None:
-        """Validate Jinja2 syntax. Returns error message or None if valid."""
-        try:
-            _jinja_env.parse(template_str)
-            return None
-        except TemplateSyntaxError as exc:
-            return f"Line {exc.lineno}: {exc.message}" if exc.lineno else str(exc.message)
+        """Validate template syntax. Returns error message or None if valid."""
+        return validate_template_syntax(template_str)
 
     async def render_preview(
         self, institution_id: str, template_type: str

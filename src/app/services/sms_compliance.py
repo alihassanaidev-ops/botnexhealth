@@ -6,19 +6,24 @@ from contextlib import suppress as ignore_errors
 from dataclasses import dataclass
 from datetime import datetime, timezone
 
-from sqlalchemy import select
+from sqlalchemy import or_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.app.models.sms_consent import (
+    ConsentBasis,
     ConsentChannel,
     ConsentRecord,
     ConsentSource,
     ConsentStatus,
+    DncScope,
     DoNotContact,
     SmsSuppression,
 )
-from src.app.services.sms_privacy import hash_phone, mask_phone
+from src.app.services.sms_privacy import hash_email, hash_phone, mask_email, mask_phone
+
+# DNC scopes that reach beyond a single location (block for the whole tenant).
+_TENANT_WIDE_DNC_SCOPES = frozenset({DncScope.INSTITUTION.value, DncScope.GROUP.value})
 
 
 class SmsBlockedReason(str):
@@ -71,25 +76,22 @@ class SmsComplianceService:
         to_number: str,
         contact_id: str | None = None,
     ) -> SmsRecipientIdentity:
-        """Block only explicit suppressions, DNC records, and latest revoked consent."""
+        """Block explicit location suppressions, DNC records, and revoked consent."""
         identity = self.identify(to_number)
 
-        dnc = (
-            await self.session.execute(
-                select(DoNotContact).where(
-                    DoNotContact.institution_id == institution_id,
-                    DoNotContact.phone_hash == identity.phone_hash,
-                    DoNotContact.is_active.is_(True),
-                )
-            )
-        ).scalars().first()
-        if dnc:
+        if await self.is_do_not_contact(
+            institution_id=institution_id,
+            location_id=location_id,
+            phone_hash=identity.phone_hash,
+            contact_id=contact_id,
+        ):
             raise SmsSendBlockedError(SmsBlockedReason.DO_NOT_CONTACT)
 
         suppression = (
             await self.session.execute(
                 select(SmsSuppression).where(
                     SmsSuppression.institution_id == institution_id,
+                    SmsSuppression.location_id == location_id,
                     SmsSuppression.channel == ConsentChannel.SMS.value,
                     SmsSuppression.phone_hash == identity.phone_hash,
                     SmsSuppression.is_active.is_(True),
@@ -104,6 +106,7 @@ class SmsComplianceService:
                 select(ConsentRecord)
                 .where(
                     ConsentRecord.institution_id == institution_id,
+                    ConsentRecord.location_id == location_id,
                     ConsentRecord.channel == ConsentChannel.SMS.value,
                     ConsentRecord.phone_hash == identity.phone_hash,
                 )
@@ -114,6 +117,142 @@ class SmsComplianceService:
             raise SmsSendBlockedError(SmsBlockedReason.CONSENT_REVOKED)
 
         return identity
+
+    async def is_do_not_contact(
+        self,
+        *,
+        institution_id: str,
+        location_id: str | None = None,
+        phone_hash: str | None = None,
+        contact_id: str | None = None,
+    ) -> bool:
+        """Scope-aware, channel-agnostic do-not-contact check (scope §11).
+
+        A DNC blocks a send to ``(institution_id, location_id)`` when an active
+        row matches the recipient (by ``phone_hash`` or ``contact_id``) and its
+        scope reaches that location: ``institution``/``group`` block the whole
+        tenant; ``location`` blocks only its own location. Matching on
+        ``contact_id`` (not just phone) lets a DNC also cover email-only contacts.
+        """
+        identity_conditions = []
+        if phone_hash:
+            identity_conditions.append(DoNotContact.phone_hash == phone_hash)
+        if contact_id:
+            identity_conditions.append(DoNotContact.contact_id == contact_id)
+        if not identity_conditions:
+            return False
+
+        rows = (
+            await self.session.execute(
+                select(DoNotContact).where(
+                    DoNotContact.institution_id == institution_id,
+                    DoNotContact.is_active.is_(True),
+                    or_(*identity_conditions),
+                )
+            )
+        ).scalars().all()
+
+        for dnc in rows:
+            scope = getattr(dnc, "scope", DncScope.INSTITUTION.value)
+            if scope in _TENANT_WIDE_DNC_SCOPES:
+                return True
+            if scope == DncScope.LOCATION.value and location_id is not None:
+                if dnc.location_id == location_id:
+                    return True
+        return False
+
+    async def set_do_not_contact(
+        self,
+        *,
+        institution_id: str,
+        phone: str,
+        scope: DncScope | str = DncScope.LOCATION,
+        location_id: str | None = None,
+        contact_id: str | None = None,
+        source: ConsentSource | str = ConsentSource.MANUAL,
+        reason: str | None = None,
+        created_by_user_id: str | None = None,
+    ) -> DoNotContact:
+        """Create (or return the existing active) do-not-contact record.
+
+        ``scope`` tiers reach: ``location`` (this location's sender only),
+        ``institution`` (whole tenant), or ``group`` (privileged DSO-wide). The
+        institution/group tiers are the "remove me everywhere" privileged action
+        (scope §11); the caller is responsible for the RBAC step-up.
+        """
+        identity = self.identify(phone)
+        scope_value = scope.value if isinstance(scope, DncScope) else scope
+        existing = (
+            await self.session.execute(
+                select(DoNotContact).where(
+                    DoNotContact.institution_id == institution_id,
+                    DoNotContact.phone_hash == identity.phone_hash,
+                    DoNotContact.is_active.is_(True),
+                )
+            )
+        ).scalars().first()
+        if existing:
+            return existing
+
+        row = DoNotContact(
+            institution_id=institution_id,
+            location_id=location_id,
+            contact_id=contact_id,
+            phone_hash=identity.phone_hash,
+            phone_masked=identity.phone_masked,
+            scope=scope_value,
+            is_active=True,
+            source=source.value if isinstance(source, ConsentSource) else source,
+            reason=reason,
+            created_by_user_id=created_by_user_id,
+        )
+        try:
+            async with self.session.begin_nested():
+                self.session.add(row)
+                await self.session.flush()
+        except IntegrityError:
+            with ignore_errors(Exception):
+                self.session.expunge(row)
+            existing = (
+                await self.session.execute(
+                    select(DoNotContact).where(
+                        DoNotContact.institution_id == institution_id,
+                        DoNotContact.phone_hash == identity.phone_hash,
+                        DoNotContact.is_active.is_(True),
+                    )
+                )
+            ).scalars().first()
+            if existing:
+                return existing
+            raise
+        return row
+
+    async def release_do_not_contact(
+        self,
+        *,
+        institution_id: str,
+        phone: str,
+        released_by_user_id: str | None = None,
+    ) -> DoNotContact | None:
+        """Deactivate the active do-not-contact record for a phone. Returns the
+        released row, or None if there was no active DNC. Idempotent."""
+        identity = self.identify(phone)
+        row = (
+            await self.session.execute(
+                select(DoNotContact).where(
+                    DoNotContact.institution_id == institution_id,
+                    DoNotContact.phone_hash == identity.phone_hash,
+                    DoNotContact.is_active.is_(True),
+                )
+            )
+        ).scalars().first()
+        if row is None:
+            return None
+        row.is_active = False
+        row.released_by_user_id = released_by_user_id
+        row.released_at = datetime.now(timezone.utc)
+        await self.session.flush()
+        return row
 
     async def suppress(
         self,
@@ -127,10 +266,13 @@ class SmsComplianceService:
         reason: str | None = None,
         created_by_user_id: str | None = None,
     ) -> SmsSuppression:
-        """Create an active suppression if one does not already exist."""
+        """Create an active location-scoped suppression if one does not exist."""
+        if not location_id:
+            raise ValueError("location_id is required for SMS suppression")
         identity = self.identify(phone)
         active = await self._active_suppression(
             institution_id=institution_id,
+            location_id=location_id,
             phone_hash=identity.phone_hash,
         )
         if active:
@@ -158,6 +300,7 @@ class SmsComplianceService:
                 self.session.expunge(row)
             active = await self._active_suppression(
                 institution_id=institution_id,
+                location_id=location_id,
                 phone_hash=identity.phone_hash,
             )
             if active:
@@ -188,12 +331,15 @@ class SmsComplianceService:
         location_id: str | None = None,
         contact_id: str | None = None,
     ) -> int:
-        """Release all active suppressions for a phone within an institution."""
+        """Release active suppressions for a phone at one location."""
+        if not location_id:
+            raise ValueError("location_id is required to release SMS suppression")
         identity = self.identify(phone)
         rows = (
             await self.session.execute(
                 select(SmsSuppression).where(
                     SmsSuppression.institution_id == institution_id,
+                    SmsSuppression.location_id == location_id,
                     SmsSuppression.channel == ConsentChannel.SMS.value,
                     SmsSuppression.phone_hash == identity.phone_hash,
                     SmsSuppression.is_active.is_(True),
@@ -226,6 +372,8 @@ class SmsComplianceService:
         institution_id: str,
         phone: str,
         status: ConsentStatus | str,
+        channel: ConsentChannel | str = ConsentChannel.SMS,
+        basis: ConsentBasis | str | None = None,
         location_id: str | None = None,
         contact_id: str | None = None,
         source: ConsentSource | str = ConsentSource.MANUAL,
@@ -237,10 +385,11 @@ class SmsComplianceService:
             institution_id=institution_id,
             location_id=location_id,
             contact_id=contact_id,
-            channel=ConsentChannel.SMS.value,
+            channel=channel.value if isinstance(channel, ConsentChannel) else channel,
             phone_hash=identity.phone_hash,
             phone_masked=identity.phone_masked,
             status=status.value if isinstance(status, ConsentStatus) else status,
+            basis=basis.value if isinstance(basis, ConsentBasis) else basis,
             source=source.value if isinstance(source, ConsentSource) else source,
             reason=reason,
             created_by_user_id=created_by_user_id,
@@ -248,11 +397,42 @@ class SmsComplianceService:
         self.session.add(row)
         return row
 
-    async def _active_suppression(self, *, institution_id: str, phone_hash: str) -> SmsSuppression | None:
+    async def has_consent_record(
+        self,
+        institution_id: str,
+        phone: str,
+        channel: ConsentChannel | str,
+    ) -> bool:
+        """True if ANY consent record (granted or revoked) already exists for this
+        (institution, channel, phone). Used before auto-capturing consent so a prior
+        opt-out is never overwritten and no duplicate rows accumulate."""
+        phone_hash = hash_phone(phone)
+        if not phone_hash:
+            return False
+        channel_value = channel.value if isinstance(channel, ConsentChannel) else channel
+        row = (
+            await self.session.execute(
+                select(ConsentRecord.id).where(
+                    ConsentRecord.institution_id == institution_id,
+                    ConsentRecord.channel == channel_value,
+                    ConsentRecord.phone_hash == phone_hash,
+                ).limit(1)
+            )
+        ).first()
+        return row is not None
+
+    async def _active_suppression(
+        self,
+        *,
+        institution_id: str,
+        location_id: str,
+        phone_hash: str,
+    ) -> SmsSuppression | None:
         return (
             await self.session.execute(
                 select(SmsSuppression).where(
                     SmsSuppression.institution_id == institution_id,
+                    SmsSuppression.location_id == location_id,
                     SmsSuppression.channel == ConsentChannel.SMS.value,
                     SmsSuppression.phone_hash == phone_hash,
                     SmsSuppression.is_active.is_(True),
@@ -267,6 +447,8 @@ class SmsComplianceService:
         phone_hash: str,
         phone_masked: str,
         status: ConsentStatus | str,
+        channel: ConsentChannel | str = ConsentChannel.SMS,
+        basis: ConsentBasis | str | None = None,
         location_id: str | None = None,
         contact_id: str | None = None,
         source: ConsentSource | str = ConsentSource.MANUAL,
@@ -277,13 +459,80 @@ class SmsComplianceService:
             institution_id=institution_id,
             location_id=location_id,
             contact_id=contact_id,
-            channel=ConsentChannel.SMS.value,
+            channel=channel.value if isinstance(channel, ConsentChannel) else channel,
             phone_hash=phone_hash,
             phone_masked=phone_masked,
             status=status.value if isinstance(status, ConsentStatus) else status,
+            basis=basis.value if isinstance(basis, ConsentBasis) else basis,
             source=source.value if isinstance(source, ConsentSource) else source,
             reason=reason,
             created_by_user_id=created_by_user_id,
         )
         self.session.add(row)
+        return row
+
+    async def record_email_consent(
+        self,
+        *,
+        institution_id: str,
+        email: str,
+        status: ConsentStatus | str,
+        basis: ConsentBasis | str | None = None,
+        location_id: str | None = None,
+        contact_id: str | None = None,
+        source: ConsentSource | str = ConsentSource.SYSTEM,
+        reason: str | None = None,
+    ) -> ConsentRecord | None:
+        """Append an EMAIL consent record keyed on the email identity.
+
+        The email counterpart to ``record_consent`` (which keys on phone). Writing
+        a REVOKED record here is how unsubscribe / hard-bounce / complaint suppress
+        email — the gate reads the latest EMAIL record and a revoked one beats the
+        implied-transactional allowance. Returns None if the email can't be hashed."""
+        email_hash = hash_email(email)
+        if not email_hash:
+            return None
+        return await self.record_email_consent_identity(
+            institution_id=institution_id,
+            email_hash=email_hash,
+            email_masked=mask_email(email),
+            status=status,
+            basis=basis,
+            location_id=location_id,
+            contact_id=contact_id,
+            source=source,
+            reason=reason,
+        )
+
+    async def record_email_consent_identity(
+        self,
+        *,
+        institution_id: str,
+        email_hash: str,
+        email_masked: str | None = None,
+        status: ConsentStatus | str,
+        basis: ConsentBasis | str | None = None,
+        location_id: str | None = None,
+        contact_id: str | None = None,
+        source: ConsentSource | str = ConsentSource.SYSTEM,
+        reason: str | None = None,
+    ) -> ConsentRecord:
+        """Append an EMAIL consent record from a pre-computed ``email_hash``.
+
+        Used where the raw address isn't available (an unsubscribe token carries
+        only the keyed email hash)."""
+        row = ConsentRecord(
+            institution_id=institution_id,
+            location_id=location_id,
+            contact_id=contact_id,
+            channel=ConsentChannel.EMAIL.value,
+            email_hash=email_hash,
+            email_masked=email_masked,
+            status=status.value if isinstance(status, ConsentStatus) else status,
+            basis=basis.value if isinstance(basis, ConsentBasis) else basis,
+            source=source.value if isinstance(source, ConsentSource) else source,
+            reason=reason,
+        )
+        self.session.add(row)
+        await self.session.flush()
         return row

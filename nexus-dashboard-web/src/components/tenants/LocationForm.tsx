@@ -1,5 +1,5 @@
 import { useState, useEffect } from "react";
-import { Loader2, CheckCircle2, XCircle, HelpCircle } from "lucide-react";
+import { Loader2, CheckCircle2, XCircle, HelpCircle, RefreshCw } from "lucide-react";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import * as z from "zod";
@@ -29,10 +29,12 @@ import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
 import { toast } from "sonner";
 import api from "@/lib/api";
-import { verifyRetellAgent, listTwilioPhoneNumbers } from "@/lib/admin-api";
+import { verifyRetellAgent, listInstitutionTwilioPhoneNumbers } from "@/lib/admin-api";
 import { SUPPORTED_TIMEZONES } from "@/lib/timezones";
 import type { Location, InstitutionBasicListResponse, InstitutionBasic, TwilioPhoneNumber } from "@/types";
 import { cn } from "@/lib/utils";
+import { OutboundVoiceProfilesAdmin } from "./OutboundVoiceProfilesAdmin";
+import { RetellSmsProfilesAdmin } from "./RetellSmsProfilesAdmin";
 
 const US_STATES = [
     { value: "AL", label: "AL — Alabama" }, { value: "AK", label: "AK — Alaska" },
@@ -69,6 +71,10 @@ const locationSchema = z.object({
     slug: z.string().optional(),
     nexhealth_subdomain: z.string().optional(),
     nexhealth_location_id: z.string().optional(),
+    gotracker_base_url: z.string().optional(),
+    gotracker_product_key: z.string().optional(),
+    gotracker_webhook_subscription_id: z.string().optional(),
+    gotracker_webhook_secret: z.string().optional(),
     retell_agent_id: z.string().optional(),
     twilio_from_number: z.string().optional(),
     address: z.string().optional(),
@@ -83,8 +89,9 @@ type LocationFormValues = z.infer<typeof locationSchema>;
 interface LocationFormProps {
     institutionSlug: string;
     location?: Location;
-    /** False for call-intelligence-only tenants — hides the NexHealth fields. */
+    /** False for call-intelligence-only tenants — hides PMS fields. */
     hasPms?: boolean;
+    pmsType?: string | null;
     onSuccess: () => void;
     onCancel: () => void;
 }
@@ -121,14 +128,61 @@ function FieldHint({ text }: { text: string }) {
     );
 }
 
-export function LocationForm({ institutionSlug, location, hasPms = true, onSuccess, onCancel }: LocationFormProps) {
+function GoTrackerWebhookStatus({ location }: { location?: Location }) {
+    if (!location) return null;
+    const hasApiKey = location.has_gotracker_product_key;
+    const status = location.gotracker_webhook_status;
+    const connected = hasApiKey && status === "active" && !!location.gotracker_webhook_subscription_id && location.has_gotracker_webhook_secret;
+    const failed = status === "failed";
+    const message = !hasApiKey
+        ? "Paste the GoTracker API key and save to connect this location."
+        : connected
+            ? "GoTracker API and webhooks are connected."
+            : failed
+                ? "GoTracker API key is saved, but webhook setup failed. Check the subscription status or use advanced adoption below."
+                : "GoTracker API key is saved. Webhook setup is pending or waiting for reconciliation.";
+
+    return (
+        <div className={cn(
+            "rounded-lg border p-3 text-sm",
+            connected
+                ? "border-green-500/25 bg-green-500/10 text-green-700 dark:text-green-300"
+                : failed
+                    ? "border-destructive/30 bg-destructive/10 text-destructive"
+                    : "border-border bg-background/70 text-muted-foreground",
+        )}>
+            <div className="flex items-center justify-between gap-3">
+                <span>{message}</span>
+                <Badge variant="secondary" className={cn(
+                    "shrink-0 capitalize",
+                    connected && "bg-green-500/15 text-green-700 dark:text-green-300",
+                    failed && "bg-destructive/15 text-destructive",
+                )}>
+                    {connected ? "Connected" : status || "Not connected"}
+                </Badge>
+            </div>
+            {location.gotracker_webhook_subscription_id && (
+                <p className="mt-1 text-xs opacity-80">
+                    Subscription ID: {location.gotracker_webhook_subscription_id}
+                </p>
+            )}
+        </div>
+    );
+}
+
+export function LocationForm({ institutionSlug, location, hasPms = true, pmsType = "nexhealth", onSuccess, onCancel }: LocationFormProps) {
     const isEditing = !!location;
+    const isNexHealth = hasPms && (pmsType ?? "nexhealth") === "nexhealth";
+    const isGoTracker = hasPms && pmsType === "gotracker";
     const [nexHealthInstitutions, setNexHealthInstitutions] = useState<InstitutionBasic[]>([]);
     const [isLoadingNH, setIsLoadingNH] = useState(false);
     const [isVerifyingAgent, setIsVerifyingAgent] = useState(false);
     const [agentVerificationStatus, setAgentVerificationStatus] = useState<"idle" | "success" | "error">("idle");
     const [twilioNumbers, setTwilioNumbers] = useState<TwilioPhoneNumber[]>([]);
     const [isLoadingTwilio, setIsLoadingTwilio] = useState(false);
+    const [twilioLoadError, setTwilioLoadError] = useState<string | null>(null);
+    const [isConnectingTwilio, setIsConnectingTwilio] = useState(false);
+    const [isConnectingGoTracker, setIsConnectingGoTracker] = useState(false);
 
     const form = useForm<LocationFormValues>({
         resolver: zodResolver(locationSchema),
@@ -137,6 +191,10 @@ export function LocationForm({ institutionSlug, location, hasPms = true, onSucce
             slug: location?.slug || "",
             nexhealth_subdomain: location?.nexhealth_subdomain || "",
             nexhealth_location_id: location?.nexhealth_location_id || "",
+            gotracker_base_url: location?.gotracker_base_url || "",
+            gotracker_product_key: "",
+            gotracker_webhook_subscription_id: location?.gotracker_webhook_subscription_id || "",
+            gotracker_webhook_secret: "",
             retell_agent_id: location?.retell_agent_id || "",
             twilio_from_number: location?.twilio_from_number || "",
             address: location?.address || "",
@@ -151,10 +209,13 @@ export function LocationForm({ institutionSlug, location, hasPms = true, onSucce
 
     // Fetch NexHealth institutions + locations on mount
     useEffect(() => {
+        if (!isNexHealth) return;
         async function fetchNHLocations() {
             setIsLoadingNH(true);
             try {
-                const { data } = await api.get<InstitutionBasicListResponse>("/admin/institutions/nexhealth/locations");
+                const { data } = await api.get<InstitutionBasicListResponse>(
+                    `/admin/institutions/${institutionSlug}/nexhealth/locations`
+                );
                 setNexHealthInstitutions(data.data);
             } catch {
                 // Silently fail — NexHealth locations are optional hints
@@ -163,23 +224,27 @@ export function LocationForm({ institutionSlug, location, hasPms = true, onSucce
             }
         }
         fetchNHLocations();
-    }, []);
+    }, [isNexHealth, institutionSlug]);
 
     // Fetch Twilio phone numbers on mount
     useEffect(() => {
         async function fetchTwilioNumbers() {
             setIsLoadingTwilio(true);
+            setTwilioLoadError(null);
             try {
-                const numbers = await listTwilioPhoneNumbers();
+                const numbers = await listInstitutionTwilioPhoneNumbers(institutionSlug);
                 setTwilioNumbers(numbers.filter(n => n.capabilities.sms));
-            } catch {
-                // Non-critical — form still works without the list
+            } catch (err: unknown) {
+                const error = err as { response?: { data?: { detail?: string } } };
+                setTwilioLoadError(
+                    error.response?.data?.detail || "Unable to load this institution's Twilio numbers",
+                );
             } finally {
                 setIsLoadingTwilio(false);
             }
         }
         fetchTwilioNumbers();
-    }, []);
+    }, [institutionSlug]);
 
     const nexHealthLocations = nexHealthInstitutions.flatMap(inst => inst.locations);
 
@@ -251,13 +316,50 @@ export function LocationForm({ institutionSlug, location, hasPms = true, onSucce
         }
     }
 
+    async function reconnectTwilioWebhook() {
+        if (!location?.twilio_from_number) return;
+        setIsConnectingTwilio(true);
+        try {
+            await api.post(
+                `/admin/institutions/${institutionSlug}/locations/${location.slug}/twilio/webhook`,
+            );
+            toast.success("Twilio inbound SMS webhook connected");
+        } catch (err: unknown) {
+            const error = err as { response?: { data?: { detail?: string } } };
+            toast.error(error.response?.data?.detail || "Failed to connect Twilio webhook");
+        } finally {
+            setIsConnectingTwilio(false);
+        }
+    }
+
+    async function reconnectGoTrackerWebhook() {
+        if (!location?.has_gotracker_product_key) return;
+        setIsConnectingGoTracker(true);
+        try {
+            const { data } = await api.post<{ action: "created" | "rotated" }>(
+                `/admin/institutions/${institutionSlug}/locations/${location.slug}/gotracker/webhook/reconnect`,
+            );
+            toast.success(
+                data.action === "rotated"
+                    ? "GoTracker webhook signing secret rotated"
+                    : "GoTracker webhook subscription created",
+            );
+            onSuccess();
+        } catch (err: unknown) {
+            const error = err as { response?: { data?: { detail?: string } } };
+            toast.error(error.response?.data?.detail || "Failed to reconnect GoTracker webhook");
+        } finally {
+            setIsConnectingGoTracker(false);
+        }
+    }
+
     return (
         <TooltipProvider>
             <Form {...form}>
                 <form onSubmit={form.handleSubmit(onSubmit)} className="space-y-5 pb-24">
 
                     {/* NexHealth Autofill Picker */}
-                    {hasPms && (
+                    {isNexHealth && (
                     <FormField
                         control={form.control}
                         name="nexhealth_location_id"
@@ -334,7 +436,7 @@ export function LocationForm({ institutionSlug, location, hasPms = true, onSucce
                     </SectionCard>
 
                     {/* Section: NexHealth Integration */}
-                    {hasPms && (
+                    {isNexHealth && (
                     <SectionCard title="NexHealth Integration" description="Connect this location to your NexHealth PMS account.">
                         <FormField
                             control={form.control}
@@ -352,6 +454,126 @@ export function LocationForm({ institutionSlug, location, hasPms = true, onSucce
                                 </FormItem>
                             )}
                         />
+                    </SectionCard>
+                    )}
+
+                    {/* Section: GoTracker Integration */}
+                    {isGoTracker && (
+                    <SectionCard title="GoTracker Integration" description="Connect this location to the ScaleNexus GoTracker Synchronizer.">
+                        <GoTrackerWebhookStatus location={location} />
+                        {isEditing && location?.has_gotracker_product_key && (
+                            <div className="flex justify-end">
+                                <Button
+                                    type="button"
+                                    variant="outline"
+                                    size="sm"
+                                    className="gap-1.5"
+                                    onClick={reconnectGoTrackerWebhook}
+                                    disabled={isConnectingGoTracker || isDirty}
+                                    title={isDirty ? "Save location changes before reconnecting" : undefined}
+                                >
+                                    <RefreshCw className={cn(
+                                        "h-4 w-4",
+                                        isConnectingGoTracker && "animate-spin",
+                                    )} />
+                                    Reconnect webhook
+                                </Button>
+                            </div>
+                        )}
+                        <FormField
+                            control={form.control}
+                            name="gotracker_base_url"
+                            render={({ field }) => (
+                                <FormItem>
+                                    <FormLabel>
+                                        Synchronizer Base URL
+                                        <FieldHint text="Defaults to https://synchronizer.scalenexus.ai when left blank." />
+                                    </FormLabel>
+                                    <FormControl>
+                                        <Input placeholder="https://synchronizer.scalenexus.ai" {...field} />
+                                    </FormControl>
+                                    <FormMessage />
+                                </FormItem>
+                            )}
+                        />
+                        <FormField
+                            control={form.control}
+                            name="gotracker_product_key"
+                            render={({ field }) => (
+                                <FormItem>
+                                    <FormLabel>
+                                        GoTracker API Key
+                                        <FieldHint text="API key from the GoTracker Synchronizer admin panel. It must include the scopes needed for read, book, and webhooks. Stored encrypted and never shown again." />
+                                    </FormLabel>
+                                    <FormControl>
+                                        <Input
+                                            type="password"
+                                            placeholder={location?.has_gotracker_product_key ? "Configured — enter a new key to replace" : "Paste GoTracker API key"}
+                                            autoComplete="off"
+                                            {...field}
+                                        />
+                                    </FormControl>
+                                    <FormMessage />
+                                </FormItem>
+                            )}
+                        />
+                        <p className="text-xs text-muted-foreground">
+                            Saving the API key automatically creates or updates this location's webhook subscription when the callback base URL is configured.
+                        </p>
+                        {isEditing && (
+                            <div className="space-y-3">
+                                <div>
+                                    <h4 className="text-sm font-medium">Advanced webhook adoption</h4>
+                                    <p className="text-xs text-muted-foreground">
+                                        Leave these blank for normal setup. Use them only to adopt an existing Synchronizer webhook subscription.
+                                    </p>
+                                </div>
+                                <div className="grid gap-4 md:grid-cols-2">
+                                <FormField
+                                    control={form.control}
+                                    name="gotracker_webhook_subscription_id"
+                                    render={({ field }) => (
+                                        <FormItem>
+                                            <FormLabel>
+                                                Webhook Subscription ID
+                                                <FieldHint text="Synchronizer subscription id for this location. Use this to adopt an existing cloud subscription instead of creating a new one." />
+                                            </FormLabel>
+                                            <FormControl>
+                                                <Input placeholder="14" {...field} />
+                                            </FormControl>
+                                            {location?.gotracker_webhook_status && (
+                                                <p className="text-xs text-muted-foreground">
+                                                    Current status: {location.gotracker_webhook_status}
+                                                </p>
+                                            )}
+                                            <FormMessage />
+                                        </FormItem>
+                                    )}
+                                />
+                                <FormField
+                                    control={form.control}
+                                    name="gotracker_webhook_secret"
+                                    render={({ field }) => (
+                                        <FormItem>
+                                            <FormLabel>
+                                                Webhook Signing Secret
+                                                <FieldHint text="Paste the secret returned by the Synchronizer for this location's webhook subscription. Stored encrypted and never shown again." />
+                                            </FormLabel>
+                                            <FormControl>
+                                                <Input
+                                                    type="password"
+                                                    placeholder={location?.has_gotracker_webhook_secret ? "Configured — enter a new secret to replace" : "Paste webhook secret"}
+                                                    autoComplete="off"
+                                                    {...field}
+                                                />
+                                            </FormControl>
+                                            <FormMessage />
+                                        </FormItem>
+                                    )}
+                                />
+                                </div>
+                            </div>
+                        )}
                     </SectionCard>
                     )}
 
@@ -425,51 +647,115 @@ export function LocationForm({ institutionSlug, location, hasPms = true, onSucce
                         />
                     </SectionCard>
 
+                    {isEditing && location && (
+                        <SectionCard
+                            title="Outbound Voice Profiles"
+                            description="Named outbound agents used by campaign workflow voice steps."
+                        >
+                            <OutboundVoiceProfilesAdmin
+                                institutionSlug={institutionSlug}
+                                locationSlug={location.slug}
+                            />
+                        </SectionCard>
+                    )}
+
+                    {isEditing && location && (
+                        <SectionCard
+                            title="Retell SMS Profiles"
+                            description="Response-generator agents available to Retell SMS Conversation workflow nodes."
+                        >
+                            <RetellSmsProfilesAdmin locationId={location.id} />
+                        </SectionCard>
+                    )}
+
                     {/* Section: Twilio SMS */}
                     <SectionCard
                         title="Twilio SMS"
-                        description="Select the outbound number used to send post-call SMS messages to patients."
+                        description="Select this location's number for workflow messages and patient replies."
                     >
                         <FormField
                             control={form.control}
                             name="twilio_from_number"
-                            render={({ field }) => (
-                                <FormItem>
-                                    <FormLabel>
-                                        Outbound SMS Number
-                                        <FieldHint text="When a call analysis includes a send_sms message, it will be sent from this number to the patient." />
-                                    </FormLabel>
-                                    <Select
-                                        onValueChange={(val) => field.onChange(val === "none" ? "" : val)}
-                                        value={field.value || "none"}
-                                        disabled={isLoadingTwilio}
-                                    >
-                                        <FormControl>
-                                            <SelectTrigger>
-                                                <SelectValue
-                                                    placeholder={
-                                                        isLoadingTwilio
-                                                            ? "Loading numbers…"
-                                                            : twilioNumbers.length === 0
-                                                                ? "No SMS-capable numbers found"
-                                                                : "Select a Twilio number"
-                                                    }
-                                                />
-                                            </SelectTrigger>
-                                        </FormControl>
-                                        <SelectContent>
-                                            <SelectItem value="none">None — disable auto-SMS</SelectItem>
-                                            {twilioNumbers.map((n) => (
-                                                <SelectItem key={n.sid} value={n.phone_number}>
-                                                    {n.phone_number}
-                                                    {n.friendly_name ? ` — ${n.friendly_name}` : ""}
-                                                </SelectItem>
-                                            ))}
-                                        </SelectContent>
-                                    </Select>
-                                    <FormMessage />
-                                </FormItem>
-                            )}
+                            render={({ field }) => {
+                                const options = field.value && !twilioNumbers.some(
+                                    number => number.phone_number === field.value,
+                                )
+                                    ? [{
+                                        sid: `assigned-${field.value}`,
+                                        phone_number: field.value,
+                                        friendly_name: "Currently assigned",
+                                        capabilities: { voice: false, sms: true, mms: false },
+                                        status: "active",
+                                    }, ...twilioNumbers]
+                                    : twilioNumbers;
+
+                                return (
+                                    <FormItem>
+                                        <FormLabel>
+                                            Outbound SMS Number
+                                            <FieldHint text="Saving connects this number to the deployment's inbound SMS webhook." />
+                                        </FormLabel>
+                                        <div className="flex items-center gap-2">
+                                            <Select
+                                                onValueChange={(val) => field.onChange(val === "none" ? "" : val)}
+                                                value={field.value || "none"}
+                                                disabled={isLoadingTwilio}
+                                            >
+                                                <FormControl>
+                                                    <SelectTrigger className="flex-1">
+                                                        <SelectValue
+                                                            placeholder={
+                                                                isLoadingTwilio
+                                                                    ? "Loading numbers…"
+                                                                    : options.length === 0
+                                                                        ? "No SMS-capable numbers found"
+                                                                        : "Select a Twilio number"
+                                                            }
+                                                        />
+                                                    </SelectTrigger>
+                                                </FormControl>
+                                                <SelectContent>
+                                                    <SelectItem value="none">None — disable auto-SMS</SelectItem>
+                                                    {options.map((n) => (
+                                                        <SelectItem key={n.sid} value={n.phone_number}>
+                                                            {n.phone_number}
+                                                            {n.friendly_name ? ` — ${n.friendly_name}` : ""}
+                                                        </SelectItem>
+                                                    ))}
+                                                </SelectContent>
+                                            </Select>
+                                            {isEditing && location.twilio_from_number && (
+                                                <Tooltip>
+                                                    <TooltipTrigger asChild>
+                                                        <Button
+                                                            type="button"
+                                                            variant="outline"
+                                                            size="icon"
+                                                            className="shrink-0"
+                                                            onClick={reconnectTwilioWebhook}
+                                                            disabled={
+                                                                isConnectingTwilio
+                                                                || field.value !== location.twilio_from_number
+                                                            }
+                                                        >
+                                                            <RefreshCw className={cn(
+                                                                "h-4 w-4",
+                                                                isConnectingTwilio && "animate-spin",
+                                                            )} />
+                                                            <span className="sr-only">Reconnect inbound SMS webhook</span>
+                                                        </Button>
+                                                    </TooltipTrigger>
+                                                    <TooltipContent>Reconnect inbound SMS webhook</TooltipContent>
+                                                </Tooltip>
+                                            )}
+                                        </div>
+                                        {twilioLoadError && (
+                                            <p className="text-sm text-destructive">{twilioLoadError}</p>
+                                        )}
+                                        <FormMessage />
+                                    </FormItem>
+                                );
+                            }}
                         />
                     </SectionCard>
 

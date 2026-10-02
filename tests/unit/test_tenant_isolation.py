@@ -22,6 +22,7 @@ import pytest
 from fastapi import HTTPException
 
 from src.app.api.deps_scope import assert_location_scope
+from src.app.api.routes.calls import _location_scope_id
 from src.app.models.user import User, UserRole
 from src.app.pms.factory import get_institution_pms
 
@@ -79,6 +80,18 @@ def test_assert_location_scope_allows_super_admin_anywhere():
     user = _user(UserRole.SUPER_ADMIN, institution_id=None)
     assert_location_scope(user, _LOC_A)  # no raise
     assert_location_scope(user, _LOC_B)  # no raise
+
+
+def test_institution_admin_location_filter_uses_active_location():
+    user = _user(UserRole.INSTITUTION_ADMIN)
+    assert _location_scope_id(user, _LOC_A) == _LOC_A
+
+
+def test_location_admin_cannot_override_assigned_location_filter():
+    user = _user(UserRole.LOCATION_ADMIN, location_id=_LOC_A)
+    with pytest.raises(HTTPException) as exc:
+        _location_scope_id(user, _LOC_B)
+    assert exc.value.status_code == 403
 
 
 # =============================================================================

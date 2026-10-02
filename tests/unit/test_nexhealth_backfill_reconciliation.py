@@ -1,0 +1,505 @@
+"""Unit tests for Plan 09 appointment backfill/reconciliation service."""
+
+from __future__ import annotations
+
+from datetime import datetime, timezone
+from types import SimpleNamespace
+from unittest.mock import AsyncMock, MagicMock, patch
+
+import pytest
+
+from src.app.models.nexhealth_webhook_subscription import (
+    NexHealthWebhookSubscriptionStatus,
+)
+from src.app.services.automation.nexhealth_backfill_service import (
+    NexHealthAppointmentSyncService,
+    NexHealthPatientSyncService,
+)
+from src.app.tasks.automation_workflow import (
+    _sync_nexhealth_appointments_async,
+    _sync_nexhealth_patients_async,
+)
+
+
+def _result(*, first=None, scalar=None):
+    result = MagicMock()
+    result.first.return_value = first
+    result.scalar_one_or_none.return_value = scalar
+    result.scalars.return_value.all.return_value = []
+    return result
+
+
+def _compiled_sql(stmt) -> str:
+    return str(stmt.compile(compile_kwargs={"literal_binds": True}))
+
+
+def _assert_nexhealth_pms_filter(stmt) -> None:
+    sql = _compiled_sql(stmt)
+    assert "institutions.pms_type = 'nexhealth'" in sql
+
+
+@pytest.mark.asyncio
+async def test_backfill_projects_new_appointment_and_triggers_workflow():
+    subscription = SimpleNamespace(
+        id="sub-1",
+        institution_id="inst-1",
+        status=NexHealthWebhookSubscriptionStatus.PENDING.value,
+        last_backfill_at=None,
+        updated_at=None,
+        error_metadata={"old": "error"},
+    )
+    institution = SimpleNamespace(id="inst-1")
+    location = SimpleNamespace(
+        id="loc-1", nexhealth_subdomain="sub", nexhealth_location_id="nh-loc"
+    )
+
+    session = AsyncMock()
+    session.add = MagicMock()
+    session.execute = AsyncMock(
+        side_effect=[
+            _result(first=(subscription, institution, location)),
+            _result(scalar=SimpleNamespace(id="contact-1")),  # contact lookup
+            _result(scalar=None),  # projection row lookup
+        ]
+    )
+
+    adapter = AsyncMock()
+    adapter.list_appointments = AsyncMock(
+        return_value=[
+            {
+                "id": "appt-1",
+                "patient_id": "pat-1",
+                "location_id": "nh-loc",
+                "start_time": "2026-08-01T10:00:00Z",
+                "cancelled": False,
+            }
+        ]
+    )
+    adapter.close = AsyncMock()
+
+    with (
+        patch(
+            "src.app.pms.nexhealth.adapter.NexHealthAdapter.create",
+            AsyncMock(return_value=adapter),
+        ),
+        patch(
+            "src.app.services.automation.nexhealth_backfill_service._trigger_appointment_workflows"
+        ) as trigger,
+    ):
+        summary = await NexHealthAppointmentSyncService(session).sync_subscription(
+            subscription_id="sub-1",
+            mode="backfill",
+        )
+
+    assert summary.locations_scanned == 1
+    assert summary.appointments_seen == 1
+    assert summary.projected == 1
+    assert summary.triggered == 1
+    assert subscription.last_backfill_at is not None
+    assert subscription.error_metadata is None
+    adapter.list_appointments.assert_awaited_once()
+    assert adapter.list_appointments.await_args.kwargs["cancellation_mode"] == (
+        "active_and_cancelled"
+    )
+    trigger.assert_called_once()
+    assert trigger.call_args.kwargs["appointment_id"] == "appt-1"
+    assert trigger.call_args.kwargs["contact_id"] == "contact-1"
+
+
+@pytest.mark.asyncio
+async def test_backfill_projects_flat_v3_appointment_fields():
+    subscription = SimpleNamespace(
+        id="sub-1",
+        institution_id="inst-1",
+        status=NexHealthWebhookSubscriptionStatus.PENDING.value,
+        last_backfill_at=None,
+        updated_at=None,
+        error_metadata=None,
+    )
+    institution = SimpleNamespace(id="inst-1")
+    location = SimpleNamespace(
+        id="loc-1", nexhealth_subdomain="sub", nexhealth_location_id="nh-loc"
+    )
+
+    session = AsyncMock()
+    session.add = MagicMock()
+    session.execute = AsyncMock(
+        side_effect=[
+            _result(first=(subscription, institution, location)),
+            _result(scalar=SimpleNamespace(id="contact-1")),  # contact lookup
+            _result(scalar=None),  # projection row lookup
+        ]
+    )
+
+    adapter = AsyncMock()
+    adapter.list_appointments = AsyncMock(
+        return_value=[
+            {
+                "id": "appt-1",
+                "patient_id": "pat-1",
+                "location_id": "nh-loc",
+                "provider_id": 123,
+                "appointment_type_id": 456,
+                "reason": "Cleaning",
+                "start_time": "2026-08-01T10:00:00Z",
+                "confirmed": True,
+                "cancelled": False,
+            }
+        ]
+    )
+    adapter.close = AsyncMock()
+
+    with (
+        patch(
+            "src.app.pms.nexhealth.adapter.NexHealthAdapter.create",
+            AsyncMock(return_value=adapter),
+        ),
+        patch(
+            "src.app.services.automation.nexhealth_backfill_service._trigger_appointment_workflows"
+        ),
+    ):
+        await NexHealthAppointmentSyncService(session).sync_subscription(
+            subscription_id="sub-1",
+            mode="backfill",
+        )
+
+    row = session.add.call_args.args[0]
+    assert row.provider_id == "123"
+    assert row.appointment_type_id == "456"
+    assert row.appointment_reason == "Cleaning"
+    assert row.is_confirmed is True
+    assert row.last_status_source == "nexhealth_backfill"
+
+
+@pytest.mark.asyncio
+async def test_reconciliation_cancels_runs_for_cancelled_appointment():
+    subscription = SimpleNamespace(
+        id="sub-1",
+        institution_id="inst-1",
+        status=NexHealthWebhookSubscriptionStatus.ACTIVE.value,
+        last_reconciliation_at=None,
+        updated_at=None,
+        error_metadata=None,
+    )
+    institution = SimpleNamespace(id="inst-1")
+    location = SimpleNamespace(
+        id="loc-1", nexhealth_subdomain="sub", nexhealth_location_id="nh-loc"
+    )
+
+    existing_projection = SimpleNamespace(
+        start_time=datetime(2026, 8, 1, 10, 0, tzinfo=timezone.utc),
+        status="scheduled",
+        location_id="loc-1",
+        nexhealth_patient_id="pat-1",
+        contact_id="contact-1",
+        last_event=None,
+        last_synced_at=None,
+        updated_at=None,
+    )
+    session = AsyncMock()
+    session.add = MagicMock()
+    session.execute = AsyncMock(
+        side_effect=[
+            _result(first=(subscription, institution, location)),
+            _result(scalar=None),  # contact lookup
+            _result(scalar=existing_projection),  # projection row lookup
+        ]
+    )
+
+    adapter = AsyncMock()
+    adapter.list_appointments = AsyncMock(
+        return_value=[
+            {
+                "id": "appt-1",
+                "patient_id": "pat-1",
+                "location_id": "nh-loc",
+                "start_time": "2026-08-01T10:00:00Z",
+                "cancelled": True,
+            }
+        ]
+    )
+    adapter.close = AsyncMock()
+
+    with (
+        patch(
+            "src.app.pms.nexhealth.adapter.NexHealthAdapter.create",
+            AsyncMock(return_value=adapter),
+        ),
+        patch(
+            "src.app.services.automation.nexhealth_backfill_service._cancel_runs_for_appointment",
+            AsyncMock(return_value=2),
+        ) as cancel,
+        patch(
+            "src.app.services.automation.nexhealth_backfill_service._trigger_appointment_workflows"
+        ) as trigger,
+    ):
+        summary = await NexHealthAppointmentSyncService(session).sync_subscription(
+            subscription_id="sub-1",
+            mode="reconciliation",
+        )
+
+    assert summary.projected == 1
+    assert summary.triggered == 0
+    assert summary.cancelled_runs == 2
+    assert subscription.last_reconciliation_at is not None
+    cancel.assert_awaited_once()
+    trigger.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_patient_backfill_projects_contact_and_patient_working_set():
+    subscription = SimpleNamespace(
+        id="sub-1",
+        institution_id="inst-1",
+        status=NexHealthWebhookSubscriptionStatus.PENDING.value,
+        last_patient_backfill_at=None,
+        updated_at=None,
+        error_metadata={"old": "error"},
+    )
+    institution = SimpleNamespace(id="inst-1")
+    location = SimpleNamespace(
+        id="loc-1",
+        institution_id="inst-1",
+        nexhealth_subdomain="sub",
+        nexhealth_location_id="nh-loc",
+    )
+
+    loc_result = _result()
+    loc_result.scalars.return_value.all.return_value = [location]
+    session = AsyncMock()
+    session.execute = AsyncMock(
+        side_effect=[
+            _result(first=(subscription, institution, location)),
+            loc_result,
+        ]
+    )
+
+    adapter = AsyncMock()
+    adapter.list_patients = AsyncMock(
+        return_value=[
+            {
+                "id": "pat-1",
+                "first_name": "Sam",
+                "last_name": "Lee",
+                "location_ids": ["nh-loc"],
+                "bio": {"phone_number": "+15551234567"},
+            }
+        ]
+    )
+    adapter.close = AsyncMock()
+    projection = MagicMock()
+    projection.upsert_patient = AsyncMock()
+
+    with (
+        patch(
+            "src.app.pms.nexhealth.adapter.NexHealthAdapter.create",
+            AsyncMock(return_value=adapter),
+        ),
+        patch(
+            "src.app.services.automation.nexhealth_backfill_service.NexHealthProjectionService",
+            return_value=projection,
+        ),
+    ):
+        summary = await NexHealthPatientSyncService(session).sync_subscription(
+            subscription_id="sub-1",
+            mode="backfill",
+        )
+
+    assert summary.locations_scanned == 1
+    assert summary.patients_seen == 1
+    assert summary.projected == 1
+    assert subscription.last_patient_backfill_at is not None
+    assert subscription.error_metadata is None
+    adapter.list_patients.assert_awaited_once_with(updated_since=None)
+    projection.upsert_patient.assert_awaited_once()
+    assert projection.upsert_patient.call_args.kwargs["local_location_ids"] == ["loc-1"]
+    assert projection.upsert_patient.call_args.kwargs["nexhealth_location_ids"] == [
+        "nh-loc"
+    ]
+    assert projection.upsert_patient.call_args.kwargs["event"] == "patient.backfill"
+
+
+@pytest.mark.asyncio
+async def test_patient_backfill_uses_adapter_location_when_v3_omits_location_ids():
+    subscription = SimpleNamespace(
+        id="sub-1",
+        institution_id="inst-1",
+        status=NexHealthWebhookSubscriptionStatus.PENDING.value,
+        last_patient_backfill_at=None,
+        updated_at=None,
+        error_metadata=None,
+    )
+    institution = SimpleNamespace(id="inst-1")
+    location = SimpleNamespace(
+        id="loc-1",
+        institution_id="inst-1",
+        nexhealth_subdomain="sub",
+        nexhealth_location_id="nh-loc",
+    )
+
+    session = AsyncMock()
+    session.execute = AsyncMock(
+        side_effect=[
+            _result(first=(subscription, institution, location)),
+            _result(),  # no location_ids in v3 row; use adapter-bound location
+        ]
+    )
+
+    adapter = AsyncMock()
+    adapter.list_patients = AsyncMock(
+        return_value=[
+            {
+                "id": "pat-1",
+                "first_name": "Sam",
+                "last_name": "Lee",
+                "bio": {"phone_number": "+15551234567"},
+            }
+        ]
+    )
+    adapter.close = AsyncMock()
+    projection = MagicMock()
+    projection.upsert_patient = AsyncMock()
+
+    with (
+        patch(
+            "src.app.pms.nexhealth.adapter.NexHealthAdapter.create",
+            AsyncMock(return_value=adapter),
+        ),
+        patch(
+            "src.app.services.automation.nexhealth_backfill_service.NexHealthProjectionService",
+            return_value=projection,
+        ),
+    ):
+        await NexHealthPatientSyncService(session).sync_subscription(
+            subscription_id="sub-1",
+            mode="backfill",
+        )
+
+    projection.upsert_patient.assert_awaited_once()
+    assert projection.upsert_patient.call_args.kwargs["local_location_ids"] == ["loc-1"]
+    assert projection.upsert_patient.call_args.kwargs["nexhealth_location_ids"] == [
+        "nh-loc"
+    ]
+
+
+@pytest.mark.asyncio
+async def test_patient_reconciliation_uses_patient_watermark_overlap():
+    watermark = datetime(2026, 7, 21, 10, 0, tzinfo=timezone.utc)
+    subscription = SimpleNamespace(
+        id="sub-1",
+        institution_id="inst-1",
+        status=NexHealthWebhookSubscriptionStatus.ACTIVE.value,
+        last_patient_backfill_at=watermark,
+        last_patient_reconciliation_at=None,
+        updated_at=None,
+        error_metadata=None,
+    )
+    institution = SimpleNamespace(id="inst-1")
+    location = SimpleNamespace(
+        id="loc-1", nexhealth_subdomain="sub", nexhealth_location_id="nh-loc"
+    )
+    session = AsyncMock()
+    session.execute = AsyncMock(
+        return_value=_result(first=(subscription, institution, location))
+    )
+
+    adapter = AsyncMock()
+    adapter.list_patients = AsyncMock(return_value=[])
+    adapter.close = AsyncMock()
+
+    with patch(
+        "src.app.pms.nexhealth.adapter.NexHealthAdapter.create",
+        AsyncMock(return_value=adapter),
+    ):
+        summary = await NexHealthPatientSyncService(session).sync_subscription(
+            subscription_id="sub-1",
+            mode="reconciliation",
+        )
+
+    assert summary.locations_scanned == 1
+    assert subscription.last_patient_reconciliation_at is not None
+    adapter.list_patients.assert_awaited_once_with(
+        updated_since="2026-07-21T09:00:00+00:00"
+    )
+
+
+@pytest.mark.asyncio
+async def test_appointment_target_scan_only_loads_nexhealth_institutions():
+    session = AsyncMock()
+    result = MagicMock()
+    result.all.return_value = []
+    session.execute = AsyncMock(return_value=result)
+
+    await NexHealthAppointmentSyncService(session)._load_subscription_locations()
+
+    _assert_nexhealth_pms_filter(session.execute.await_args.args[0])
+
+
+@pytest.mark.asyncio
+async def test_appointment_sync_subscription_ignores_non_nexhealth_institutions():
+    session = AsyncMock()
+    session.execute = AsyncMock(return_value=_result(first=None))
+
+    summary = await NexHealthAppointmentSyncService(session).sync_subscription(
+        subscription_id="sub-1",
+        mode="backfill",
+    )
+
+    assert summary.locations_scanned == 0
+    _assert_nexhealth_pms_filter(session.execute.await_args.args[0])
+
+
+@pytest.mark.asyncio
+async def test_patient_sync_subscription_ignores_non_nexhealth_institutions():
+    session = AsyncMock()
+    session.execute = AsyncMock(return_value=_result(first=None))
+
+    summary = await NexHealthPatientSyncService(session).sync_subscription(
+        subscription_id="sub-1",
+        mode="backfill",
+    )
+
+    assert summary.locations_scanned == 0
+    _assert_nexhealth_pms_filter(session.execute.await_args.args[0])
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("sync", "external_id"),
+    [
+        (_sync_nexhealth_appointments_async, "nexhealth_reconciliation_target_scan"),
+        (
+            _sync_nexhealth_patients_async,
+            "nexhealth_patient_reconciliation_target_scan",
+        ),
+    ],
+)
+async def test_global_target_scans_use_superadmin_rls_context(sync, external_id):
+    """A tenantless Celery context cannot see institutions after RLS hardening."""
+    session = AsyncMock()
+    session.__aenter__ = AsyncMock(return_value=session)
+    session.__aexit__ = AsyncMock(return_value=False)
+    lifecycle = MagicMock()
+    lifecycle.sync_eligible_targets = AsyncMock(return_value=[])
+
+    with (
+        patch(
+            "src.app.tasks.automation_workflow._superadmin_system_session",
+            return_value=session,
+        ) as superadmin_session,
+        patch(
+            "src.app.tasks.automation_workflow.get_system_db_session",
+            side_effect=AssertionError(
+                "global NexHealth target discovery must not use tenantless Celery RLS"
+            ),
+        ),
+        patch(
+            "src.app.tasks.automation_workflow.NexHealthSubscriptionLifecycleService",
+            return_value=lifecycle,
+        ),
+    ):
+        result = await sync(mode="reconciliation")
+
+    superadmin_session.assert_called_once_with(external_id)
+    lifecycle.sync_eligible_targets.assert_awaited_once()
+    assert result["subscriptions"] == 0

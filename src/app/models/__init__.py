@@ -1,13 +1,92 @@
 """SQLAlchemy models for multi-institution architecture."""
 
 from src.app.models.audit_log import AuditAction, AuditActor, AuditLog, AuditOutcome
+from src.app.models.automation_workflow import (
+    AutomationRunStatus,
+    AutomationStepStatus,
+    AutomationTimerStatus,
+    AutomationWorkflow,
+    AutomationWorkflowDripState,
+    AutomationWorkflowEvent,
+    AutomationWorkflowRun,
+    AutomationWorkflowStatus,
+    AutomationWorkflowStepExecution,
+    AutomationWorkflowTimer,
+    AutomationWorkflowVersion,
+)
+from src.app.models.appointment_working_set import (  # noqa: F401 — model registration
+    AppointmentWorkingSet,
+)
 from src.app.models.call import Call, CallDirection, CallStatus, PatientStatus
 from src.app.models.call_note import MAX_NOTE_LENGTH, CallNote
+from src.app.models.contact import Contact, LeadStatus
+from src.app.models.campaign_response import (  # noqa: F401 — model registration
+    CampaignResponseEvent,
+    CampaignStaffHandoff,
+)
+from src.app.models.campaign_conversation_thread import (  # noqa: F401 — model registration
+    CampaignConversationThread,
+)
+from src.app.models.campaign_analytics import (  # noqa: F401 — model registration
+    CampaignMetricsDaily,
+    CampaignOutcomeDefinition,
+)
+from src.app.models.campaign_audience import (  # noqa: F401 — model registration
+    CampaignAudienceDefinition,
+    CampaignAudiencePreview,
+)
+from src.app.models.inbound_email_message import (  # noqa: F401 — model registration
+    InboundEmailIntent,
+    InboundEmailMessage,
+    InboundEmailStatus,
+)
+from src.app.models.inbound_sms_message import (  # noqa: F401 — model registration
+    InboundSmsMessage,
+)
+from src.app.models.nexhealth_webhook_event import (  # noqa: F401 — model registration
+    NexHealthWebhookEvent,
+    NexHealthWebhookStatus,
+)
+from src.app.models.gotracker_webhook_event import (  # noqa: F401 — model registration
+    GoTrackerWebhookEvent,
+    GoTrackerWebhookStatus,
+)
+from src.app.models.gotracker_appointment_writeback import (  # noqa: F401 — model registration
+    GoTrackerAppointmentWriteback,
+    GoTrackerAppointmentWritebackAction,
+    GoTrackerAppointmentWritebackStatus,
+)
+from src.app.models.gotracker_webhook_subscription import (  # noqa: F401 — model registration
+    GoTrackerWebhookSubscription,
+    GoTrackerWebhookSubscriptionStatus,
+)
+from src.app.models.patient_working_set import (  # noqa: F401 — model registration
+    PatientWorkingSet,
+)
+from src.app.models.internal_status_event import (  # noqa: F401 — model registration
+    INTERNAL_STATUS_FIELDS,
+    InternalStatusEvent,
+)
+from src.app.models.patient_workflow_status import (  # noqa: F401 — model registration
+    PatientWorkflowStatusEvent,
+)
+from src.app.models.nexhealth_sync_status import (  # noqa: F401 — model registration
+    NexHealthSyncStatus,
+)
+from src.app.models.nexhealth_webhook_subscription import (  # noqa: F401 — model registration
+    NexHealthWebhookSubscription,
+    NexHealthWebhookSubscriptionStatus,
+)
+from src.app.models.nexhealth_webhook_shadow import (  # noqa: F401 — model registration
+    NexHealthWebhookShadowEvent,
+    NexHealthWebhookShadowParseStatus,
+    NexHealthWebhookShadowSubscription,
+    NexHealthWebhookShadowSubscriptionStatus,
+)
 from src.app.models.call_metrics_daily import (  # noqa: F401 — model registration
     CallMetricsDaily,
     NULL_LOCATION_SENTINEL,
 )
-from src.app.models.contact import Contact
 from src.app.models.contact_location_access import ContactLocationAccess
 from src.app.models.custom_field import (
     CustomFieldDefinition,
@@ -28,6 +107,14 @@ from src.app.models.institution_location_transfer_number import InstitutionLocat
 from src.app.models.insurance_plan import InsurancePlan
 from src.app.models.location_break import LocationBreak
 from src.app.models.location_operating_hours import LocationOperatingHours
+from src.app.models.campaign_email_template import CampaignEmailTemplate
+from src.app.models.email_sending_identity import (  # noqa: F401 — model registration
+    EmailIdentityStatus,
+    EmailSendingIdentity,
+)
+from src.app.models.email_inbox_setting import EmailInboxSetting  # noqa: F401
+from src.app.models.email_sender_address import EmailSenderAddress  # noqa: F401
+from src.app.models.outbound_email_message import OutboundEmailMessage  # noqa: F401
 from src.app.models.email_template import EmailTemplate, EmailTemplateType
 from src.app.models.sms_template import SmsTemplate, SmsTemplateType
 from src.app.models.external_notification_recipient import ExternalNotificationRecipient
@@ -41,19 +128,70 @@ from src.app.models.retell_function_invocation import (
 )
 from src.app.models.sms_history_log import SmsHistoryLog, SmsStatus
 from src.app.models.sms_consent import (
+    ConsentBasis,
     ConsentChannel,
     ConsentRecord,
     ConsentSource,
     ConsentStatus,
+    DncScope,
     DoNotContact,
     SmsSuppression,
 )
 from src.app.models.dead_letter_event import DeadLetterEvent, DeadLetterStatus
+from src.app.models.outbound_halt import OutboundEmergencyHalt
+from src.app.models.usage_cost_rollup import (  # noqa: F401 — model registration
+    UsageCostRollup,
+)
+from src.app.models.usage_event import (
+    UsageChannel,
+    UsageDirection,
+    UsageEvent,
+    UsageProvider,
+)
+from src.app.models.outbound_voice import (
+    OutboundVoiceProfile,
+    VoiceAttemptStatus,
+    WorkflowVoiceAttempt,
+)
+from src.app.models.retell_sms import (  # noqa: F401 — model registration
+    RetellSmsChatProfile,
+    RetellSmsSession,
+    RetellSmsSessionStatus,
+    RetellSmsTurn,
+    RetellSmsTurnStatus,
+)
+
+from src.app.models.form_integration import (  # noqa: F401 — model registration
+    FormConnectionStatus,
+    FormDefinition,
+    FormFieldMapping,
+    FormFieldTarget,
+    FormProvider,
+    FormProviderConnection,
+    FormSubmission,
+    FormSubmissionStatus,
+    FormWebhookStatus,
+)
 
 __all__ = [
+    "LeadStatus",
     "Institution",
     "InstitutionGroup",
     "WorkflowStatus",
+    "AutomationWorkflow",
+    "AutomationWorkflowVersion",
+    "AutomationWorkflowRun",
+    "AutomationWorkflowStepExecution",
+    "AutomationWorkflowDripState",
+    "AutomationWorkflowTimer",
+    "AutomationWorkflowEvent",
+    "INTERNAL_STATUS_FIELDS",
+    "InternalStatusEvent",
+    "PatientWorkflowStatusEvent",
+    "AutomationWorkflowStatus",
+    "AutomationRunStatus",
+    "AutomationStepStatus",
+    "AutomationTimerStatus",
     "InstitutionLocation",
     "InstitutionProvider",
     "InstitutionAppointmentType",
@@ -69,6 +207,13 @@ __all__ = [
     "CallStatus",
     "CallDirection",
     "PatientStatus",
+    "CampaignResponseEvent",
+    "CampaignStaffHandoff",
+    "CampaignConversationThread",
+    "CampaignMetricsDaily",
+    "CampaignOutcomeDefinition",
+    "CampaignAudienceDefinition",
+    "CampaignAudiencePreview",
     "CustomFieldDefinition",
     "CustomFieldValue",
     "EntityType",
@@ -84,6 +229,12 @@ __all__ = [
     "RetellWebhookStatus",
     "RetellFunctionInvocation",
     "RetellFunctionStatus",
+    "CampaignEmailTemplate",
+    "EmailIdentityStatus",
+    "EmailSendingIdentity",
+    "EmailSenderAddress",
+    "EmailInboxSetting",
+    "OutboundEmailMessage",
     "EmailTemplate",
     "EmailTemplateType",
     "SmsTemplate",
@@ -95,7 +246,9 @@ __all__ = [
     "UserEmailNotificationPreference",
     "SmsHistoryLog",
     "SmsStatus",
+    "ConsentBasis",
     "ConsentChannel",
+    "DncScope",
     "ConsentRecord",
     "ConsentSource",
     "ConsentStatus",
@@ -103,4 +256,49 @@ __all__ = [
     "SmsSuppression",
     "DeadLetterEvent",
     "DeadLetterStatus",
+    "OutboundEmergencyHalt",
+    "AppointmentWorkingSet",
+    "InboundEmailIntent",
+    "InboundEmailMessage",
+    "InboundEmailStatus",
+    "InboundSmsMessage",
+    "RetellSmsChatProfile",
+    "RetellSmsSession",
+    "RetellSmsSessionStatus",
+    "RetellSmsTurn",
+    "RetellSmsTurnStatus",
+    "NexHealthWebhookEvent",
+    "NexHealthWebhookStatus",
+    "GoTrackerWebhookEvent",
+    "GoTrackerWebhookStatus",
+    "GoTrackerAppointmentWriteback",
+    "GoTrackerAppointmentWritebackAction",
+    "GoTrackerAppointmentWritebackStatus",
+    "GoTrackerWebhookSubscription",
+    "GoTrackerWebhookSubscriptionStatus",
+    "PatientWorkingSet",
+    "NexHealthSyncStatus",
+    "NexHealthWebhookSubscription",
+    "NexHealthWebhookSubscriptionStatus",
+    "NexHealthWebhookShadowEvent",
+    "NexHealthWebhookShadowParseStatus",
+    "NexHealthWebhookShadowSubscription",
+    "NexHealthWebhookShadowSubscriptionStatus",
+    "UsageCostRollup",
+    "UsageEvent",
+    "UsageChannel",
+    "UsageDirection",
+    "UsageProvider",
+    "OutboundVoiceProfile",
+    "WorkflowVoiceAttempt",
+    "VoiceAttemptStatus",
+    "FormProvider",
+    "FormProviderConnection",
+    "FormConnectionStatus",
+    "FormDefinition",
+    "FormWebhookStatus",
+    "FormFieldMapping",
+    "FormFieldTarget",
+    "FormSubmission",
+    "FormSubmissionStatus",
 ]

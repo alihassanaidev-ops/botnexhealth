@@ -100,7 +100,6 @@ class RefreshTokenService:
     def _rotated_key(cls, token_hash: str) -> str:
         return f"{cls.ROTATED_PREFIX}:{token_hash}"
 
-    @classmethod
     @staticmethod
     def _encode_session(*, mfa: bool, amr: list[str] | tuple[str, ...] | None, auth_time: int | None) -> str:
         return json.dumps(

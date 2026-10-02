@@ -1,0 +1,394 @@
+import { useCallback, useEffect, useMemo, useState } from "react"
+import { format } from "date-fns"
+import { AlertTriangle, CheckCircle2, ChevronLeft, ChevronRight, RefreshCw, RotateCcw } from "lucide-react"
+import { toast } from "sonner"
+
+import { PageHeader } from "@/components/PageHeader"
+import { Badge } from "@/components/ui/badge"
+import { Button } from "@/components/ui/button"
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
+import {
+    Dialog,
+    DialogContent,
+    DialogDescription,
+    DialogFooter,
+    DialogHeader,
+    DialogTitle,
+} from "@/components/ui/dialog"
+import { Label } from "@/components/ui/label"
+import {
+    Select,
+    SelectContent,
+    SelectItem,
+    SelectTrigger,
+    SelectValue,
+} from "@/components/ui/select"
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
+import { TableSkeleton } from "@/components/ui/skeletons"
+import { Textarea } from "@/components/ui/textarea"
+import { useAuth } from "@/context/AuthContext"
+import { useSelectedLocationId } from "@/context/LocationContext"
+import {
+    dismissUndeliverable,
+    listUndeliverables,
+    retryUndeliverable,
+    type DismissalReason,
+    type UndeliverableEvent,
+    type UndeliverableScope,
+    type UndeliverableStatus,
+} from "@/lib/undeliverables-api"
+
+const PAGE_SIZE = 50
+
+const reasonLabels: Record<DismissalReason, string> = {
+    resolved_elsewhere: "Resolved outside the platform",
+    duplicate: "Duplicate event",
+    not_actionable: "No action needed",
+    superseded: "Superseded by newer work",
+    other: "Other",
+}
+
+function sourceLabel(source: string): string {
+    return source.replace(/_/g, " ").replace(/\b\w/g, (letter: string) => letter.toUpperCase())
+}
+
+function statusBadge(status: UndeliverableStatus) {
+    if (status === "open") return <Badge variant="destructive">Needs attention</Badge>
+    if (status === "replayed") return <Badge className="bg-emerald-600">Retried</Badge>
+    return <Badge variant="secondary">Resolved</Badge>
+}
+
+interface IssueGroup {
+    key: string
+    primary: UndeliverableEvent
+    items: UndeliverableEvent[]
+}
+
+function isWorkflowTimerIssue(item: UndeliverableEvent): boolean {
+    return item.source === "workflow_dispatch" && item.event_type === "dispatch_workflow_timer"
+}
+
+function issueGroupKey(item: UndeliverableEvent): string {
+    if (isWorkflowTimerIssue(item)) {
+        return [
+            item.status,
+            item.source,
+            item.event_type,
+            item.originating_run_id ?? "no-run",
+            item.originating_timer_id ?? item.payload_hash,
+        ].join(":")
+    }
+    return `${item.status}:${item.id}`
+}
+
+function groupIssues(items: UndeliverableEvent[]): IssueGroup[] {
+    const groups = new Map<string, IssueGroup>()
+    for (const item of items) {
+        const key = issueGroupKey(item)
+        const group = groups.get(key)
+        if (group) {
+            group.items.push(item)
+        } else {
+            groups.set(key, { key, primary: item, items: [item] })
+        }
+    }
+    return Array.from(groups.values())
+}
+
+function humanFailureMessage(item: UndeliverableEvent): string {
+    const error = item.last_error.toLowerCase()
+    if (error.includes("current transaction is aborted")) {
+        return "A previous database operation failed during this background action. The query in Technical details was attempted after the transaction was already unusable."
+    }
+    if (error.includes("nexhealth_credential_mode") && error.includes("does not exist")) {
+        return "A database migration was missing when this automation ran. If the related workflow later completed, mark this issue resolved rather than retrying it."
+    }
+    if (isWorkflowTimerIssue(item)) {
+        return "A background workflow timer could not finish after automatic retries."
+    }
+    return "This background action could not complete after automatic retries."
+}
+
+export default function Undeliverables() {
+    const { user } = useAuth()
+    const locationId = useSelectedLocationId()
+    const scope: UndeliverableScope = user?.role === "SUPER_ADMIN" ? "platform" : "institution"
+    const canReplay = user?.role === "SUPER_ADMIN" || user?.role === "INSTITUTION_ADMIN"
+    const [items, setItems] = useState<UndeliverableEvent[]>([])
+    const [statusFilter, setStatusFilter] = useState<UndeliverableStatus | "all">("open")
+    const [page, setPage] = useState(1)
+    const [pages, setPages] = useState(0)
+    const [total, setTotal] = useState(0)
+    const [loading, setLoading] = useState(true)
+    const [busyId, setBusyId] = useState<string | null>(null)
+    const [dismissTarget, setDismissTarget] = useState<UndeliverableEvent | null>(null)
+    const [dismissReason, setDismissReason] = useState<DismissalReason>("resolved_elsewhere")
+    const [dismissNote, setDismissNote] = useState("")
+    const groupedItems = useMemo(() => groupIssues(items), [items])
+
+    const load = useCallback(async (nextPage = page) => {
+        if (scope === "institution" && !locationId) {
+            setItems([])
+            setTotal(0)
+            setPages(0)
+            setLoading(false)
+            return
+        }
+        setLoading(true)
+        try {
+            const result = await listUndeliverables(scope, {
+                page: nextPage,
+                size: PAGE_SIZE,
+                status: statusFilter,
+                ...(scope === "institution" ? { locationId } : {}),
+            })
+            setItems(result.items)
+            setTotal(result.total)
+            setPages(result.pages)
+            setPage(result.page)
+        } catch {
+            toast.error("Failed to load automation issues.")
+        } finally {
+            setLoading(false)
+        }
+    }, [locationId, page, scope, statusFilter])
+
+    useEffect(() => {
+        void load(1)
+        // `page` is deliberately not a dependency: filter changes reset it,
+        // while pagination calls load directly with the requested page.
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [locationId, scope, statusFilter])
+
+    async function retry(item: UndeliverableEvent) {
+        if (busyId || !canReplay || !item.replay_supported) return
+        setBusyId(item.id)
+        try {
+            await retryUndeliverable(scope, item.id)
+            toast.success("The event was queued once for retry.")
+            await load(page)
+        } catch {
+            toast.error("The automation issue could not be retried.")
+        } finally {
+            setBusyId(null)
+        }
+    }
+
+    async function dismiss() {
+        if (!dismissTarget || busyId) return
+        setBusyId(dismissTarget.id)
+        try {
+            await dismissUndeliverable(scope, dismissTarget.id, {
+                reason: dismissReason,
+                ...(dismissNote.trim() ? { note: dismissNote.trim() } : {}),
+            })
+            toast.success("The automation issue was marked resolved.")
+            setDismissTarget(null)
+            setDismissNote("")
+            setDismissReason("resolved_elsewhere")
+            await load(page)
+        } catch {
+            toast.error("The automation issue could not be marked resolved.")
+        } finally {
+            setBusyId(null)
+        }
+    }
+
+    return (
+        <div className="space-y-6">
+            <PageHeader
+                art="workflow"
+                icon={AlertTriangle}
+                title="Automation issues"
+                description="Background actions that could not complete automatically and may need attention."
+                actions={
+                    <div className="flex items-center gap-2">
+                        <Select value={statusFilter} onValueChange={(value) => setStatusFilter(value as UndeliverableStatus | "all")}>
+                            <SelectTrigger className="w-40" aria-label="Status filter">
+                                <SelectValue />
+                            </SelectTrigger>
+                            <SelectContent>
+                                <SelectItem value="open">Needs attention</SelectItem>
+                                <SelectItem value="replayed">Retried</SelectItem>
+                                <SelectItem value="discarded">Resolved</SelectItem>
+                                <SelectItem value="all">All statuses</SelectItem>
+                            </SelectContent>
+                        </Select>
+                        <Button variant="outline" onClick={() => void load(page)} disabled={loading}>
+                            <RefreshCw className={`mr-2 h-4 w-4 ${loading ? "animate-spin" : ""}`} />
+                            Refresh
+                        </Button>
+                    </div>
+                }
+            />
+
+            <Card>
+                <CardHeader>
+                    <CardTitle>Issue queue</CardTitle>
+                    <CardDescription>
+                        Retry only after correcting the recorded cause. Unsupported event types remain available for investigation and resolution.
+                    </CardDescription>
+                </CardHeader>
+                <CardContent>
+                    {loading && items.length === 0 ? (
+                        <TableSkeleton rows={6} cols={6} />
+                    ) : groupedItems.length === 0 ? (
+                        <div className="rounded-lg border border-dashed p-10 text-center text-sm text-muted-foreground">
+                            No automation issues match this status.
+                        </div>
+                    ) : (
+                        <div className="space-y-4">
+                            <div className="overflow-x-auto rounded-lg border">
+                                <Table>
+                                    <TableHeader>
+                                        <TableRow>
+                                            <TableHead>Failed</TableHead>
+                                            <TableHead>Source</TableHead>
+                                            <TableHead>Failure</TableHead>
+                                            <TableHead>Related workflow</TableHead>
+                                            <TableHead>Status</TableHead>
+                                            <TableHead className="text-right">Actions</TableHead>
+                                        </TableRow>
+                                    </TableHeader>
+                                    <TableBody>
+                                        {groupedItems.map((group) => {
+                                            const item = group.primary
+                                            return (
+                                                <TableRow key={group.key}>
+                                                    <TableCell className="whitespace-nowrap align-top text-sm">
+                                                        {format(new Date(item.created_at), "MMM d, yyyy h:mm a")}
+                                                        <div className="mt-1 text-xs text-muted-foreground">{item.attempts} attempt{item.attempts === 1 ? "" : "s"}</div>
+                                                        {group.items.length > 1 && (
+                                                            <div className="mt-1 text-xs font-medium text-muted-foreground">
+                                                                {group.items.length} related failures
+                                                            </div>
+                                                        )}
+                                                    </TableCell>
+                                                    <TableCell className="align-top">
+                                                        <div className="font-medium">{sourceLabel(item.source)}</div>
+                                                        <div className="font-mono text-xs text-muted-foreground">{item.event_type}</div>
+                                                    </TableCell>
+                                                    <TableCell className="max-w-md align-top">
+                                                        <p className="text-sm text-foreground">{humanFailureMessage(item)}</p>
+                                                        <details className="mt-2 text-xs text-muted-foreground">
+                                                            <summary className="cursor-pointer select-none">Technical details</summary>
+                                                            <pre className="mt-2 max-w-md overflow-auto rounded bg-muted p-2 whitespace-pre-wrap break-all">
+                                                                {item.last_error}
+                                                            </pre>
+                                                            {item.redacted_payload && (
+                                                                <>
+                                                                    <div className="mt-2 font-medium">Redacted context</div>
+                                                                    <pre className="mt-2 max-w-md overflow-auto rounded bg-muted p-2 whitespace-pre-wrap break-all">
+                                                                        {JSON.stringify(item.redacted_payload, null, 2)}
+                                                                    </pre>
+                                                                </>
+                                                            )}
+                                                        </details>
+                                                        {item.resolution_reason && (
+                                                            <p className="mt-2 text-xs text-muted-foreground">
+                                                                Resolution: {reasonLabels[item.resolution_reason]}
+                                                                {item.resolution_note ? ` - ${item.resolution_note}` : ""}
+                                                            </p>
+                                                        )}
+                                                    </TableCell>
+                                                    <TableCell className="align-top font-mono text-xs">
+                                                        {item.originating_run_id ?? "Not a campaign event"}
+                                                    </TableCell>
+                                                    <TableCell className="align-top">{statusBadge(item.status)}</TableCell>
+                                                    <TableCell className="align-top">
+                                                        {item.status === "open" && (
+                                                            <div className="flex justify-end gap-2">
+                                                                <Button
+                                                                    size="sm"
+                                                                    variant="outline"
+                                                                    onClick={() => void retry(item)}
+                                                                    disabled={busyId !== null || !canReplay || !item.replay_supported}
+                                                                    title={!canReplay
+                                                                        ? "An institution administrator is required to retry"
+                                                                        : !item.replay_supported
+                                                                            ? "This event type cannot be retried automatically"
+                                                                            : "Retry once"}
+                                                                >
+                                                                    <RotateCcw className="mr-1.5 h-3.5 w-3.5" />
+                                                                    Retry
+                                                                </Button>
+                                                                <Button
+                                                                    size="sm"
+                                                                    variant="ghost"
+                                                                    onClick={() => setDismissTarget(item)}
+                                                                    disabled={busyId !== null}
+                                                                >
+                                                                    <CheckCircle2 className="mr-1.5 h-3.5 w-3.5" />
+                                                                    Mark resolved
+                                                                </Button>
+                                                            </div>
+                                                        )}
+                                                    </TableCell>
+                                                </TableRow>
+                                            )
+                                        })}
+                                    </TableBody>
+                                </Table>
+                            </div>
+
+                            <div className="flex items-center justify-between text-sm text-muted-foreground">
+                                <span>
+                                    {groupedItems.length} issue{groupedItems.length === 1 ? "" : "s"}
+                                    {total !== groupedItems.length ? ` (${total} events)` : ""}
+                                </span>
+                                <div className="flex items-center gap-2">
+                                    <Button variant="outline" size="sm" onClick={() => void load(page - 1)} disabled={loading || page <= 1}>
+                                        <ChevronLeft className="mr-1 h-4 w-4" /> Previous
+                                    </Button>
+                                    <span>Page {page} of {Math.max(pages, 1)}</span>
+                                    <Button variant="outline" size="sm" onClick={() => void load(page + 1)} disabled={loading || page >= pages}>
+                                        Next <ChevronRight className="ml-1 h-4 w-4" />
+                                    </Button>
+                                </div>
+                            </div>
+                        </div>
+                    )}
+                </CardContent>
+            </Card>
+
+            <Dialog open={dismissTarget !== null} onOpenChange={(open) => !open && setDismissTarget(null)}>
+                <DialogContent>
+                    <DialogHeader>
+                        <DialogTitle>Mark automation issue resolved</DialogTitle>
+                        <DialogDescription>
+                            This removes the issue from the review queue without retrying it. A reason is required and recorded in the audit trail.
+                        </DialogDescription>
+                    </DialogHeader>
+                    <div className="space-y-4 py-2">
+                        <div className="space-y-2">
+                            <Label htmlFor="dismiss-reason">Reason</Label>
+                            <Select value={dismissReason} onValueChange={(value) => setDismissReason(value as DismissalReason)}>
+                                <SelectTrigger id="dismiss-reason"><SelectValue /></SelectTrigger>
+                                <SelectContent>
+                                    {Object.entries(reasonLabels).map(([value, label]) => (
+                                        <SelectItem key={value} value={value}>{label}</SelectItem>
+                                    ))}
+                                </SelectContent>
+                            </Select>
+                        </div>
+                        <div className="space-y-2">
+                            <Label htmlFor="dismiss-note">Note (optional)</Label>
+                            <Textarea
+                                id="dismiss-note"
+                                value={dismissNote}
+                                onChange={(event) => setDismissNote(event.target.value)}
+                                maxLength={1000}
+                                placeholder="Add context for the next operator."
+                            />
+                            <p className="text-xs text-muted-foreground">The note is encrypted and is not copied into audit metadata.</p>
+                        </div>
+                    </div>
+                    <DialogFooter>
+                        <Button variant="outline" onClick={() => setDismissTarget(null)}>Cancel</Button>
+                        <Button variant="default" onClick={() => void dismiss()} disabled={busyId !== null}>Mark resolved</Button>
+                    </DialogFooter>
+                </DialogContent>
+            </Dialog>
+        </div>
+    )
+}

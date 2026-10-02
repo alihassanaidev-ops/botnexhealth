@@ -30,18 +30,46 @@ from src.app.services.audit import (
 # (await before returning). High-volume clinic reads such as debounced patient
 # search stay best-effort/background and are drained on shutdown; explicit
 # full patient/detail reveals use phi_reveal_audit or VIEW_* and fail closed.
-DURABLE_AUDIT_ACTIONS: frozenset[str] = frozenset({
-    AuditAction.BOOK_APPOINTMENT.value,
-    AuditAction.CANCEL_APPOINTMENT.value,
-    AuditAction.RESCHEDULE_APPOINTMENT.value,
-    AuditAction.CREATE_PATIENT.value,
-    AuditAction.UPDATE_PATIENT.value,
-    AuditAction.VIEW_FULL_TRANSCRIPT.value,
-    AuditAction.VIEW_CALL_RECORDING.value,
-    AuditAction.VIEW_FULL_PHONE.value,
-    AuditAction.VIEW_SMS_BODY.value,
-    AuditAction.VIEW_CUSTOM_PHI_FIELD.value,
-})
+DURABLE_AUDIT_ACTIONS: frozenset[str] = frozenset(
+    {
+        AuditAction.BOOK_APPOINTMENT.value,
+        AuditAction.CANCEL_APPOINTMENT.value,
+        AuditAction.RESCHEDULE_APPOINTMENT.value,
+        AuditAction.CREATE_PATIENT.value,
+        AuditAction.UPDATE_PATIENT.value,
+        AuditAction.READ_PATIENT_COMMUNICATION.value,
+        AuditAction.CONTACT_CREATE.value,
+        AuditAction.CONTACT_UPDATE.value,
+        AuditAction.VIEW_FULL_TRANSCRIPT.value,
+        AuditAction.VIEW_CALL_RECORDING.value,
+        AuditAction.VIEW_FULL_PHONE.value,
+        AuditAction.VIEW_SMS_BODY.value,
+        AuditAction.VIEW_CUSTOM_PHI_FIELD.value,
+        # Campaign state changes: publishing or enrolling starts automated contact
+        # with real patients, so the record must be durable before we return.
+        AuditAction.CAMPAIGN_CREATE.value,
+        AuditAction.CAMPAIGN_UPDATE.value,
+        AuditAction.CAMPAIGN_DELETE.value,
+        AuditAction.CAMPAIGN_PUBLISH.value,
+        AuditAction.CAMPAIGN_PAUSE.value,
+        AuditAction.CAMPAIGN_RESUME.value,
+        AuditAction.CAMPAIGN_ARCHIVE.value,
+        AuditAction.CAMPAIGN_AUDIENCE_UPDATE.value,
+        AuditAction.CAMPAIGN_ENROLL.value,
+        AuditAction.CAMPAIGN_BULK_ENROLL.value,
+        AuditAction.CAMPAIGN_RUN_CANCEL.value,
+        AuditAction.CAMPAIGN_EMERGENCY_HALT.value,
+        AuditAction.CAMPAIGN_HALT_RELEASE.value,
+        AuditAction.CAMPAIGN_COMPLIANCE_UPDATE.value,
+        # Changing the identity behind patient email is a high-consequence
+        # external side effect. Refuse it if the intent cannot be recorded.
+        AuditAction.EMAIL_IDENTITY_PROVISION.value,
+        AuditAction.EMAIL_IDENTITY_UPDATE.value,
+        AuditAction.EMAIL_IDENTITY_ACTIVATE.value,
+        AuditAction.EMAIL_IDENTITY_DEACTIVATE.value,
+        AuditAction.EMAIL_IDENTITY_DELETE.value,
+    }
+)
 
 logger = logging.getLogger(__name__)
 
@@ -75,6 +103,7 @@ def audit(
         @functools.wraps(func)
         async def wrapper(*args: Any, **kwargs: Any) -> Any:
             from uuid import uuid4
+
             request_id = str(uuid4())
 
             # 1. Extract resource identifier from the function's args. Failure
@@ -90,7 +119,9 @@ def audit(
                     raise ValueError("Extractor returned empty string")
             except Exception as e:
                 config_error = f"Audit extraction failed: {e}"
-                logger.critical("AUDIT CONFIG ERROR in %s: %s", func.__name__, config_error)
+                logger.critical(
+                    "AUDIT CONFIG ERROR in %s: %s", func.__name__, config_error
+                )
                 target_resource = f"{action_value}:CONFIGURATION_ERROR"
 
             # 2. Pre-call context (request, user, IP). Institution may not be
@@ -189,9 +220,8 @@ def audit(
             institution_id = _resolve_institution_id(
                 args, kwargs, actor_ctx.get("institution_id")
             )
-            location_id = (
-                actor_ctx.get("location_id")
-                or _resolve_location_id_from_retell_context()
+            location_id = actor_ctx.get("location_id") or _resolve_location_id(
+                args, kwargs
             )
             if location_id and "location_id" not in base_metadata:
                 base_metadata["location_id"] = location_id
@@ -201,9 +231,7 @@ def audit(
             #    from step 3 lets operators reconcile via request_id. Reads
             #    stay best-effort (background).
             post_metadata = (
-                {**base_metadata, "phase": "complete"}
-                if is_durable
-                else base_metadata
+                {**base_metadata, "phase": "complete"} if is_durable else base_metadata
             )
             audit_persistence_error: AuditPersistenceError | None = None
             if is_durable:
@@ -253,10 +281,15 @@ def audit(
     return decorator
 
 
-def _resolve_institution_id(args: tuple, kwargs: dict, fallback: str | None = None) -> str | None:
+def _resolve_institution_id(
+    args: tuple, kwargs: dict, fallback: str | None = None
+) -> str | None:
     """Resolve institution ID from request.state, current_user, or Retell call context."""
-    for arg in args:
-        if hasattr(arg, "state") and hasattr(arg.state, "institution"):
+    for arg in (*args, *kwargs.values()):
+        if hasattr(arg, "state"):
+            explicit = getattr(arg.state, "audit_institution_id", None)
+            if explicit:
+                return str(explicit)
             institution = getattr(arg.state, "institution", None)
             if institution:
                 return str(institution.id)
@@ -265,6 +298,7 @@ def _resolve_institution_id(args: tuple, kwargs: dict, fallback: str | None = No
     # The handler stashes resolved IDs onto a ContextVar after _resolve_context().
     try:
         from src.app.retell.functions import get_call_context
+
         call_ctx = get_call_context()
         if call_ctx.get("institution_id"):
             return str(call_ctx["institution_id"])
@@ -272,6 +306,16 @@ def _resolve_institution_id(args: tuple, kwargs: dict, fallback: str | None = No
         pass
 
     return fallback
+
+
+def _resolve_location_id(args: tuple, kwargs: dict) -> str | None:
+    """Resolve a route-supplied audit location, then fall back to Retell."""
+    for arg in list(args) + list(kwargs.values()):
+        if hasattr(arg, "state"):
+            explicit = getattr(arg.state, "audit_location_id", None)
+            if explicit:
+                return str(explicit)
+    return _resolve_location_id_from_retell_context()
 
 
 def _augment_metadata_for_action(
@@ -334,6 +378,7 @@ def _resolve_location_id_from_retell_context() -> str | None:
     """Read the location ID stashed by the Retell handler, if any."""
     try:
         from src.app.retell.functions import get_call_context
+
         loc_id = get_call_context().get("location_id")
         return str(loc_id) if loc_id else None
     except Exception:
@@ -347,12 +392,23 @@ def _resolve_actor_context(args: tuple, kwargs: dict) -> dict[str, str | None]:
     candidate_values = list(args) + list(kwargs.values())
     for value in candidate_values:
         # User model shape: id, role, institution_id, location_id.
-        if all(hasattr(value, attr) for attr in ("id", "role", "institution_id", "location_id")):
+        if all(
+            hasattr(value, attr)
+            for attr in ("id", "role", "institution_id", "location_id")
+        ):
             return {
-                "actor_user_id": str(getattr(value, "id", None)) if getattr(value, "id", None) else None,
-                "actor_role": str(getattr(value, "role", None)) if getattr(value, "role", None) else None,
-                "institution_id": str(getattr(value, "institution_id", None)) if getattr(value, "institution_id", None) else None,
-                "location_id": str(getattr(value, "location_id", None)) if getattr(value, "location_id", None) else None,
+                "actor_user_id": str(getattr(value, "id", None))
+                if getattr(value, "id", None)
+                else None,
+                "actor_role": str(getattr(value, "role", None))
+                if getattr(value, "role", None)
+                else None,
+                "institution_id": str(getattr(value, "institution_id", None))
+                if getattr(value, "institution_id", None)
+                else None,
+                "location_id": str(getattr(value, "location_id", None))
+                if getattr(value, "location_id", None)
+                else None,
             }
     return {
         "actor_user_id": None,
@@ -441,11 +497,7 @@ def _classify_soft_error(result: Any) -> tuple[AuditOutcome | None, str | None]:
         # No "error" key but explicit success=False — fall back to "message"
         # for forensics.
         message = result.get("message")
-        msg = (
-            sanitize_provider_error(str(message), max_length=200)
-            if message
-            else None
-        )
+        msg = sanitize_provider_error(str(message), max_length=200) if message else None
         return AuditOutcome.FAILURE_VALIDATION, msg
 
     return None, None

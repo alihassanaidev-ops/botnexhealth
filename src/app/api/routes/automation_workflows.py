@@ -1,0 +1,2676 @@
+"""FastAPI routes for automation workflow management and enrollment."""
+
+from __future__ import annotations
+
+from datetime import date, datetime, timezone
+import hashlib
+from typing import Annotated, Any, Literal
+
+import httpx
+import phonenumbers
+from fastapi import (
+    APIRouter,
+    Depends,
+    File,
+    Form,
+    HTTPException,
+    Query,
+    UploadFile,
+    status,
+)
+from pydantic import BaseModel, Field, ValidationError
+
+from src.app.config import settings
+from src.app.api.deps import (
+    get_current_institution_or_location_admin,
+    get_current_institution_user,
+)
+from src.app.api.permissions import Permission, require_permission
+from src.app.database import get_db_session
+from sqlalchemy import select as sa_select
+from src.app.models.automation_workflow import (
+    AutomationWorkflowRun,
+    AutomationWorkflowStatus,
+    AutomationWorkflowVersion,
+)
+from src.app.models.contact import Contact
+from src.app.models.institution import Institution
+from src.app.models.institution_location import InstitutionLocation
+from src.app.models.outbound_halt import OutboundEmergencyHalt
+from src.app.models.audit_log import AuditAction, AuditActor
+from src.app.models.user import User, UserRole
+from src.app.services.audit_decorator import audit
+from src.app.services.automation.definition_schema import WorkflowDefinition
+from src.app.services.automation.definition_service import (
+    AutomationWorkflowDefinitionService,
+)
+from src.app.services.automation.channel_readiness import ChannelReadinessService
+from src.app.services.automation.dry_run import simulate_run
+from src.app.services.automation.template_renderer import build_merge_vars
+from src.app.services.automation.launch_checklist_service import (
+    CampaignLaunchChecklist,
+    CampaignLaunchChecklistService,
+)
+from src.app.services.automation.audience_service import (
+    AudienceEnrollResult,
+    AudiencePreviewResult,
+    AudienceSample,
+    AudienceSegment,
+    CampaignAudienceService,
+)
+from src.app.services.automation.campaign_operations_service import (
+    CampaignOperationsService,
+    RunListFilters,
+)
+from src.app.services.automation.campaign_analytics_service import (
+    MIN_ARM_ENROLLMENTS,
+    CampaignAnalytics,
+    CampaignAnalyticsService,
+    CampaignSplitAnalytics,
+    resolve_window,
+)
+from src.app.pms.gotracker.statuses import public_statuses
+from src.app.services.automation.csv_enrollment_service import (
+    CsvEnrollmentService,
+    csv_idempotency_key,
+    parse_csv,
+)
+from src.app.services.automation.event_catalog import (
+    fields_for_events,
+    public_events,
+)
+from src.app.services.automation.merge_field_catalog import fields_for
+from src.app.services.automation.node_registry import (
+    NODE_REGISTRY_VERSION,
+    public_capabilities,
+)
+from src.app.services.automation import pms_scope
+from src.app.services.automation.validation_service import WorkflowValidationService
+from src.app.services.automation.enrollment_service import (
+    AutomationWorkflowEnrollmentService,
+)
+from src.app.services.automation.step_dispatcher import build_dispatcher
+from src.app.services.sms_compliance import SmsComplianceService
+
+#: Uploads are bounded well below the row cap; a larger file is a mistake.
+_CSV_MAX_BYTES = 512 * 1024
+
+router = APIRouter(prefix="/automation/workflows", tags=["Automation Workflows"])
+_OPENAI_MODELS_CACHE: tuple[datetime, list["WorkflowLlmModelResponse"]] | None = None
+_OPENAI_MODELS_CACHE_SECONDS = 300
+_MODEL_EXCLUDE_MARKERS = (
+    "audio",
+    "dall-e",
+    "embedding",
+    "image",
+    "moderation",
+    "realtime",
+    "search",
+    "tts",
+    "transcribe",
+    "whisper",
+)
+
+# Institution-wide safety controls remain institution-admin only.
+_InstitutionAdmin = Annotated[User, Depends(get_current_institution_user)]
+
+# Reads and run operations are available to institution and location admins.
+_InstitutionOrLocationAdmin = Annotated[
+    User, Depends(get_current_institution_or_location_admin)
+]
+
+
+async def get_current_campaign_manager(
+    current_user: Annotated[User, Depends(get_current_institution_or_location_admin)],
+    _permission_user: Annotated[
+        User, Depends(require_permission(Permission.CAMPAIGN_CONFIGURE))
+    ],
+) -> User:
+    """Authorize campaign authors without widening institution-wide controls."""
+    if (
+        current_user.role == UserRole.LOCATION_ADMIN.value
+        and not current_user.location_id
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Location-scoped account is missing location assignment",
+        )
+    return current_user
+
+
+_CampaignManager = Annotated[User, Depends(get_current_campaign_manager)]
+
+
+# ---------------------------------------------------------------------------
+# Request / response models
+# ---------------------------------------------------------------------------
+
+
+class WorkflowCreateRequest(BaseModel):
+    name: str = Field(..., min_length=1, max_length=255)
+    definition: dict[str, Any]
+
+
+class WorkflowDraftCreateRequest(BaseModel):
+    name: str = Field(..., min_length=1, max_length=255)
+    location_id: str | None = None
+
+
+class WorkflowUpdateRequest(BaseModel):
+    name: str | None = Field(None, min_length=1, max_length=255)
+    definition: dict[str, Any] | None = None
+
+
+class EnrollRequest(BaseModel):
+    contact_id: str | None = None
+    location_id: str | None = None
+    trigger_ref_type: str | None = None
+    trigger_ref_id: str | None = None
+    idempotency_key: str
+    trigger_metadata: dict[str, Any] = Field(default_factory=dict)
+
+
+class WorkflowResponse(BaseModel):
+    id: str
+    name: str
+    status: str
+    trigger_type: str | None
+    definition: dict[str, Any] | None
+    location_id: str | None
+    current_version_id: str | None
+    created_at: datetime
+    updated_at: datetime
+
+    @classmethod
+    def from_model(cls, wf: Any) -> "WorkflowResponse":
+        return cls(
+            id=str(wf.id),
+            name=wf.name,
+            status=wf.status,
+            trigger_type=wf.trigger_type,
+            definition=wf.definition,
+            location_id=str(wf.location_id) if wf.location_id else None,
+            current_version_id=str(wf.current_version_id)
+            if wf.current_version_id
+            else None,
+            created_at=wf.created_at,
+            updated_at=wf.updated_at,
+        )
+
+
+class WorkflowRunResponse(BaseModel):
+    id: str
+    workflow_id: str
+    status: str
+    current_step_id: str | None
+    outcome: str | None
+    started_at: datetime | None
+    completed_at: datetime | None
+    created_at: datetime
+
+    @classmethod
+    def from_model(cls, run: Any) -> "WorkflowRunResponse":
+        return cls(
+            id=str(run.id),
+            workflow_id=str(run.workflow_id),
+            status=run.status,
+            current_step_id=run.current_step_id,
+            outcome=run.outcome,
+            started_at=run.started_at,
+            completed_at=run.completed_at,
+            created_at=run.created_at,
+        )
+
+
+class WorkflowLlmModelResponse(BaseModel):
+    id: str
+    label: str
+    owned_by: str | None = None
+
+
+class WorkflowLlmModelsResponse(BaseModel):
+    default_model: str
+    configured: bool
+    models: list[WorkflowLlmModelResponse]
+
+
+class CampaignRunListItemResponse(BaseModel):
+    id: str
+    workflow_id: str
+    workflow_version_id: str
+    status: str
+    current_step_id: str | None
+    current_step_type: str | None
+    outcome: str | None
+    blocked_reason: str | None
+    contact_id: str | None
+    contact_name: str | None
+    next_due_at: datetime | None
+    latest_event_at: datetime | None
+    started_at: datetime | None
+    completed_at: datetime | None
+    created_at: datetime
+
+
+class CampaignRunListResponse(BaseModel):
+    items: list[CampaignRunListItemResponse] = Field(default_factory=list)
+    limit: int
+    next_cursor: str | None
+
+
+class WorkflowVersionResponse(BaseModel):
+    id: str
+    workflow_id: str
+    version_number: int
+    definition: dict[str, Any]
+    definition_checksum: str | None
+    content_classification: str | None
+    published_by_user_id: str | None
+    published_at: datetime
+    created_at: datetime
+    is_current: bool
+
+    @classmethod
+    def from_model(
+        cls, v: Any, *, current_version_id: str | None
+    ) -> "WorkflowVersionResponse":
+        return cls(
+            id=str(v.id),
+            workflow_id=str(v.workflow_id),
+            version_number=v.version_number,
+            definition=v.definition,
+            definition_checksum=v.definition_checksum,
+            content_classification=v.content_classification,
+            published_by_user_id=(
+                str(v.published_by_user_id) if v.published_by_user_id else None
+            ),
+            published_at=v.published_at,
+            created_at=v.created_at,
+            is_current=bool(current_version_id)
+            and str(v.id) == str(current_version_id),
+        )
+
+
+class ValidateDefinitionRequest(BaseModel):
+    definition: dict[str, Any]
+    location_id: str | None = None
+
+
+class ValidationIssueResponse(BaseModel):
+    severity: Literal["error", "warning"] = "error"
+    node_id: str | None = None
+    field_path: list[Any] = Field(default_factory=list)
+    message: str
+    code: str | None = None
+    fix: str | None = None
+
+
+class ValidateDefinitionResponse(BaseModel):
+    valid: bool
+    issues: list[ValidationIssueResponse] = Field(default_factory=list)
+
+
+class NodeCapabilityResponse(BaseModel):
+    node_type: str
+    outgoing_fields: list[str] = Field(default_factory=list)
+    authorable: bool
+    runtime_supported: bool
+    dry_run_supported: bool
+    legacy: bool
+
+
+class NodeCapabilitiesResponse(BaseModel):
+    registry_version: str
+    nodes: list[NodeCapabilityResponse] = Field(default_factory=list)
+    # PMS-aware builder scope: which triggers/nodes this institution's practice
+    # software supports. The frontend hides everything not listed here.
+    pms_type: str = "none"
+    allowed_trigger_types: list[str] = Field(default_factory=list)
+    allowed_node_types: list[str] = Field(default_factory=list)
+
+
+class PhoneCountryRegionResponse(BaseModel):
+    region: str
+    calling_code: str
+
+
+class PmsAppointmentStatusResponse(BaseModel):
+    """One PMS appointment disposition, for the builder's status pickers.
+
+    Served rather than hardcoded in the frontend so a label or a writability
+    change lands in one place. ``semantics`` is the PMS-neutral meaning.
+    """
+
+    id: int
+    key: str
+    label: str
+    semantics: str
+    readable: bool
+    writable: bool
+    description: str
+
+
+class PmsAppointmentStatusCatalogResponse(BaseModel):
+    pms: str
+    statuses: list[PmsAppointmentStatusResponse] = Field(default_factory=list)
+
+
+class EventContextFieldResponse(BaseModel):
+    """One canonical context field an event carries.
+
+    ``pms_support`` is per-PMS (``native``/``derived``/``unsupported``) so the
+    builder can grey out a field the caller's practice software cannot supply,
+    with a reason, instead of letting someone branch on a value that will always
+    be absent.
+    """
+
+    path: str
+    label: str
+    type: str
+    description: str
+    sample: Any = None
+    pms_support: dict[str, str] = Field(default_factory=dict)
+    phi_level: str = "none"
+    pms_specific: bool = False
+
+
+class EventCatalogEntryResponse(BaseModel):
+    key: str
+    label: str
+    description: str
+    pms_support: dict[str, str] = Field(default_factory=dict)
+    context: list[EventContextFieldResponse] = Field(default_factory=list)
+
+
+class EventCatalogResponse(BaseModel):
+    pms: str
+    events: list[EventCatalogEntryResponse] = Field(default_factory=list)
+
+
+class MergeFieldResponse(BaseModel):
+    name: str
+    token: str
+    label: str
+    description: str
+    sample: str
+    group: str
+    availability: str
+    requires: list[str] = Field(default_factory=list)
+    phi_level: str
+    channels: list[str] = Field(default_factory=list)
+    trigger_types: list[str] = Field(default_factory=list)
+
+
+class CsvEnrollRowResponse(BaseModel):
+    line: int
+    first_name: str | None = None
+    last_name: str | None = None
+    #: Masked. A preview is shown on screen and often screenshotted, so it
+    #: identifies a row without reprinting a full contact detail.
+    contact_hint: str | None = None
+    contact_id: str | None = None
+    will_create_contact: bool = False
+    excluded_reason: str | None = None
+
+
+class CsvEnrollPreviewResponse(BaseModel):
+    upload_id: str
+    total_rows: int
+    eligible_count: int
+    excluded_count: int
+    new_contact_count: int
+    truncated: bool = False
+    parse_errors: list[str] = Field(default_factory=list)
+    rows: list[CsvEnrollRowResponse] = Field(default_factory=list)
+    #: False on a preview; true once contacts were created and runs enqueued.
+    committed: bool = False
+    enrolled_count: int = 0
+
+
+class ChannelReadinessDetail(BaseModel):
+    channel: str
+    ready: bool
+    reason: str | None = None
+
+
+class ChannelReadinessResponse(BaseModel):
+    sms: bool
+    email: bool
+    voice_configurable: bool
+    details: list[ChannelReadinessDetail] = Field(default_factory=list)
+
+
+class DryRunRequest(BaseModel):
+    definition: dict[str, Any]
+    context: dict[str, Any] | None = None
+    #: Preview against a real person instead of sample data. The contact's own
+    #: record resolves the merge fields, so a field the record cannot fill
+    #: renders blank and is reported rather than being papered over by a sample.
+    contact_id: str | None = None
+    #: Location supplying the clinic-side merge fields (name, phone, address).
+    location_id: str | None = None
+    condition_choices: dict[str, bool] | None = None
+    # node_id -> case label. Names the switch branch a preview should walk;
+    # an unset or unknown label previews the default branch.
+    switch_case_choices: dict[str, str] | None = None
+
+
+class DryRunStepResponse(BaseModel):
+    node_id: str
+    node_type: str
+    summary: str
+    detail: str | None = None
+
+
+class EmptyMergeFieldResponse(BaseModel):
+    name: str
+    nodes: list[str] = Field(default_factory=list)
+
+
+class DryRunResultResponse(BaseModel):
+    steps: list[DryRunStepResponse] = Field(default_factory=list)
+    outcome: str | None = None
+    truncated: bool = False
+    #: "sample" when previewing against catalog samples, "contact" when a real
+    #: record supplied the merge values.
+    context_source: Literal["sample", "contact"] = "sample"
+    #: Display name of the previewed contact, when one was used.
+    contact_name: str | None = None
+    #: Merge fields a message references that rendered blank. Only meaningful
+    #: for a contact preview — samples populate every field by construction.
+    empty_fields: list[EmptyMergeFieldResponse] = Field(default_factory=list)
+
+
+class LaunchChecklistPreviewRequest(BaseModel):
+    definition: dict[str, Any]
+    location_id: str | None = None
+
+
+class LaunchChecklistItemResponse(BaseModel):
+    id: str
+    section: str
+    label: str
+    status: Literal["pass", "warning", "blocked", "unknown"]
+    message: str
+    fix_href: str | None = None
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+
+class LaunchChecklistResponse(BaseModel):
+    workflow_id: str
+    workflow_version_id: str | None
+    location_id: str | None
+    overall_status: Literal["pass", "warning", "blocked", "unknown"]
+    blockers_count: int
+    warnings_count: int
+    unknown_count: int
+    estimated_audience: int | None
+    estimated_send_volume: dict[str, int] | None
+    estimated_cost_cents: int | None
+    estimate_basis: str
+    generated_at: datetime
+    items: list[LaunchChecklistItemResponse] = Field(default_factory=list)
+
+    @classmethod
+    def from_service(
+        cls, checklist: CampaignLaunchChecklist
+    ) -> "LaunchChecklistResponse":
+        return cls(
+            workflow_id=checklist.workflow_id,
+            workflow_version_id=checklist.workflow_version_id,
+            location_id=checklist.location_id,
+            overall_status=checklist.overall_status,
+            blockers_count=checklist.blockers_count,
+            warnings_count=checklist.warnings_count,
+            unknown_count=checklist.unknown_count,
+            estimated_audience=checklist.estimated_audience,
+            estimated_send_volume=checklist.estimated_send_volume,
+            estimated_cost_cents=checklist.estimated_cost_cents,
+            estimate_basis=checklist.estimate_basis,
+            generated_at=checklist.generated_at,
+            items=[
+                LaunchChecklistItemResponse(
+                    id=item.id,
+                    section=item.section,
+                    label=item.label,
+                    status=item.status,
+                    message=item.message,
+                    fix_href=item.fix_href,
+                    metadata=item.metadata,
+                )
+                for item in checklist.items
+            ],
+        )
+
+
+class AudienceDefinitionResponse(BaseModel):
+    workflow_id: str
+    location_id: str | None
+    segment: dict[str, Any]
+    exclusions: dict[str, Any]
+    persisted: bool
+    updated_at: datetime | None = None
+
+
+class AudienceDefinitionRequest(BaseModel):
+    filters: dict[str, Any] = Field(default_factory=dict)
+    exclusions: dict[str, Any] = Field(default_factory=dict)
+
+    def to_segment(self) -> AudienceSegment:
+        return AudienceSegment(filters=self.filters, exclusions=self.exclusions)
+
+
+class AudiencePreviewRequest(AudienceDefinitionRequest):
+    sample_limit: int = Field(default=25, ge=0, le=100)
+
+
+class AudienceSampleResponse(BaseModel):
+    contact_id: str
+    display_name: str | None
+    phone_masked: str | None
+    email_masked: str | None
+    status: Literal["included", "excluded"]
+    reasons: list[str] = Field(default_factory=list)
+
+    @classmethod
+    def from_service(cls, sample: AudienceSample) -> "AudienceSampleResponse":
+        return cls(**sample.__dict__)
+
+
+class AudiencePreviewResponse(BaseModel):
+    preview_id: str
+    workflow_id: str
+    workflow_version_id: str | None
+    location_id: str | None
+    segment: dict[str, Any]
+    exclusions: dict[str, Any]
+    total_candidates: int
+    included_count: int
+    excluded_count: int
+    counts_by_reason: dict[str, int]
+    samples: list[AudienceSampleResponse] = Field(default_factory=list)
+    warnings: list[str] = Field(default_factory=list)
+    estimate_basis: str
+    generated_at: datetime
+    expires_at: datetime
+
+    @classmethod
+    def from_service(cls, preview: AudiencePreviewResult) -> "AudiencePreviewResponse":
+        return cls(
+            preview_id=preview.preview_id,
+            workflow_id=preview.workflow_id,
+            workflow_version_id=preview.workflow_version_id,
+            location_id=preview.location_id,
+            segment=preview.segment,
+            exclusions=preview.exclusions,
+            total_candidates=preview.total_candidates,
+            included_count=preview.included_count,
+            excluded_count=preview.excluded_count,
+            counts_by_reason=preview.counts_by_reason,
+            samples=[
+                AudienceSampleResponse.from_service(sample)
+                for sample in preview.samples
+            ],
+            warnings=preview.warnings,
+            estimate_basis=preview.estimate_basis,
+            generated_at=preview.generated_at,
+            expires_at=preview.expires_at,
+        )
+
+
+class AudienceEnrollRequest(BaseModel):
+    preview_id: str | None = None
+    filters: dict[str, Any] | None = None
+    exclusions: dict[str, Any] | None = None
+    max_enrollments: int = Field(default=500, ge=1, le=500)
+
+    def to_segment(self) -> AudienceSegment | None:
+        if self.filters is None and self.exclusions is None:
+            return None
+        return AudienceSegment(
+            filters=self.filters or {}, exclusions=self.exclusions or {}
+        )
+
+
+class AudienceEnrollResponse(BaseModel):
+    workflow_id: str
+    workflow_version_id: str
+    preview_id: str
+    enqueued: int
+    skipped: int
+    counts_by_reason: dict[str, int]
+
+    @classmethod
+    def from_service(cls, result: AudienceEnrollResult) -> "AudienceEnrollResponse":
+        return cls(**result.__dict__)
+
+
+class CampaignOverviewResponse(BaseModel):
+    workflow_id: str
+    workflow_name: str
+    workflow_status: str
+    trigger_type: str | None
+    location_id: str | None
+    latest_version: dict[str, Any] | None
+    readiness: dict[str, Any]
+    channels: list[str]
+    run_counts: dict[str, int]
+    outcome_counts: dict[str, int]
+    response_counts: dict[str, int]
+    open_handoff_count: int
+    channel_attempts: dict[str, dict[str, Any]]
+    recent_outcomes: list[dict[str, Any]]
+    generated_at: datetime
+
+
+class ChannelAnalyticsResponse(BaseModel):
+    channel: str
+    attempted: int
+    delivered: int
+    failed: int
+    responded: int
+
+
+class OutcomeAnalyticsResponse(BaseModel):
+    key: str
+    label: str
+    group: str
+    count: int
+    rate: float | None
+    description: str
+
+
+class TrendPointResponse(BaseModel):
+    date: str
+    enrollments: int
+    sends: int
+    responses: int
+    confirmed: int
+    booked: int
+    handoffs: int
+    total_cost: float
+
+
+class CostSummaryResponse(BaseModel):
+    currency: str
+    total_cost: float
+    cost_per_booking: float | None
+    cost_per_confirmation: float | None
+
+
+class CampaignAnalyticsResponse(BaseModel):
+    workflow_id: str
+    workflow_name: str
+    category: str
+    start_date: str
+    end_date: str
+    summary: dict[str, int]
+    channels: list[ChannelAnalyticsResponse]
+    outcomes: list[OutcomeAnalyticsResponse]
+    trend: list[TrendPointResponse]
+    cost: CostSummaryResponse
+    generated_at: datetime
+    rollup_fresh_at: datetime | None
+
+    @classmethod
+    def from_service(cls, analytics: CampaignAnalytics) -> "CampaignAnalyticsResponse":
+        return cls(
+            workflow_id=analytics.workflow_id,
+            workflow_name=analytics.workflow_name,
+            category=analytics.category,
+            start_date=analytics.start_date.isoformat(),
+            end_date=analytics.end_date.isoformat(),
+            summary=analytics.summary,
+            channels=[
+                ChannelAnalyticsResponse(**channel.__dict__)
+                for channel in analytics.channels
+            ],
+            outcomes=[
+                OutcomeAnalyticsResponse(**outcome.__dict__)
+                for outcome in analytics.outcomes
+            ],
+            trend=[
+                TrendPointResponse(
+                    date=point.date.isoformat(),
+                    enrollments=point.enrollments,
+                    sends=point.sends,
+                    responses=point.responses,
+                    confirmed=point.confirmed,
+                    booked=point.booked,
+                    handoffs=point.handoffs,
+                    total_cost=point.total_cost,
+                )
+                for point in analytics.trend
+            ],
+            cost=CostSummaryResponse(**analytics.cost.__dict__),
+            generated_at=analytics.generated_at,
+            rollup_fresh_at=analytics.rollup_fresh_at,
+        )
+
+
+class SplitBranchAnalyticsResponse(BaseModel):
+    label: str
+    weight: int | None
+    enrollments: int
+    summary: dict[str, int]
+    outcomes: list[OutcomeAnalyticsResponse]
+    total_cost: float
+    cost_per_booking: float | None
+    primary_rate: float | None
+    lift: float | None
+    is_leader: bool
+
+
+class SplitNodeAnalyticsResponse(BaseModel):
+    node_id: str
+    subject: str | None
+    primary_outcome_key: str
+    primary_outcome_label: str
+    branches: list[SplitBranchAnalyticsResponse]
+    has_enough_volume: bool
+
+
+class CampaignSplitAnalyticsResponse(BaseModel):
+    workflow_id: str
+    workflow_name: str
+    category: str
+    start_date: str
+    end_date: str
+    #: Minimum contacts per arm before a leader is named, so the builder can say
+    #: how far off a conclusive result is instead of hard-coding the same number.
+    min_arm_enrollments: int
+    splits: list[SplitNodeAnalyticsResponse]
+    generated_at: datetime
+    rollup_fresh_at: datetime | None
+
+    @classmethod
+    def from_service(
+        cls, analytics: CampaignSplitAnalytics
+    ) -> "CampaignSplitAnalyticsResponse":
+        return cls(
+            workflow_id=analytics.workflow_id,
+            workflow_name=analytics.workflow_name,
+            category=analytics.category,
+            start_date=analytics.start_date.isoformat(),
+            end_date=analytics.end_date.isoformat(),
+            min_arm_enrollments=MIN_ARM_ENROLLMENTS,
+            splits=[
+                SplitNodeAnalyticsResponse(
+                    node_id=split.node_id,
+                    subject=split.subject,
+                    primary_outcome_key=split.primary_outcome_key,
+                    primary_outcome_label=split.primary_outcome_label,
+                    has_enough_volume=split.has_enough_volume,
+                    branches=[
+                        SplitBranchAnalyticsResponse(
+                            label=branch.label,
+                            weight=branch.weight,
+                            enrollments=branch.enrollments,
+                            summary=branch.summary,
+                            outcomes=[
+                                OutcomeAnalyticsResponse(**outcome.__dict__)
+                                for outcome in branch.outcomes
+                            ],
+                            total_cost=branch.total_cost,
+                            cost_per_booking=branch.cost_per_booking,
+                            primary_rate=branch.primary_rate,
+                            lift=branch.lift,
+                            is_leader=branch.is_leader,
+                        )
+                        for branch in split.branches
+                    ],
+                )
+                for split in analytics.splits
+            ],
+            generated_at=analytics.generated_at,
+            rollup_fresh_at=analytics.rollup_fresh_at,
+        )
+
+
+class TimelineItemResponse(BaseModel):
+    id: str
+    kind: str
+    occurred_at: datetime
+    title: str
+    status: str | None = None
+    step_id: str | None = None
+    channel: str | None = None
+    summary: str | None = None
+    metadata: dict[str, Any] = Field(default_factory=dict)
+    input: dict[str, Any] = Field(default_factory=dict)
+    output: dict[str, Any] = Field(default_factory=dict)
+    node: dict[str, Any] = Field(default_factory=dict)
+    duration_ms: int | None = None
+    error_message: str | None = None
+
+
+class RunTimelineResponse(BaseModel):
+    run: CampaignRunListItemResponse
+    contact: dict[str, Any]
+    workflow_version: dict[str, Any] = Field(default_factory=dict)
+    items: list[TimelineItemResponse] = Field(default_factory=list)
+
+
+class OperationItemResponse(BaseModel):
+    id: str
+    run_id: str
+    kind: str
+    severity: str
+    title: str
+    status: str | None
+    step_id: str | None
+    occurred_at: datetime | None
+    cancel_eligible: bool
+    replay_eligible: bool
+    reason: str | None
+
+
+class CampaignOperationsResponse(BaseModel):
+    stuck_waiting_runs: list[OperationItemResponse] = Field(default_factory=list)
+    failed_sends: list[OperationItemResponse] = Field(default_factory=list)
+    suppressed_skipped_runs: list[OperationItemResponse] = Field(default_factory=list)
+    open_handoffs: list[OperationItemResponse] = Field(default_factory=list)
+    generated_at: datetime
+
+
+# ---------------------------------------------------------------------------
+# Shared helpers
+# ---------------------------------------------------------------------------
+
+
+def _institution_id(user: User) -> str:
+    if not user.institution_id:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN, detail="No institution context"
+        )
+    return str(user.institution_id)
+
+
+def _campaign_location_id(
+    user: User,
+    requested_location_id: str | None,
+) -> str | None:
+    """Pin a location admin to their assigned clinic before any DB access."""
+    if user.role != UserRole.LOCATION_ADMIN.value:
+        return requested_location_id
+    if not user.location_id:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Location-scoped account is missing location assignment",
+        )
+    own_location_id = str(user.location_id)
+    if requested_location_id and str(requested_location_id) != own_location_id:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Cannot manage campaigns for another location",
+        )
+    return own_location_id
+
+
+async def _get_workflow_or_404(
+    svc: AutomationWorkflowDefinitionService,
+    workflow_id: str,
+    current_user: User,
+    requested_location_id: str | None = None,
+) -> Any:
+    institution_id = _institution_id(current_user)
+    wf = await svc.get_workflow(institution_id, workflow_id)
+    if current_user.role == UserRole.LOCATION_ADMIN.value:
+        own_location_id = _campaign_location_id(current_user, None)
+        if wf is not None and str(wf.location_id or "") != own_location_id:
+            wf = None
+    if (
+        wf is not None
+        and requested_location_id
+        and str(wf.location_id or "") != str(requested_location_id)
+    ):
+        wf = None
+    if wf is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Workflow not found"
+        )
+    return wf
+
+
+def _workflow_location_id(
+    current_user: User,
+    workflow: Any,
+    requested_location_id: str | None = None,
+) -> str | None:
+    """Resolve enrollment/preview scope without allowing a workflow to widen it."""
+    actor_location_id = _campaign_location_id(current_user, requested_location_id)
+    workflow_location_id = str(workflow.location_id) if workflow.location_id else None
+    if workflow_location_id:
+        if requested_location_id and str(requested_location_id) != workflow_location_id:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Campaign belongs to a different location",
+            )
+        return workflow_location_id
+    return actor_location_id
+
+
+def _scope_audience_to_workflow(
+    workflow: Any,
+    segment: AudienceSegment | None,
+) -> AudienceSegment | None:
+    """Prevent a location-owned campaign from selecting another clinic."""
+    if segment is None or not workflow.location_id:
+        return segment
+    workflow_location_id = str(workflow.location_id)
+    requested = {str(value) for value in segment.filters.location_id_in}
+    if requested and requested != {workflow_location_id}:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Campaign audience cannot include another location",
+        )
+    segment.filters.location_id_in = [workflow_location_id]
+    return segment
+
+
+def _node_id_for_loc(loc: tuple, definition: dict[str, Any]) -> str | None:
+    """Resolve the declared node id for a pydantic error location.
+
+    Pydantic reports node-level errors with a location like
+    ``("nodes", <index>, ...)``; translate the positional index back to the
+    node's own ``id`` so the builder can highlight the offending node.
+    """
+    if len(loc) >= 2 and loc[0] == "nodes" and isinstance(loc[1], int):
+        nodes = definition.get("nodes")
+        if isinstance(nodes, list) and 0 <= loc[1] < len(nodes):
+            node = nodes[loc[1]]
+            if isinstance(node, dict) and node.get("id") is not None:
+                return str(node["id"])
+    return None
+
+
+def _issue_from_pydantic_error(
+    err: dict[str, Any], definition: dict[str, Any]
+) -> ValidationIssueResponse:
+    loc = tuple(err.get("loc", ()))
+    message = str(err.get("msg", "invalid"))
+    # Graph-structure errors raised in the model validator are prefixed by
+    # pydantic with "Value error, " — strip it for a cleaner message.
+    if message.startswith("Value error, "):
+        message = message[len("Value error, ") :]
+    return ValidationIssueResponse(
+        node_id=_node_id_for_loc(loc, definition),
+        field_path=list(loc),
+        message=message,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Workflow CRUD
+# ---------------------------------------------------------------------------
+
+
+@router.post("", response_model=WorkflowResponse, status_code=status.HTTP_201_CREATED)
+@audit(
+    AuditAction.CAMPAIGN_CREATE,
+    resource=lambda *args, **kwargs: (
+        f"campaign:new:{getattr(kwargs.get('data'), 'name', 'unnamed')}"
+    ),
+    actor=AuditActor.ADMIN,
+)
+async def create_workflow(
+    data: WorkflowCreateRequest,
+    current_user: _CampaignManager,
+) -> WorkflowResponse:
+    inst_id = _institution_id(current_user)
+    location_id = _campaign_location_id(current_user, None)
+    async with get_db_session() as session:
+        svc = AutomationWorkflowDefinitionService(session)
+        wf = await svc.create_draft(
+            institution_id=inst_id,
+            name=data.name,
+            location_id=location_id,
+        )
+        await svc.publish_version(wf, data.definition)
+        return WorkflowResponse.from_model(wf)
+
+
+@router.post(
+    "/draft", response_model=WorkflowResponse, status_code=status.HTTP_201_CREATED
+)
+@audit(
+    AuditAction.CAMPAIGN_CREATE,
+    resource=lambda *args, **kwargs: (
+        f"campaign:new:{getattr(kwargs.get('data'), 'name', 'unnamed')}"
+    ),
+    actor=AuditActor.ADMIN,
+)
+async def create_draft_workflow(
+    data: WorkflowDraftCreateRequest,
+    current_user: _CampaignManager,
+) -> WorkflowResponse:
+    inst_id = _institution_id(current_user)
+    requested_location_id = _campaign_location_id(current_user, data.location_id)
+    async with get_db_session() as session:
+        if requested_location_id:
+            location_id = (
+                await session.execute(
+                    sa_select(InstitutionLocation.id).where(
+                        InstitutionLocation.id == requested_location_id,
+                        InstitutionLocation.institution_id == inst_id,
+                        InstitutionLocation.is_active.is_(True),
+                    )
+                )
+            ).scalar_one_or_none()
+            if location_id is None:
+                raise HTTPException(
+                    status_code=status.HTTP_404_NOT_FOUND,
+                    detail="Location not found",
+                )
+        svc = AutomationWorkflowDefinitionService(session)
+        wf = await svc.create_draft(
+            institution_id=inst_id,
+            name=data.name,
+            location_id=requested_location_id,
+        )
+        return WorkflowResponse.from_model(wf)
+
+
+@router.post("/validate", response_model=ValidateDefinitionResponse)
+async def validate_definition(
+    data: ValidateDefinitionRequest,
+    current_user: _CampaignManager,
+) -> ValidateDefinitionResponse:
+    """Validate a workflow definition against the authoritative backend schema
+    without persisting anything.
+
+    Mirrors exactly what publish enforces (which otherwise surfaces as a 422):
+    structural + reachability + consent/content-class + the Plan-12/readiness
+    seams, returned up-front and node-linked (with warnings) so the builder can
+    block/annotate before the user commits to publishing.
+    """
+    inst_id = _institution_id(current_user)
+    location_id = _campaign_location_id(current_user, data.location_id)
+    # Pure validation — no persistence. The builder supplies its workflow location
+    # so null-location runtime failures are node-linked before publish. Readiness
+    # needs a DB session to see the location's sender number and tenant creds —
+    # without one it would report every SMS/voice channel as unprovisioned.
+    async with get_db_session() as session:
+        issues = await WorkflowValidationService(
+            session=session,
+            readiness_checker=ChannelReadinessService(session),
+        ).validate(
+            data.definition,
+            institution_id=inst_id,
+            location_id=location_id,
+        )
+    responses = [
+        ValidationIssueResponse(
+            severity=i.severity,
+            node_id=i.node_id,
+            field_path=list(i.field_path),
+            message=i.message,
+            code=i.code,
+            fix=i.fix,
+        )
+        for i in issues
+    ]
+    valid = not any(i.severity == "error" for i in issues)
+    return ValidateDefinitionResponse(valid=valid, issues=responses)
+
+
+@router.get("/node-capabilities", response_model=NodeCapabilitiesResponse)
+async def list_node_capabilities(
+    current_user: _CampaignManager,
+) -> NodeCapabilitiesResponse:
+    """Return the engine's authoritative authoring/runtime support contract."""
+    inst_id = _institution_id(current_user)
+    async with get_db_session() as session:
+        institution = await session.get(Institution, inst_id)
+    pms_type = institution.pms_type if institution else "none"
+    return NodeCapabilitiesResponse(
+        registry_version=NODE_REGISTRY_VERSION,
+        nodes=[NodeCapabilityResponse(**item) for item in public_capabilities()],
+        pms_type=pms_type,
+        allowed_trigger_types=pms_scope.allowed_trigger_types(pms_type),
+        allowed_node_types=pms_scope.allowed_node_types(pms_type),
+    )
+
+
+@router.get("/phone-country-regions", response_model=list[PhoneCountryRegionResponse])
+async def list_phone_country_regions(
+    current_user: _CampaignManager,
+) -> list[PhoneCountryRegionResponse]:
+    _institution_id(current_user)
+    return [
+        PhoneCountryRegionResponse(
+            region=region,
+            calling_code=f"+{phonenumbers.country_code_for_region(region)}",
+        )
+        for region in sorted(phonenumbers.SUPPORTED_REGIONS)
+    ]
+
+
+@router.get(
+    "/pms-appointment-statuses",
+    response_model=PmsAppointmentStatusCatalogResponse,
+)
+async def list_pms_appointment_statuses(
+    current_user: _CampaignManager,
+    pms: Annotated[str | None, Query()] = None,
+) -> PmsAppointmentStatusCatalogResponse:
+    """Return a PMS's appointment disposition catalog for the builder.
+
+    Defaults to the caller institution's own PMS so a NexHealth tenant never
+    receives the GoTracker vocabulary.
+
+    NOTE: declared before ``/{workflow_id}`` so this literal path is not captured
+    as a workflow id by the parameterised route.
+    """
+    inst_id = _institution_id(current_user)
+    async with get_db_session() as session:
+        institution = await session.get(Institution, inst_id)
+    normalized = institution.pms_type if institution else "none"
+    requested = (pms or "").strip().lower()
+    if requested and requested != normalized:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="The requested PMS does not match the current institution",
+        )
+    if normalized != "gotracker":
+        # NexHealth has no comparable fixed disposition vocabulary today; it is
+        # introduced with the canonical event model rather than faked here.
+        return PmsAppointmentStatusCatalogResponse(pms=normalized, statuses=[])
+    return PmsAppointmentStatusCatalogResponse(
+        pms="gotracker",
+        statuses=[
+            PmsAppointmentStatusResponse(**status) for status in public_statuses()
+        ],
+    )
+
+
+@router.get("/event-catalog", response_model=EventCatalogResponse)
+async def get_event_catalog(
+    current_user: _CampaignManager,
+    pms: Annotated[str | None, Query()] = None,
+) -> EventCatalogResponse:
+    """Return the canonical event vocabulary the builder authors against.
+
+    Events a PMS cannot raise at all are dropped, so the trigger picker only
+    offers what the caller's location can actually deliver — a NexHealth tenant
+    is not shown ``appointment.checked_in`` and left wondering why the campaign
+    never enrolls anyone. Field-level support is carried through on each entry
+    so the filter editor can annotate rather than hide.
+
+    NOTE: declared before ``/{workflow_id}`` so this literal path is not captured
+    as a workflow id by the parameterised route.
+    """
+    inst_id = _institution_id(current_user)
+    normalized = (pms or "").strip().lower()
+    if not normalized:
+        async with get_db_session() as session:
+            institution = await session.get(Institution, inst_id)
+        normalized = institution.pms_type if institution else "none"
+    # A tenant with no PMS still authors platform events (inbound message,
+    # enquiry, schedule), so filter only for a PMS we actually know.
+    filter_pms = normalized if normalized in {"gotracker", "nexhealth"} else None
+    return EventCatalogResponse(
+        pms=normalized,
+        events=[
+            EventCatalogEntryResponse(**entry) for entry in public_events(filter_pms)
+        ],
+    )
+
+
+@router.post("/dry-run", response_model=DryRunResultResponse)
+async def dry_run_definition(
+    data: DryRunRequest,
+    current_user: _CampaignManager,
+) -> DryRunResultResponse:
+    """Simulate a run against the authoritative backend definition + merge renderer
+    without persisting or sending. Powers the builder's test-run preview so it can't
+    drift from real engine semantics. Structurally-invalid definitions return 422."""
+    _institution_id(current_user)  # authz / institution context
+    location_id = _campaign_location_id(current_user, data.location_id)
+    try:
+        definition = WorkflowDefinition.model_validate(data.definition)
+    except ValidationError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=f"Invalid workflow definition: {exc.error_count()} error(s)",
+        ) from exc
+
+    context = data.context
+    contact_name: str | None = None
+    context_source: Literal["sample", "contact"] = "sample"
+
+    if data.contact_id:
+        inst_id = _institution_id(current_user)
+        async with get_db_session() as session:
+            contact = await session.get(Contact, data.contact_id)
+            if contact is None or contact.institution_id != inst_id:
+                raise HTTPException(
+                    status_code=status.HTTP_404_NOT_FOUND, detail="Contact not found"
+                )
+            location = None
+            if location_id:
+                location = await session.get(InstitutionLocation, location_id)
+                if location is not None and location.institution_id != inst_id:
+                    raise HTTPException(
+                        status_code=status.HTTP_404_NOT_FOUND,
+                        detail="Location not found",
+                    )
+            # Resolve through the same builder the sender uses, so the preview
+            # cannot disagree with what a real send would put on the wire.
+            context = build_merge_vars(contact, location, dict(data.context or {}))
+            contact_name = (
+                contact.full_name
+                or " ".join(
+                    part for part in (contact.first_name, contact.last_name) if part
+                ).strip()
+                or None
+            )
+        context_source = "contact"
+
+    result = simulate_run(
+        definition,
+        context=context,
+        condition_choices=data.condition_choices,
+        switch_case_choices=data.switch_case_choices,
+        # A contact preview must not borrow sample values for what the record
+        # cannot supply — the blanks are the point.
+        prefill_samples=context_source != "contact",
+    )
+    return DryRunResultResponse(
+        steps=[
+            DryRunStepResponse(
+                node_id=s.node_id,
+                node_type=s.node_type,
+                summary=s.summary,
+                detail=s.detail,
+            )
+            for s in result.steps
+        ],
+        outcome=result.outcome,
+        truncated=result.truncated,
+        context_source=context_source,
+        contact_name=contact_name,
+        empty_fields=[
+            EmptyMergeFieldResponse(name=f.name, nodes=f.nodes)
+            for f in result.empty_fields
+        ],
+    )
+
+
+@router.get("", response_model=list[WorkflowResponse])
+async def list_workflows(
+    current_user: _CampaignManager,
+    location_id: Annotated[str | None, Query()] = None,
+) -> list[WorkflowResponse]:
+    inst_id = _institution_id(current_user)
+    location_id = _campaign_location_id(current_user, location_id)
+    async with get_db_session() as session:
+        svc = AutomationWorkflowDefinitionService(session)
+        workflows = await svc.list_workflows(
+            institution_id=inst_id,
+            location_id=location_id,
+        )
+        return [WorkflowResponse.from_model(wf) for wf in workflows]
+
+
+@router.get("/merge-fields", response_model=list[MergeFieldResponse])
+async def list_merge_fields(
+    current_user: _InstitutionOrLocationAdmin,
+    trigger_type: Annotated[str | None, Query()] = None,
+    channel: Annotated[str | None, Query()] = None,
+    include_unavailable: Annotated[bool, Query()] = False,
+    event_keys: Annotated[list[str] | None, Query()] = None,
+    pms: Annotated[str | None, Query()] = None,
+) -> list[MergeFieldResponse]:
+    """Return the fields the builder may insert into a message.
+
+    Two families, deliberately in one list so the author sees one menu:
+
+    * **Canonical context fields** (``{{appointment.start_at}}``) — the same
+      vocabulary the trigger picker and condition editor use, scoped to the
+      events this campaign subscribes to and to the channel being written.
+    * **Derived merge fields** (``{{patient_first_name}}``) — values computed
+      from the contact and location records rather than read from context, so
+      they cannot be expressed as a context path.
+
+    NOTE: declared before ``/{workflow_id}`` so this literal path is not
+    captured as a workflow id by the parameterised route.
+    """
+    canonical = [
+        MergeFieldResponse(
+            name=spec.path,
+            token=spec.token,
+            label=spec.label,
+            description=spec.description,
+            sample="" if spec.sample is None else str(spec.sample),
+            group=spec.path.split(".", 1)[0],
+            # Present whenever the event fires, unless the PMS derives it.
+            availability=(
+                "derived"
+                if pms and spec.pms_support.get(pms) == "derived"
+                else "required_context"
+            ),
+            requires=[],
+            phi_level=spec.phi_level,
+            channels=list(spec.channels),
+            trigger_types=[trigger_type] if trigger_type else [],
+        )
+        for spec in fields_for_events(event_keys or [], pms=pms, channel=channel)
+    ]
+    return canonical + [
+        MergeFieldResponse(
+            name=f.name,
+            token=f.token,
+            label=f.label,
+            description=f.description,
+            sample=f.sample,
+            group=f.group,
+            availability=f.availability,
+            requires=list(f.requires),
+            phi_level=f.phi_level,
+            channels=list(f.channels),
+            trigger_types=list(f.triggers),
+        )
+        for f in fields_for(
+            trigger_type=trigger_type,
+            channel=channel,
+            include_unavailable=include_unavailable,
+        )
+    ]
+
+
+@router.get("/llm-models", response_model=WorkflowLlmModelsResponse)
+async def list_llm_models(
+    current_user: _InstitutionOrLocationAdmin,
+) -> WorkflowLlmModelsResponse:
+    """Return OpenAI text model choices without exposing the backend API key."""
+    del current_user
+    default = settings.workflow_llm_default_model
+    if not settings.openai_api_key:
+        return WorkflowLlmModelsResponse(
+            default_model=default,
+            configured=False,
+            models=[WorkflowLlmModelResponse(id=default, label=default)],
+        )
+
+    models = await _openai_workflow_models()
+    if not any(model.id == default for model in models):
+        models.insert(0, WorkflowLlmModelResponse(id=default, label=default))
+    return WorkflowLlmModelsResponse(
+        default_model=default,
+        configured=True,
+        models=models,
+    )
+
+
+async def _openai_workflow_models() -> list[WorkflowLlmModelResponse]:
+    global _OPENAI_MODELS_CACHE
+
+    now = datetime.now(timezone.utc)
+    if _OPENAI_MODELS_CACHE is not None:
+        cached_at, cached_models = _OPENAI_MODELS_CACHE
+        age = (now - cached_at).total_seconds()
+        if age < _OPENAI_MODELS_CACHE_SECONDS:
+            return list(cached_models)
+
+    base_url = settings.openai_base_url.rstrip("/")
+    try:
+        async with httpx.AsyncClient(
+            timeout=settings.workflow_llm_timeout_seconds
+        ) as client:
+            response = await client.get(
+                f"{base_url}/models",
+                headers={"Authorization": f"Bearer {settings.openai_api_key}"},
+            )
+            response.raise_for_status()
+    except httpx.HTTPError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail="OpenAI models could not be loaded",
+        ) from exc
+
+    data = response.json().get("data")
+    if not isinstance(data, list):
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail="OpenAI models response was invalid",
+        )
+
+    models = [
+        WorkflowLlmModelResponse(
+            id=str(item["id"]),
+            label=str(item["id"]),
+            owned_by=str(item["owned_by"]) if item.get("owned_by") else None,
+        )
+        for item in data
+        if isinstance(item, dict) and item.get("id")
+    ]
+    compatible = [model for model in models if _is_workflow_llm_model(model.id)]
+    selected = compatible or models
+    selected.sort(key=lambda model: model.id)
+    _OPENAI_MODELS_CACHE = (now, selected)
+    return list(selected)
+
+
+def _is_workflow_llm_model(model_id: str) -> bool:
+    lowered = model_id.lower()
+    if any(marker in lowered for marker in _MODEL_EXCLUDE_MARKERS):
+        return False
+    return lowered.startswith("gpt-") or lowered.startswith("o")
+
+
+@router.get("/channel-readiness", response_model=ChannelReadinessResponse)
+async def get_channel_readiness(
+    current_user: _CampaignManager,
+    location_id: str = Query(
+        ..., description="Location to check channel readiness for"
+    ),
+) -> ChannelReadinessResponse:
+    """Report whether SMS / email / voice are provisioned for a location so the
+    builder can surface missing setup before publish (B6).
+
+    Readiness is computed from existing credentials (Twilio sender number /
+    sub-account creds, email from-address, per-location Retell agent) — there is
+    no readiness state table. Provisioning stays manual in this MVP, so these are
+    advisory: an unready channel warns at publish but does not block it.
+
+    NOTE: declared before ``/{workflow_id}`` so this literal path is not captured
+    as a workflow id by the parameterised route.
+    """
+    inst_id = _institution_id(current_user)
+    location_id = _campaign_location_id(current_user, location_id) or location_id
+    async with get_db_session() as session:
+        report = await ChannelReadinessService(session).readiness_for_location(
+            institution_id=inst_id, location_id=location_id
+        )
+    return ChannelReadinessResponse(
+        sms=report.sms,
+        email=report.email,
+        voice_configurable=report.voice_configurable,
+        details=[ChannelReadinessDetail(**d) for d in report.details],
+    )
+
+
+# ---------------------------------------------------------------------------
+# Outbound emergency halt — institution-level kill switch (Plan 12)
+# ---------------------------------------------------------------------------
+
+
+class OutboundHaltResponse(BaseModel):
+    halted: bool
+    halt_id: str | None = None
+    reason: str | None = None
+    halted_at: datetime | None = None
+    halted_by_user_id: str | None = None
+    # Number of in-flight runs terminated when the halt was activated.
+    halted_runs: int | None = None
+
+
+@router.get("/outbound-halt", response_model=OutboundHaltResponse)
+async def get_outbound_halt_status(
+    current_user: _InstitutionAdmin,
+) -> OutboundHaltResponse:
+    """Return the current outbound halt status for this institution.
+
+    NOTE: declared before ``/{workflow_id}`` so this literal path is not
+    captured as a workflow id by the parameterised route.
+    """
+    inst_id = _institution_id(current_user)
+    async with get_db_session() as session:
+        result = await session.execute(
+            sa_select(OutboundEmergencyHalt)
+            .where(
+                OutboundEmergencyHalt.institution_id == inst_id,
+                OutboundEmergencyHalt.released_at.is_(None),
+            )
+            .limit(1)
+        )
+        halt = result.scalar_one_or_none()
+    if halt is None:
+        return OutboundHaltResponse(halted=False)
+    return OutboundHaltResponse(
+        halted=True,
+        halt_id=halt.id,
+        reason=halt.reason,
+        halted_at=halt.created_at,
+        halted_by_user_id=halt.halted_by_user_id,
+    )
+
+
+class OutboundHaltRequest(BaseModel):
+    reason: str | None = None
+
+
+@router.post(
+    "/outbound-halt",
+    response_model=OutboundHaltResponse,
+    status_code=status.HTTP_201_CREATED,
+)
+@audit(
+    AuditAction.CAMPAIGN_EMERGENCY_HALT,
+    resource=lambda *args, **kwargs: "campaign:outbound-halt",
+    actor=AuditActor.ADMIN,
+)
+async def activate_outbound_halt(
+    data: OutboundHaltRequest,
+    current_user: _InstitutionAdmin,
+) -> OutboundHaltResponse:
+    """Activate institution-wide outbound campaign halt. Idempotent — if already
+    halted, returns the existing active halt without creating a duplicate."""
+    inst_id = _institution_id(current_user)
+    async with get_db_session() as session:
+        existing = (
+            await session.execute(
+                sa_select(OutboundEmergencyHalt)
+                .where(
+                    OutboundEmergencyHalt.institution_id == inst_id,
+                    OutboundEmergencyHalt.released_at.is_(None),
+                )
+                .limit(1)
+            )
+        ).scalar_one_or_none()
+
+        if existing:
+            return OutboundHaltResponse(
+                halted=True,
+                halt_id=existing.id,
+                reason=existing.reason,
+                halted_at=existing.created_at,
+                halted_by_user_id=existing.halted_by_user_id,
+            )
+
+        halt = OutboundEmergencyHalt(
+            institution_id=inst_id,
+            halted_by_user_id=str(current_user.id),
+            reason=data.reason,
+        )
+        session.add(halt)
+        await session.flush()
+        halt_id = halt.id
+        halt_reason = halt.reason
+        halt_created = halt.created_at
+
+        # A halt is a kill switch: terminate in-flight runs now (cancel their
+        # timers) so waiting runs can't fire during the halt — not just block the
+        # next send. New sends are also blocked by the compliance gate reading
+        # this halt row.
+        def_svc = AutomationWorkflowDefinitionService(session)
+        halted_runs = await def_svc.emergency_halt_institution(
+            institution_id=inst_id,
+            actor_user_id=str(current_user.id),
+            reason=data.reason or "emergency_halt",
+        )
+        await session.commit()
+
+    return OutboundHaltResponse(
+        halted=True,
+        halt_id=halt_id,
+        reason=halt_reason,
+        halted_at=halt_created,
+        halted_by_user_id=str(current_user.id),
+        halted_runs=halted_runs,
+    )
+
+
+@router.delete("/outbound-halt", response_model=OutboundHaltResponse)
+@audit(
+    AuditAction.CAMPAIGN_HALT_RELEASE,
+    resource=lambda *args, **kwargs: "campaign:outbound-halt",
+    actor=AuditActor.ADMIN,
+)
+async def release_outbound_halt(
+    current_user: _InstitutionAdmin,
+) -> OutboundHaltResponse:
+    """Release the active outbound halt. Returns 404 if no halt is active."""
+    inst_id = _institution_id(current_user)
+    async with get_db_session() as session:
+        halt = (
+            await session.execute(
+                sa_select(OutboundEmergencyHalt)
+                .where(
+                    OutboundEmergencyHalt.institution_id == inst_id,
+                    OutboundEmergencyHalt.released_at.is_(None),
+                )
+                .limit(1)
+            )
+        ).scalar_one_or_none()
+
+        if halt is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="No active outbound halt for this institution",
+            )
+
+        halt.released_at = datetime.now(tz=timezone.utc)
+        halt.released_by_user_id = str(current_user.id)
+        await session.commit()
+
+    return OutboundHaltResponse(halted=False)
+
+
+@router.get("/{workflow_id}/launch-checklist", response_model=LaunchChecklistResponse)
+async def get_launch_checklist(
+    workflow_id: str,
+    current_user: _InstitutionOrLocationAdmin,
+    location_id: str | None = Query(
+        None, description="Optional location context override"
+    ),
+) -> LaunchChecklistResponse:
+    """Return the launch-readiness checklist for the workflow's saved definition."""
+    inst_id = _institution_id(current_user)
+    async with get_db_session() as session:
+        svc = AutomationWorkflowDefinitionService(session)
+        wf = await _get_workflow_or_404(svc, workflow_id, current_user)
+        location_id = _workflow_location_id(current_user, wf, location_id)
+        checklist = await CampaignLaunchChecklistService(session).build(
+            wf,
+            institution_id=inst_id,
+            location_id=location_id,
+        )
+        return LaunchChecklistResponse.from_service(checklist)
+
+
+@router.get("/{workflow_id}/overview", response_model=CampaignOverviewResponse)
+async def get_campaign_overview(
+    workflow_id: str,
+    current_user: _InstitutionOrLocationAdmin,
+) -> CampaignOverviewResponse:
+    """Return an operational campaign summary: latest version, readiness,
+    channels, run status counts, usage by channel, and recent outcomes."""
+    inst_id = _institution_id(current_user)
+    async with get_db_session() as session:
+        svc = AutomationWorkflowDefinitionService(session)
+        wf = await _get_workflow_or_404(svc, workflow_id, current_user)
+        overview = await CampaignOperationsService(session).overview(
+            wf,
+            institution_id=inst_id,
+        )
+        return CampaignOverviewResponse(**overview.__dict__)
+
+
+@router.get("/{workflow_id}/analytics", response_model=CampaignAnalyticsResponse)
+async def get_campaign_analytics(
+    workflow_id: str,
+    current_user: _InstitutionOrLocationAdmin,
+    start_date: date | None = Query(
+        None, description="Inclusive range start (YYYY-MM-DD)"
+    ),
+    end_date: date | None = Query(None, description="Inclusive range end (YYYY-MM-DD)"),
+) -> CampaignAnalyticsResponse:
+    """Return normalized outcome analytics from the daily campaign rollup."""
+    inst_id = _institution_id(current_user)
+    try:
+        start, end = resolve_window(start_date, end_date)
+    except ValueError as exc:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, str(exc)) from exc
+    async with get_db_session() as session:
+        svc = AutomationWorkflowDefinitionService(session)
+        wf = await _get_workflow_or_404(svc, workflow_id, current_user)
+        analytics = await CampaignAnalyticsService(session).workflow_analytics(
+            wf,
+            institution_id=inst_id,
+            start_date=start,
+            end_date=end,
+        )
+        return CampaignAnalyticsResponse.from_service(analytics)
+
+
+@router.get(
+    "/{workflow_id}/analytics/splits",
+    response_model=CampaignSplitAnalyticsResponse,
+)
+async def get_campaign_split_analytics(
+    workflow_id: str,
+    current_user: _InstitutionOrLocationAdmin,
+    start_date: date | None = Query(
+        None, description="Inclusive range start (YYYY-MM-DD)"
+    ),
+    end_date: date | None = Query(None, description="Inclusive range end (YYYY-MM-DD)"),
+) -> CampaignSplitAnalyticsResponse:
+    """Return per-variant results for every Split (A/B) node in the workflow."""
+    inst_id = _institution_id(current_user)
+    try:
+        start, end = resolve_window(start_date, end_date)
+    except ValueError as exc:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, str(exc)) from exc
+    async with get_db_session() as session:
+        svc = AutomationWorkflowDefinitionService(session)
+        wf = await _get_workflow_or_404(svc, workflow_id, current_user)
+        analytics = await CampaignAnalyticsService(session).split_analytics(
+            wf,
+            institution_id=inst_id,
+            start_date=start,
+            end_date=end,
+        )
+        return CampaignSplitAnalyticsResponse.from_service(analytics)
+
+
+@router.post(
+    "/{workflow_id}/launch-checklist/preview", response_model=LaunchChecklistResponse
+)
+async def preview_launch_checklist(
+    workflow_id: str,
+    data: LaunchChecklistPreviewRequest,
+    current_user: _CampaignManager,
+) -> LaunchChecklistResponse:
+    """Return launch readiness for an unsaved builder draft without persisting it."""
+    inst_id = _institution_id(current_user)
+    async with get_db_session() as session:
+        svc = AutomationWorkflowDefinitionService(session)
+        wf = await _get_workflow_or_404(svc, workflow_id, current_user)
+        location_id = _workflow_location_id(current_user, wf, data.location_id)
+        checklist = await CampaignLaunchChecklistService(session).build(
+            wf,
+            institution_id=inst_id,
+            definition_dict=data.definition,
+            location_id=location_id,
+        )
+        return LaunchChecklistResponse.from_service(checklist)
+
+
+@router.get("/{workflow_id}/audience", response_model=AudienceDefinitionResponse)
+async def get_audience_definition(
+    workflow_id: str,
+    current_user: _InstitutionOrLocationAdmin,
+) -> AudienceDefinitionResponse:
+    inst_id = _institution_id(current_user)
+    async with get_db_session() as session:
+        svc = AutomationWorkflowDefinitionService(session)
+        wf = await _get_workflow_or_404(svc, workflow_id, current_user)
+        row = await CampaignAudienceService(session).get_definition(
+            institution_id=inst_id,
+            workflow_id=workflow_id,
+        )
+        if row is None:
+            segment = AudienceSegment()
+            payload = segment.model_dump(mode="json")
+            return AudienceDefinitionResponse(
+                workflow_id=workflow_id,
+                location_id=str(wf.location_id) if wf.location_id else None,
+                segment=payload["filters"],
+                exclusions=payload["exclusions"],
+                persisted=False,
+            )
+        return AudienceDefinitionResponse(
+            workflow_id=workflow_id,
+            location_id=str(row.location_id) if row.location_id else None,
+            segment=row.segment or {},
+            exclusions=row.exclusions or {},
+            persisted=True,
+            updated_at=row.updated_at,
+        )
+
+
+@router.put("/{workflow_id}/audience", response_model=AudienceDefinitionResponse)
+@audit(
+    AuditAction.CAMPAIGN_AUDIENCE_UPDATE,
+    resource=lambda *args, **kwargs: f"campaign:{kwargs.get('workflow_id')}:audience",
+    actor=AuditActor.ADMIN,
+)
+async def put_audience_definition(
+    workflow_id: str,
+    data: AudienceDefinitionRequest,
+    current_user: _CampaignManager,
+) -> AudienceDefinitionResponse:
+    inst_id = _institution_id(current_user)
+    try:
+        segment = data.to_segment()
+    except ValueError as exc:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, str(exc)) from exc
+    async with get_db_session() as session:
+        svc = AutomationWorkflowDefinitionService(session)
+        wf = await _get_workflow_or_404(svc, workflow_id, current_user)
+        segment = _scope_audience_to_workflow(wf, segment)
+        assert segment is not None
+        row = await CampaignAudienceService(session).upsert_definition(
+            wf,
+            institution_id=inst_id,
+            segment=segment,
+            actor_user_id=str(current_user.id),
+        )
+        await session.commit()
+        return AudienceDefinitionResponse(
+            workflow_id=workflow_id,
+            location_id=str(row.location_id) if row.location_id else None,
+            segment=row.segment or {},
+            exclusions=row.exclusions or {},
+            persisted=True,
+            updated_at=row.updated_at,
+        )
+
+
+@router.post("/{workflow_id}/audience/preview", response_model=AudiencePreviewResponse)
+@audit(
+    AuditAction.CAMPAIGN_AUDIENCE_PREVIEW,
+    resource=lambda *args, **kwargs: (
+        f"campaign:{kwargs.get('workflow_id')}:audience-preview"
+    ),
+    actor=AuditActor.ADMIN,
+)
+async def preview_audience(
+    workflow_id: str,
+    data: AudiencePreviewRequest,
+    current_user: _InstitutionOrLocationAdmin,
+) -> AudiencePreviewResponse:
+    inst_id = _institution_id(current_user)
+    try:
+        segment = data.to_segment()
+    except ValueError as exc:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, str(exc)) from exc
+    async with get_db_session() as session:
+        svc = AutomationWorkflowDefinitionService(session)
+        wf = await _get_workflow_or_404(svc, workflow_id, current_user)
+        segment = _scope_audience_to_workflow(wf, segment)
+        assert segment is not None
+        preview = await CampaignAudienceService(session).preview(
+            wf,
+            institution_id=inst_id,
+            segment=segment,
+            actor_user_id=str(current_user.id),
+            sample_limit=data.sample_limit,
+        )
+        await session.commit()
+        return AudiencePreviewResponse.from_service(preview)
+
+
+@router.post(
+    "/{workflow_id}/audience/enroll",
+    response_model=AudienceEnrollResponse,
+    status_code=status.HTTP_202_ACCEPTED,
+)
+@audit(
+    AuditAction.CAMPAIGN_ENROLL,
+    resource=lambda *args, **kwargs: (
+        f"campaign:{kwargs.get('workflow_id')}:audience-enroll"
+    ),
+    actor=AuditActor.ADMIN,
+)
+async def enroll_audience(
+    workflow_id: str,
+    data: AudienceEnrollRequest,
+    current_user: _CampaignManager,
+) -> AudienceEnrollResponse:
+    inst_id = _institution_id(current_user)
+    try:
+        segment = data.to_segment()
+    except ValueError as exc:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, str(exc)) from exc
+    async with get_db_session() as session:
+        svc = AutomationWorkflowDefinitionService(session)
+        wf = await _get_workflow_or_404(svc, workflow_id, current_user)
+        segment = _scope_audience_to_workflow(wf, segment)
+        if wf.status != AutomationWorkflowStatus.ACTIVE.value:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=f"Workflow is not active (status={wf.status})",
+            )
+        if not wf.current_version_id:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="Workflow has no published version",
+            )
+        checklist = await CampaignLaunchChecklistService(session).build(
+            wf,
+            institution_id=inst_id,
+        )
+        if checklist.blockers_count:
+            blockers = [item.id for item in checklist.items if item.status == "blocked"]
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail={
+                    "message": "Launch checklist has blockers; audience enrollment is disabled.",
+                    "blockers": blockers,
+                },
+            )
+        try:
+            result = await CampaignAudienceService(session).enqueue_enrollment(
+                wf,
+                institution_id=inst_id,
+                segment=segment,
+                actor_user_id=str(current_user.id),
+                preview_id=data.preview_id,
+                max_enrollments=data.max_enrollments,
+            )
+        except ValueError as exc:
+            raise HTTPException(status.HTTP_409_CONFLICT, str(exc)) from exc
+        await session.commit()
+        return AudienceEnrollResponse.from_service(result)
+
+
+@router.get("/{workflow_id}", response_model=WorkflowResponse)
+async def get_workflow(
+    workflow_id: str,
+    current_user: _InstitutionOrLocationAdmin,
+    location_id: Annotated[str | None, Query()] = None,
+) -> WorkflowResponse:
+    async with get_db_session() as session:
+        svc = AutomationWorkflowDefinitionService(session)
+        wf = await _get_workflow_or_404(
+            svc, workflow_id, current_user, location_id
+        )
+        return WorkflowResponse.from_model(wf)
+
+
+@router.get("/{workflow_id}/versions", response_model=list[WorkflowVersionResponse])
+async def list_workflow_versions(
+    workflow_id: str,
+    current_user: _InstitutionOrLocationAdmin,
+    location_id: Annotated[str | None, Query()] = None,
+) -> list[WorkflowVersionResponse]:
+    """List every published version of a workflow, newest first.
+
+    The definition schema is ``extra="forbid"`` so versions are immutable
+    snapshots; this exposes the full history the model already records (only
+    ``current_version_id`` was previously reachable via the API).
+    """
+    async with get_db_session() as session:
+        svc = AutomationWorkflowDefinitionService(session)
+        wf = await _get_workflow_or_404(
+            svc, workflow_id, current_user, location_id
+        )
+        result = await session.execute(
+            sa_select(AutomationWorkflowVersion)
+            .where(AutomationWorkflowVersion.workflow_id == wf.id)
+            .order_by(AutomationWorkflowVersion.version_number.desc())
+        )
+        versions = list(result.scalars().all())
+        return [
+            WorkflowVersionResponse.from_model(
+                v, current_version_id=wf.current_version_id
+            )
+            for v in versions
+        ]
+
+
+@router.patch("/{workflow_id}", response_model=WorkflowResponse)
+@audit(
+    AuditAction.CAMPAIGN_UPDATE,
+    resource=lambda *args, **kwargs: f"campaign:{kwargs.get('workflow_id')}",
+    actor=AuditActor.ADMIN,
+)
+async def update_workflow(
+    workflow_id: str,
+    data: WorkflowUpdateRequest,
+    current_user: _CampaignManager,
+) -> WorkflowResponse:
+    async with get_db_session() as session:
+        svc = AutomationWorkflowDefinitionService(session)
+        wf = await _get_workflow_or_404(svc, workflow_id, current_user)
+        if data.name is not None:
+            wf.name = data.name
+            await session.flush()
+            await session.refresh(wf, attribute_names=["updated_at"])
+        if data.definition is not None:
+            await svc.publish_version(wf, data.definition)
+        return WorkflowResponse.from_model(wf)
+
+
+# ---------------------------------------------------------------------------
+# Lifecycle transitions
+# ---------------------------------------------------------------------------
+
+
+@router.post("/{workflow_id}/publish", response_model=WorkflowResponse)
+@audit(
+    AuditAction.CAMPAIGN_PUBLISH,
+    resource=lambda *args, **kwargs: f"campaign:{kwargs.get('workflow_id')}",
+    actor=AuditActor.ADMIN,
+)
+async def publish_workflow(
+    workflow_id: str,
+    current_user: _CampaignManager,
+    data: WorkflowUpdateRequest | None = None,
+) -> WorkflowResponse:
+    async with get_db_session() as session:
+        svc = AutomationWorkflowDefinitionService(session)
+        wf = await _get_workflow_or_404(svc, workflow_id, current_user)
+        if data is not None and data.name is not None:
+            wf.name = data.name
+            await session.flush()
+        if data is None:
+            await svc.publish_version(wf)
+        else:
+            await svc.publish_version(wf, data.definition)
+        return WorkflowResponse.from_model(wf)
+
+
+@router.post("/{workflow_id}/pause", response_model=WorkflowResponse)
+@audit(
+    AuditAction.CAMPAIGN_PAUSE,
+    resource=lambda *args, **kwargs: f"campaign:{kwargs.get('workflow_id')}",
+    actor=AuditActor.ADMIN,
+)
+async def pause_workflow(
+    workflow_id: str,
+    current_user: _CampaignManager,
+) -> WorkflowResponse:
+    async with get_db_session() as session:
+        svc = AutomationWorkflowDefinitionService(session)
+        wf = await _get_workflow_or_404(svc, workflow_id, current_user)
+        await svc.pause_workflow(wf)
+        return WorkflowResponse.from_model(wf)
+
+
+@router.post("/{workflow_id}/resume", response_model=WorkflowResponse)
+@audit(
+    AuditAction.CAMPAIGN_RESUME,
+    resource=lambda *args, **kwargs: f"campaign:{kwargs.get('workflow_id')}",
+    actor=AuditActor.ADMIN,
+)
+async def resume_workflow(
+    workflow_id: str,
+    current_user: _CampaignManager,
+) -> WorkflowResponse:
+    inst_id = _institution_id(current_user)
+    async with get_db_session() as session:
+        svc = AutomationWorkflowDefinitionService(session)
+        wf = await _get_workflow_or_404(svc, workflow_id, current_user)
+        checklist = await CampaignLaunchChecklistService(session).build(
+            wf,
+            institution_id=inst_id,
+        )
+        if checklist.blockers_count:
+            blockers = [item.id for item in checklist.items if item.status == "blocked"]
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail={
+                    "message": "Launch checklist has blockers; workflow cannot be resumed.",
+                    "blockers": blockers,
+                },
+            )
+        await svc.resume_workflow(wf)
+        return WorkflowResponse.from_model(wf)
+
+
+@router.post(
+    "/{workflow_id}/enroll/csv",
+    response_model=CsvEnrollPreviewResponse,
+)
+@audit(
+    AuditAction.CAMPAIGN_ENROLL,
+    resource=lambda *args, **kwargs: f"campaign:{kwargs.get('workflow_id')}:enroll-csv",
+    actor=AuditActor.ADMIN,
+)
+async def enroll_from_csv(
+    workflow_id: str,
+    current_user: _CampaignManager,
+    file: Annotated[UploadFile, File()],
+    commit: Annotated[bool, Form()] = False,
+) -> CsvEnrollPreviewResponse:
+    """Enroll a list of people from a CSV.
+
+    Defaults to a preview: nothing is written and the caller sees who would be
+    contacted, who would be created, and who is excluded and why. A CSV is the
+    one route where a mistake reaches hundreds of people at once, so committing
+    is a deliberate second call rather than a side effect of uploading.
+
+    Excluded rows are reported, never silently dropped — a quiet skip is how an
+    import looks successful while half the list was never contacted.
+    """
+    inst_id = _institution_id(current_user)
+    raw = await file.read()
+    if len(raw) > _CSV_MAX_BYTES:
+        raise HTTPException(
+            status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+            detail=f"CSV is larger than {_CSV_MAX_BYTES // 1024}KB.",
+        )
+
+    preview = parse_csv(raw)
+    upload_id = hashlib.sha256(raw).hexdigest()[:16]
+
+    async with get_db_session() as session:
+        def_svc = AutomationWorkflowDefinitionService(session)
+        wf = await _get_workflow_or_404(def_svc, workflow_id, current_user)
+        if wf.status != "active" or not wf.current_version_id:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="Workflow must be active with a published version to enroll.",
+            )
+        location_id = str(wf.location_id) if wf.location_id else None
+
+        svc = CsvEnrollmentService(session)
+        await svc.resolve(preview, institution_id=inst_id)
+
+        # Same gate as every other enrollment route: a CSV is not a way around
+        # a patient's opt-out.
+        compliance = SmsComplianceService(session)
+        for row in preview.rows:
+            if row.excluded_reason is not None or not row.contact_id:
+                continue
+            contact = await session.get(Contact, row.contact_id)
+            if contact is None:
+                continue
+            if await compliance.is_do_not_contact(
+                institution_id=inst_id,
+                location_id=location_id,
+                phone_hash=contact.phone_hash,
+                contact_id=str(contact.id),
+            ):
+                row.excluded_reason = (
+                    "Patient has an all-channel do-not-contact restriction"
+                )
+
+        enrolled = 0
+        if commit and not preview.parse_errors:
+            await svc.create_missing_contacts(preview, institution_id=inst_id)
+            enroll_svc = AutomationWorkflowEnrollmentService(session)
+            for row in preview.eligible:
+                if not row.contact_id:
+                    continue
+                await enroll_svc.enroll(
+                    institution_id=inst_id,
+                    workflow_id=workflow_id,
+                    workflow_version_id=str(wf.current_version_id),
+                    contact_id=row.contact_id,
+                    location_id=location_id,
+                    trigger_type="manual",
+                    trigger_ref_type="csv_import",
+                    trigger_ref_id=upload_id,
+                    trigger_metadata={
+                        "event": "manual.csv_import",
+                        "trigger_type": "manual",
+                        "contact_id": row.contact_id,
+                        "location_id": location_id,
+                        "csv_upload_id": upload_id,
+                        "csv_line": row.line,
+                    },
+                    idempotency_key=csv_idempotency_key(
+                        str(wf.current_version_id), upload_id, row.contact_id
+                    ),
+                )
+                enrolled += 1
+            await session.commit()
+
+        return CsvEnrollPreviewResponse(
+            upload_id=upload_id,
+            total_rows=len(preview.rows),
+            eligible_count=len(preview.eligible),
+            excluded_count=len(preview.excluded),
+            new_contact_count=sum(
+                1 for row in preview.rows if row.would_create_contact
+            ),
+            truncated=preview.truncated,
+            parse_errors=preview.parse_errors,
+            committed=bool(commit and not preview.parse_errors),
+            enrolled_count=enrolled,
+            rows=[
+                CsvEnrollRowResponse(
+                    line=row.line,
+                    first_name=row.first_name,
+                    last_name=row.last_name,
+                    contact_hint=_mask_contact_hint(row.phone, row.email),
+                    contact_id=row.contact_id,
+                    will_create_contact=row.would_create_contact,
+                    excluded_reason=row.excluded_reason,
+                )
+                for row in preview.rows
+            ],
+        )
+
+
+def _mask_contact_hint(phone: str | None, email: str | None) -> str | None:
+    """Enough to recognise a row, not enough to be a contact list."""
+    if phone:
+        return f"•••{phone[-4:]}"
+    if email and "@" in email:
+        name, domain = email.split("@", 1)
+        return f"{name[:2]}…@{domain}"
+    return None
+
+
+@router.post("/{workflow_id}/archive", response_model=WorkflowResponse)
+@audit(
+    AuditAction.CAMPAIGN_ARCHIVE,
+    resource=lambda *args, **kwargs: f"campaign:{kwargs.get('workflow_id')}",
+    actor=AuditActor.ADMIN,
+)
+async def archive_workflow(
+    workflow_id: str,
+    current_user: _CampaignManager,
+) -> WorkflowResponse:
+    async with get_db_session() as session:
+        svc = AutomationWorkflowDefinitionService(session)
+        wf = await _get_workflow_or_404(svc, workflow_id, current_user)
+        await svc.archive_workflow(wf)
+        return WorkflowResponse.from_model(wf)
+
+
+@router.delete("/{workflow_id}", status_code=status.HTTP_204_NO_CONTENT)
+@audit(
+    AuditAction.CAMPAIGN_DELETE,
+    resource=lambda *args, **kwargs: f"campaign:{kwargs.get('workflow_id')}",
+    actor=AuditActor.ADMIN,
+)
+async def delete_workflow(
+    workflow_id: str,
+    current_user: _CampaignManager,
+) -> None:
+    async with get_db_session() as session:
+        svc = AutomationWorkflowDefinitionService(session)
+        wf = await _get_workflow_or_404(svc, workflow_id, current_user)
+        await svc.delete_workflow(wf)
+
+
+# ---------------------------------------------------------------------------
+# Enrollment and run management
+# ---------------------------------------------------------------------------
+
+
+@router.post(
+    "/{workflow_id}/enroll",
+    response_model=WorkflowRunResponse,
+    status_code=status.HTTP_201_CREATED,
+)
+@audit(
+    AuditAction.CAMPAIGN_ENROLL,
+    resource=lambda *args, **kwargs: f"campaign:{kwargs.get('workflow_id')}:enroll",
+    actor=AuditActor.ADMIN,
+)
+async def enroll_in_workflow(
+    workflow_id: str,
+    data: EnrollRequest,
+    current_user: _InstitutionOrLocationAdmin,
+) -> WorkflowRunResponse:
+    inst_id = _institution_id(current_user)
+
+    async with get_db_session() as session:
+        def_svc = AutomationWorkflowDefinitionService(session)
+        wf = await _get_workflow_or_404(def_svc, workflow_id, current_user)
+        location_id = _workflow_location_id(current_user, wf, data.location_id)
+
+        if wf.status != "active":
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=f"Workflow is not active (status={wf.status})",
+            )
+        if not wf.current_version_id:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="Workflow has no published version",
+            )
+
+        if data.contact_id:
+            contact = await session.get(Contact, data.contact_id)
+            if contact is None or str(contact.institution_id) != inst_id:
+                raise HTTPException(
+                    status_code=status.HTTP_404_NOT_FOUND,
+                    detail="Patient not found",
+                )
+            if await SmsComplianceService(session).is_do_not_contact(
+                institution_id=inst_id,
+                location_id=location_id,
+                phone_hash=contact.phone_hash,
+                contact_id=str(contact.id),
+            ):
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail=(
+                        "Patient has an active all-channel DNC restriction and "
+                        "cannot be enrolled. Remove the DNC restriction before enrolling."
+                    ),
+                )
+
+        enroll_svc = AutomationWorkflowEnrollmentService(session)
+        run, created = await enroll_svc.enroll(
+            institution_id=inst_id,
+            workflow_id=workflow_id,
+            workflow_version_id=str(wf.current_version_id),
+            contact_id=data.contact_id,
+            location_id=location_id,
+            trigger_type=wf.trigger_type,
+            trigger_ref_type=data.trigger_ref_type,
+            trigger_ref_id=data.trigger_ref_id,
+            trigger_metadata=data.trigger_metadata,
+            idempotency_key=data.idempotency_key,
+        )
+
+        if created:
+            # Start run and advance inline. The first advance typically ends
+            # at a WaitNode (one DB write for the timer). Move to a Celery
+            # task if response latency becomes a concern at higher volume.
+            version = await session.get(
+                AutomationWorkflowVersion, str(wf.current_version_id)
+            )
+            if version is None:
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail="Workflow's published version is unavailable",
+                )
+            definition = WorkflowDefinition.model_validate(version.definition)
+            location_issues = WorkflowValidationService.location_scope_issues(
+                definition,
+                location_id=location_id,
+            )
+            if location_issues:
+                # The transaction rolls the just-created run back. This is a
+                # compatibility backstop for versions published before the
+                # location-required validator existed; new versions cannot pass
+                # publish validation in this state.
+                raise HTTPException(
+                    status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                    detail=(
+                        "Cannot enroll: "
+                        + "; ".join(issue.message for issue in location_issues)
+                        + " Select a clinic location and try again."
+                    ),
+                )
+            # Single wiring path: injects the real ComplianceGateService and
+            # resolves the location timezone (never NoOp / never hardcoded UTC).
+            # The live PMS revalidator guards appointment-triggered sends against
+            # cancelled/rescheduled appointments; it is a no-op for other runs.
+            from src.app.services.automation.revalidation import (
+                PmsLiveRevalidationService,
+            )
+
+            dispatcher, location_timezone = await build_dispatcher(
+                session,
+                location_id=location_id,
+                revalidator=PmsLiveRevalidationService(session),
+            )
+            await dispatcher.runtime.start_run(run)
+            await dispatcher.advance(
+                run,
+                definition,
+                context=run.trigger_metadata or {},
+                location_timezone=location_timezone,
+            )
+
+    return WorkflowRunResponse.from_model(run)
+
+
+@router.get("/{workflow_id}/runs", response_model=CampaignRunListResponse)
+async def list_runs(
+    workflow_id: str,
+    current_user: _InstitutionOrLocationAdmin,
+    limit: int = Query(50, ge=1, le=500),
+    cursor: str | None = Query(None),
+    status_filter: str | None = Query(None, alias="status"),
+    outcome: str | None = Query(None),
+    current_node: str | None = Query(None),
+    next_due_from: datetime | None = Query(None),
+    next_due_to: datetime | None = Query(None),
+    channel: str | None = Query(None, pattern="^(sms|email|voice)$"),
+    failure_reason: str | None = Query(None),
+    contact_search: str | None = Query(None),
+) -> CampaignRunListResponse:
+    inst_id = _institution_id(current_user)
+    async with get_db_session() as session:
+        svc = AutomationWorkflowDefinitionService(session)
+        await _get_workflow_or_404(svc, workflow_id, current_user)
+        runs = await CampaignOperationsService(session).list_runs(
+            workflow_id,
+            institution_id=inst_id,
+            filters=RunListFilters(
+                status=status_filter,
+                outcome=outcome,
+                current_node=current_node,
+                next_due_from=next_due_from,
+                next_due_to=next_due_to,
+                channel=channel,
+                failure_reason=failure_reason,
+                contact_search=contact_search,
+                cursor=cursor,
+                limit=limit,
+            ),
+        )
+    return CampaignRunListResponse(
+        items=[CampaignRunListItemResponse(**item.__dict__) for item in runs.items],
+        limit=runs.limit,
+        next_cursor=runs.next_cursor,
+    )
+
+
+@router.get("/{workflow_id}/operations", response_model=CampaignOperationsResponse)
+async def get_campaign_operations(
+    workflow_id: str,
+    current_user: _InstitutionOrLocationAdmin,
+    limit: int = Query(25, ge=1, le=100),
+) -> CampaignOperationsResponse:
+    """Return current operational exceptions for the campaign."""
+    inst_id = _institution_id(current_user)
+    async with get_db_session() as session:
+        svc = AutomationWorkflowDefinitionService(session)
+        await _get_workflow_or_404(svc, workflow_id, current_user)
+        operations = await CampaignOperationsService(session).operations(
+            workflow_id,
+            institution_id=inst_id,
+            limit=limit,
+        )
+    return CampaignOperationsResponse(
+        stuck_waiting_runs=[
+            OperationItemResponse(**item.__dict__)
+            for item in operations.stuck_waiting_runs
+        ],
+        failed_sends=[
+            OperationItemResponse(**item.__dict__) for item in operations.failed_sends
+        ],
+        suppressed_skipped_runs=[
+            OperationItemResponse(**item.__dict__)
+            for item in operations.suppressed_skipped_runs
+        ],
+        open_handoffs=[
+            OperationItemResponse(**item.__dict__) for item in operations.open_handoffs
+        ],
+        generated_at=operations.generated_at,
+    )
+
+
+@router.get("/{workflow_id}/runs/{run_id}", response_model=WorkflowRunResponse)
+async def get_run_status(
+    workflow_id: str,
+    run_id: str,
+    current_user: _InstitutionOrLocationAdmin,
+) -> WorkflowRunResponse:
+    inst_id = _institution_id(current_user)
+    async with get_db_session() as session:
+        svc = AutomationWorkflowDefinitionService(session)
+        await _get_workflow_or_404(svc, workflow_id, current_user)
+        run = await session.get(AutomationWorkflowRun, run_id)
+        if (
+            run is None
+            or str(run.institution_id) != inst_id
+            or str(run.workflow_id) != workflow_id
+        ):
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND, detail="Run not found"
+            )
+    return WorkflowRunResponse.from_model(run)
+
+
+@router.get("/{workflow_id}/runs/{run_id}/timeline", response_model=RunTimelineResponse)
+async def get_run_timeline(
+    workflow_id: str,
+    run_id: str,
+    current_user: _InstitutionOrLocationAdmin,
+) -> RunTimelineResponse:
+    """Return a PHI-light timeline for one campaign run."""
+    inst_id = _institution_id(current_user)
+    async with get_db_session() as session:
+        svc = AutomationWorkflowDefinitionService(session)
+        await _get_workflow_or_404(svc, workflow_id, current_user)
+        timeline = await CampaignOperationsService(session).timeline(
+            workflow_id,
+            run_id,
+            institution_id=inst_id,
+        )
+        if timeline is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND, detail="Run not found"
+            )
+    return RunTimelineResponse(
+        run=CampaignRunListItemResponse(**timeline.run.__dict__),
+        contact=timeline.contact,
+        workflow_version=timeline.workflow_version,
+        items=[TimelineItemResponse(**item.__dict__) for item in timeline.items],
+    )
+
+
+@router.post("/{workflow_id}/runs/{run_id}/cancel", response_model=WorkflowRunResponse)
+@audit(
+    AuditAction.CAMPAIGN_RUN_CANCEL,
+    resource=lambda *args, **kwargs: (
+        f"campaign:{kwargs.get('workflow_id')}:run:{kwargs.get('run_id')}"
+    ),
+    actor=AuditActor.ADMIN,
+)
+async def cancel_run(
+    workflow_id: str,
+    run_id: str,
+    current_user: _InstitutionOrLocationAdmin,
+) -> WorkflowRunResponse:
+    inst_id = _institution_id(current_user)
+    async with get_db_session() as session:
+        svc = AutomationWorkflowDefinitionService(session)
+        await _get_workflow_or_404(svc, workflow_id, current_user)
+        run = await session.get(AutomationWorkflowRun, run_id)
+        if (
+            run is None
+            or str(run.institution_id) != inst_id
+            or str(run.workflow_id) != workflow_id
+        ):
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND, detail="Run not found"
+            )
+        enroll_svc = AutomationWorkflowEnrollmentService(session)
+        await enroll_svc.cancel_run(run)
+    return WorkflowRunResponse.from_model(run)
+
+
+# ---------------------------------------------------------------------------
+# Bulk enrollment — Slice 12 (Plan 09)
+# ---------------------------------------------------------------------------
+
+
+class BulkEnrollItem(BaseModel):
+    contact_id: str | None = None
+    location_id: str | None = None
+    trigger_ref_type: str | None = None
+    trigger_ref_id: str | None = None
+    idempotency_key: str
+    trigger_metadata: dict[str, Any] = Field(default_factory=dict)
+
+
+class BulkEnrollRequest(BaseModel):
+    items: list[BulkEnrollItem] = Field(..., min_length=1, max_length=500)
+
+
+class BulkEnrollResponse(BaseModel):
+    enqueued: int
+    workflow_id: str
+    workflow_version_id: str
+
+
+@router.post(
+    "/{workflow_id}/bulk-enroll",
+    response_model=BulkEnrollResponse,
+    status_code=status.HTTP_202_ACCEPTED,
+)
+@audit(
+    AuditAction.CAMPAIGN_BULK_ENROLL,
+    resource=lambda *args, **kwargs: (
+        f"campaign:{kwargs.get('workflow_id')}:bulk-enroll"
+    ),
+    actor=AuditActor.ADMIN,
+)
+async def bulk_enroll(
+    workflow_id: str,
+    data: BulkEnrollRequest,
+    current_user: _CampaignManager,
+) -> BulkEnrollResponse:
+    """Enqueue workflow enrollment for a list of contacts (up to 500 per request).
+
+    Each item is dispatched as an independent Celery task with its own
+    idempotency key. Returns 202 immediately — enrollment happens asynchronously.
+    """
+    from src.app.tasks.automation_workflow import enroll_and_start_workflow_run
+
+    inst_id = _institution_id(current_user)
+
+    async with get_db_session() as session:
+        svc = AutomationWorkflowDefinitionService(session)
+        wf = await _get_workflow_or_404(svc, workflow_id, current_user)
+
+        if wf.status != "active":
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=f"Workflow is not active (status={wf.status})",
+            )
+        if not wf.current_version_id:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="Workflow has no published version",
+            )
+
+        version_id = str(wf.current_version_id)
+        trigger_type = wf.trigger_type
+        item_location_ids = [
+            _workflow_location_id(current_user, wf, item.location_id)
+            for item in data.items
+        ]
+
+    for item, location_id in zip(data.items, item_location_ids, strict=True):
+        enroll_and_start_workflow_run.apply_async(
+            kwargs={
+                "institution_id": inst_id,
+                "workflow_id": workflow_id,
+                "workflow_version_id": version_id,
+                "contact_id": item.contact_id,
+                "location_id": location_id,
+                "trigger_type": trigger_type,
+                "trigger_ref_type": item.trigger_ref_type,
+                "trigger_ref_id": item.trigger_ref_id,
+                "idempotency_key": item.idempotency_key,
+                "trigger_metadata": item.trigger_metadata,
+            },
+            queue="workflow",
+        )
+
+    return BulkEnrollResponse(
+        enqueued=len(data.items),
+        workflow_id=workflow_id,
+        workflow_version_id=version_id,
+    )
+
+
+class WorkflowHaltResponse(BaseModel):
+    workflow_id: str
+    halted_runs: int
+    status: str
+
+
+@router.post("/{workflow_id}/emergency-halt", response_model=WorkflowHaltResponse)
+@audit(
+    AuditAction.CAMPAIGN_EMERGENCY_HALT,
+    resource=lambda *args, **kwargs: (
+        f"campaign:{kwargs.get('workflow_id')}:emergency-halt"
+    ),
+    actor=AuditActor.ADMIN,
+)
+async def emergency_halt_workflow(
+    workflow_id: str,
+    current_user: _CampaignManager,
+    data: OutboundHaltRequest | None = None,
+) -> WorkflowHaltResponse:
+    """Emergency-halt a single workflow: terminate all in-flight runs on its
+    current version (cancelling their timers) and pause the workflow so no new
+    enrollments start. Distinct from pause, which leaves in-flight runs to finish."""
+    inst_id = _institution_id(current_user)
+    reason = (data.reason if data else None) or "emergency_halt"
+    async with get_db_session() as session:
+        svc = AutomationWorkflowDefinitionService(session)
+        wf = await _get_workflow_or_404(svc, workflow_id, current_user)
+        halted = 0
+        if wf.current_version_id:
+            halted = await svc.emergency_halt_version(
+                institution_id=inst_id,
+                workflow_version_id=str(wf.current_version_id),
+                actor_user_id=str(current_user.id),
+                reason=reason,
+            )
+        if wf.status == AutomationWorkflowStatus.ACTIVE.value:
+            await svc.pause_workflow(wf)
+        status_val = wf.status
+        await session.commit()
+    return WorkflowHaltResponse(
+        workflow_id=workflow_id, halted_runs=halted, status=status_val
+    )

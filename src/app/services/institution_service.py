@@ -11,6 +11,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from src.app.models.institution import Institution
 from src.app.models.institution_group import InstitutionGroup
 from src.app.models.institution_location import InstitutionLocation
+from src.app.models.outbound_voice import OutboundVoiceProfile
+from src.app.models.retell_sms import RetellSmsChatProfile
 from src.app.services.sms_privacy import hash_for_logging
 
 logger = logging.getLogger(__name__)
@@ -95,7 +97,38 @@ class InstitutionService:
         return institution
 
     async def update(self, institution: Institution, **updates: Any) -> Institution:
-        """Update institution fields."""
+        """Update institution fields.
+
+        Enforces the NexHealth credential invariant here rather than in the route
+        so no caller can write a configuration the resolver will refuse: an
+        institution set to authenticate as itself must actually have a key.
+        Leaving that inconsistent used to be survivable because resolution fell
+        back to the platform key; it no longer does, by design.
+        """
+        from src.app.dependencies import (
+            INSTITUTION_CREDENTIAL_MODE,
+            VALID_CREDENTIAL_MODES,
+        )
+
+        mode = updates.get("nexhealth_credential_mode")
+        if mode is not None:
+            if mode not in VALID_CREDENTIAL_MODES:
+                raise ValueError(
+                    f"nexhealth_credential_mode must be one of "
+                    f"{sorted(VALID_CREDENTIAL_MODES)}, got {mode!r}"
+                )
+            if mode == INSTITUTION_CREDENTIAL_MODE:
+                # A key supplied in the same request counts; so does one already
+                # stored. Otherwise this would create a config that fails on the
+                # next NexHealth call rather than here.
+                incoming_key = updates.get("nexhealth_api_key")
+                if not incoming_key and not institution.nexhealth_api_key_encrypted:
+                    raise ValueError(
+                        "Cannot set nexhealth_credential_mode to "
+                        f"{INSTITUTION_CREDENTIAL_MODE!r} without a NexHealth API "
+                        "key: supply one in the same request, or leave the "
+                        "institution on the platform key."
+                    )
         # Fields that use encryption setters
         encrypted_fields = {
             "nexhealth_api_key",
@@ -159,9 +192,40 @@ class InstitutionService:
             await self.session.delete(location)
             logger.info(f"Hard deleted location: {location.slug}")
         else:
+            from src.app.models.user import User, UserRole
+
             location.is_active = False
+
+            # Release the practice-software mapping. The unique index over
+            # (nexhealth_subdomain, nexhealth_location_id) covers inactive
+            # rows too, so a soft-deleted location that keeps its mapping
+            # holds that site hostage: the clinic can never be re-imported
+            # under a new location, and the insert fails on a constraint the
+            # operator cannot see from the UI. Deleted means disconnected.
+            released_mapping = bool(
+                location.nexhealth_subdomain or location.nexhealth_location_id
+            )
+            location.nexhealth_subdomain = None
+            location.nexhealth_location_id = None
+
+            result = await self.session.execute(
+                select(User).where(
+                    User.location_id == location.id,
+                    User.role != UserRole.SUPER_ADMIN.value,
+                    User.deleted_at.is_(None),
+                )
+            )
+            users = result.scalars().all()
+            for user in users:
+                user.mark_deleted()
             await self.session.flush()
-            logger.info(f"Soft deleted location: {location.slug}")
+            logger.info(
+                "Soft deleted location: %s, removed %s scoped users, "
+                "released_nexhealth_mapping=%s",
+                location.slug,
+                len(users),
+                released_mapping,
+            )
 
     async def list_locations(
         self, institution_id: str, include_inactive: bool = False
@@ -182,11 +246,11 @@ class InstitutionService:
     ) -> InstitutionLocation | None:
         """Get a location by slug, scoped to a specific institution.
 
-        Slug is globally unique today, but the institution_id predicate is
-        defense-in-depth: if a future migration changes slug uniqueness to
-        per-institution, callers don't silently start matching wrong-tenant
-        rows. For platform-admin "is this slug taken anywhere?" checks, use
-        ``find_any_location_by_slug`` instead.
+        Slugs are unique per institution, not globally
+        (uq_institution_locations_inst_slug), so the institution_id predicate
+        is required for correctness and not merely defensive: two groups can
+        each own a "downtown". This is also the right check before creating a
+        location — a cross-tenant one would reject slugs the database allows.
         """
         result = await self.session.execute(
             select(InstitutionLocation).where(
@@ -196,23 +260,42 @@ class InstitutionService:
         )
         return result.scalar_one_or_none()
 
-    async def find_any_location_by_slug(self, slug: str) -> InstitutionLocation | None:
-        """Look up a location by slug across ALL institutions.
+    async def find_location_by_nexhealth_mapping(
+        self,
+        subdomain: str,
+        nexhealth_location_id: str,
+        *,
+        exclude_location_id: str | None = None,
+    ) -> InstitutionLocation | None:
+        """Find the location already bound to a practice-software site.
 
-        Use this only for cross-tenant uniqueness checks (e.g. before
-        creating a new location with a candidate slug). Routes that serve
-        tenant-scoped data must use ``get_location_by_slug`` instead so the
-        institution_id predicate is in the WHERE clause.
+        Deliberately cross-tenant and inclusive of inactive rows, because the
+        unique index enforcing this mapping is too: a caller that filtered
+        either out would report the mapping as free and then fail on the
+        insert. Pass ``exclude_location_id`` when updating a location so it
+        does not collide with its own mapping.
         """
+        conditions = [
+            InstitutionLocation.nexhealth_subdomain == subdomain,
+            InstitutionLocation.nexhealth_location_id == nexhealth_location_id,
+        ]
+        if exclude_location_id is not None:
+            conditions.append(InstitutionLocation.id != exclude_location_id)
         result = await self.session.execute(
-            select(InstitutionLocation).where(InstitutionLocation.slug == slug)
+            select(InstitutionLocation).where(*conditions).limit(1)
         )
-        return result.scalar_one_or_none()
+        return result.scalars().first()
 
     async def get_location_by_retell_agent_id(
         self, agent_id: str
     ) -> tuple[InstitutionLocation, Institution] | None:
-        """Get location and its parent institution by Retell agent ID."""
+        """Get location and its parent institution by Retell agent ID.
+
+        Inbound/location-wide agents are stored on ``InstitutionLocation``.
+        Outbound campaign agents are stored on ``OutboundVoiceProfile`` and SMS
+        response-generator agents on ``RetellSmsChatProfile``. Retell function
+        calls still need location routing for PMS operations, so resolve all three.
+        """
         result = await self.session.execute(
             select(InstitutionLocation, Institution)
             .join(Institution, InstitutionLocation.institution_id == Institution.id)
@@ -221,6 +304,48 @@ class InstitutionService:
                 InstitutionLocation.is_active.is_(True),
                 Institution.is_active.is_(True),
             )
+        )
+        row = result.first()
+        if row:
+            return row[0], row[1]
+        result = await self.session.execute(
+            select(InstitutionLocation, Institution)
+            .select_from(OutboundVoiceProfile)
+            .join(
+                InstitutionLocation,
+                OutboundVoiceProfile.location_id == InstitutionLocation.id,
+            )
+            .join(Institution, OutboundVoiceProfile.institution_id == Institution.id)
+            .where(
+                OutboundVoiceProfile.retell_agent_id == agent_id,
+                OutboundVoiceProfile.institution_id
+                == InstitutionLocation.institution_id,
+                OutboundVoiceProfile.is_active.is_(True),
+                InstitutionLocation.is_active.is_(True),
+                Institution.is_active.is_(True),
+            )
+            .limit(1)
+        )
+        row = result.first()
+        if row:
+            return row[0], row[1]
+        result = await self.session.execute(
+            select(InstitutionLocation, Institution)
+            .select_from(RetellSmsChatProfile)
+            .join(
+                InstitutionLocation,
+                RetellSmsChatProfile.location_id == InstitutionLocation.id,
+            )
+            .join(Institution, RetellSmsChatProfile.institution_id == Institution.id)
+            .where(
+                RetellSmsChatProfile.retell_agent_id == agent_id,
+                RetellSmsChatProfile.institution_id
+                == InstitutionLocation.institution_id,
+                RetellSmsChatProfile.is_active.is_(True),
+                InstitutionLocation.is_active.is_(True),
+                Institution.is_active.is_(True),
+            )
+            .limit(1)
         )
         row = result.first()
         if row:

@@ -4,8 +4,12 @@ import type {
     SmsLocation,
     SmsSuppression,
     TwilioPhoneNumber,
+    RetellAgent,
+    RetellPhoneNumber,
     SendSmsRequest,
     SendSmsResponse,
+    OutboundVoiceProfile,
+    InstitutionProvisioningStatus,
     Location,
 } from "@/types"
 import type { AuditLogPaginatedResponse } from "./tenant-api"
@@ -27,9 +31,121 @@ export async function verifyRetellAgent(agentId: string): Promise<unknown> {
     return data
 }
 
+export async function listRetellAgents(): Promise<RetellAgent[]> {
+    const { data } = await api.get<RetellAgent[]>("/admin/institutions/retell/agents")
+    return data
+}
+
+export async function verifyRetellChatAgent(agentId: string): Promise<unknown> {
+    const { data } = await api.get(`/admin/institutions/retell/chat-agents/${agentId}`)
+    return data
+}
+
+export async function listRetellChatAgents(): Promise<RetellAgent[]> {
+    const { data } = await api.get<RetellAgent[]>("/admin/institutions/retell/chat-agents")
+    return data
+}
+
 export async function listTwilioPhoneNumbers(): Promise<TwilioPhoneNumber[]> {
     const { data } = await api.get<TwilioPhoneNumber[]>("/admin/twilio/phone-numbers")
     return data
+}
+
+export async function getInstitutionProvisioning(
+    institutionSlug: string,
+): Promise<InstitutionProvisioningStatus> {
+    const { data } = await api.get<InstitutionProvisioningStatus>(
+        `/admin/institutions/${institutionSlug}/provisioning`,
+    )
+    return data
+}
+
+export async function updateInstitutionTwilioProvisioning(
+    institutionSlug: string,
+    credentials: { twilio_account_sid: string; twilio_auth_token: string },
+): Promise<InstitutionProvisioningStatus> {
+    const { data } = await api.patch<InstitutionProvisioningStatus>(
+        `/admin/institutions/${institutionSlug}/provisioning`,
+        credentials,
+    )
+    return data
+}
+
+export async function clearInstitutionTwilioProvisioning(
+    institutionSlug: string,
+): Promise<void> {
+    await api.delete(`/admin/institutions/${institutionSlug}/provisioning/twilio`)
+}
+
+export async function listInstitutionTwilioPhoneNumbers(
+    institutionSlug: string,
+): Promise<TwilioPhoneNumber[]> {
+    const { data } = await api.get<TwilioPhoneNumber[]>(
+        `/admin/institutions/${institutionSlug}/twilio/phone-numbers`,
+    )
+    return data
+}
+
+export async function listRetellPhoneNumbers(): Promise<RetellPhoneNumber[]> {
+    const { data } = await api.get<RetellPhoneNumber[]>("/admin/institutions/retell/phone-numbers")
+    return data
+}
+
+export async function listAdminOutboundVoiceProfiles(
+    institutionSlug: string,
+    locationSlug: string,
+): Promise<OutboundVoiceProfile[]> {
+    const { data } = await api.get<OutboundVoiceProfile[]>(
+        `/admin/institutions/${institutionSlug}/locations/${locationSlug}/outbound-voice-profiles`,
+    )
+    return data
+}
+
+export async function createAdminOutboundVoiceProfile(
+    institutionSlug: string,
+    locationSlug: string,
+    payload: {
+        display_name?: string | null
+        retell_agent_id?: string | null
+        retell_from_number?: string | null
+        is_active?: boolean
+        config?: Record<string, unknown> | null
+    },
+): Promise<OutboundVoiceProfile> {
+    const { data } = await api.post<OutboundVoiceProfile>(
+        `/admin/institutions/${institutionSlug}/locations/${locationSlug}/outbound-voice-profiles`,
+        payload,
+    )
+    return data
+}
+
+export async function updateAdminOutboundVoiceProfile(
+    institutionSlug: string,
+    locationSlug: string,
+    profileId: string,
+    payload: {
+        display_name?: string | null
+        retell_agent_id?: string | null
+        retell_from_number?: string | null
+        is_active?: boolean
+        config?: Record<string, unknown> | null
+    },
+): Promise<OutboundVoiceProfile> {
+    const { data } = await api.patch<OutboundVoiceProfile>(
+        `/admin/institutions/${institutionSlug}/locations/${locationSlug}/outbound-voice-profiles/${profileId}`,
+        payload,
+    )
+    return data
+}
+
+export async function deleteAdminOutboundVoiceProfile(
+    institutionSlug: string,
+    locationSlug: string,
+    profileId: string,
+): Promise<void> {
+    await api.delete(
+        `/admin/institutions/${institutionSlug}/locations/${locationSlug}/outbound-voice-profiles/${profileId}`,
+    )
 }
 
 export async function sendSms(payload: SendSmsRequest): Promise<SendSmsResponse> {

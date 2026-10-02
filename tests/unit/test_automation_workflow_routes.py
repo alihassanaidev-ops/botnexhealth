@@ -1,0 +1,1521 @@
+"""Unit tests for automation workflow API routes."""
+
+from __future__ import annotations
+
+import asyncio
+from datetime import datetime, timezone
+from unittest.mock import AsyncMock, MagicMock, patch
+
+import pytest
+from fastapi import HTTPException
+
+from src.app.api.routes.automation_workflows import (
+    CampaignRunListResponse,
+    EnrollRequest,
+    LaunchChecklistPreviewRequest,
+    ValidateDefinitionRequest,
+    WorkflowCreateRequest,
+    WorkflowDraftCreateRequest,
+    WorkflowUpdateRequest,
+    WorkflowResponse,
+    WorkflowRunResponse,
+    _institution_id,
+    cancel_run,
+    create_draft_workflow,
+    create_workflow,
+    delete_workflow,
+    enroll_in_workflow,
+    get_campaign_operations,
+    get_campaign_overview,
+    get_current_campaign_manager,
+    get_run_status,
+    get_run_timeline,
+    get_launch_checklist,
+    get_workflow,
+    list_llm_models,
+    list_merge_fields,
+    list_node_capabilities,
+    list_runs,
+    list_workflow_versions,
+    list_workflows,
+    preview_launch_checklist,
+    publish_workflow,
+    resume_workflow,
+    router as workflows_router,
+    validate_definition,
+)
+from src.app.services.automation.launch_checklist_service import (
+    CampaignLaunchChecklist,
+)
+from src.app.services.automation.campaign_operations_service import (
+    CampaignOperations,
+    CampaignOverview,
+    CampaignRunList,
+    CampaignRunListItem,
+    OperationItem,
+    RunTimeline,
+    TimelineItem,
+)
+
+_NOW = datetime(2026, 7, 2, 14, 0, 0, tzinfo=timezone.utc)
+
+
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+
+
+def _make_user(
+    institution_id="inst-1",
+    location_id=None,
+    role="INSTITUTION_ADMIN",
+):
+    u = MagicMock()
+    u.institution_id = institution_id
+    u.location_id = location_id
+    u.role = role
+    return u
+
+
+def _make_workflow(status="draft", version_id=None):
+    wf = MagicMock()
+    wf.id = "wf-1"
+    wf.name = "Test Workflow"
+    wf.status = status
+    wf.trigger_type = "manual"
+    wf.definition = {"trigger": {"type": "manual"}, "entry_node_id": "e1", "nodes": []}
+    wf.current_version_id = version_id
+    wf.location_id = None
+    wf.created_at = _NOW
+    wf.updated_at = _NOW
+    return wf
+
+
+def _make_run(status="waiting"):
+    r = MagicMock()
+    r.id = "run-1"
+    r.workflow_id = "wf-1"
+    r.institution_id = "inst-1"
+    r.status = status
+    r.current_step_id = None
+    r.outcome = None
+    r.started_at = _NOW
+    r.completed_at = None
+    r.blocked_reason = None
+    r.created_at = _NOW
+    r.trigger_metadata = {}
+    r.workflow_version_id = "ver-1"
+    r.contact_id = "contact-1"
+    return r
+
+
+def _checklist():
+    return CampaignLaunchChecklist(
+        workflow_id="wf-1",
+        workflow_version_id="ver-1",
+        location_id="loc-1",
+        overall_status="pass",
+        blockers_count=0,
+        warnings_count=0,
+        unknown_count=0,
+        estimated_audience=None,
+        estimated_send_volume=None,
+        estimated_cost_cents=None,
+        estimate_basis="test",
+        generated_at=_NOW,
+        items=[],
+    )
+
+
+def _run_list_item(run_id="run-1"):
+    return CampaignRunListItem(
+        id=run_id,
+        workflow_id="wf-1",
+        workflow_version_id="ver-1",
+        status="waiting",
+        current_step_id="wait-1",
+        current_step_type="wait",
+        outcome=None,
+        blocked_reason=None,
+        contact_id="contact-1",
+        contact_name="Jordan Rivera",
+        next_due_at=_NOW,
+        latest_event_at=_NOW,
+        started_at=_NOW,
+        completed_at=None,
+        created_at=_NOW,
+    )
+
+
+def _make_session(wf=None, run=None, version=None, contact=None):
+    session = AsyncMock()
+    session.__aenter__ = AsyncMock(return_value=session)
+    session.__aexit__ = AsyncMock(return_value=False)
+    session.flush = AsyncMock()
+    execute_result = MagicMock()
+    execute_result.scalar_one_or_none.return_value = wf
+    session.execute = AsyncMock(return_value=execute_result)
+
+    async def _get(model, pk, **kwargs):
+        from src.app.models.automation_workflow import AutomationWorkflowRun, AutomationWorkflowVersion
+        from src.app.models.contact import Contact
+        if model is AutomationWorkflowRun:
+            return run
+        if model is AutomationWorkflowVersion:
+            return version
+        if model is Contact:
+            return contact
+        return None
+
+    session.get = _get
+    return session
+
+
+# ---------------------------------------------------------------------------
+# _institution_id helper
+# ---------------------------------------------------------------------------
+
+
+def test_institution_id_returns_string():
+    user = _make_user(institution_id="inst-abc")
+    assert _institution_id(user) == "inst-abc"
+
+
+def test_institution_id_raises_on_none():
+    user = _make_user(institution_id=None)
+    with pytest.raises(HTTPException) as exc_info:
+        _institution_id(user)
+    assert exc_info.value.status_code == 403
+
+
+def test_campaign_manager_requires_location_admin_assignment():
+    user = _make_user(location_id=None, role="LOCATION_ADMIN")
+
+    with pytest.raises(HTTPException) as exc_info:
+        asyncio.run(get_current_campaign_manager(user, user))
+
+    assert exc_info.value.status_code == 403
+
+
+# ---------------------------------------------------------------------------
+# WorkflowResponse.from_model
+# ---------------------------------------------------------------------------
+
+
+def test_workflow_response_from_model():
+    wf = _make_workflow(status="draft")
+    resp = WorkflowResponse.from_model(wf)
+    assert resp.id == "wf-1"
+    assert resp.status == "draft"
+    assert resp.current_version_id is None
+
+
+def test_workflow_response_from_model_with_version():
+    wf = _make_workflow(status="active", version_id="ver-1")
+    resp = WorkflowResponse.from_model(wf)
+    assert resp.current_version_id == "ver-1"
+
+
+# ---------------------------------------------------------------------------
+# WorkflowRunResponse.from_model
+# ---------------------------------------------------------------------------
+
+
+def test_run_response_from_model():
+    run = _make_run(status="waiting")
+    resp = WorkflowRunResponse.from_model(run)
+    assert resp.id == "run-1"
+    assert resp.status == "waiting"
+    assert resp.outcome is None
+
+
+# ---------------------------------------------------------------------------
+# create_workflow
+# ---------------------------------------------------------------------------
+
+
+def test_create_workflow_returns_201():
+    user = _make_user()
+    wf = _make_workflow()
+    mock_svc = AsyncMock()
+    mock_svc.create_draft = AsyncMock(return_value=wf)
+    session = _make_session()
+
+    data = WorkflowCreateRequest(
+        name="Test",
+        definition={"trigger": {"type": "manual"}, "entry_node_id": "e1", "nodes": []},
+    )
+
+    with (
+        patch("src.app.api.routes.automation_workflows.get_db_session", return_value=session),
+        patch(
+            "src.app.api.routes.automation_workflows.AutomationWorkflowDefinitionService",
+            return_value=mock_svc,
+        ),
+    ):
+        result = asyncio.run(create_workflow(data, user))
+
+    assert result.name == "Test Workflow"
+    mock_svc.create_draft.assert_awaited_once()
+
+
+def test_create_draft_workflow_does_not_publish():
+    user = _make_user()
+    wf = _make_workflow(status="draft")
+    mock_svc = AsyncMock()
+    mock_svc.create_draft = AsyncMock(return_value=wf)
+    mock_svc.publish_version = AsyncMock()
+    session = _make_session()
+
+    with (
+        patch("src.app.api.routes.automation_workflows.get_db_session", return_value=session),
+        patch(
+            "src.app.api.routes.automation_workflows.AutomationWorkflowDefinitionService",
+            return_value=mock_svc,
+        ),
+    ):
+        result = asyncio.run(create_draft_workflow(WorkflowDraftCreateRequest(name="Scratch"), user))
+
+    assert result.status == "draft"
+    mock_svc.create_draft.assert_awaited_once_with(
+        institution_id="inst-1",
+        name="Scratch",
+        location_id=None,
+    )
+    mock_svc.publish_version.assert_not_awaited()
+
+
+def test_create_draft_workflow_scopes_to_selected_location():
+    user = _make_user()
+    wf = _make_workflow(status="draft")
+    wf.location_id = "loc-1"
+    mock_svc = AsyncMock()
+    mock_svc.create_draft = AsyncMock(return_value=wf)
+    session = _make_session()
+    location_result = MagicMock()
+    location_result.scalar_one_or_none.return_value = "loc-1"
+    session.execute.return_value = location_result
+
+    with (
+        patch("src.app.api.routes.automation_workflows.get_db_session", return_value=session),
+        patch(
+            "src.app.api.routes.automation_workflows.AutomationWorkflowDefinitionService",
+            return_value=mock_svc,
+        ),
+    ):
+        result = asyncio.run(
+            create_draft_workflow(
+                WorkflowDraftCreateRequest(name="Scratch", location_id="loc-1"),
+                user,
+            )
+        )
+
+    assert result.location_id == "loc-1"
+    mock_svc.create_draft.assert_awaited_once_with(
+        institution_id="inst-1",
+        name="Scratch",
+        location_id="loc-1",
+    )
+
+
+def test_create_draft_workflow_rejects_location_outside_institution():
+    user = _make_user()
+    session = _make_session()
+    location_result = MagicMock()
+    location_result.scalar_one_or_none.return_value = None
+    session.execute.return_value = location_result
+
+    with patch(
+        "src.app.api.routes.automation_workflows.get_db_session",
+        return_value=session,
+    ):
+        with pytest.raises(HTTPException) as exc_info:
+            asyncio.run(
+                create_draft_workflow(
+                    WorkflowDraftCreateRequest(name="Scratch", location_id="other-loc"),
+                    user,
+                )
+            )
+
+    assert exc_info.value.status_code == 404
+    assert exc_info.value.detail == "Location not found"
+
+
+def test_location_admin_create_draft_is_pinned_to_assigned_location():
+    user = _make_user(location_id="loc-1", role="LOCATION_ADMIN")
+    wf = _make_workflow(status="draft")
+    wf.location_id = "loc-1"
+    mock_svc = AsyncMock()
+    mock_svc.create_draft = AsyncMock(return_value=wf)
+    session = _make_session()
+    location_result = MagicMock()
+    location_result.scalar_one_or_none.return_value = "loc-1"
+    session.execute.return_value = location_result
+
+    with (
+        patch("src.app.api.routes.automation_workflows.get_db_session", return_value=session),
+        patch(
+            "src.app.api.routes.automation_workflows.AutomationWorkflowDefinitionService",
+            return_value=mock_svc,
+        ),
+    ):
+        result = asyncio.run(
+            create_draft_workflow(WorkflowDraftCreateRequest(name="Local"), user)
+        )
+
+    assert result.location_id == "loc-1"
+    mock_svc.create_draft.assert_awaited_once_with(
+        institution_id="inst-1",
+        name="Local",
+        location_id="loc-1",
+    )
+
+
+def test_location_admin_cannot_create_draft_for_another_location():
+    user = _make_user(location_id="loc-1", role="LOCATION_ADMIN")
+
+    with pytest.raises(HTTPException) as exc_info:
+        asyncio.run(
+            create_draft_workflow(
+                WorkflowDraftCreateRequest(name="Wrong clinic", location_id="loc-2"),
+                user,
+            )
+        )
+
+    assert exc_info.value.status_code == 403
+    assert exc_info.value.detail == "Cannot manage campaigns for another location"
+
+
+# ---------------------------------------------------------------------------
+# list_workflows
+# ---------------------------------------------------------------------------
+
+
+def test_list_workflows_returns_list():
+    user = _make_user()
+    wf = _make_workflow()
+    mock_svc = AsyncMock()
+    mock_svc.list_workflows = AsyncMock(return_value=[wf, wf])
+    session = _make_session()
+
+    with (
+        patch("src.app.api.routes.automation_workflows.get_db_session", return_value=session),
+        patch(
+            "src.app.api.routes.automation_workflows.AutomationWorkflowDefinitionService",
+            return_value=mock_svc,
+        ),
+    ):
+        result = asyncio.run(list_workflows(user))
+
+    assert len(result) == 2
+
+
+def test_location_admin_list_is_explicitly_filtered_to_assigned_location():
+    user = _make_user(location_id="loc-1", role="LOCATION_ADMIN")
+    mock_svc = AsyncMock()
+    mock_svc.list_workflows = AsyncMock(return_value=[])
+    session = _make_session()
+
+    with (
+        patch("src.app.api.routes.automation_workflows.get_db_session", return_value=session),
+        patch(
+            "src.app.api.routes.automation_workflows.AutomationWorkflowDefinitionService",
+            return_value=mock_svc,
+        ),
+    ):
+        asyncio.run(list_workflows(user))
+
+    mock_svc.list_workflows.assert_awaited_once_with(
+        institution_id="inst-1",
+        location_id="loc-1",
+    )
+
+
+def test_institution_admin_list_is_filtered_to_selected_location():
+    user = _make_user(role="INSTITUTION_ADMIN")
+    mock_svc = AsyncMock()
+    mock_svc.list_workflows = AsyncMock(return_value=[])
+    session = _make_session()
+
+    with (
+        patch("src.app.api.routes.automation_workflows.get_db_session", return_value=session),
+        patch(
+            "src.app.api.routes.automation_workflows.AutomationWorkflowDefinitionService",
+            return_value=mock_svc,
+        ),
+    ):
+        asyncio.run(list_workflows(user, location_id="loc-2"))
+
+    mock_svc.list_workflows.assert_awaited_once_with(
+        institution_id="inst-1",
+        location_id="loc-2",
+    )
+
+
+# ---------------------------------------------------------------------------
+# get_workflow
+# ---------------------------------------------------------------------------
+
+
+def test_get_workflow_returns_workflow():
+    user = _make_user()
+    wf = _make_workflow()
+    mock_svc = AsyncMock()
+    mock_svc.get_workflow = AsyncMock(return_value=wf)
+    session = _make_session()
+
+    with (
+        patch("src.app.api.routes.automation_workflows.get_db_session", return_value=session),
+        patch(
+            "src.app.api.routes.automation_workflows.AutomationWorkflowDefinitionService",
+            return_value=mock_svc,
+        ),
+    ):
+        result = asyncio.run(get_workflow("wf-1", user))
+
+    assert result.id == "wf-1"
+
+
+def test_get_workflow_not_found_raises_404():
+    user = _make_user()
+    mock_svc = AsyncMock()
+    mock_svc.get_workflow = AsyncMock(return_value=None)
+    session = _make_session()
+
+    with (
+        patch("src.app.api.routes.automation_workflows.get_db_session", return_value=session),
+        patch(
+            "src.app.api.routes.automation_workflows.AutomationWorkflowDefinitionService",
+            return_value=mock_svc,
+        ),
+    ):
+        with pytest.raises(HTTPException) as exc_info:
+            asyncio.run(get_workflow("wf-bad", user))
+
+    assert exc_info.value.status_code == 404
+
+
+def test_institution_admin_cannot_read_campaign_from_inactive_location():
+    user = _make_user(role="INSTITUTION_ADMIN")
+    wf = _make_workflow()
+    wf.location_id = "loc-2"
+    mock_svc = AsyncMock()
+    mock_svc.get_workflow = AsyncMock(return_value=wf)
+    session = _make_session()
+
+    with (
+        patch("src.app.api.routes.automation_workflows.get_db_session", return_value=session),
+        patch(
+            "src.app.api.routes.automation_workflows.AutomationWorkflowDefinitionService",
+            return_value=mock_svc,
+        ),
+    ):
+        with pytest.raises(HTTPException) as exc_info:
+            asyncio.run(get_workflow("wf-1", user, location_id="loc-1"))
+
+    assert exc_info.value.status_code == 404
+
+
+@pytest.mark.parametrize("workflow_location", [None, "loc-2"])
+def test_location_admin_cannot_read_unscoped_or_other_location_workflow(
+    workflow_location,
+):
+    user = _make_user(location_id="loc-1", role="LOCATION_ADMIN")
+    wf = _make_workflow()
+    wf.location_id = workflow_location
+    mock_svc = AsyncMock()
+    mock_svc.get_workflow = AsyncMock(return_value=wf)
+    session = _make_session()
+
+    with (
+        patch("src.app.api.routes.automation_workflows.get_db_session", return_value=session),
+        patch(
+            "src.app.api.routes.automation_workflows.AutomationWorkflowDefinitionService",
+            return_value=mock_svc,
+        ),
+    ):
+        with pytest.raises(HTTPException) as exc_info:
+            asyncio.run(get_workflow("wf-1", user))
+
+    assert exc_info.value.status_code == 404
+
+
+# ---------------------------------------------------------------------------
+# publish_workflow
+# ---------------------------------------------------------------------------
+
+
+def test_publish_workflow_calls_publish_version():
+    user = _make_user()
+    wf = _make_workflow(status="draft", version_id="ver-1")
+    mock_svc = AsyncMock()
+    mock_svc.get_workflow = AsyncMock(return_value=wf)
+    mock_svc.publish_version = AsyncMock()
+    session = _make_session()
+
+    with (
+        patch("src.app.api.routes.automation_workflows.get_db_session", return_value=session),
+        patch(
+            "src.app.api.routes.automation_workflows.AutomationWorkflowDefinitionService",
+            return_value=mock_svc,
+        ),
+    ):
+        asyncio.run(publish_workflow("wf-1", user))
+
+    mock_svc.publish_version.assert_awaited_once_with(wf)
+
+
+def test_publish_workflow_snapshots_submitted_definition():
+    user = _make_user()
+    wf = _make_workflow(status="paused", version_id="ver-1")
+    mock_svc = AsyncMock()
+    mock_svc.get_workflow = AsyncMock(return_value=wf)
+    mock_svc.publish_version = AsyncMock()
+    session = _make_session()
+    request = WorkflowUpdateRequest(name="Updated", definition=_VALID_DEF)
+
+    with (
+        patch("src.app.api.routes.automation_workflows.get_db_session", return_value=session),
+        patch(
+            "src.app.api.routes.automation_workflows.AutomationWorkflowDefinitionService",
+            return_value=mock_svc,
+        ),
+    ):
+        asyncio.run(publish_workflow("wf-1", user, request))
+
+    assert wf.name == "Updated"
+    mock_svc.publish_version.assert_awaited_once_with(wf, _VALID_DEF)
+
+
+def test_delete_workflow_calls_definition_service_delete():
+    user = _make_user()
+    wf = _make_workflow(status="paused", version_id="ver-1")
+    mock_svc = AsyncMock()
+    mock_svc.get_workflow = AsyncMock(return_value=wf)
+    mock_svc.delete_workflow = AsyncMock()
+    session = _make_session()
+
+    with (
+        patch("src.app.api.routes.automation_workflows.get_db_session", return_value=session),
+        patch(
+            "src.app.api.routes.automation_workflows.AutomationWorkflowDefinitionService",
+            return_value=mock_svc,
+        ),
+    ):
+        result = asyncio.run(delete_workflow("wf-1", user))
+
+    assert result is None
+    mock_svc.delete_workflow.assert_awaited_once_with(wf)
+
+
+# ---------------------------------------------------------------------------
+# launch checklist
+# ---------------------------------------------------------------------------
+
+
+def test_get_launch_checklist_returns_saved_definition_report():
+    user = _make_user()
+    wf = _make_workflow(status="active", version_id="ver-1")
+    mock_svc = AsyncMock()
+    mock_svc.get_workflow = AsyncMock(return_value=wf)
+    checklist_svc = AsyncMock()
+    checklist_svc.build = AsyncMock(return_value=_checklist())
+    session = _make_session()
+
+    with (
+        patch("src.app.api.routes.automation_workflows.get_db_session", return_value=session),
+        patch(
+            "src.app.api.routes.automation_workflows.AutomationWorkflowDefinitionService",
+            return_value=mock_svc,
+        ),
+        patch(
+            "src.app.api.routes.automation_workflows.CampaignLaunchChecklistService",
+            return_value=checklist_svc,
+        ),
+    ):
+        result = asyncio.run(get_launch_checklist("wf-1", user, location_id="loc-1"))
+
+    assert result.workflow_id == "wf-1"
+    assert result.overall_status == "pass"
+    checklist_svc.build.assert_awaited_once_with(
+        wf,
+        institution_id="inst-1",
+        location_id="loc-1",
+    )
+
+
+def test_preview_launch_checklist_uses_unsaved_definition():
+    user = _make_user()
+    wf = _make_workflow(status="active", version_id="ver-1")
+    draft = {"trigger": {"type": "manual"}, "entry_node_id": "x1", "nodes": []}
+    mock_svc = AsyncMock()
+    mock_svc.get_workflow = AsyncMock(return_value=wf)
+    checklist_svc = AsyncMock()
+    checklist_svc.build = AsyncMock(return_value=_checklist())
+    session = _make_session()
+
+    with (
+        patch("src.app.api.routes.automation_workflows.get_db_session", return_value=session),
+        patch(
+            "src.app.api.routes.automation_workflows.AutomationWorkflowDefinitionService",
+            return_value=mock_svc,
+        ),
+        patch(
+            "src.app.api.routes.automation_workflows.CampaignLaunchChecklistService",
+            return_value=checklist_svc,
+        ),
+    ):
+        result = asyncio.run(
+            preview_launch_checklist(
+                "wf-1",
+                LaunchChecklistPreviewRequest(definition=draft, location_id="loc-1"),
+                user,
+            )
+        )
+
+    assert result.workflow_version_id == "ver-1"
+    checklist_svc.build.assert_awaited_once_with(
+        wf,
+        institution_id="inst-1",
+        definition_dict=draft,
+        location_id="loc-1",
+    )
+
+
+def test_resume_workflow_rejects_launch_checklist_blockers():
+    user = _make_user()
+    wf = _make_workflow(status="paused", version_id="ver-1")
+    mock_svc = AsyncMock()
+    mock_svc.get_workflow = AsyncMock(return_value=wf)
+    mock_svc.resume_workflow = AsyncMock()
+    checklist_svc = AsyncMock()
+    blocker = MagicMock(id="gotracker_readiness", status="blocked")
+    checklist_svc.build = AsyncMock(
+        return_value=MagicMock(blockers_count=1, items=[blocker])
+    )
+    session = _make_session()
+
+    with (
+        patch("src.app.api.routes.automation_workflows.get_db_session", return_value=session),
+        patch(
+            "src.app.api.routes.automation_workflows.AutomationWorkflowDefinitionService",
+            return_value=mock_svc,
+        ),
+        patch(
+            "src.app.api.routes.automation_workflows.CampaignLaunchChecklistService",
+            return_value=checklist_svc,
+        ),
+    ):
+        with pytest.raises(HTTPException) as exc_info:
+            asyncio.run(resume_workflow("wf-1", user))
+
+    assert exc_info.value.status_code == 409
+    assert exc_info.value.detail == {
+        "message": "Launch checklist has blockers; workflow cannot be resumed.",
+        "blockers": ["gotracker_readiness"],
+    }
+    checklist_svc.build.assert_awaited_once_with(wf, institution_id="inst-1")
+    mock_svc.resume_workflow.assert_not_awaited()
+
+
+def test_resume_workflow_allows_warning_only_checklist():
+    user = _make_user()
+    wf = _make_workflow(status="paused", version_id="ver-1")
+    mock_svc = AsyncMock()
+    mock_svc.get_workflow = AsyncMock(return_value=wf)
+
+    async def _resume(workflow):
+        workflow.status = "active"
+        return workflow
+
+    mock_svc.resume_workflow = AsyncMock(side_effect=_resume)
+    checklist_svc = AsyncMock()
+    checklist_svc.build = AsyncMock(
+        return_value=MagicMock(blockers_count=0, warnings_count=1, items=[])
+    )
+    session = _make_session()
+
+    with (
+        patch("src.app.api.routes.automation_workflows.get_db_session", return_value=session),
+        patch(
+            "src.app.api.routes.automation_workflows.AutomationWorkflowDefinitionService",
+            return_value=mock_svc,
+        ),
+        patch(
+            "src.app.api.routes.automation_workflows.CampaignLaunchChecklistService",
+            return_value=checklist_svc,
+        ),
+    ):
+        result = asyncio.run(resume_workflow("wf-1", user))
+
+    assert result.status == "active"
+    checklist_svc.build.assert_awaited_once_with(wf, institution_id="inst-1")
+    mock_svc.resume_workflow.assert_awaited_once_with(wf)
+
+
+# ---------------------------------------------------------------------------
+# campaign overview and operations
+# ---------------------------------------------------------------------------
+
+
+def test_get_campaign_overview_returns_operational_summary():
+    user = _make_user()
+    wf = _make_workflow(status="active", version_id="ver-1")
+    mock_svc = AsyncMock()
+    mock_svc.get_workflow = AsyncMock(return_value=wf)
+    operations_svc = AsyncMock()
+    operations_svc.overview = AsyncMock(
+        return_value=CampaignOverview(
+            workflow_id="wf-1",
+            workflow_name="Test Workflow",
+            workflow_status="active",
+            trigger_type="manual",
+            location_id="loc-1",
+            latest_version={"id": "ver-1", "version_number": 1},
+            readiness={"overall_status": "pass", "blockers_count": 0},
+            channels=["sms"],
+            run_counts={"waiting": 2},
+            outcome_counts={"booked": 1},
+            response_counts={"confirm": 1},
+            open_handoff_count=0,
+            channel_attempts={"sms": {"event_count": 3}},
+            recent_outcomes=[],
+            generated_at=_NOW,
+        )
+    )
+    session = _make_session()
+
+    with (
+        patch("src.app.api.routes.automation_workflows.get_db_session", return_value=session),
+        patch(
+            "src.app.api.routes.automation_workflows.AutomationWorkflowDefinitionService",
+            return_value=mock_svc,
+        ),
+        patch(
+            "src.app.api.routes.automation_workflows.CampaignOperationsService",
+            return_value=operations_svc,
+        ),
+    ):
+        result = asyncio.run(get_campaign_overview("wf-1", user))
+
+    assert result.workflow_id == "wf-1"
+    assert result.run_counts["waiting"] == 2
+    operations_svc.overview.assert_awaited_once_with(wf, institution_id="inst-1")
+
+
+def test_list_runs_uses_filters_and_returns_cursor_response():
+    user = _make_user()
+    wf = _make_workflow(status="active", version_id="ver-1")
+    mock_svc = AsyncMock()
+    mock_svc.get_workflow = AsyncMock(return_value=wf)
+    operations_svc = AsyncMock()
+    operations_svc.list_runs = AsyncMock(
+        return_value=CampaignRunList(
+            items=[_run_list_item()],
+            limit=25,
+            next_cursor="cursor-1",
+        )
+    )
+    session = _make_session()
+
+    with (
+        patch("src.app.api.routes.automation_workflows.get_db_session", return_value=session),
+        patch(
+            "src.app.api.routes.automation_workflows.AutomationWorkflowDefinitionService",
+            return_value=mock_svc,
+        ),
+        patch(
+            "src.app.api.routes.automation_workflows.CampaignOperationsService",
+            return_value=operations_svc,
+        ),
+    ):
+        result = asyncio.run(
+            list_runs(
+                "wf-1",
+                user,
+                limit=25,
+                status_filter="waiting",
+                channel="sms",
+                contact_search="Jordan",
+            )
+        )
+
+    assert isinstance(result, CampaignRunListResponse)
+    assert result.items[0].contact_name == "Jordan Rivera"
+    assert result.next_cursor == "cursor-1"
+    filters = operations_svc.list_runs.await_args.kwargs["filters"]
+    assert filters.status == "waiting"
+    assert filters.channel == "sms"
+    assert filters.contact_search == "Jordan"
+
+
+def test_get_run_timeline_returns_phi_light_items():
+    user = _make_user()
+    operations_svc = AsyncMock()
+    operations_svc.timeline = AsyncMock(
+        return_value=RunTimeline(
+            run=_run_list_item(),
+            contact={"id": "contact-1", "display_name": "Jordan Rivera", "phone_masked": None},
+            workflow_version={
+                "id": "version-1",
+                "version_number": 3,
+                "definition": {"schema_version": "1.0"},
+                "published_at": _NOW,
+            },
+            items=[
+                TimelineItem(
+                    id="event-1",
+                    kind="inbound_reply",
+                    occurred_at=_NOW,
+                    title="Inbound SMS reply",
+                    status="confirm",
+                    channel="sms",
+                    summary="Intent: confirm",
+                    input={
+                        "context": {
+                            "appointment_time": "10:00 AM",
+                            "patient_first_name": "[redacted]",
+                        }
+                    },
+                    output={"result_code": "confirmed"},
+                    node={"type": "send_sms", "content_redacted": True},
+                    duration_ms=1200,
+                )
+            ],
+        )
+    )
+    session = _make_session(wf=_make_workflow())
+
+    with (
+        patch("src.app.api.routes.automation_workflows.get_db_session", return_value=session),
+        patch(
+            "src.app.api.routes.automation_workflows.CampaignOperationsService",
+            return_value=operations_svc,
+        ),
+    ):
+        result = asyncio.run(get_run_timeline("wf-1", "run-1", user))
+
+    assert result.contact["display_name"] == "Jordan Rivera"
+    assert result.workflow_version["version_number"] == 3
+    assert result.items[0].kind == "inbound_reply"
+    assert "body" not in result.items[0].metadata
+    assert result.items[0].input["context"]["appointment_time"] == "10:00 AM"
+    assert result.items[0].input["context"]["patient_first_name"] == "[redacted]"
+    assert result.items[0].output["result_code"] == "confirmed"
+    assert result.items[0].node["content_redacted"] is True
+    assert result.items[0].duration_ms == 1200
+
+
+def test_get_campaign_operations_returns_sections():
+    user = _make_user()
+    wf = _make_workflow(status="active", version_id="ver-1")
+    mock_svc = AsyncMock()
+    mock_svc.get_workflow = AsyncMock(return_value=wf)
+    operations_svc = AsyncMock()
+    item = OperationItem(
+        id="op-1",
+        run_id="run-1",
+        kind="failed_send",
+        severity="critical",
+        title="SMS send failed",
+        status="twilio_error",
+        step_id="sms-1",
+        occurred_at=_NOW,
+        cancel_eligible=True,
+        replay_eligible=False,
+        reason="twilio_error",
+    )
+    operations_svc.operations = AsyncMock(
+        return_value=CampaignOperations(
+            stuck_waiting_runs=[],
+            failed_sends=[item],
+            suppressed_skipped_runs=[],
+            open_handoffs=[],
+            generated_at=_NOW,
+        )
+    )
+    session = _make_session()
+
+    with (
+        patch("src.app.api.routes.automation_workflows.get_db_session", return_value=session),
+        patch(
+            "src.app.api.routes.automation_workflows.AutomationWorkflowDefinitionService",
+            return_value=mock_svc,
+        ),
+        patch(
+            "src.app.api.routes.automation_workflows.CampaignOperationsService",
+            return_value=operations_svc,
+        ),
+    ):
+        result = asyncio.run(get_campaign_operations("wf-1", user))
+
+    assert result.failed_sends[0].title == "SMS send failed"
+    assert result.failed_sends[0].replay_eligible is False
+
+
+# ---------------------------------------------------------------------------
+# enroll_in_workflow
+# ---------------------------------------------------------------------------
+
+
+def test_enroll_rejects_non_active_workflow():
+    user = _make_user()
+    wf = _make_workflow(status="draft")
+    mock_svc = AsyncMock()
+    mock_svc.get_workflow = AsyncMock(return_value=wf)
+    session = _make_session()
+
+    data = EnrollRequest(idempotency_key="key-1")
+
+    with (
+        patch("src.app.api.routes.automation_workflows.get_db_session", return_value=session),
+        patch(
+            "src.app.api.routes.automation_workflows.AutomationWorkflowDefinitionService",
+            return_value=mock_svc,
+        ),
+    ):
+        with pytest.raises(HTTPException) as exc_info:
+            asyncio.run(enroll_in_workflow("wf-1", data, user))
+
+    assert exc_info.value.status_code == 409
+    assert "not active" in exc_info.value.detail
+
+
+def test_enroll_rejects_workflow_without_version():
+    user = _make_user()
+    wf = _make_workflow(status="active", version_id=None)
+    mock_svc = AsyncMock()
+    mock_svc.get_workflow = AsyncMock(return_value=wf)
+    session = _make_session()
+
+    data = EnrollRequest(idempotency_key="key-1")
+
+    with (
+        patch("src.app.api.routes.automation_workflows.get_db_session", return_value=session),
+        patch(
+            "src.app.api.routes.automation_workflows.AutomationWorkflowDefinitionService",
+            return_value=mock_svc,
+        ),
+    ):
+        with pytest.raises(HTTPException) as exc_info:
+            asyncio.run(enroll_in_workflow("wf-1", data, user))
+
+    assert exc_info.value.status_code == 409
+    assert "no published version" in exc_info.value.detail
+
+
+def test_enroll_idempotent_returns_existing_run():
+    """Duplicate idempotency_key returns existing run without re-advancing."""
+    user = _make_user()
+    wf = _make_workflow(status="active", version_id="ver-1")
+    existing_run = _make_run(status="completed")
+
+    def_svc = AsyncMock()
+    def_svc.get_workflow = AsyncMock(return_value=wf)
+
+    enroll_svc = AsyncMock()
+    enroll_svc.enroll = AsyncMock(return_value=(existing_run, False))  # created=False
+
+    session = _make_session()
+
+    data = EnrollRequest(idempotency_key="dup-key")
+
+    with (
+        patch("src.app.api.routes.automation_workflows.get_db_session", return_value=session),
+        patch(
+            "src.app.api.routes.automation_workflows.AutomationWorkflowDefinitionService",
+            return_value=def_svc,
+        ),
+        patch(
+            "src.app.api.routes.automation_workflows.AutomationWorkflowEnrollmentService",
+            return_value=enroll_svc,
+        ),
+    ):
+        result = asyncio.run(enroll_in_workflow("wf-1", data, user))
+
+    assert result.status == "completed"
+
+
+def test_enroll_blocks_legacy_booking_workflow_without_location():
+    """Old active versions get the same guard even if they predate publish validation."""
+    user = _make_user(location_id=None)
+    wf = _make_workflow(status="active", version_id="ver-1")
+    created_run = _make_run(status="pending")
+    version = MagicMock()
+    version.definition = {
+        "trigger": {"type": "manual"},
+        "entry_node_id": "booking-1",
+        "nodes": [
+            {
+                "type": "booking_link",
+                "id": "booking-1",
+                "next_node_id": "exit-1",
+                "actions": ["book"],
+            },
+            {"type": "exit", "id": "exit-1", "outcome": "configured"},
+        ],
+    }
+
+    def_svc = AsyncMock()
+    def_svc.get_workflow = AsyncMock(return_value=wf)
+    enroll_svc = AsyncMock()
+    enroll_svc.enroll = AsyncMock(return_value=(created_run, True))
+    session = _make_session(version=version)
+
+    with (
+        patch("src.app.api.routes.automation_workflows.get_db_session", return_value=session),
+        patch(
+            "src.app.api.routes.automation_workflows.AutomationWorkflowDefinitionService",
+            return_value=def_svc,
+        ),
+        patch(
+            "src.app.api.routes.automation_workflows.AutomationWorkflowEnrollmentService",
+            return_value=enroll_svc,
+        ),
+    ):
+        with pytest.raises(HTTPException) as exc_info:
+            asyncio.run(
+                enroll_in_workflow(
+                    "wf-1",
+                    EnrollRequest(idempotency_key="legacy-booking"),
+                    user,
+                )
+            )
+
+    assert exc_info.value.status_code == 422
+    assert "Booking Link requires a clinic location" in exc_info.value.detail
+
+
+def test_manual_enroll_rejects_patient_with_active_all_channel_dnc():
+    user = _make_user()
+    wf = _make_workflow(status="active", version_id="ver-1")
+    wf.location_id = "loc-1"
+    contact = MagicMock()
+    contact.id = "contact-1"
+    contact.institution_id = "inst-1"
+    contact.phone_hash = "phone-hash-1"
+
+    def_svc = AsyncMock()
+    def_svc.get_workflow = AsyncMock(return_value=wf)
+    compliance = AsyncMock()
+    compliance.is_do_not_contact = AsyncMock(return_value=True)
+    enroll_svc = AsyncMock()
+    session = _make_session(contact=contact)
+    data = EnrollRequest(idempotency_key="manual-key", contact_id="contact-1")
+
+    with (
+        patch("src.app.api.routes.automation_workflows.get_db_session", return_value=session),
+        patch(
+            "src.app.api.routes.automation_workflows.AutomationWorkflowDefinitionService",
+            return_value=def_svc,
+        ),
+        patch(
+            "src.app.api.routes.automation_workflows.SmsComplianceService",
+            return_value=compliance,
+        ),
+        patch(
+            "src.app.api.routes.automation_workflows.AutomationWorkflowEnrollmentService",
+            return_value=enroll_svc,
+        ),
+    ):
+        with pytest.raises(HTTPException) as exc_info:
+            asyncio.run(enroll_in_workflow("wf-1", data, user))
+
+    assert exc_info.value.status_code == 409
+    assert "all-channel DNC" in exc_info.value.detail
+    compliance.is_do_not_contact.assert_awaited_once_with(
+        institution_id="inst-1",
+        location_id="loc-1",
+        phone_hash="phone-hash-1",
+        contact_id="contact-1",
+    )
+    enroll_svc.enroll.assert_not_awaited()
+
+
+def test_enroll_uses_workflow_location_when_request_and_user_have_none():
+    """Manual enroll must preserve campaign location for voice profile lookup."""
+    user = _make_user(location_id=None)
+    wf = _make_workflow(status="active", version_id="ver-1")
+    wf.location_id = "loc-1"
+    existing_run = _make_run(status="completed")
+
+    def_svc = AsyncMock()
+    def_svc.get_workflow = AsyncMock(return_value=wf)
+
+    enroll_svc = AsyncMock()
+    enroll_svc.enroll = AsyncMock(return_value=(existing_run, False))
+    compliance = AsyncMock()
+    compliance.is_do_not_contact = AsyncMock(return_value=False)
+    contact = MagicMock()
+    contact.id = "contact-1"
+    contact.institution_id = "inst-1"
+    contact.phone_hash = "phone-hash-1"
+
+    session = _make_session(contact=contact)
+
+    data = EnrollRequest(idempotency_key="manual-key", contact_id="contact-1")
+
+    with (
+        patch("src.app.api.routes.automation_workflows.get_db_session", return_value=session),
+        patch(
+            "src.app.api.routes.automation_workflows.AutomationWorkflowDefinitionService",
+            return_value=def_svc,
+        ),
+        patch(
+            "src.app.api.routes.automation_workflows.AutomationWorkflowEnrollmentService",
+            return_value=enroll_svc,
+        ),
+        patch(
+            "src.app.api.routes.automation_workflows.SmsComplianceService",
+            return_value=compliance,
+        ),
+    ):
+        result = asyncio.run(enroll_in_workflow("wf-1", data, user))
+
+    assert result.status == "completed"
+    assert enroll_svc.enroll.call_args.kwargs["location_id"] == "loc-1"
+    compliance.is_do_not_contact.assert_awaited_once()
+
+
+# ---------------------------------------------------------------------------
+# get_run_status
+# ---------------------------------------------------------------------------
+
+
+def test_get_run_status_returns_run():
+    user = _make_user()
+    run = _make_run(status="waiting")
+    session = _make_session(wf=_make_workflow(), run=run)
+
+    with patch("src.app.api.routes.automation_workflows.get_db_session", return_value=session):
+        result = asyncio.run(get_run_status("wf-1", "run-1", user))
+
+    assert result.status == "waiting"
+
+
+def test_get_run_status_wrong_workflow_raises_404():
+    user = _make_user()
+    run = _make_run(status="waiting")
+    session = _make_session(wf=_make_workflow(), run=run)
+
+    with patch("src.app.api.routes.automation_workflows.get_db_session", return_value=session):
+        with pytest.raises(HTTPException) as exc_info:
+            asyncio.run(get_run_status("wf-OTHER", "run-1", user))
+
+    assert exc_info.value.status_code == 404
+
+
+# ---------------------------------------------------------------------------
+# cancel_run
+# ---------------------------------------------------------------------------
+
+
+def test_cancel_run_calls_cancel():
+    user = _make_user()
+    run = _make_run(status="waiting")
+    session = _make_session(wf=_make_workflow(), run=run)
+    enroll_svc = AsyncMock()
+    enroll_svc.cancel_run = AsyncMock()
+
+    with (
+        patch("src.app.api.routes.automation_workflows.get_db_session", return_value=session),
+        patch(
+            "src.app.api.routes.automation_workflows.AutomationWorkflowEnrollmentService",
+            return_value=enroll_svc,
+        ),
+    ):
+        asyncio.run(cancel_run("wf-1", "run-1", user))
+
+    enroll_svc.cancel_run.assert_awaited_once_with(run)
+
+
+# ---------------------------------------------------------------------------
+# validate_definition  (finding #2 — backend node-linked validation endpoint)
+# ---------------------------------------------------------------------------
+
+
+_VALID_DEF = {
+    "trigger": {"type": "manual"},
+    "entry_node_id": "e1",
+    "nodes": [{"type": "exit", "id": "e1", "outcome": "done"}],
+}
+
+
+def _run_validate(definition, user, location_id=None):
+    """Call the validate route with a stubbed session.
+
+    The route reads channel readiness from the database so it does not report
+    every provisioned SMS channel as unprovisioned; without a session stub it
+    raises "Database not initialized" before validating anything.
+    """
+    session = _make_session()
+    with patch(
+        "src.app.api.routes.automation_workflows.get_db_session",
+        return_value=session,
+    ):
+        return asyncio.run(
+            validate_definition(
+                ValidateDefinitionRequest(
+                    definition=definition, location_id=location_id
+                ),
+                user,
+            )
+        )
+
+
+def test_validate_accepts_valid_definition():
+    user = _make_user()
+    result = _run_validate(_VALID_DEF, user)
+    assert result.valid is True
+    # A structurally-valid sending workflow with no content class is publishable
+    # but surfaces a (non-blocking) content-class warning, never an error.
+    assert not any(issue.severity == "error" for issue in result.issues)
+
+
+def test_node_capabilities_expose_authoritative_engine_support():
+    # The response now carries the caller's PMS and what it may author, so the
+    # route opens a session to read the institution.
+    session = _make_session()
+    with patch(
+        "src.app.api.routes.automation_workflows.get_db_session",
+        return_value=session,
+    ):
+        result = asyncio.run(list_node_capabilities(_make_user()))
+
+    by_type = {node.node_type: node for node in result.nodes}
+    assert result.registry_version == "1.0"
+    assert by_type["update_appointment"].runtime_supported is True
+    assert by_type["update_appointment"].dry_run_supported is True
+    assert by_type["wait_for_sms_reply"].authorable is False
+
+
+def test_validate_reports_missing_exit_node():
+    user = _make_user()
+    definition = {
+        "trigger": {"type": "manual"},
+        "entry_node_id": "s1",
+        "nodes": [
+            {"type": "send_sms", "id": "s1", "body_template": "hi", "next_node_id": "s1"},
+        ],
+    }
+    result = _run_validate(definition, user)
+    assert result.valid is False
+    assert any("exit node" in issue.message for issue in result.issues)
+
+
+def test_validate_links_field_error_to_node_id():
+    """A node-level field error must carry the offending node's declared id."""
+    user = _make_user()
+    definition = {
+        "trigger": {"type": "manual"},
+        "entry_node_id": "s1",
+        "nodes": [
+            {"type": "send_sms", "id": "s1", "body_template": "", "next_node_id": "x1"},
+            {"type": "exit", "id": "x1"},
+        ],
+    }
+    result = _run_validate(definition, user)
+    assert result.valid is False
+    assert any(issue.node_id == "s1" for issue in result.issues)
+
+
+def test_validate_reports_location_required_for_booking_link():
+    user = _make_user()
+    definition = {
+        "trigger": {"type": "manual"},
+        "entry_node_id": "booking-1",
+        "nodes": [
+            {
+                "type": "booking_link",
+                "id": "booking-1",
+                "next_node_id": "exit-1",
+                "actions": ["book"],
+            },
+            {"type": "exit", "id": "exit-1", "outcome": "configured"},
+        ],
+    }
+
+    missing = _run_validate(definition, user)
+    scoped = _run_validate(definition, user, location_id="loc-1")
+
+    assert missing.valid is False
+    assert any(
+        issue.code == "location_required" and issue.node_id == "booking-1"
+        for issue in missing.issues
+    )
+    assert not any(issue.code == "location_required" for issue in scoped.issues)
+
+
+# ---------------------------------------------------------------------------
+# list_workflow_versions  (finding #6 — version history endpoint)
+# ---------------------------------------------------------------------------
+
+
+def _make_version(version_id, number):
+    v = MagicMock()
+    v.id = version_id
+    v.workflow_id = "wf-1"
+    v.version_number = number
+    v.definition = {"trigger": {"type": "manual"}, "entry_node_id": "e1", "nodes": []}
+    v.definition_checksum = f"sum-{number}"
+    v.content_classification = None
+    v.published_by_user_id = "user-1"
+    v.published_at = _NOW
+    v.created_at = _NOW
+    return v
+
+
+def test_list_versions_returns_newest_first_with_current_flag():
+    user = _make_user()
+    v1 = _make_version("ver-1", 1)
+    v2 = _make_version("ver-2", 2)
+    wf = _make_workflow(status="active", version_id="ver-2")
+    mock_svc = AsyncMock()
+    mock_svc.get_workflow = AsyncMock(return_value=wf)
+    session = _make_session()
+    version_result = MagicMock()
+    version_result.scalars.return_value.all.return_value = [v2, v1]
+    session.execute = AsyncMock(return_value=version_result)
+
+    with (
+        patch("src.app.api.routes.automation_workflows.get_db_session", return_value=session),
+        patch(
+            "src.app.api.routes.automation_workflows.AutomationWorkflowDefinitionService",
+            return_value=mock_svc,
+        ),
+    ):
+        result = asyncio.run(list_workflow_versions("wf-1", user))
+
+    assert [v.version_number for v in result] == [2, 1]
+    assert result[0].is_current is True
+    assert result[1].is_current is False
+    session.execute.assert_awaited_once()
+
+
+def test_list_versions_workflow_not_found_raises_404():
+    user = _make_user()
+    mock_svc = AsyncMock()
+    mock_svc.get_workflow = AsyncMock(return_value=None)
+    session = _make_session()
+
+    with (
+        patch("src.app.api.routes.automation_workflows.get_db_session", return_value=session),
+        patch(
+            "src.app.api.routes.automation_workflows.AutomationWorkflowDefinitionService",
+            return_value=mock_svc,
+        ),
+    ):
+        with pytest.raises(HTTPException) as exc_info:
+            asyncio.run(list_workflow_versions("wf-bad", user))
+
+    assert exc_info.value.status_code == 404
+
+
+# ---------------------------------------------------------------------------
+# list_merge_fields  (finding #3 — merge-field catalog, unblocked by Plans 04/05)
+# ---------------------------------------------------------------------------
+
+
+def test_list_merge_fields_returns_catalog_with_tokens():
+    user = _make_user()
+    result = asyncio.run(list_merge_fields(user))
+    names = {f.name for f in result}
+    assert {
+        "patient_first_name",
+        "patient_last_name",
+        "patient_full_name",
+        "clinic_name",
+    } <= names
+    for f in result:
+        assert f.token == "{{" + f.name + "}}"
+        assert f.label and f.sample and f.group
+        assert f.availability in {"required_context", "optional_context", "derived"}
+        assert f.phi_level in {"none", "low", "medium", "high"}
+        assert f.channels
+        assert f.trigger_types
+
+
+def test_list_merge_fields_filters_by_trigger_and_channel():
+    user = _make_user()
+    # `appointment_offset` folded into the event trigger, which is what now
+    # scopes the appointment merge fields.
+    result = asyncio.run(
+        list_merge_fields(user, trigger_type="event", channel="sms")
+    )
+    names = {f.name for f in result}
+
+    assert "appointment_date" in names
+    assert "appointment_reason" in names
+    assert "appointment_status_id" in names
+    assert "appointment_duration" in names
+    assert "schedule_column_id" in names
+    assert "provider_id" in names
+    assert "booked_timestamp" in names
+    assert "created_machine_name" in names
+    assert "recall_due_date" not in names
+    assert "appointment_type" in names
+    assert "provider_name" in names
+
+
+def test_merge_field_catalog_does_not_drift_from_renderer():
+    """Every catalog field must actually be substituted by the renderer.
+
+    This is the drift guard: the catalog is sourced from the renderer's
+    STATIC_MERGE_FIELDS, so a template of all catalog tokens must render with no
+    raw {{...}} left behind.
+    """
+    from types import SimpleNamespace
+
+    from src.app.services.automation.template_renderer import (
+        STATIC_MERGE_FIELDS,
+        render_sms_body,
+    )
+
+    contact = SimpleNamespace(first_name="Jordan", last_name="Rivera", full_name="Jordan Rivera")
+    location = SimpleNamespace(name="Riverside Dental")
+    template = " ".join("{{" + f.name + "}}" for f in STATIC_MERGE_FIELDS)
+
+    rendered = render_sms_body(template, contact, location, {})
+
+    assert "{{" not in rendered and "}}" not in rendered
+    assert "Jordan" in rendered and "Riverside Dental" in rendered
+
+
+def test_list_llm_models_returns_backend_default_without_openai_key(monkeypatch):
+    from src.app.api.routes import automation_workflows as routes
+
+    routes._OPENAI_MODELS_CACHE = None
+    monkeypatch.setattr(routes.settings, "openai_api_key", None)
+    monkeypatch.setattr(routes.settings, "workflow_llm_default_model", "gpt-test-default")
+
+    result = asyncio.run(list_llm_models(_make_user()))
+
+    assert result.configured is False
+    assert result.default_model == "gpt-test-default"
+    assert [model.id for model in result.models] == ["gpt-test-default"]
+
+
+def test_workflow_llm_model_filter_keeps_text_models_only():
+    from src.app.api.routes.automation_workflows import _is_workflow_llm_model
+
+    assert _is_workflow_llm_model("gpt-5.6-luna") is True
+    assert _is_workflow_llm_model("o4-mini") is True
+    assert _is_workflow_llm_model("text-embedding-3-large") is False
+    assert _is_workflow_llm_model("gpt-image-2") is False
+    assert _is_workflow_llm_model("whisper-1") is False
+
+
+def test_merge_fields_route_declared_before_workflow_id():
+    """Guard the route-shadowing trap: the literal /merge-fields path must be
+    matched before the parameterised /{workflow_id} route."""
+    paths = [getattr(r, "path", "") for r in workflows_router.routes]
+    mf = paths.index("/automation/workflows/merge-fields")
+    wid = paths.index("/automation/workflows/{workflow_id}")
+    assert mf < wid
+
+
+def test_llm_models_route_declared_before_workflow_id():
+    paths = [getattr(r, "path", "") for r in workflows_router.routes]
+    llm_models = paths.index("/automation/workflows/llm-models")
+    wid = paths.index("/automation/workflows/{workflow_id}")
+    assert llm_models < wid

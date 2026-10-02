@@ -9,7 +9,8 @@
     "lint": "eslint .",
     "preview": "vite preview",
     "test": "vitest run",
-    "test:watch": "vitest"
+    "test:watch": "vitest",
+    "dev:staging": "vite --mode staging"
   },
   "dependencies": {
     "@hookform/resolvers": "^5.2.2",
@@ -26,10 +27,12 @@
     "@radix-ui/react-tabs": "^1.1.13",
     "@radix-ui/react-tooltip": "^1.2.8",
     "@simplewebauthn/browser": "^13.3.0",
+    "@xyflow/react": "^12.11.1",
     "axios": "^1.13.4",
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
     "date-fns": "^4.1.0",
+    "elkjs": "^0.11.1",
     "lucide-react": "^0.563.0",
     "next-themes": "^0.4.6",
     "qrcode.react": "^4.2.0",

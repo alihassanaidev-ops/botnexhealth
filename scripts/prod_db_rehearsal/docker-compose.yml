@@ -1,0 +1,24 @@
+# Local, throwaway copy of the production database for migration rehearsal.
+# Matches production's engine version (RDS PostgreSQL 16.14). Holds real PHI
+# once restored — never expose the port beyond localhost, and remove the
+# volume when finished: `docker compose -f scripts/prod_db_rehearsal/docker-compose.yml down -v`
+services:
+  prod-rehearsal-db:
+    image: postgres:16.14
+    container_name: nexhealth-prod-rehearsal-db
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: rehearsal
+      POSTGRES_DB: postgres
+    ports:
+      - "127.0.0.1:55432:5432"
+    volumes:
+      - nexhealth_prod_rehearsal_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+
+volumes:
+  nexhealth_prod_rehearsal_data:

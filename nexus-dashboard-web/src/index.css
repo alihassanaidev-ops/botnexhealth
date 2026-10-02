@@ -4,6 +4,65 @@
 
 @layer base {
   :root {
+    /* ── Design tokens ────────────────────────────────────────────────────
+       A fixed scale for spacing, type, control heights and radii. Ported
+       from the UI-refactor branch, which derived them from Refactoring UI:
+       pick a constrained set of values up front so every surface lands on
+       the same rhythm instead of accumulating one-off pixel choices.
+       Theme-independent, so they live here and not in `.dark`. */
+    --page-max-width: 168rem;
+    --page-gutter: clamp(1.15rem, calc(0.75rem + 0.8vw), 3.5rem);
+
+    --space-1: 0.25rem;
+    --space-2: 0.5rem;
+    --space-3: 0.75rem;
+    --space-4: 1rem;
+    --space-5: 1.25rem;
+    --space-6: 1.5rem;
+    --space-8: 2rem;
+
+    --font-sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Inter, ui-sans-serif, system-ui, sans-serif;
+    --text-xs: max(0.75rem, 12px);
+    --text-sm: max(0.875rem, 13px);
+    --text-base: 1rem;
+    --text-lg: 1.125rem;
+    --text-xl: 1.375rem;
+    --text-2xl: 1.75rem;
+
+    --control-sm: 2rem;
+    --control-md: 2.5rem;
+
+    /* Calibrated to what staging had before the refactor: --radius was
+       0.5rem, giving lg 8px / md 6px / sm 4px. The refactor branch ran
+       ~45% rounder than that, which lost the squarer, more technical feel.
+       Keeping the named steps is the part worth having — it is only the
+       values that come back down. xl and 2xl match Tailwind's defaults so
+       existing rounded-xl / rounded-2xl usages are unchanged.
+
+       In rem rather than staging's calc(var(--radius) - 2px): subtracting
+       fixed pixels meant the steps converged as the root scaled. */
+    --radius-xs: 0.1875rem;
+    --radius-sm: 0.25rem;
+    --radius-md: 0.375rem;
+    --radius-lg: 0.5rem;
+    --radius-xl: 0.75rem;
+    --radius-2xl: 1rem;
+    --radius-pill: 999px;
+
+    --surface-radius: var(--radius-lg);
+    --surface-shadow: 0 1px 2px hsl(230 40% 10% / 0.04), 0 12px 32px hsl(230 40% 10% / 0.05);
+
+    /* Illustration colours. The traced SVGs resolve every fill to one of
+       these, so the artwork follows the theme instead of needing a light
+       tile propped behind it. They are expressed against the existing
+       theme tokens rather than as fixed hexes, which means dark mode needs
+       no second palette and a brand change reaches the drawings too. */
+    --art-ink: hsl(var(--foreground));
+    --art-surface: hsl(var(--card));
+    --art-muted: hsl(var(--muted-foreground));
+    --art-accent: hsl(var(--primary));
+    --art-accent-soft: hsl(var(--primary) / 0.35);
+
     --background: 0 0% 100%;
     --foreground: 230 40% 10%;
     --card: 0 0% 100%;
@@ -21,6 +80,12 @@
     --accent-foreground: 0 0% 20%;
     --destructive: 0 84.2% 60.2%;
     --destructive-foreground: 0 0% 100%;
+    /* Between neutral and destructive: a number somebody has to deal with, but
+       nothing has gone wrong. There was no token for this, so every amber in
+       the app was a literal — the KPI artwork tint, the blank-merge-field
+       warnings — each one a value nobody could find to change. */
+    --warning: 32 94% 44%;
+    --warning-foreground: 0 0% 100%;
     --border: 0 0% 90%;
     --input: 0 0% 90%;
     --ring: 265 85% 55%;
@@ -29,7 +94,7 @@
     --chart-3: 150 60% 45%;
     --chart-4: 35 85% 55%;
     --chart-5: 340 75% 55%;
-    --radius: 0.5rem;
+    --radius: var(--radius-lg);
     --sidebar-background: 0 0% 97%;
     --sidebar-foreground: 0 0% 15%;
     --sidebar-primary: 265 85% 55%;
@@ -41,41 +106,66 @@
   }
 
   .dark {
-    --background: 0 0% 2%;
-    --foreground: 210 20% 92%;
-    --card: 0 0% 5%;
-    --card-foreground: 210 20% 92%;
-    --popover: 0 0% 6%;
-    --popover-foreground: 210 20% 92%;
-    --primary: 265 85% 65%;
-    --primary-2: 220 90% 68%;
+    /* Not a inversion of the light theme, and deliberately not near-black.
+       Three things this fixes: pure black leaves nothing to cast a shadow
+       onto, so elevation has to be carried by lighter surfaces instead;
+       neutrals with no hue read as dead next to tinted text (the light theme
+       already tints its foreground, dark used to drop it); and text on
+       near-black ran at 16.9:1, more than double what AAA asks and harsh
+       enough to make one-pixel light strokes sparkle at the edges.
+
+       Surfaces are tinted toward the brand's cool end and stepped widely
+       enough that a card reads as raised rather than as a slightly different
+       black. Text lands at 13.6:1 — still well past AAA. */
+    --background: 230 16% 9%;
+    --foreground: 220 18% 88%;
+    --card: 230 14% 13%;
+    --card-foreground: 220 18% 88%;
+    --popover: 230 14% 15%;
+    --popover-foreground: 220 18% 88%;
+    --primary: 265 85% 68%;
+    --primary-2: 220 90% 70%;
     --primary-foreground: 0 0% 100%;
-    --secondary: 0 0% 9%;
-    --secondary-foreground: 210 20% 92%;
-    --muted: 0 0% 8%;
-    --muted-foreground: 220 15% 58%;
-    --accent: 265 20% 12%;
-    --accent-foreground: 210 20% 92%;
-    --destructive: 0 62.8% 30.6%;
-    --destructive-foreground: 210 20% 92%;
-    --border: 0 0% 12%;
-    --input: 0 0% 14%;
-    --ring: 265 85% 65%;
+    --secondary: 230 12% 20%;
+    --secondary-foreground: 220 18% 88%;
+    --muted: 230 12% 17%;
+    --muted-foreground: 220 14% 63%;
+    --accent: 265 24% 24%;
+    --accent-foreground: 220 18% 92%;
+    /* Lifted off the old 30%, which was tuned to sit on near-black and turns
+       muddy against these surfaces. 58% is the crossover between the two ways
+       this token gets used: white-on-destructive as a button reads 4.05:1,
+       and destructive-as-text on a card reads 4.10:1. Both beat the light
+       theme's own 3.76:1 for the button case. */
+    --destructive: 0 70% 58%;
+    --destructive-foreground: 0 0% 100%;
+    /* Lifted and desaturated like the rest of the dark ramp: the light theme's
+       amber goes muddy on these surfaces. */
+    --warning: 43 96% 62%;
+    --warning-foreground: 0 0% 10%;
+    --border: 230 12% 26%;
+    --input: 230 12% 30%;
+    --ring: 265 85% 68%;
 
-    --chart-1: 265 85% 65%;
-    --chart-2: 150 70% 50%;
-    --chart-3: 180 65% 45%;
-    --chart-4: 220 60% 60%;
-    --chart-5: 340 75% 55%;
+    --chart-1: 265 85% 68%;
+    --chart-2: 150 65% 55%;
+    --chart-3: 180 60% 52%;
+    --chart-4: 220 70% 66%;
+    --chart-5: 340 70% 62%;
 
-    --sidebar-background: 0 0% 3%;
-    --sidebar-foreground: 210 20% 90%;
-    --sidebar-primary: 265 85% 65%;
+    --sidebar-background: 230 16% 11%;
+    --sidebar-foreground: 220 16% 85%;
+    --sidebar-primary: 265 85% 68%;
     --sidebar-primary-foreground: 0 0% 100%;
-    --sidebar-accent: 265 20% 10%;
-    --sidebar-accent-foreground: 210 20% 90%;
-    --sidebar-border: 0 0% 10%;
-    --sidebar-ring: 265 85% 65%;
+    --sidebar-accent: 265 24% 22%;
+    --sidebar-accent-foreground: 220 18% 92%;
+    --sidebar-border: 230 12% 22%;
+    --sidebar-ring: 265 85% 68%;
+
+    /* The artwork goes back to inheriting the theme. It needed pulling off
+       the extremes only while the ground was near-black; these surfaces are
+       gentle enough that the illustrations can follow --foreground and
+       --card like they do in light mode. */
   }
 }
 
@@ -84,15 +174,25 @@
     @apply border-border;
   }
 
-  /* Tighter base scale — shrinks text, padding and rem-based widths
-     proportionally for a cleaner, denser admin UI. */
+  /* The whole interface is sized off this one value. A flat 14px kept the
+     UI dense on a laptop but left it stranded at the same physical size on
+     a 4K panel, where it reads as a postage stamp in the corner.
+     
+     The slope is deliberately shallow: ~14.5px on a 1440px laptop, so density
+     stays close to the old flat 14px, rising to 17.5px at 4K. An earlier,
+     steeper curve hit 15.5px on the same laptop and read as though the whole
+     page had been zoomed. Small text is not fixed by scaling everything up —
+     that is what the floors on the small sizes in tailwind.config.js are for. */
   html {
-    font-size: 14px;
+    font-size: clamp(14px, calc(12.7px + 0.125vw), 17.5px);
   }
 
   body {
     @apply bg-background text-foreground;
-    font-feature-settings: "cv11", "ss01";
+    font-family: var(--font-sans);
+    font-feature-settings: "cv02", "cv03", "cv04", "cv11", "ss01";
+    font-size: var(--text-base);
+    line-height: 1.5;
     -webkit-font-smoothing: antialiased;
     -moz-osx-font-smoothing: grayscale;
   }
@@ -102,8 +202,54 @@
   h3,
   h4 {
     @apply tracking-tight;
+    font-weight: 700;
+  }
+
+  /* Form controls opt out of the browser's own font stack. */
+  button,
+  input,
+  select,
+  textarea {
+    font: inherit;
   }
 }
+
+@layer components {
+  /* Wrappers only. The chrome these used to carry — a bordered, shadowed
+     white tile — existed because raster artwork could not follow the theme
+     and needed a light ground under it in dark mode. The SVGs colour
+     themselves, so the tile is gone and the drawing sits on the surface. */
+  .ui-artwork,
+  .nav-art {
+    display: block;
+  }
+
+  .ui-artwork > svg,
+  .nav-art > svg {
+    display: block;
+    width: 100%;
+    height: 100%;
+  }
+
+  /* Inactive rows drain to grey, so the only colour in the rail belongs to
+     the page you are on and the eye goes straight to it. Hover restores the
+     colour, which doubles as the hover affordance — no separate treatment
+     needed. Greyscale rather than re-pointing the art variables: draining
+     each fill separately flattens the drawing into a silhouette, where a
+     filter keeps its internal light and shade. */
+  [data-sidebar="menu-button"] .nav-art {
+    filter: grayscale(1);
+    opacity: 0.65;
+    transition: filter 160ms ease, opacity 160ms ease;
+  }
+
+  [data-sidebar="menu-button"][data-active="true"] .nav-art,
+  [data-sidebar="menu-button"]:hover .nav-art {
+    filter: none;
+    opacity: 1;
+  }
+}
+
 
 /* ── Animations ─────────────────────────────────────────────────────────────── */
 
@@ -226,4 +372,99 @@
     transform: translateX(0);
     opacity: 1;
   }
+}
+
+/* React Flow zoom/fit controls — theme-aware so the +/- icons are visible.
+   xyflow's dark palette is gated behind the OS `prefers-color-scheme`, but this app
+   forces dark via a `.dark` class, so the controls otherwise get the light (white)
+   defaults. Override both the xyflow CSS vars and the resolved styles with !important
+   (xyflow's stylesheet is imported after index.css, so specificity alone loses). */
+.react-flow {
+  --xy-controls-button-background-color-default: hsl(var(--card));
+  --xy-controls-button-background-color-hover-default: hsl(var(--accent));
+  --xy-controls-button-color-default: hsl(var(--foreground));
+  --xy-controls-button-color-hover-default: hsl(var(--foreground));
+  --xy-controls-button-border-color-default: hsl(var(--border));
+}
+
+.react-flow__controls {
+  box-shadow: 0 1px 4px rgb(0 0 0 / 0.3) !important;
+  border: 1px solid hsl(var(--border)) !important;
+  border-radius: 0.5rem;
+  overflow: hidden;
+}
+
+.react-flow__controls-button {
+  background-color: hsl(var(--card)) !important;
+  border-bottom: 1px solid hsl(var(--border)) !important;
+  color: hsl(var(--foreground)) !important;
+  width: 26px;
+  height: 26px;
+}
+
+.react-flow__controls-button:hover {
+  background-color: hsl(var(--accent)) !important;
+}
+
+.react-flow__controls-button svg,
+.react-flow__controls-button svg path {
+  fill: hsl(var(--foreground)) !important;
+  max-width: 14px;
+  max-height: 14px;
+}
+
+.react-flow__edge-text {
+  fill: hsl(var(--foreground)) !important;
+}
+
+.react-flow__edge-textbg {
+  fill: hsl(var(--card)) !important;
+  fill-opacity: 0.96 !important;
+}
+
+/* Sidebar scrollbar — present but invisible until the sidebar is hovered.
+ *
+ * The track keeps its width the whole time and only the thumb's colour
+ * changes, so revealing it cannot reflow the nav underneath. Hiding by
+ * collapsing the scrollbar's width would shift every label a few pixels on
+ * hover, which is worse than the bar it removes. */
+[data-sidebar="content"] {
+  scrollbar-width: thin;
+  scrollbar-color: transparent transparent;
+  transition: scrollbar-color 150ms ease;
+}
+
+[data-sidebar="content"]::-webkit-scrollbar {
+  width: 8px;
+}
+
+[data-sidebar="content"]::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+[data-sidebar="content"]::-webkit-scrollbar-thumb {
+  background-color: transparent;
+  border-radius: 9999px;
+  border: 2px solid transparent;
+  background-clip: content-box;
+  transition: background-color 150ms ease;
+}
+
+[data-sidebar="sidebar"]:hover [data-sidebar="content"] {
+  scrollbar-color: hsl(var(--sidebar-border)) transparent;
+}
+
+[data-sidebar="sidebar"]:hover [data-sidebar="content"]::-webkit-scrollbar-thumb {
+  background-color: hsl(var(--sidebar-border));
+}
+
+/* Keyboard users never hover, so a focused item inside the rail reveals it
+ * too — otherwise tabbing through a long nav scrolls with no indication of
+ * where you are in it. */
+[data-sidebar="content"]:focus-within {
+  scrollbar-color: hsl(var(--sidebar-border)) transparent;
+}
+
+[data-sidebar="content"]:focus-within::-webkit-scrollbar-thumb {
+  background-color: hsl(var(--sidebar-border));
 }

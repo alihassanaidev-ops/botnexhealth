@@ -1,4 +1,4 @@
-import { useEffect, useState, useCallback, useRef, useMemo } from "react"
+import { useEffect, useState, useCallback, useMemo, useRef } from "react"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
@@ -23,6 +23,7 @@ import {
     listOperatories,
     createAvailability,
     updateAvailability,
+    clearAvailabilityOverride,
     previewBulkLinkRange,
     applyBulkLinkRange,
     updateProvider,
@@ -33,14 +34,14 @@ import { useSelectedLocationId, useLocationContext } from "@/context/LocationCon
 import SchedulerCalendar from "@/components/scheduling/SchedulerCalendar"
 import { UpcomingRangePicker } from "@/components/scheduling/UpcomingRangePicker"
 import {
-    allUpcomingRange,
     byDateThenTime,
+    defaultRange,
+    isExpired,
+    todayISO,
     isActive,
     isBookableWindow,
-    isExpired,
     isRecurring,
     matchesRange,
-    todayISO,
     type UpcomingRange,
 } from "@/lib/availability-filter"
 
@@ -48,7 +49,9 @@ import {
 const PAGE_SIZE = 25
 
 const ISO_DATE = "yyyy-MM-dd"
+/** Bulk range linking is capped server-side; `today + 14` spans 15 days inclusive. */
 const BULK_RANGE_MAX_DAYS = 15
+/** Range the picker opens with — matches the old fixed "next week" behaviour. */
 const BULK_RANGE_DEFAULT_DAYS = 7
 
 interface BulkProgress {
@@ -70,22 +73,13 @@ export default function ProvidersScheduling() {
     const [selectedProviderId, setSelectedProviderId] = useState<string>("")
     const [selectedApptTypeId, setSelectedApptTypeId] = useState<string>("all")
     const [selectedOperatoryId, setSelectedOperatoryId] = useState<string>("all")
-    // No past-date control: the backend drops past-dated windows before they
-    // reach us (adapter.list_availabilities defaults ignore_past_dates=True),
-    // so a toggle here would have nothing to reveal.
-    const [dateRange, setDateRange] = useState<UpcomingRange>(() => allUpcomingRange())
-    // Notes and lunch breaks come back in the same collection as real working
-    // windows. Shown by default *with* their label, because seeing "Lunch" on a
-    // row is what tells an operator it isn't bookable time — hiding them
-    // answered the clutter but not the question they were asking of the list.
-    const [showNonBookable, setShowNonBookable] = useState(true)
+    const [showExpired, setShowExpired] = useState(false)
+    // Opens on the coming week: that's what a front-desk operator is working on,
+    // and it keeps the default view to a page or two instead of thousands of
+    // pre-expanded rows. Wider presets are one click away in the picker.
+    const [dateRange, setDateRange] = useState<UpcomingRange>(() => defaultRange())
     const [page, setPage] = useState(0)
     const [view, setView] = useState<"list" | "calendar">("list")
-    // Calendar view is still under test — expose it on staging/local only and keep
-    // it out of production until validated. Remove this gate to launch everywhere.
-    const calendarEnabled =
-        typeof window !== "undefined" &&
-        (window.location.hostname.includes("staging") || window.location.hostname.includes("localhost"))
     const [loading, setLoading] = useState(true)
     const [loadingAvailabilities, setLoadingAvailabilities] = useState(false)
     const [syncing, setSyncing] = useState(false)
@@ -111,9 +105,16 @@ export default function ProvidersScheduling() {
     const [cutoffTime, setCutoffTime] = useState<string>("")
     const [minAge, setMinAge] = useState<number | "">("")
     const [maxAge, setMaxAge] = useState<number | "">("")
-    const [isHidden, setIsHidden] = useState(false)
     const [savingSettings, setSavingSettings] = useState(false)
     const [canLinkAvailability, setCanLinkAvailability] = useState(false)
+    const [pmsSource, setPmsSource] = useState<string | null>(null)
+    const [canCreateWorkWindows, setCanCreateWorkWindows] = useState(false)
+    const [canClearWorkingWindowOverride, setCanClearWorkingWindowOverride] = useState(false)
+    // NexHealth returns PMS notes and lunch breaks in the same collection as
+    // real working windows. Only v3 labels them, so on v2 every row reports as
+    // bookable and this toggle is inert. Shown by default: seeing "Lunch" on a
+    // row is what tells an operator it is not bookable time.
+    const [showNonBookable, setShowNonBookable] = useState(true)
     const [bulkDialogOpen, setBulkDialogOpen] = useState(false)
     const [bulkTypeIds, setBulkTypeIds] = useState<string[]>([])
     const [bulkOperatoryIds, setBulkOperatoryIds] = useState<string[]>([])
@@ -129,6 +130,8 @@ export default function ProvidersScheduling() {
     const [bulkRunning, setBulkRunning] = useState(false)
     const [bulkProgress, setBulkProgress] = useState<BulkProgress | null>(null)
     const [bulkPauseRemaining, setBulkPauseRemaining] = useState(0)
+    // Flipped on unmount (or a cancel) so the batch loop stops between batches
+    // instead of firing more PMS writes into a dead component.
     const bulkCancelledRef = useRef(false)
 
     // Load providers + appointment types once on mount
@@ -144,6 +147,9 @@ export default function ProvidersScheduling() {
                 listOperatories(locationId),
             ])
             setCanLinkAvailability(overview.can_link_availability)
+            setPmsSource(overview.pms_source)
+            setCanCreateWorkWindows(overview.can_create_work_windows)
+            setCanClearWorkingWindowOverride(overview.can_clear_working_window_override)
             setProviders(p)
             setAppointmentTypes(at)
             setOperatories(ops)
@@ -165,8 +171,11 @@ export default function ProvidersScheduling() {
     const fetchAvailabilities = useCallback(async () => {
         if (!selectedProviderId || !locationId) return
         setLoadingAvailabilities(true)
+        setAvailabilities([])
         try {
-            const data = await listAvailabilities(locationId, selectedProviderId)
+            const data = await listAvailabilities(locationId, selectedProviderId, {
+                includeClosed: pmsSource === "gotracker",
+            })
             setAvailabilities(data)
         } catch (error: unknown) {
             const message = error instanceof Error ? error.message : "Failed to load availabilities"
@@ -174,7 +183,7 @@ export default function ProvidersScheduling() {
         } finally {
             setLoadingAvailabilities(false)
         }
-    }, [selectedProviderId, locationId])
+    }, [selectedProviderId, locationId, pmsSource])
 
     useEffect(() => {
         fetchData()
@@ -184,6 +193,7 @@ export default function ProvidersScheduling() {
         fetchAvailabilities()
     }, [fetchAvailabilities])
 
+    // Stop the throttled batch loop if the page goes away mid-run.
     useEffect(() => () => { bulkCancelledRef.current = true }, [])
 
     // Reset appointment type/operatory filters + sync settings when provider changes
@@ -195,7 +205,6 @@ export default function ProvidersScheduling() {
         setCutoffTime(p?.same_day_cutoff_time ?? "")
         setMinAge(p?.min_age ?? "")
         setMaxAge(p?.max_age ?? "")
-        setIsHidden(p?.is_hidden ?? false)
     }, [selectedProviderId, providers])
 
     const selectedProvider = providers.find((p) => p.source_id === selectedProviderId)
@@ -244,7 +253,6 @@ export default function ProvidersScheduling() {
                 same_day_cutoff_time: cutoffTime || null,
                 min_age: minAge === "" ? null : minAge,
                 max_age: maxAge === "" ? null : maxAge,
-                is_hidden: isHidden,
             }, locationId)
             // Merge the server-confirmed provider instead of refetching every
             // provider/type/operatory — the PATCH already returns the fresh row.
@@ -262,8 +270,7 @@ export default function ProvidersScheduling() {
         bufferMinutes !== (selectedProvider?.buffer_minutes ?? 0) ||
         cutoffTime !== (selectedProvider?.same_day_cutoff_time ?? "") ||
         minAge !== (selectedProvider?.min_age ?? "") ||
-        maxAge !== (selectedProvider?.max_age ?? "") ||
-        isHidden !== (selectedProvider?.is_hidden ?? false)
+        maxAge !== (selectedProvider?.max_age ?? "")
 
     const openEditDialog = (av: CachedAvailability) => {
         setEditTarget(av)
@@ -294,6 +301,8 @@ export default function ProvidersScheduling() {
         )
     }
 
+    // Idle wait between write batches, surfaced as a live countdown so the
+    // admin can see the run is pacing itself rather than stalled.
     const pauseBetweenBatches = (seconds: number) =>
         new Promise<void>((resolve) => {
             let remaining = seconds
@@ -330,6 +339,8 @@ export default function ProvidersScheduling() {
         setBulkProgress(null)
         setBulkPauseRemaining(0)
         try {
+            // One read for the whole range; the batches below only write, so a
+            // wide range costs the PMS quota a single listing call.
             const preview = await previewBulkLinkRange({
                 provider_id: selectedProviderId,
                 start_date: format(bulkRange.from, ISO_DATE),
@@ -337,37 +348,41 @@ export default function ProvidersScheduling() {
                 operatory_ids: bulkOperatoryIds,
             }, locationId)
 
-            const ids = preview.windows.map((window) => window.source_id).filter(Boolean)
+            const ids = preview.windows.map((w) => w.source_id).filter(Boolean)
             if (ids.length === 0) {
-                toast.warning("No dated work windows matched the selected provider, operatories, and range")
+                toast.warning("No dated work windows in that range matched the selected provider and operatories")
                 return
             }
 
             const batches: string[][] = []
-            for (let index = 0; index < ids.length; index += preview.batch_size) {
-                batches.push(ids.slice(index, index + preview.batch_size))
+            for (let i = 0; i < ids.length; i += preview.batch_size) {
+                batches.push(ids.slice(i, i + preview.batch_size))
             }
 
             let updated = 0
             const errors: string[] = []
-            for (let index = 0; index < batches.length; index++) {
+            for (let i = 0; i < batches.length; i++) {
                 if (bulkCancelledRef.current) break
-                setBulkProgress({ batch: index + 1, batches: batches.length, done: updated, total: ids.length })
+                setBulkProgress({ batch: i + 1, batches: batches.length, done: updated, total: ids.length })
                 const result = await applyBulkLinkRange({
-                    availability_ids: batches[index],
+                    availability_ids: batches[i],
                     appointment_type_ids: bulkTypeIds,
                 }, locationId)
                 updated += result.updated_count
                 errors.push(...result.errors)
-                setBulkProgress({ batch: index + 1, batches: batches.length, done: updated, total: ids.length })
-                if (index < batches.length - 1 && !bulkCancelledRef.current) {
+                setBulkProgress({ batch: i + 1, batches: batches.length, done: updated, total: ids.length })
+                if (i < batches.length - 1 && !bulkCancelledRef.current) {
                     await pauseBetweenBatches(preview.batch_pause_seconds)
                 }
             }
 
             if (bulkCancelledRef.current) return
+
             if (updated > 0) {
-                toast.success(`Linked ${updated} work window${updated === 1 ? "" : "s"} across ${preview.day_count} day${preview.day_count === 1 ? "" : "s"}`)
+                toast.success(
+                    `Linked ${updated} work window${updated === 1 ? "" : "s"} across ` +
+                    `${preview.day_count} day${preview.day_count === 1 ? "" : "s"}`
+                )
             }
             if (errors.length > 0) {
                 toast.error(`${errors.length} work window${errors.length === 1 ? "" : "s"} failed to update`)
@@ -408,6 +423,7 @@ export default function ProvidersScheduling() {
                 ...editTarget,
                 appointment_type_ids: typeIds,
                 appointment_type_names: typeIds.map((id) => nameBySourceId.get(id) ?? id),
+                types_overridden: updated.types_overridden,
             }
             setAvailabilities((prev) =>
                 prev.map((a) => (a.source_id === merged.source_id ? merged : a))
@@ -416,6 +432,34 @@ export default function ProvidersScheduling() {
             setEditTarget(null)
         } catch (error: unknown) {
             const message = error instanceof Error ? error.message : "Failed to update"
+            toast.error(message)
+        } finally {
+            setSaving(false)
+        }
+    }
+
+    const handleClearEditOverride = async () => {
+        if (!canManage || !editTarget) return
+        setSaving(true)
+        try {
+            const updated = await clearAvailabilityOverride(editTarget.source_id, locationId)
+            const nameBySourceId = new Map(appointmentTypes.map((at) => [at.source_id, at.name]))
+            const typeIds = updated.appointment_type_ids ?? []
+            const merged: CachedAvailability = {
+                ...editTarget,
+                appointment_type_ids: typeIds,
+                appointment_type_names: typeIds.map((id) => nameBySourceId.get(id) ?? id),
+                types_overridden: updated.types_overridden,
+            }
+            setAvailabilities((prev) =>
+                prev.map((availability) =>
+                    availability.source_id === merged.source_id ? merged : availability
+                )
+            )
+            toast.success("Restored the PMS appointment-type links")
+            setEditTarget(null)
+        } catch (error: unknown) {
+            const message = error instanceof Error ? error.message : "Failed to restore PMS links"
             toast.error(message)
         } finally {
             setSaving(false)
@@ -479,9 +523,22 @@ export default function ProvidersScheduling() {
         }
     }
 
-    // Today in the browser's timezone — the user is sitting at the practice.
-    const today = todayISO()
+    // Use local date (browser TZ) — the user is at the practice.
+    const todayLocal = todayISO()
+    // useCallback so the memoised derivations below actually memoise: a fresh
+    // function identity each render defeated them entirely.
+    const isAvailabilityExpired = useCallback(
+        (av: CachedAvailability) => isExpired(av, todayLocal),
+        [todayLocal]
+    )
 
+    // Filter availabilities by selected appointment type (and expired state
+    // unless showExpired is on), then sort by date.
+    // NexHealth returns rows in insertion order, which renders as random
+    // dates from the operator's perspective — easy to mis-link an
+    // appointment type to a far-future row instead of the soonest one.
+    // Sort: specific_date ascending, then begin_time. Rows without a
+    // specific_date (pure recurring rules) sort first.
     // Memoised: this used to recompute (filter + sort over the provider's whole
     // availability set) on every render, including every keystroke in the
     // Scheduling Rules inputs above.
@@ -489,10 +546,14 @@ export default function ProvidersScheduling() {
         () =>
             availabilities
                 .filter(isActive)
+                // PMS notes and lunch breaks arrive in the same collection as
+                // real working windows; only v3 labels them, so on v2 this is
+                // a no-op.
                 .filter((av) => showNonBookable || isBookableWindow(av))
-                .filter((av) => matchesRange(av, dateRange))
+                .filter((av) => showExpired || matchesRange(av, dateRange))
                 .filter(
                     (av) =>
+                        !canLinkAvailability ||
                         selectedApptTypeId === "all" ||
                         av.appointment_type_ids?.includes(selectedApptTypeId)
                 )
@@ -501,12 +562,16 @@ export default function ProvidersScheduling() {
                         selectedOperatoryId === "all" ||
                         av.operatory_source_id === selectedOperatoryId
                 ),
-        [availabilities, dateRange, selectedApptTypeId, selectedOperatoryId, showNonBookable]
+        [
+            availabilities, showExpired, dateRange, showNonBookable,
+            canLinkAvailability, selectedApptTypeId, selectedOperatoryId,
+        ]
     )
 
-    // Recurring rules are pinned above the paginated list rather than sorted into
-    // it. Sorted in, they'd take the top of page 1 and push the dated rows the
-    // operator is filtering for onto page 2 — which reads as "the filter did nothing".
+    // Recurring rules are pinned above the paginated list rather than sorted
+    // into it. Sorted in, they'd take the top of page 1 and push the dated rows
+    // the operator is filtering for onto page 2 — which reads as "the filter did
+    // nothing".
     const recurringWindows = useMemo(
         () => visibleAvailabilities.filter(isRecurring),
         [visibleAvailabilities]
@@ -521,16 +586,37 @@ export default function ProvidersScheduling() {
         () => datedWindows.slice(page * PAGE_SIZE, (page + 1) * PAGE_SIZE),
         [datedWindows, page]
     )
-    const from = datedWindows.length === 0 ? 0 : page * PAGE_SIZE + 1
-    const to = Math.min((page + 1) * PAGE_SIZE, datedWindows.length)
+    // Group the visible page by date so each day gets its own heading — a flat
+    // run of rows reads as one long list with the dates buried inside each card.
+    const pagedGroups = useMemo(() => {
+        const groups: { date: string; rows: CachedAvailability[] }[] = []
+        for (const av of pagedWindows) {
+            const key = av.specific_date ?? ""
+            const last = groups[groups.length - 1]
+            if (last && last.date === key) last.rows.push(av)
+            else groups.push({ date: key, rows: [av] })
+        }
+        return groups
+    }, [pagedWindows])
+
+    const rangeFrom = datedWindows.length === 0 ? 0 : page * PAGE_SIZE + 1
+    const rangeTo = Math.min((page + 1) * PAGE_SIZE, datedWindows.length)
     const totalShown = recurringWindows.length + datedWindows.length
+
+    // Kept for the row markup and the existing empty-state copy.
+    const filteredAvailabilities = visibleAvailabilities
 
     // Narrowing a filter while on page 4 would otherwise strand the operator on
     // an out-of-range page showing nothing.
     useEffect(() => {
         setPage(0)
-    }, [selectedProviderId, selectedApptTypeId, selectedOperatoryId, dateRange, showNonBookable])
+    }, [
+        selectedProviderId, selectedApptTypeId, selectedOperatoryId,
+        dateRange, showNonBookable, showExpired,
+    ])
 
+    // `showExpired` and `showNonBookable` widen rather than narrow, so they
+    // don't count toward the "(filtered)" label or the Clear button.
     const hasNarrowingFilter =
         selectedApptTypeId !== "all" ||
         selectedOperatoryId !== "all" ||
@@ -539,47 +625,46 @@ export default function ProvidersScheduling() {
     const resetFilters = () => {
         setSelectedApptTypeId("all")
         setSelectedOperatoryId("all")
-        setShowNonBookable(true)
-        setDateRange(allUpcomingRange())
+        setDateRange(defaultRange())
     }
 
     const unlinkedCount = useMemo(
         () =>
-            availabilities.filter(
-                (av) =>
-                    // An inactive window generates no slots, so an unlinked one
-                    // isn't a problem to warn about.
-                    isActive(av) &&
-                    // A note or lunch break has no appointment type to link.
-                    isBookableWindow(av) &&
-                    !isExpired(av, today) &&
-                    (!av.appointment_type_ids || av.appointment_type_ids.length === 0)
-            ).length,
-        [availabilities, today]
+            canLinkAvailability
+                ? availabilities.filter(
+                    (av) =>
+                        // An inactive window generates no slots, and a note or
+                        // break has no appointment type to link — warning about
+                        // either sends the operator chasing something unfixable.
+                        isActive(av) &&
+                        isBookableWindow(av) &&
+                        !isAvailabilityExpired(av) &&
+                        (!av.appointment_type_ids || av.appointment_type_ids.length === 0)
+                ).length
+                : 0,
+        [availabilities, canLinkAvailability, isAvailabilityExpired]
     )
 
     // Collect appointment types that appear in this provider's availabilities
-    const relevantApptTypes = useMemo(() => {
-        const ids = new Set(availabilities.flatMap((av) => av.appointment_type_ids || []))
-        return appointmentTypes.filter((at) => ids.has(at.source_id))
-    }, [availabilities, appointmentTypes])
+    const availableApptTypeIds = new Set(availabilities.flatMap((av) => av.appointment_type_ids || []))
+    const relevantApptTypes = canLinkAvailability
+        ? appointmentTypes.filter((at) => availableApptTypeIds.has(at.source_id))
+        : appointmentTypes
 
     // Collect operatories that appear in this provider's availabilities.
     // Names alone can collide (e.g. two rooms both named "DR. KADRI"), so the
     // filter label always includes the ID to disambiguate.
-    const relevantOperatories = useMemo(() => {
-        const ids = new Set(
-            availabilities.map((av) => av.operatory_source_id).filter((id): id is string => !!id)
-        )
-        return operatories.filter((op) => ids.has(op.source_id))
-    }, [availabilities, operatories])
+    const availableOperatoryIds = new Set(
+        availabilities.map((av) => av.operatory_source_id).filter((id): id is string => !!id)
+    )
+    const relevantOperatories = operatories.filter((op) => availableOperatoryIds.has(op.source_id))
 
     // NexHealth doesn't embed an operatory name on the availability itself (only
     // operatory_id), so resolve the display name from the operatories list by
     // source_id. Names can collide, so rows still show the ID alongside.
-    const operatoryNameBySourceId = useMemo(
-        () => new Map(operatories.map((op) => [op.source_id, op.name])),
-        [operatories]
+    const operatoryNameBySourceId = new Map(operatories.map((op) => [op.source_id, op.name]))
+    const appointmentTypeNameBySourceId = new Map(
+        appointmentTypes.map((appointmentType) => [appointmentType.source_id, appointmentType.name])
     )
 
     const allBulkOperatoriesSelected =
@@ -605,20 +690,28 @@ export default function ProvidersScheduling() {
         setBulkDialogOpen(true)
     }
 
-    // One row, rendered by both the recurring section and the paginated dated
-    // list. Defined once so the two can't drift apart visually.
+    // One row, rendered by both the recurring section and the paginated
+    // dated list, so the two cannot drift apart visually.
     const renderWindow = (av: CachedAvailability) => {
+        const isClosed = av.status === "closed"
         const hasTypes = av.appointment_type_ids && av.appointment_type_ids.length > 0
-        const isPastDate = isExpired(av, today)
-        const isWarning = !hasTypes && !isPastDate && isBookableWindow(av)
+        const appointmentTypeNames = (av.appointment_type_ids || []).map(
+            (id) => appointmentTypeNameBySourceId.get(id) ?? id
+        )
+        const isPastDate = isAvailabilityExpired(av)
+        const isWarning = canLinkAvailability && !isClosed && !hasTypes && !isPastDate
 
-        const mutedClass = isWarning ? "text-indigo-500 dark:text-indigo-300" : "text-muted-foreground"
-        const normalClass = isWarning ? "text-indigo-700 dark:text-indigo-200" : ""
+        const mutedClass = isClosed
+            ? "text-slate-500 dark:text-slate-400"
+            : isWarning ? "text-indigo-500 dark:text-indigo-300" : "text-muted-foreground"
+        const normalClass = isClosed ? "text-slate-700 dark:text-slate-300" : isWarning ? "text-indigo-700 dark:text-indigo-200" : ""
 
         return (
             <div
                 key={av.id}
-                className={`rounded-lg border p-4 transition-colors ${isPastDate
+                className={`rounded-lg border p-4 transition-colors ${isClosed
+                        ? "border-slate-400/40 border-dashed bg-slate-500/5"
+                        : isPastDate
                         ? "border-border/40 bg-muted/20 opacity-50"
                         : isWarning
                             ? "border-indigo-500/40 border-dotted bg-[rgb(255,244,227)] dark:bg-[rgb(255,244,227)]/10"
@@ -637,16 +730,25 @@ export default function ProvidersScheduling() {
                                     Expired
                                 </Badge>
                             )}
-                            {av.label_name && (
+                            {isClosed && (
                                 <Badge
                                     variant="outline"
-                                    className="text-xs border-amber-500/50 text-amber-700 dark:text-amber-300"
-                                    title="Not bookable time — this row describes the schedule rather than offering appointments"
+                                    className="text-xs border-slate-500/50 text-slate-600 dark:text-slate-300"
+                                    title="Derived from the gaps between PMS working windows; this period cannot be edited"
                                 >
-                                    {av.label_name}
+                                    Closed — read-only
                                 </Badge>
                             )}
-                            {av.synced && (
+                            {av.label_name && (
+                            <Badge
+                                variant="outline"
+                                className="text-xs border-amber-500/50 text-amber-700 dark:text-amber-300"
+                                title="Not bookable time — this row describes the schedule rather than offering appointments"
+                            >
+                                {av.label_name}
+                            </Badge>
+                        )}
+                        {!isClosed && av.synced && (
                                 <Badge
                                     variant={isWarning ? "outline" : "secondary"}
                                     className={`text-xs ${isWarning
@@ -657,13 +759,18 @@ export default function ProvidersScheduling() {
                                     Synced from PMS
                                 </Badge>
                             )}
-                            {!av.synced && (
+                            {!isClosed && !av.synced && (
                                 <Badge
                                     variant="outline"
                                     className={`text-xs ${isWarning ? "border-indigo-500/40 text-indigo-700 dark:text-indigo-300" : ""
                                         }`}
                                 >
                                     Manual
+                                </Badge>
+                            )}
+                            {av.types_overridden && (
+                                <Badge variant="outline" className="text-xs border-violet-500/50 text-violet-700 dark:text-violet-300">
+                                    Type override
                                 </Badge>
                             )}
                         </div>
@@ -686,18 +793,20 @@ export default function ProvidersScheduling() {
                                 Specific date: {av.specific_date}
                             </div>
                         )}
-                        <div className={`text-sm ${normalClass}`}>
-                            <span className={mutedClass}>Appointment Types: </span>
-                            {hasTypes ? (
-                                <span>{av.appointment_type_names?.join(", ")}</span>
-                            ) : (
-                                <span className="text-indigo-700 dark:text-indigo-300 font-medium">
-                                    None linked
-                                </span>
-                            )}
-                        </div>
+                        {canLinkAvailability && !isClosed && (
+                            <div className={`text-sm ${normalClass}`}>
+                                <span className={mutedClass}>Appointment Types: </span>
+                                {hasTypes ? (
+                                    <span>{appointmentTypeNames.join(", ")}</span>
+                                ) : (
+                                    <span className="text-indigo-700 dark:text-indigo-300 font-medium">
+                                        None linked
+                                    </span>
+                                )}
+                            </div>
+                        )}
                     </div>
-                    {canManage && (
+                    {canManage && canLinkAvailability && !isClosed && (
                         <Button
                             variant="outline"
                             size="sm"
@@ -712,29 +821,31 @@ export default function ProvidersScheduling() {
         )
     }
 
-
     return (
         <div className="relative flex-1 space-y-4 bg-background p-8 pt-6">
             <div className="fixed inset-0 overflow-hidden pointer-events-none"><div className="absolute -top-32 -right-32 w-[420px] h-[420px] bg-transparent dark:bg-violet-700/20 rounded-full blur-[100px]" /></div>
             <PageHeader
+                art="providers"
                 icon={UserCog}
                 title="Providers & Scheduling"
-                description="Link appointment types to provider availabilities so your scheduling engine can generate bookable slots."
+                description={
+                    canLinkAvailability
+                        ? "Link appointment types to provider availabilities so your scheduling engine can generate bookable slots."
+                        : "Review live bookable slots from your PMS and configure provider scheduling rules."
+                }
                 actions={
                     <>
-                        {calendarEnabled && (
-                            <div className="inline-flex overflow-hidden rounded-md border">
-                                {(["list", "calendar"] as const).map((v) => (
-                                    <button
-                                        key={v}
-                                        onClick={() => setView(v)}
-                                        className={`px-3 py-1.5 text-xs capitalize ${view === v ? "bg-primary text-primary-foreground font-medium" : "bg-background text-muted-foreground"}`}
-                                    >
-                                        {v}
-                                    </button>
-                                ))}
-                            </div>
-                        )}
+                        <div className="inline-flex overflow-hidden rounded-md border">
+                            {(["calendar", "list"] as const).map((v) => (
+                                <button
+                                    key={v}
+                                    onClick={() => setView(v)}
+                                    className={`px-3 py-1.5 text-xs capitalize ${view === v ? "bg-primary text-primary-foreground font-medium" : "bg-background text-muted-foreground hover:text-foreground"}`}
+                                >
+                                    {v}
+                                </button>
+                            ))}
+                        </div>
                         {canManage && view === "list" && (
                             <>
                                 {canLinkAvailability && (
@@ -747,9 +858,11 @@ export default function ProvidersScheduling() {
                                         Link date range
                                     </Button>
                                 )}
-                                <Button variant="default" onClick={() => setCreateDialogOpen(true)} disabled={loading || !selectedProviderId}>
-                                    Create Work Window
-                                </Button>
+                                {canCreateWorkWindows && (
+                                    <Button variant="default" onClick={() => setCreateDialogOpen(true)} disabled={loading || !selectedProviderId}>
+                                        Create Work Window
+                                    </Button>
+                                )}
                                 <Button variant="outline" size="icon" onClick={handleSync} disabled={syncing}>
                                     <RefreshCcw className={`h-4 w-4 ${syncing ? "animate-spin" : ""}`} />
                                 </Button>
@@ -790,19 +903,20 @@ export default function ProvidersScheduling() {
                         </p>
                     </CardContent>
                 </Card>
-            ) : view === "calendar" && calendarEnabled ? (
+            ) : view === "calendar" ? (
                 <SchedulerCalendar
                     locationId={locationId}
                     operatories={operatories}
                     appointmentTypes={appointmentTypes}
                     canManage={canManage}
+                    pmsSource={pmsSource}
                     timezone={selectedLocation?.timezone ?? undefined}
                 />
             ) : (
                 <>
-                    {/* Provider scopes the whole page: it drives the availability fetch
-                        and the Scheduling Rules card below, so it stays here. The
-                        list-only filters live in the Work Windows card header. */}
+                    {/* Provider scopes the whole page: it drives the availability
+                        fetch and the Scheduling Rules card below, so it stays here.
+                        The list-only filters live in the Work Windows card header. */}
                     <div className="flex items-center gap-2">
                         <label className="text-sm font-medium whitespace-nowrap">Provider:</label>
                         <Select value={selectedProviderId} onValueChange={setSelectedProviderId}>
@@ -913,31 +1027,6 @@ export default function ProvidersScheduling() {
                                 </div>
                             </div>
 
-                            {/* Voice agent visibility */}
-                            <div className="space-y-1">
-                                <label className="text-sm font-medium">Voice Agent Visibility</label>
-                                <p className="text-xs text-muted-foreground">
-                                    Hide providers the practice does not book over the phone. The PMS
-                                    reports every provider on record, including ones no longer seeing
-                                    patients; hidden providers are never offered to callers. This does
-                                    not change anything in the PMS.
-                                </p>
-                                <div className="flex items-center gap-2 pt-1">
-                                    <Checkbox
-                                        id="provider-hidden"
-                                        checked={isHidden}
-                                        onCheckedChange={(checked) => setIsHidden(checked === true)}
-                                        disabled={!canManage}
-                                    />
-                                    <label
-                                        htmlFor="provider-hidden"
-                                        className="text-sm text-muted-foreground"
-                                    >
-                                        Hide this provider from the voice agent
-                                    </label>
-                                </div>
-                            </div>
-
                             {canManage && (
                                 <Button
                                     size="sm"
@@ -954,14 +1043,16 @@ export default function ProvidersScheduling() {
                         <CardHeader className="gap-4 space-y-0">
                             <div className="space-y-1.5">
                                 <CardTitle>
-                                    Work Windows for {selectedProvider?.name || `${selectedProvider?.first_name} ${selectedProvider?.last_name}`}
+                                    {canLinkAvailability ? "Work Windows" : "Live Slots"} for {selectedProvider?.name || `${selectedProvider?.first_name} ${selectedProvider?.last_name}`}
                                 </CardTitle>
                                 <CardDescription>
-                                    {totalShown} schedule{totalShown !== 1 ? "s" : ""} shown
+                                    {totalShown} {canLinkAvailability ? "schedule" : "slot"}{totalShown !== 1 ? "s" : ""} shown
                                     {hasNarrowingFilter ? " (filtered)" : ""}.
-                                    {canManage
-                                        ? ' Click "Edit Linking" for one window, or use "Link date range" to update matching windows in bulk.'
-                                        : " Read-only view."}
+                                    {canLinkAvailability && canManage
+                                        ? ' Click "Edit Linking" to associate appointment types, or use "Link Date Range" to bulk-link matching windows.'
+                                        : canLinkAvailability
+                                            ? " Read-only view."
+                                            : " These are read directly from your PMS."}
                                 </CardDescription>
                             </div>
 
@@ -973,20 +1064,22 @@ export default function ProvidersScheduling() {
                                     Filters
                                 </span>
 
-                                <Select value={selectedApptTypeId} onValueChange={setSelectedApptTypeId}>
-                                    <SelectTrigger className="h-9 w-[220px]" aria-label="Filter by appointment type">
-                                        <SelectValue placeholder="All Types" />
-                                    </SelectTrigger>
-                                    <SelectContent>
-                                        <SelectItem value="all">All Types</SelectItem>
-                                        {relevantApptTypes.map((at) => (
-                                            <SelectItem key={at.source_id} value={at.source_id}>
-                                                {at.name}
-                                                {at.duration_minutes ? ` (${at.duration_minutes} min)` : ""}
-                                            </SelectItem>
-                                        ))}
-                                    </SelectContent>
-                                </Select>
+                                {canLinkAvailability && (
+                                    <Select value={selectedApptTypeId} onValueChange={setSelectedApptTypeId}>
+                                        <SelectTrigger className="h-9 w-[220px]" aria-label="Filter by appointment type">
+                                            <SelectValue placeholder="All Types" />
+                                        </SelectTrigger>
+                                        <SelectContent>
+                                            <SelectItem value="all">All Types</SelectItem>
+                                            {relevantApptTypes.map((at) => (
+                                                <SelectItem key={at.source_id} value={at.source_id}>
+                                                    {at.name}
+                                                    {at.duration_minutes ? ` (${at.duration_minutes} min)` : ""}
+                                                </SelectItem>
+                                            ))}
+                                        </SelectContent>
+                                    </Select>
+                                )}
 
                                 <Select value={selectedOperatoryId} onValueChange={setSelectedOperatoryId}>
                                     <SelectTrigger className="h-9 w-[220px]" aria-label="Filter by operatory">
@@ -1006,11 +1099,21 @@ export default function ProvidersScheduling() {
 
                                 <label className="flex items-center gap-2 text-sm font-medium cursor-pointer">
                                     <Checkbox
-                                        checked={showNonBookable}
-                                        onCheckedChange={(checked) => setShowNonBookable(checked === true)}
+                                        checked={showExpired}
+                                        onCheckedChange={(checked) => setShowExpired(checked === true)}
                                     />
-                                    Show notes &amp; breaks (Lunch, NOTE)
+                                    Show expired
                                 </label>
+
+                                {canLinkAvailability && (
+                                    <label className="flex items-center gap-2 text-sm font-medium cursor-pointer">
+                                        <Checkbox
+                                            checked={showNonBookable}
+                                            onCheckedChange={(checked) => setShowNonBookable(checked === true)}
+                                        />
+                                            Show closed periods, notes &amp; breaks
+                                    </label>
+                                )}
 
                                 {hasNarrowingFilter && (
                                     <Button variant="ghost" size="sm" className="h-9 text-xs" onClick={resetFilters}>
@@ -1021,14 +1124,20 @@ export default function ProvidersScheduling() {
                         </CardHeader>
                         <CardContent>
                             {loadingAvailabilities ? (
-                                <div className="flex justify-center py-6 text-muted-foreground">Loading work windows...</div>
-                            ) : totalShown === 0 ? (
+                                <div className="flex justify-center py-6 text-muted-foreground">
+                                    Loading {canLinkAvailability ? "work windows" : "live slots"}...
+                                </div>
+                            ) : filteredAvailabilities.length === 0 ? (
                                 <p className="text-center py-6 text-muted-foreground">
-                                    {hasNarrowingFilter
-                                        ? "No work windows match the current filters."
-                                        : canManage
-                                            ? "No work windows found for this provider. Add one above."
-                                            : "No work windows found for this provider."}
+                                    {canLinkAvailability
+                                        ? selectedApptTypeId !== "all"
+                                            ? "No work windows match this appointment type."
+                                            : canManage
+                                                ? canCreateWorkWindows
+                                                    ? "No work windows found for this provider. Add one above."
+                                                    : "No work windows found for this provider. Refresh from your PMS."
+                                                : "No work windows found for this provider."
+                                        : "No live slots found for this provider in the next 7 days."}
                                 </p>
                             ) : (
                                 <div className="space-y-6">
@@ -1051,12 +1160,27 @@ export default function ProvidersScheduling() {
                                                     Dated windows
                                                 </div>
                                             )}
-                                            {pagedWindows.map(renderWindow)}
+                                            {pagedGroups.map((group) => (
+                                                <div key={group.date || "undated"} className="space-y-3">
+                                                    <div className="flex items-center gap-2 border-b pb-1.5 text-sm font-semibold">
+                                                        <CalendarDays className="h-4 w-4 shrink-0 text-muted-foreground" />
+                                                        {group.date
+                                                            ? new Date(`${group.date}T12:00:00`).toLocaleDateString("en-US", {
+                                                                weekday: "long", month: "long", day: "numeric", year: "numeric",
+                                                            })
+                                                            : "No specific date"}
+                                                        <span className="font-normal text-muted-foreground">
+                                                            — {group.rows.length} window{group.rows.length !== 1 ? "s" : ""}
+                                                        </span>
+                                                    </div>
+                                                    {group.rows.map(renderWindow)}
+                                                </div>
+                                            ))}
 
                                             {datedWindows.length > PAGE_SIZE && (
                                                 <div className="flex flex-wrap items-center justify-between gap-3 border-t pt-4 text-sm text-muted-foreground">
                                                     <span>
-                                                        Showing <span className="font-medium text-foreground">{from}–{to}</span> of{" "}
+                                                        Showing <span className="font-medium text-foreground">{rangeFrom}–{rangeTo}</span> of{" "}
                                                         <span className="font-medium text-foreground">{datedWindows.length}</span> dated windows
                                                     </span>
                                                     <div className="flex items-center gap-2">
@@ -1079,162 +1203,180 @@ export default function ProvidersScheduling() {
                 </>
             )}
 
-            {canManage && (
+            {canManage && canLinkAvailability && (
                 <>
-                    {canLinkAvailability && (
-                        <Dialog
-                            open={bulkDialogOpen}
-                            onOpenChange={(next) => { if (!bulkRunning) setBulkDialogOpen(next) }}
-                        >
-                            <DialogContent className="max-w-2xl max-h-[85vh] overflow-y-auto">
-                                <DialogHeader>
-                                    <DialogTitle>Link Date Range</DialogTitle>
-                                    <DialogDescription>
-                                        Apply appointment types to dated PMS work windows from today up to {BULK_RANGE_MAX_DAYS} days ahead.
-                                    </DialogDescription>
-                                </DialogHeader>
-                                <div className="space-y-3 py-2">
-                                    <div className="rounded-md border border-border/70 p-3 text-sm text-muted-foreground">
-                                        <div>Provider: {selectedProvider?.name || `${selectedProvider?.first_name} ${selectedProvider?.last_name}`}</div>
-                                        <div>Operatories: {bulkOperatoryLabel}</div>
-                                        <div>Range: {bulkRangeLabel}</div>
+                    {/* Bulk Link Date Range Dialog */}
+                    <Dialog
+                        open={bulkDialogOpen}
+                        onOpenChange={(next) => { if (!bulkRunning) setBulkDialogOpen(next) }}
+                    >
+                        <DialogContent className="max-w-2xl max-h-[85vh] overflow-y-auto">
+                            <DialogHeader>
+                                <DialogTitle>Link Date Range</DialogTitle>
+                                <DialogDescription>
+                                    Apply appointment types to real PMS work windows on the days you pick, from
+                                    today up to {BULK_RANGE_MAX_DAYS} days ahead.
+                                </DialogDescription>
+                            </DialogHeader>
+                            <div className="space-y-3 py-2">
+                                <div className="rounded-md border border-border/70 p-3 text-sm text-muted-foreground">
+                                    <div>Provider: {selectedProvider?.name || `${selectedProvider?.first_name} ${selectedProvider?.last_name}`}</div>
+                                    <div>Operatories: {bulkOperatoryLabel}</div>
+                                    <div>Range: {bulkRangeLabel}</div>
+                                </div>
+                                <div className="grid gap-4 sm:grid-cols-2">
+                                    <div className="space-y-1">
+                                        <div className="flex items-center justify-between">
+                                            <p className="text-sm font-medium">Days to link</p>
+                                            <Button
+                                                variant="ghost"
+                                                size="sm"
+                                                className="h-7 px-2 text-xs"
+                                                onClick={() => setBulkRange(undefined)}
+                                                disabled={bulkRunning || !bulkRange?.from}
+                                            >
+                                                Clear
+                                            </Button>
+                                        </div>
+                                        {/* `max` counts the gap between the ends, so 14 means 15 days inclusive. */}
+                                        <CalendarPicker
+                                            mode="range"
+                                            max={BULK_RANGE_MAX_DAYS - 1}
+                                            selected={bulkRange}
+                                            onSelect={setBulkRange}
+                                            defaultMonth={bulkRangeMin}
+                                            startMonth={bulkRangeMin}
+                                            endMonth={bulkRangeMax}
+                                            disabled={bulkRunning || { before: bulkRangeMin, after: bulkRangeMax }}
+                                            className="rounded-md border"
+                                        />
+                                        <p className="text-xs text-muted-foreground">
+                                            Click a day to start a range, then a later day to extend it.
+                                            Clear to start over.
+                                        </p>
                                     </div>
-                                    <div className="grid gap-4 sm:grid-cols-2">
+                                    <div className="space-y-4">
                                         <div className="space-y-1">
-                                            <div className="flex items-center justify-between">
-                                                <p className="text-sm font-medium">Days to link</p>
+                                            <div className="flex items-center justify-between gap-2">
+                                                <p className="text-sm font-medium">Operatories</p>
                                                 <Button
                                                     variant="ghost"
                                                     size="sm"
                                                     className="h-7 px-2 text-xs"
-                                                    onClick={() => setBulkRange(undefined)}
-                                                    disabled={bulkRunning || !bulkRange?.from}
-                                                >
-                                                    Clear
-                                                </Button>
-                                            </div>
-                                            <CalendarPicker
-                                                mode="range"
-                                                max={BULK_RANGE_MAX_DAYS - 1}
-                                                selected={bulkRange}
-                                                onSelect={setBulkRange}
-                                                defaultMonth={bulkRangeMin}
-                                                startMonth={bulkRangeMin}
-                                                endMonth={bulkRangeMax}
-                                                disabled={bulkRunning || { before: bulkRangeMin, after: bulkRangeMax }}
-                                                className="rounded-md border"
-                                            />
-                                            <p className="text-xs text-muted-foreground">
-                                                Select a start day and an end day. Recurring weekly rules are not changed.
-                                            </p>
-                                        </div>
-                                        <div className="space-y-4">
-                                            <div className="space-y-1">
-                                                <div className="flex items-center justify-between gap-2">
-                                                    <p className="text-sm font-medium">Operatories</p>
-                                                    <Button
-                                                        variant="ghost"
-                                                        size="sm"
-                                                        className="h-7 px-2 text-xs"
-                                                        onClick={() => setBulkOperatoryIds(
+                                                    onClick={() =>
+                                                        setBulkOperatoryIds(
                                                             allBulkOperatoriesSelected
                                                                 ? []
                                                                 : relevantOperatories.map((op) => op.source_id)
-                                                        )}
-                                                        disabled={bulkRunning || relevantOperatories.length === 0}
-                                                    >
-                                                        {allBulkOperatoriesSelected ? "Clear" : "Select all"}
-                                                    </Button>
+                                                        )
+                                                    }
+                                                    disabled={bulkRunning || relevantOperatories.length === 0}
+                                                >
+                                                    {allBulkOperatoriesSelected ? "Clear" : "Select all"}
+                                                </Button>
+                                            </div>
+                                            {relevantOperatories.length === 0 ? (
+                                                <p className="text-sm text-muted-foreground">
+                                                    No visible operatories found for this provider.
+                                                </p>
+                                            ) : (
+                                                <div className="border rounded-md max-h-36 overflow-y-auto">
+                                                    {relevantOperatories.map((op) => (
+                                                        <label
+                                                            key={op.source_id}
+                                                            className="flex items-center gap-2 px-3 py-2 hover:bg-muted/50 cursor-pointer border-b last:border-b-0"
+                                                        >
+                                                            <Checkbox
+                                                                checked={bulkOperatoryIds.includes(op.source_id)}
+                                                                onCheckedChange={() => toggleBulkOperatoryId(op.source_id)}
+                                                                disabled={bulkRunning}
+                                                            />
+                                                            <span className="min-w-0 flex-1 truncate text-sm">{op.name}</span>
+                                                            <span className="shrink-0 text-xs text-muted-foreground">
+                                                                {op.source_id}
+                                                            </span>
+                                                        </label>
+                                                    ))}
                                                 </div>
-                                                {relevantOperatories.length === 0 ? (
-                                                    <p className="text-sm text-muted-foreground">No operatories found for this provider.</p>
-                                                ) : (
-                                                    <div className="border rounded-md max-h-36 overflow-y-auto">
-                                                        {relevantOperatories.map((op) => (
-                                                            <label
-                                                                key={op.source_id}
-                                                                className="flex items-center gap-2 px-3 py-2 hover:bg-muted/50 cursor-pointer border-b last:border-b-0"
-                                                            >
-                                                                <Checkbox
-                                                                    checked={bulkOperatoryIds.includes(op.source_id)}
-                                                                    onCheckedChange={() => toggleBulkOperatoryId(op.source_id)}
-                                                                    disabled={bulkRunning}
-                                                                />
-                                                                <span className="min-w-0 flex-1 truncate text-sm">{op.name}</span>
-                                                                <span className="shrink-0 text-xs text-muted-foreground">{op.source_id}</span>
-                                                            </label>
-                                                        ))}
-                                                    </div>
-                                                )}
-                                            </div>
-                                            <div className="space-y-1">
-                                                <p className="text-sm font-medium">Appointment types</p>
-                                                {appointmentTypes.length === 0 ? (
-                                                    <p className="text-sm text-muted-foreground">No appointment types configured.</p>
-                                                ) : (
-                                                    <div className="border rounded-md max-h-64 overflow-y-auto">
-                                                        {appointmentTypes.map((at) => (
-                                                            <label
-                                                                key={at.source_id}
-                                                                className="flex items-center gap-2 px-3 py-2 hover:bg-muted/50 cursor-pointer border-b last:border-b-0"
-                                                            >
-                                                                <Checkbox
-                                                                    checked={bulkTypeIds.includes(at.source_id)}
-                                                                    onCheckedChange={() => toggleBulkTypeId(at.source_id)}
-                                                                    disabled={bulkRunning}
-                                                                />
-                                                                <span className="text-sm">{at.name}</span>
-                                                                {at.duration_minutes && (
-                                                                    <span className="text-xs text-muted-foreground ml-auto">{at.duration_minutes} min</span>
-                                                                )}
-                                                            </label>
-                                                        ))}
-                                                    </div>
-                                                )}
-                                            </div>
+                                            )}
+                                        </div>
+                                        <div className="space-y-1">
+                                            <p className="text-sm font-medium">Appointment types</p>
+                                            {appointmentTypes.length === 0 ? (
+                                                <p className="text-sm text-muted-foreground">
+                                                    No appointment types configured. Create some first.
+                                                </p>
+                                            ) : (
+                                                <div className="border rounded-md max-h-64 overflow-y-auto">
+                                                    {appointmentTypes.map((at) => (
+                                                        <label
+                                                            key={at.source_id}
+                                                            className="flex items-center gap-2 px-3 py-2 hover:bg-muted/50 cursor-pointer border-b last:border-b-0"
+                                                        >
+                                                            <Checkbox
+                                                                checked={bulkTypeIds.includes(at.source_id)}
+                                                                onCheckedChange={() => toggleBulkTypeId(at.source_id)}
+                                                                disabled={bulkRunning}
+                                                            />
+                                                            <span className="text-sm">{at.name}</span>
+                                                            {at.duration_minutes && (
+                                                                <span className="text-xs text-muted-foreground ml-auto">
+                                                                    {at.duration_minutes} min
+                                                                </span>
+                                                            )}
+                                                        </label>
+                                                    ))}
+                                                </div>
+                                            )}
                                         </div>
                                     </div>
-                                    {bulkRunning && (
-                                        <div className="space-y-2 rounded-md border border-border/70 p-3">
-                                            {bulkProgress ? (
-                                                <>
-                                                    <div className="flex items-center justify-between text-sm">
-                                                        <span>Batch {bulkProgress.batch} of {bulkProgress.batches}</span>
-                                                        <span className="text-muted-foreground">{bulkProgress.done} / {bulkProgress.total} linked</span>
-                                                    </div>
-                                                    <Progress value={(bulkProgress.done / bulkProgress.total) * 100} />
-                                                </>
-                                            ) : (
-                                                <p className="text-sm">Checking matching work windows...</p>
-                                            )}
-                                            <p className="text-xs text-muted-foreground">
-                                                {bulkPauseRemaining > 0
-                                                    ? `Pausing ${bulkPauseRemaining}s before the next batch to stay inside the PMS API quota.`
-                                                    : "Keep this dialog open until the run finishes."}
-                                            </p>
-                                        </div>
-                                    )}
                                 </div>
-                                <DialogFooter>
-                                    <Button variant="outline" onClick={() => setBulkDialogOpen(false)} disabled={bulkRunning}>
-                                        Cancel
-                                    </Button>
-                                    <Button
-                                        onClick={handleBulkLinkRange}
-                                        disabled={
-                                            bulkRunning ||
-                                            bulkOperatoryIds.length === 0 ||
-                                            bulkTypeIds.length === 0 ||
-                                            !bulkRange?.from ||
-                                            !bulkRange?.to
-                                        }
-                                    >
-                                        {bulkRunning ? "Linking..." : "Apply"}
-                                    </Button>
-                                </DialogFooter>
-                            </DialogContent>
-                        </Dialog>
-                    )}
+                                {bulkRunning && (
+                                    <div className="space-y-2 rounded-md border border-border/70 p-3">
+                                        {bulkProgress ? (
+                                            <>
+                                                <div className="flex items-center justify-between text-sm">
+                                                    <span>Batch {bulkProgress.batch} of {bulkProgress.batches}</span>
+                                                    <span className="text-muted-foreground">
+                                                        {bulkProgress.done} / {bulkProgress.total} linked
+                                                    </span>
+                                                </div>
+                                                <Progress value={(bulkProgress.done / bulkProgress.total) * 100} />
+                                            </>
+                                        ) : (
+                                            <p className="text-sm">Checking which work windows fall in this range...</p>
+                                        )}
+                                        <p className="text-xs text-muted-foreground">
+                                            {bulkPauseRemaining > 0
+                                                ? `Pausing ${bulkPauseRemaining}s before the next batch to stay inside the PMS API quota.`
+                                                : "Keep this dialog open until the run finishes."}
+                                        </p>
+                                    </div>
+                                )}
+                            </div>
+                            <DialogFooter>
+                                <Button
+                                    variant="outline"
+                                    onClick={() => setBulkDialogOpen(false)}
+                                    disabled={bulkRunning}
+                                >
+                                    Cancel
+                                </Button>
+                                <Button
+                                    onClick={handleBulkLinkRange}
+                                    disabled={
+                                        bulkRunning ||
+                                        bulkOperatoryIds.length === 0 ||
+                                        bulkTypeIds.length === 0 ||
+                                        !bulkRange?.from ||
+                                        !bulkRange?.to
+                                    }
+                                >
+                                    {bulkRunning ? "Linking..." : "Apply"}
+                                </Button>
+                            </DialogFooter>
+                        </DialogContent>
+                    </Dialog>
 
                     {/* Edit Linking Dialog */}
                     <Dialog open={!!editTarget} onOpenChange={() => setEditTarget(null)}>
@@ -1275,6 +1417,11 @@ export default function ProvidersScheduling() {
                                 )}
                             </div>
                             <DialogFooter>
+                                {canClearWorkingWindowOverride && editTarget?.types_overridden && (
+                                    <Button variant="outline" onClick={handleClearEditOverride} disabled={saving}>
+                                        Use standing rules
+                                    </Button>
+                                )}
                                 <Button variant="outline" onClick={() => setEditTarget(null)}>Cancel</Button>
                                 <Button onClick={handleSaveEdit} disabled={saving}>
                                     {saving ? "Saving..." : "Save"}
@@ -1284,6 +1431,7 @@ export default function ProvidersScheduling() {
                     </Dialog>
 
                     {/* Create Work Window Dialog */}
+                    {canCreateWorkWindows && (
                     <Dialog open={createDialogOpen} onOpenChange={setCreateDialogOpen}>
                         <DialogContent className="max-w-md">
                             <DialogHeader>
@@ -1389,6 +1537,7 @@ export default function ProvidersScheduling() {
                             </DialogFooter>
                         </DialogContent>
                     </Dialog>
+                    )}
                 </>
             )}
         </div>

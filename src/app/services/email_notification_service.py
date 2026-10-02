@@ -112,6 +112,32 @@ def _build_template_variables(
     }
 
 
+async def _staff_notifications_enabled(institution_id: str) -> bool:
+    """Whether this institution still wants the automatic staff alerts.
+
+    Fails open. The switch is a convenience, so a database blip must not become
+    a silent notification outage — an alert nobody asked to stop is a smaller
+    harm than an urgent call nobody hears about.
+    """
+    try:
+        from src.app.database import get_system_db_session
+        from src.app.models.institution import Institution
+
+        async with get_system_db_session(
+            "celery", institution_id=institution_id
+        ) as session:
+            institution = await session.get(Institution, institution_id)
+            if institution is None:
+                return True
+            return bool(institution.staff_notification_emails_enabled)
+    except Exception:
+        logger.warning(
+            "Could not read staff notification setting, sending anyway: institution_hash=%s",
+            hash_for_logging(institution_id),
+        )
+        return True
+
+
 class EmailNotificationService:
     """Sends call alert emails through Resend using DB-backed templates."""
 
@@ -142,6 +168,25 @@ class EmailNotificationService:
             )
         if not recipients:
             raise RuntimeError("No recipients for call notification")
+
+        # A practice can turn the automatic staff alerts off and work from the
+        # dashboard instead. Checked here rather than at each caller because this
+        # is the one place every staff notification passes through.
+        #
+        # Patient-facing mail is never gated: a confirmation is a promise made to
+        # the patient, not an internal convenience, and silently dropping it
+        # because the clinic muted its own inbox would be a different decision
+        # than the one the switch offers.
+        if not patient_facing and institution_id:
+            if not await _staff_notifications_enabled(institution_id):
+                logger.info(
+                    "Staff notification suppressed by institution setting: "
+                    "type=%s institution_hash=%s recipients=%d",
+                    template_type,
+                    hash_for_logging(institution_id),
+                    len(recipients),
+                )
+                return
 
         variables = _build_template_variables(payload, patient_facing=patient_facing)
 

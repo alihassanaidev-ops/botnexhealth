@@ -14,7 +14,22 @@ from src.app.pms.base import SupportsAvailabilityLinking
 
 
 class _FakeSession:
-    pass
+    def __init__(self, hidden_operatory_ids=None):
+        self.hidden_operatory_ids = hidden_operatory_ids or []
+
+    async def execute(self, _stmt):
+        return _FakeHiddenOperatoryResult(self.hidden_operatory_ids)
+
+
+class _FakeHiddenOperatoryResult:
+    def __init__(self, hidden_operatory_ids):
+        self.hidden_operatory_ids = hidden_operatory_ids
+
+    def scalars(self):
+        return self
+
+    def all(self):
+        return self.hidden_operatory_ids
 
 
 class _FakeAvailabilityAdapter(SupportsAvailabilityLinking):
@@ -66,10 +81,10 @@ class _FakeAvailabilityAdapter(SupportsAvailabilityLinking):
         return self.availabilities
 
 
-def _monkeypatch_route_context(monkeypatch, adapter, *, today="2026-08-20"):
+def _monkeypatch_route_context(monkeypatch, adapter, *, today="2026-08-20", hidden_operatory_ids=None):
     @asynccontextmanager
     async def fake_db_session():
-        yield _FakeSession()
+        yield _FakeSession(hidden_operatory_ids)
 
     async def fake_resolve(_current_user, _session, _location_id):
         return (
@@ -122,50 +137,92 @@ async def test_create_availability_returns_cached_response_shape(monkeypatch):
     assert result.appointment_type_ids == ["nh-50"]
 
 
+@pytest.mark.asyncio
+async def test_create_availability_rejects_hidden_operatory(monkeypatch):
+    adapter = _FakeAvailabilityAdapter()
+    _monkeypatch_route_context(monkeypatch, adapter, hidden_operatory_ids=["nh-789"])
+
+    with pytest.raises(HTTPException) as exc_info:
+        await route.create_availability(
+            req=route.CreateAvailabilityRequest(
+                provider_id="nh-123",
+                appointment_type_ids=["nh-50"],
+                operatory_id="nh-789",
+                days=["Monday"],
+                start_time="09:00",
+                end_time="17:00",
+            ),
+            current_user=_admin(),
+            location_id=None,
+        )
+
+    assert exc_info.value.status_code == 400
+    assert exc_info.value.detail == "Cannot use a hidden operatory"
+    assert adapter.created_payload is None
+
+
+# ── Bulk link over a selected date range ─────────────────────────────────
+
+
 def _range_availabilities():
     return [
+        # In range, matching operatory.
         {
             "id": 101,
             "provider_id": 2,
             "operatory_id": 4,
+            "begin_time": "08:00",
+            "end_time": "17:00",
             "specific_date": "2026-08-21",
             "days": ["Friday"],
             "active": True,
         },
+        # In range but a different operatory.
         {
             "id": 104,
             "provider_id": 2,
             "operatory_id": 9,
+            "begin_time": "08:00",
+            "end_time": "17:00",
             "specific_date": "2026-08-22",
             "days": ["Saturday"],
             "active": True,
         },
+        # Dated, but outside the selected range.
         {
             "id": 102,
             "provider_id": 2,
             "operatory_id": 4,
+            "begin_time": "08:00",
+            "end_time": "17:00",
             "specific_date": "2026-09-01",
+            "days": ["Tuesday"],
             "active": True,
         },
+        # Recurring — deliberately never patched.
         {
             "id": 103,
             "provider_id": 2,
             "operatory_id": 4,
+            "begin_time": "08:00",
+            "end_time": "17:00",
             "days": ["Wednesday"],
             "active": True,
         },
+        # In range but inactive.
         {
             "id": 105,
             "provider_id": 2,
             "operatory_id": 4,
             "specific_date": "2026-08-21",
+            "days": ["Friday"],
             "active": False,
         },
     ]
 
 
 @pytest.mark.asyncio
-async def test_preview_matches_only_selected_dated_windows(monkeypatch):
+async def test_preview_matches_only_dated_windows_inside_the_range(monkeypatch):
     adapter = _FakeAvailabilityAdapter()
     adapter.availabilities = _range_availabilities()
     _monkeypatch_route_context(monkeypatch, adapter)
@@ -173,7 +230,7 @@ async def test_preview_matches_only_selected_dated_windows(monkeypatch):
     result = await route.preview_bulk_link_range_availabilities(
         req=route.BulkLinkRangePreviewRequest(
             provider_id="nh-2",
-            operatory_ids=["nh-4"],
+            operatory_id="nh-4",
             start_date="2026-08-20",
             end_date="2026-08-22",
         ),
@@ -182,12 +239,36 @@ async def test_preview_matches_only_selected_dated_windows(monkeypatch):
     )
 
     assert adapter.list_kwargs == {"provider_id": "nh-2", "ignore_past_dates": False}
+    assert adapter.list_calls == 1
     assert result.day_count == 3
+    assert result.start_date == "2026-08-20"
+    assert result.end_date == "2026-08-22"
     assert result.matched_count == 1
-    assert [window.source_id for window in result.windows] == ["nh-101"]
+    assert [w.source_id for w in result.windows] == ["nh-101"]
+    # Nothing is written by a preview.
     assert adapter.updated_payloads == []
+    # The client takes its throttle settings from the server.
     assert result.batch_size == route.BULK_LINK_BATCH_SIZE
     assert result.batch_pause_seconds == route.BULK_LINK_BATCH_PAUSE_SECONDS
+
+
+@pytest.mark.asyncio
+async def test_preview_without_operatory_filter_matches_every_operatory(monkeypatch):
+    adapter = _FakeAvailabilityAdapter()
+    adapter.availabilities = _range_availabilities()
+    _monkeypatch_route_context(monkeypatch, adapter)
+
+    result = await route.preview_bulk_link_range_availabilities(
+        req=route.BulkLinkRangePreviewRequest(
+            provider_id="nh-2",
+            start_date="2026-08-20",
+            end_date="2026-08-22",
+        ),
+        current_user=_admin(),
+        location_id=None,
+    )
+
+    assert sorted(w.source_id for w in result.windows) == ["nh-101", "nh-104"]
 
 
 @pytest.mark.asyncio
@@ -207,7 +288,92 @@ async def test_preview_matches_multiple_selected_operatories(monkeypatch):
         location_id=None,
     )
 
-    assert sorted(window.source_id for window in result.windows) == ["nh-101", "nh-104"]
+    assert sorted(w.source_id for w in result.windows) == ["nh-101", "nh-104"]
+
+
+@pytest.mark.asyncio
+async def test_preview_without_operatory_filter_excludes_hidden_operatories(monkeypatch):
+    adapter = _FakeAvailabilityAdapter()
+    adapter.availabilities = _range_availabilities()
+    _monkeypatch_route_context(monkeypatch, adapter, hidden_operatory_ids=["nh-9"])
+
+    result = await route.preview_bulk_link_range_availabilities(
+        req=route.BulkLinkRangePreviewRequest(
+            provider_id="nh-2",
+            start_date="2026-08-20",
+            end_date="2026-08-22",
+        ),
+        current_user=_admin(),
+        location_id=None,
+    )
+
+    assert [w.source_id for w in result.windows] == ["nh-101"]
+
+
+@pytest.mark.asyncio
+async def test_preview_rejects_hidden_operatory_filter(monkeypatch):
+    adapter = _FakeAvailabilityAdapter()
+    adapter.availabilities = _range_availabilities()
+    _monkeypatch_route_context(monkeypatch, adapter, hidden_operatory_ids=["nh-4"])
+
+    with pytest.raises(HTTPException) as exc_info:
+        await route.preview_bulk_link_range_availabilities(
+            req=route.BulkLinkRangePreviewRequest(
+                provider_id="nh-2",
+                operatory_id="nh-4",
+                start_date="2026-08-20",
+                end_date="2026-08-22",
+            ),
+            current_user=_admin(),
+            location_id=None,
+        )
+
+    assert exc_info.value.status_code == 400
+    assert exc_info.value.detail == "Cannot use a hidden operatory"
+    assert adapter.list_calls == 0
+
+
+@pytest.mark.asyncio
+async def test_preview_rejects_hidden_operatory_in_multi_filter(monkeypatch):
+    adapter = _FakeAvailabilityAdapter()
+    adapter.availabilities = _range_availabilities()
+    _monkeypatch_route_context(monkeypatch, adapter, hidden_operatory_ids=["nh-9"])
+
+    with pytest.raises(HTTPException) as exc_info:
+        await route.preview_bulk_link_range_availabilities(
+            req=route.BulkLinkRangePreviewRequest(
+                provider_id="nh-2",
+                operatory_ids=["nh-4", "nh-9"],
+                start_date="2026-08-20",
+                end_date="2026-08-22",
+            ),
+            current_user=_admin(),
+            location_id=None,
+        )
+
+    assert exc_info.value.status_code == 400
+    assert exc_info.value.detail == "Cannot use hidden operatories: nh-9"
+    assert adapter.list_calls == 0
+
+
+@pytest.mark.asyncio
+async def test_preview_accepts_a_single_day_range(monkeypatch):
+    adapter = _FakeAvailabilityAdapter()
+    adapter.availabilities = _range_availabilities()
+    _monkeypatch_route_context(monkeypatch, adapter)
+
+    result = await route.preview_bulk_link_range_availabilities(
+        req=route.BulkLinkRangePreviewRequest(
+            provider_id="nh-2",
+            start_date="2026-08-21",
+            end_date="2026-08-21",
+        ),
+        current_user=_admin(),
+        location_id=None,
+    )
+
+    assert result.day_count == 1
+    assert result.matched_count == 1
 
 
 @pytest.mark.asyncio
@@ -228,7 +394,6 @@ async def test_preview_rejects_invalid_ranges(monkeypatch, start_date, end_date,
         await route.preview_bulk_link_range_availabilities(
             req=route.BulkLinkRangePreviewRequest(
                 provider_id="nh-2",
-                operatory_ids=["nh-4"],
                 start_date=start_date,
                 end_date=end_date,
             ),
@@ -238,11 +403,30 @@ async def test_preview_rejects_invalid_ranges(monkeypatch, start_date, end_date,
 
     assert exc_info.value.status_code == 400
     assert exc_info.value.detail == expected
+    # A bad range must not cost a PMS listing call.
     assert adapter.list_calls == 0
 
 
 @pytest.mark.asyncio
-async def test_apply_links_one_bounded_batch(monkeypatch):
+async def test_preview_accepts_the_maximum_range_exactly(monkeypatch):
+    adapter = _FakeAvailabilityAdapter()
+    _monkeypatch_route_context(monkeypatch, adapter)
+
+    result = await route.preview_bulk_link_range_availabilities(
+        req=route.BulkLinkRangePreviewRequest(
+            provider_id="nh-2",
+            start_date="2026-08-20",
+            end_date="2026-09-03",
+        ),
+        current_user=_admin(),
+        location_id=None,
+    )
+
+    assert result.day_count == route.BULK_LINK_MAX_RANGE_DAYS == 15
+
+
+@pytest.mark.asyncio
+async def test_apply_links_one_batch_of_windows(monkeypatch):
     adapter = _FakeAvailabilityAdapter()
     _monkeypatch_route_context(monkeypatch, adapter)
 
@@ -255,14 +439,19 @@ async def test_apply_links_one_bounded_batch(monkeypatch):
         location_id=None,
     )
 
-    assert result.updated_ids == ["nh-101", "nh-104"]
+    assert adapter.updated_payloads == [
+        {"availability_id": "nh-101", "appointment_type_ids": ["nh-50", "nh-51"]},
+        {"availability_id": "nh-104", "appointment_type_ids": ["nh-50", "nh-51"]},
+    ]
     assert result.updated_count == 2
+    assert result.updated_ids == ["nh-101", "nh-104"]
     assert result.errors == []
+    # Applying never re-reads the PMS; the preview already paid for that.
     assert adapter.list_calls == 0
 
 
 @pytest.mark.asyncio
-async def test_apply_reports_per_window_failures(monkeypatch):
+async def test_apply_reports_per_window_failures_without_losing_the_batch(monkeypatch):
     adapter = _FakeAvailabilityAdapter()
     adapter.fail_ids = {"nh-104"}
     _monkeypatch_route_context(monkeypatch, adapter)
@@ -282,7 +471,8 @@ async def test_apply_reports_per_window_failures(monkeypatch):
     assert result.errors[0].startswith("nh-104: ")
 
 
-def test_apply_request_rejects_an_empty_or_oversized_batch():
+def test_apply_request_rejects_more_than_one_batch():
+    """The 10-per-call cap is what forces the client to pace its writes."""
     over_cap = [f"nh-{index}" for index in range(route.BULK_LINK_BATCH_SIZE + 1)]
 
     with pytest.raises(ValidationError):
@@ -290,7 +480,9 @@ def test_apply_request_rejects_an_empty_or_oversized_batch():
             availability_ids=over_cap,
             appointment_type_ids=["nh-50"],
         )
+
     with pytest.raises(ValidationError):
         route.BulkLinkRangeApplyRequest(availability_ids=[], appointment_type_ids=["nh-50"])
+
     with pytest.raises(ValidationError):
         route.BulkLinkRangeApplyRequest(availability_ids=["nh-101"], appointment_type_ids=[])

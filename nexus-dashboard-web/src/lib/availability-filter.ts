@@ -47,6 +47,16 @@ export function allUpcomingRange(): UpcomingRange {
     return { startDate: todayISO(), endDate: null }
 }
 
+/** Days the list opens on. One source of truth for the initial state AND the
+ * Clear-filters reset — they drifted apart once and "Clear" silently widened
+ * the view instead of restoring it. */
+export const DEFAULT_RANGE_DAYS = 7
+
+/** What the list opens on: the coming week. */
+export function defaultRange(): UpcomingRange {
+    return nextNDaysRange(DEFAULT_RANGE_DAYS)
+}
+
 /** "Next N days" from today, inclusive — N=7 spans today plus the next 6. */
 export function nextNDaysRange(days: number): UpcomingRange {
     const start = todayISO()
@@ -62,8 +72,20 @@ export function isRecurring(av: CachedAvailability): boolean {
     return !av.specific_date
 }
 
-/** A dated window whose date has already passed. Recurring rules never expire. */
-export function isExpired(av: CachedAvailability, today: string = todayISO()): boolean {
+function parseInstant(value?: string | null): Date | null {
+    if (!value) return null
+    const millis = Date.parse(value)
+    return Number.isFinite(millis) ? new Date(millis) : null
+}
+
+/** A dated window whose end instant has passed. Recurring rules never expire. */
+export function isExpired(
+    av: CachedAvailability,
+    today: string = todayISO(),
+    now: Date = new Date()
+): boolean {
+    const endAt = parseInstant(av.end_at)
+    if (endAt) return endAt.getTime() <= now.getTime()
     return !!av.specific_date && av.specific_date < today
 }
 

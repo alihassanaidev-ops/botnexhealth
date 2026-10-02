@@ -234,16 +234,21 @@ export async function updateBillingEmail(billing_email: string): Promise<Billing
 
 // ROI Configuration & Calculation
 
+export type SubscriptionBillingMode = "institution" | "location"
+
 export interface ROIConfig {
     avg_appointment_value: number
     avg_new_patient_value: number
+    /** The whole-group price. Ignored when billing per location. */
     monthly_subscription_cost: number
     staff_hourly_rate: number
     avg_call_duration_minutes: number
+    subscription_billing_mode: SubscriptionBillingMode
 }
 
 export interface ROICalculation {
-    config: ROIConfig
+    /** Null when the totals were summed from per-location figures. */
+    config: ROIConfig | null
     total_calls_month: number
     appointments_booked_month: number
     new_patients_month: number
@@ -251,11 +256,14 @@ export interface ROICalculation {
     revenue_from_new_patients: number
     total_revenue_generated: number
     staff_time_saved_hours: number
-    staff_cost_saved: number
+    /** Null when no hourly rate is configured — unknown, not zero. */
+    staff_cost_saved: number | null
     total_value: number
     monthly_cost: number
     net_value: number
-    roi_percentage: number
+    /** Null when there is no cost to measure a return against. */
+    roi_percentage: number | null
+    revenue_basis: string
 }
 
 export async function getROIConfig(): Promise<ROIConfig | null> {
@@ -268,8 +276,108 @@ export async function updateROIConfig(config: ROIConfig): Promise<ROIConfig> {
     return data
 }
 
-export async function calculateROI(): Promise<ROICalculation> {
-    const { data } = await api.get<ROICalculation>("/institution/roi/calculate")
+export interface ROIWindow {
+    startDate?: string
+    endDate?: string
+}
+
+function roiParams(window?: ROIWindow): string {
+    const params = new URLSearchParams()
+    if (window?.startDate) params.set("start_date", window.startDate)
+    if (window?.endDate) params.set("end_date", window.endDate)
+    const qs = params.toString()
+    return qs ? `?${qs}` : ""
+}
+
+export async function calculateROI(window?: ROIWindow): Promise<ROICalculation> {
+    const { data } = await api.get<ROICalculation>(
+        `/institution/roi/calculate${roiParams(window)}`,
+    )
+    return data
+}
+
+// Per-location ROI. Subscription cost is charged either per institution or per
+// location; the institution's subscription_billing_mode decides which, and the
+// calculation says which one produced the figure it returns.
+
+export interface LocationROIConfig {
+    location_id: string
+    location_slug: string
+    avg_appointment_value: number
+    avg_new_patient_value: number
+    /** Null when the clinic does not track a front desk rate. */
+    staff_hourly_rate: number | null
+    avg_call_duration_minutes: number
+    /** This clinic's own price. Null when unset; never inherited. */
+    monthly_subscription_cost: number | null
+    subscription_billing_mode: SubscriptionBillingMode
+    /** "location" when set here, "institution" when inherited. */
+    source: "location" | "institution"
+}
+
+export type LocationROIConfigInput = Pick<
+    LocationROIConfig,
+    | "avg_appointment_value"
+    | "avg_new_patient_value"
+    | "staff_hourly_rate"
+    | "avg_call_duration_minutes"
+    | "monthly_subscription_cost"
+>
+
+export interface LocationROICalculation {
+    config: LocationROIConfig
+    total_calls_month: number
+    appointments_booked_month: number
+    new_patients_month: number
+    revenue_from_bookings: number
+    revenue_from_new_patients: number
+    total_revenue_generated: number
+    staff_time_saved_hours: number
+    /** Null when no hourly rate is configured — unknown, not zero. */
+    staff_cost_saved: number | null
+    period_start: string
+    period_end: string
+    total_value: number
+    monthly_cost_allocated: number
+    cost_allocation_basis: string
+    net_value: number
+    /** Null when there is no cost to measure a return against. */
+    roi_percentage: number | null
+}
+
+export async function getLocationROIConfig(
+    locSlug: string,
+): Promise<LocationROIConfig | null> {
+    const { data } = await api.get<LocationROIConfig | null>(
+        `/institution/locations/${encodeURIComponent(locSlug)}/roi/config`,
+    )
+    return data
+}
+
+export async function updateLocationROIConfig(
+    locSlug: string,
+    config: LocationROIConfigInput,
+): Promise<LocationROIConfig> {
+    const { data } = await api.put<LocationROIConfig>(
+        `/institution/locations/${encodeURIComponent(locSlug)}/roi/config`,
+        config,
+    )
+    return data
+}
+
+export async function clearLocationROIConfig(locSlug: string): Promise<void> {
+    await api.delete(
+        `/institution/locations/${encodeURIComponent(locSlug)}/roi/config`,
+    )
+}
+
+export async function calculateLocationROI(
+    locSlug: string,
+    window?: ROIWindow,
+): Promise<LocationROICalculation> {
+    const { data } = await api.get<LocationROICalculation>(
+        `/institution/locations/${encodeURIComponent(locSlug)}/roi/calculate${roiParams(window)}`,
+    )
     return data
 }
 

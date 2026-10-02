@@ -13,6 +13,7 @@ from src.app.nexhealth.exceptions import (
     NexHealthAuthenticationError,
     NexHealthRateLimitError,
 )
+from src.app.nexhealth.pagination import fetch_all_pages as fetch_nexhealth_pages
 
 logger = logging.getLogger(__name__)
 
@@ -49,55 +50,15 @@ async def fetch_all_pages(
 
         all_providers = await fetch_all_pages(fetch_providers, per_page=50)
     """
-    all_items: list[dict[str, Any]] = []
-    page = 1
+    async def fetch_page(page_params: dict[str, Any]) -> dict[str, Any]:
+        return await fetch_fn(page_params["page"], page_params["per_page"])
 
-    while True:
-        response = await fetch_fn(page, per_page)
-
-        # Extract data and count from NexHealth response
-        data = response.get("data", [])
-        total_count = response.get("count", 0)
-
-        # Handle nested data structures (e.g., {"data": {"patients": [...]}})
-        if isinstance(data, dict):
-            # Try common nested keys
-            for key in ["patients", "providers", "items"]:
-                if key in data:
-                    data = data[key]
-                    break
-
-        if not isinstance(data, list):
-            logger.warning(
-                f"fetch_all_pages: unexpected data type {type(data)}, stopping"
-            )
-            break
-
-        all_items.extend(data)
-
-        # Check if we've fetched all items
-        if len(all_items) >= total_count:
-            break
-
-        # Safety limit
-        if len(all_items) >= max_items:
-            logger.warning(
-                f"fetch_all_pages: hit max_items limit ({max_items}), stopping"
-            )
-            break
-
-        # Check if this was the last page
-        if len(data) < per_page:
-            break
-
-        page += 1
-
-        # Extra safety: don't fetch more than 10 pages
-        if page > 10:
-            logger.warning("fetch_all_pages: hit 10 page limit, stopping")
-            break
-
-    return all_items
+    return await fetch_nexhealth_pages(
+        fetch_page,
+        api_contract="legacy_v2",
+        per_page=per_page,
+        max_items=max_items,
+    )
 
 
 async def handle_nexhealth_request(

@@ -24,6 +24,11 @@ def _int_env(name: str, default: int) -> int:
 worker_class = "uvicorn.workers.UvicornWorker"
 workers = _int_env("WEB_CONCURRENCY", 2)
 bind = "0.0.0.0:8000"
+# Uvicorn reconstructs the public request scheme from X-Forwarded-Proto only
+# when the immediate peer is trusted. Twilio signs the externally visible HTTPS
+# webhook URL, so leaving Gunicorn's loopback-only default behind an ALB makes
+# every otherwise-valid webhook signature fail against an internal http URL.
+forwarded_allow_ips = os.getenv("TRUSTED_PROXY_CIDRS", "127.0.0.1,::1")
 timeout = 120
 graceful_timeout = 30
 keepalive = 5

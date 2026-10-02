@@ -26,6 +26,7 @@ def test_rls_migration_protects_expected_tables() -> None:
         "dead_letter_events",
         "retell_webhook_events",
         "retell_function_invocations",
+        "usage_events",
     }.issubset(protected)
 
 

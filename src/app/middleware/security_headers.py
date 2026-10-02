@@ -36,8 +36,14 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
         # Legacy XSS filter (for older browsers)
         response.headers["X-XSS-Protection"] = "1; mode=block"
 
-        # Limit referrer information leakage
-        response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
+        # Limit referrer information leakage. setdefault, not assignment: a
+        # route serving a tokenised patient link sets no-referrer deliberately,
+        # and strict-origin-when-cross-origin still sends the full URL — token
+        # and all — to anything same-origin on the page. Never downgrade a
+        # stricter policy a route has already chosen.
+        response.headers.setdefault(
+            "Referrer-Policy", "strict-origin-when-cross-origin"
+        )
 
         # Prevent caching of API responses (PHI safety)
         response.headers["Cache-Control"] = "no-store, no-cache, must-revalidate"

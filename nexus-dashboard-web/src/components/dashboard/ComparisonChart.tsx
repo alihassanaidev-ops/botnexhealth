@@ -1,6 +1,6 @@
 import { useMemo, useState } from "react"
-import { Bar, BarChart, Cell, Label, Pie, PieChart, XAxis, YAxis } from "recharts"
-import { PieChart as PieIcon } from "lucide-react"
+import { Bar, BarChart, LabelList, XAxis, YAxis } from "recharts"
+import { BarChart3 } from "lucide-react"
 
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import {
@@ -21,17 +21,16 @@ export interface ComparisonRow {
     values: Record<string, number>
 }
 
-const COLORS = [
-    "hsl(var(--chart-1))",
-    "hsl(var(--chart-2))",
-    "hsl(var(--chart-3))",
-    "hsl(var(--chart-4))",
-    "hsl(var(--chart-5))",
-]
+/**
+ * One measure across entities is a single series, so every bar is the same hue.
+ * Giving each clinic its own colour encoded nothing — the label already says
+ * which clinic it is — and it went wrong in two ways worth not repeating: the
+ * tooltip took its colour from the sorted position while the mark took its own
+ * from the unsorted one, so the two disagreed; and past five clinics the hues
+ * cycled and two clinics became the same colour.
+ */
+const SERIES_FILL = "hsl(var(--chart-1))"
 
-// Past this many entities a pie/donut is unreadable — switch to a ranked
-// horizontal bar chart (top N) which stays legible at any size.
-const DONUT_MAX = 8
 const BAR_TOP_N = 12
 
 interface ComparisonChartProps {
@@ -43,43 +42,55 @@ interface ComparisonChartProps {
 }
 
 /**
- * Metric-switching comparison of entities (locations or institutions). Adapts to
- * scale: a donut for a small set, a ranked top-N horizontal bar chart once there
- * are too many slices to read. Shared by the institution dashboard (locations)
- * and the group dashboard (institutions).
+ * Metric-switching comparison of entities (locations or institutions).
+ *
+ * Ranked horizontal bars, always. This was a donut below eight entities, which
+ * was the wrong shape for the question in two ways. Comparing magnitudes is what
+ * length is for — angle is measurably harder to read — and, more seriously, half
+ * these metrics are rates: a booking rate of 60% at one clinic and 40% at another
+ * does not make a whole, so drawing them as slices of one invited a reading that
+ * was never true. Bars also stay legible as clinics are added, which is why the
+ * component already fell back to them.
  */
 export function ComparisonChart({ title, rows, metrics, loading = false, emptyText = "No data yet." }: ComparisonChartProps) {
     const [activeKey, setActiveKey] = useState<string>(metrics[0]?.key ?? "")
     const activeDef = metrics.find((m) => m.key === activeKey) ?? metrics[0]
     const suffix = activeDef?.suffix ?? ""
-    const isRate = suffix === "%"
-    const useBars = rows.length > DONUT_MAX
 
     const ranked = useMemo(() =>
         rows
-            .map((row, i) => ({
+            .map((row) => ({
                 label: row.label,
                 value: Number(row.values[activeDef?.key ?? ""]) || 0,
-                fill: COLORS[i % COLORS.length],
             }))
             .sort((a, b) => b.value - a.value),
     [rows, activeDef])
 
     const barData = useMemo(() => ranked.slice(0, BAR_TOP_N), [ranked])
 
-    const chartConfig = useMemo<ChartConfig>(() => {
-        const cfg: ChartConfig = { value: { label: activeDef?.label ?? "" } }
-        ranked.forEach((d, i) => { cfg[d.label] = { label: d.label, color: COLORS[i % COLORS.length] } })
-        return cfg
-    }, [ranked, activeDef])
+    const chartConfig = useMemo<ChartConfig>(
+        () => ({ value: { label: activeDef?.label ?? "", color: SERIES_FILL } }),
+        [activeDef],
+    )
 
-    const total = useMemo(() => ranked.reduce((s, d) => s + d.value, 0), [ranked])
-    const centerValue = isRate ? Math.round(total / (ranked.length || 1)) : total
+    // A rate has no meaningful total; a count does. Saying which is which keeps
+    // the summary from being read as the other one.
+    const isRate = suffix === "%"
+    const summary = ranked.length
+        ? isRate
+            ? `${Math.round(ranked.reduce((s, d) => s + d.value, 0) / ranked.length)}${suffix} average`
+            : `${ranked.reduce((s, d) => s + d.value, 0).toLocaleString()}${suffix} total`
+        : null
 
     return (
         <Card className="border-border shadow-sm flex-1 flex flex-col">
             <CardHeader className="pb-2">
-                <CardTitle className="text-base">{title}</CardTitle>
+                <div className="flex items-start justify-between gap-3">
+                    <CardTitle className="text-base">{title}</CardTitle>
+                    {summary && (
+                        <span className="shrink-0 text-xs text-muted-foreground tabular-nums">{summary}</span>
+                    )}
+                </div>
                 <CardDescription>
                     <div className="flex items-center gap-1 flex-wrap mt-1">
                         {metrics.map((m) => (
@@ -102,23 +113,36 @@ export function ComparisonChart({ title, rows, metrics, loading = false, emptyTe
                     <ChartSkeleton />
                 ) : !rows.length ? (
                     <div className="flex flex-col items-center justify-center py-12 text-center gap-2">
-                        <PieIcon className="h-7 w-7 text-muted-foreground/30" />
+                        <BarChart3 className="h-7 w-7 text-muted-foreground/30" />
                         <p className="text-sm text-muted-foreground">{emptyText}</p>
                     </div>
-                ) : useBars ? (
+                ) : (
                     <>
-                        <ChartContainer config={chartConfig} className="h-[260px] w-full">
-                            <BarChart data={barData} layout="vertical" margin={{ left: 8, right: 16 }}>
-                                <XAxis type="number" hide />
+                        <ChartContainer
+                            config={chartConfig}
+                            className="w-full"
+                            style={{ height: Math.max(160, barData.length * 34 + 24) }}
+                        >
+                            <BarChart data={barData} layout="vertical" margin={{ left: 8, right: 44 }}>
+                                <XAxis type="number" hide domain={[0, "dataMax"]} />
                                 <YAxis
-                                    type="category" dataKey="label" width={120}
+                                    type="category" dataKey="label" width={128}
                                     tickLine={false} axisLine={false}
                                     tick={{ fontSize: 11 }}
                                     tickFormatter={(v: string) => (v.length > 18 ? v.slice(0, 17) + "…" : v)}
                                 />
                                 <ChartTooltip cursor={false} content={<ChartTooltipContent nameKey="label" hideLabel />} />
-                                <Bar dataKey="value" radius={4}>
-                                    {barData.map((entry) => <Cell key={entry.label} fill={entry.fill} />)}
+                                <Bar dataKey="value" fill={SERIES_FILL} radius={4} barSize={18}>
+                                    {/* The value at the end of each bar: this chart is read for
+                                        the number as often as for the ranking, and reading it
+                                        off a hidden axis is guesswork. */}
+                                    <LabelList
+                                        dataKey="value"
+                                        position="right"
+                                        className="fill-muted-foreground"
+                                        fontSize={11}
+                                        formatter={(v: number) => `${v.toLocaleString()}${suffix}`}
+                                    />
                                 </Bar>
                             </BarChart>
                         </ChartContainer>
@@ -128,42 +152,6 @@ export function ComparisonChart({ title, rows, metrics, loading = false, emptyTe
                             </p>
                         )}
                     </>
-                ) : (
-                    <div className="flex flex-col items-center gap-6 py-2 sm:flex-row sm:justify-center sm:gap-10">
-                        <ChartContainer config={chartConfig} className="aspect-square h-[230px] shrink-0">
-                            <PieChart>
-                                <ChartTooltip cursor={false} content={<ChartTooltipContent nameKey="label" hideLabel />} />
-                                <Pie data={ranked} dataKey="value" nameKey="label" innerRadius={62} outerRadius={95}
-                                    paddingAngle={ranked.length > 1 ? 3 : 0} strokeWidth={2}>
-                                    {ranked.map((entry) => <Cell key={entry.label} fill={entry.fill} />)}
-                                    <Label content={({ viewBox }) => {
-                                        if (viewBox && "cx" in viewBox && "cy" in viewBox) {
-                                            const cx = viewBox.cx ?? 0
-                                            const cy = viewBox.cy ?? 0
-                                            return (
-                                                <text x={cx} y={cy} textAnchor="middle" dominantBaseline="middle">
-                                                    <tspan x={cx} y={cy} className="fill-foreground text-2xl font-bold tabular-nums">{centerValue}{suffix}</tspan>
-                                                    <tspan x={cx} y={cy + 20} className="fill-muted-foreground text-[11px]">{isRate ? "average" : "total"}</tspan>
-                                                </text>
-                                            )
-                                        }
-                                        return null
-                                    }} />
-                                </Pie>
-                            </PieChart>
-                        </ChartContainer>
-                        <div className="grid w-full max-w-[220px] gap-2.5">
-                            {ranked.map((entry) => (
-                                <div key={entry.label} className="flex items-center justify-between gap-3 text-sm">
-                                    <span className="flex min-w-0 items-center gap-2">
-                                        <span className="h-2.5 w-2.5 shrink-0 rounded-sm" style={{ background: entry.fill }} />
-                                        <span className="truncate text-muted-foreground">{entry.label}</span>
-                                    </span>
-                                    <span className="shrink-0 font-semibold tabular-nums">{entry.value}{suffix}</span>
-                                </div>
-                            ))}
-                        </div>
-                    </div>
                 )}
             </CardContent>
         </Card>

@@ -45,6 +45,33 @@ async def test_handle_function_call_with_query_param(mock_registry):
     response = await functions.handle_function_call(function_name="test_func", body=body)
     assert response.result == {"result": "ok"}
 
+
+@pytest.mark.asyncio
+async def test_handle_function_call_omits_unresolved_template_arguments(mock_registry):
+    mock_handler = AsyncMock(return_value={"result": "ok"})
+    mock_registry["test_func"] = mock_handler
+
+    payload = {
+        "function_name": "test_func",
+        "call_id": "call_123",
+        "args": {
+            "start_date": "2026-08-14",
+            "provider_id": "3",
+            "appointment_type_id": "{{appointment_type_id}}",
+            "note": "literal text containing {{braces}} is preserved",
+        },
+    }
+
+    await functions.handle_function_call(body=json.dumps(payload).encode())
+
+    mock_handler.assert_awaited_once_with(
+        {
+            "start_date": "2026-08-14",
+            "provider_id": "3",
+            "note": "literal text containing {{braces}} is preserved",
+        }
+    )
+
 @pytest.mark.asyncio
 async def test_handle_function_call_unknown_function(mock_registry):
     payload = {"function_name": "unknown", "call_id": "1"}

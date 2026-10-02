@@ -1,0 +1,26 @@
+# Graphify ignore — keeps the graph build code-only (AST/tree-sitter, fully offline, no LLM API cost).
+# Remove these doc/image excludes and set an LLM API key (e.g. ANTHROPIC_API_KEY) to also
+# ingest documentation and images for richer semantic edges.
+
+# Documentation / prose (would trigger paid LLM semantic extraction)
+*.md
+*.mdx
+*.rst
+*.txt
+*.pdf
+*.docx
+*.xlsx
+*.html
+*.htm
+
+# Images (would trigger paid LLM vision extraction)
+*.png
+*.jpg
+*.jpeg
+*.gif
+*.svg
+*.webp
+*.ico
+
+# Generated graph output (avoid self-ingestion)
+graphify-out/

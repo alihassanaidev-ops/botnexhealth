@@ -25,6 +25,7 @@ from src.app.models.contact import Contact
 from src.app.models.institution_location import InstitutionLocation
 from src.app.models.user import User, UserRole
 from src.app.services.audit import log_audit_background
+from src.app.services.phi_visibility import serves_phi_inline
 from src.app.services.sms_privacy import mask_phone
 
 logger = logging.getLogger(__name__)
@@ -77,9 +78,12 @@ class CallbackQueueItem(BaseModel):
     summary: str | None
     next_action: str | None
     booked_appointment_type_name: str | None = None
-    # Masked callback number; full value via POST /institution/calls/{id}/reveal/phone.
+    # Callback number. Masked to the last 4 digits for roles that do not read
+    # inline; those use POST /institution/calls/{id}/reveal/phone.
     phone_masked: str | None = None
     phone_reveal_available: bool = False
+    #: True when phone_masked already holds the whole number.
+    phone_revealed: bool = False
 
 
 class DashboardSummary(BaseModel):
@@ -1436,6 +1440,7 @@ async def get_dashboard_summary(
             )
         ).all()
 
+        inline_phi = serves_phi_inline(current_user)
         callback_queue = [
             CallbackQueueItem(
                 call_id=call.id,
@@ -1447,11 +1452,16 @@ async def get_dashboard_summary(
                 next_action=call.next_action,
                 booked_appointment_type_name=call.booked_appointment_type_name,
                 phone_masked=(
-                    mask_phone(contact.phone)
+                    (contact.phone if inline_phi else mask_phone(contact.phone))
                     if contact and contact.phone_encrypted is not None
                     else None
                 ),
-                phone_reveal_available=bool(contact and contact.phone_encrypted is not None),
+                phone_reveal_available=bool(
+                    contact and contact.phone_encrypted is not None
+                ),
+                phone_revealed=bool(
+                    inline_phi and contact and contact.phone_encrypted is not None
+                ),
             )
             for call, contact in callback_rows
         ]

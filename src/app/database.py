@@ -29,14 +29,13 @@ def _validate_uuid_or_empty(value: str | None) -> str:
         UUID(str(value))
         return str(value)
     except (ValueError, TypeError, AttributeError):
-        logger.warning(
-            "Invalid UUID in RLS context: %r — treating as empty", value
-        )
+        logger.warning("Invalid UUID in RLS context: %r — treating as empty", value)
         return ""
 
 
 class Base(DeclarativeBase):
     """Base class for SQLAlchemy models."""
+
     pass
 
 
@@ -75,9 +74,7 @@ class RlsContext:
             location_id=(
                 str(user.location_id) if getattr(user, "location_id", None) else None
             ),
-            group_id=(
-                str(user.group_id) if getattr(user, "group_id", None) else None
-            ),
+            group_id=(str(user.group_id) if getattr(user, "group_id", None) else None),
         )
 
     @classmethod
@@ -101,6 +98,34 @@ class RlsContext:
             external_id=external_id,
             group_id=group_id,
         )
+
+
+def integrity_error_constraint(error: BaseException) -> str | None:
+    """Return the database constraint name an IntegrityError violated.
+
+    Callers that catch ``IntegrityError`` need to know *which* rule the
+    database rejected: a handler that assumes the one constraint it happens
+    to know about will report an unrelated violation as that one, sending
+    whoever reads the message after the wrong field.
+
+    asyncpg raises its own exception type, which SQLAlchemy wraps twice, so
+    the constraint name can sit on the DBAPI wrapper or on the asyncpg error
+    beneath it. Triggers that ``RAISE`` without naming a constraint report
+    none at all, so a null return means "unknown", never "no violation".
+    """
+    seen: set[int] = set()
+    candidate: BaseException | None = error
+    while candidate is not None and id(candidate) not in seen:
+        seen.add(id(candidate))
+        name = getattr(candidate, "constraint_name", None)
+        if name:
+            return str(name)
+        diag = getattr(candidate, "diag", None)
+        name = getattr(diag, "constraint_name", None)
+        if name:
+            return str(name)
+        candidate = getattr(candidate, "orig", None) or candidate.__cause__
+    return None
 
 
 def is_database_initialized() -> bool:
@@ -175,9 +200,7 @@ async def apply_rls_context(session: AsyncSession, context: RlsContext | None) -
             "external_id": (
                 context.external_id if context and context.external_id else ""
             ),
-            "group_id": (
-                _validate_uuid_or_empty(context.group_id) if context else ""
-            ),
+            "group_id": (_validate_uuid_or_empty(context.group_id) if context else ""),
         },
     )
 
@@ -277,6 +300,16 @@ def init_database(database_url: str, *, use_null_pool: bool = False) -> None:
         autoflush=False,
     )
 
+    # Campaigns that start from an internal status change observe the flush
+    # rather than requiring every write site to remember to announce itself.
+    # Registered here, not at import time, so importing a model does not attach
+    # engine-level behaviour as a side effect.
+    from src.app.services.automation.internal_status_events import (
+        register_internal_status_listeners,
+    )
+
+    register_internal_status_listeners()
+
 
 async def close_database() -> None:
     """Close database connections."""
@@ -366,6 +399,68 @@ async def get_system_db_session(
     ):
         async with get_db_session() as session:
             yield session
+
+
+@asynccontextmanager
+async def get_campaign_link_db_session(
+    run_id: str,
+) -> AsyncGenerator[AsyncSession, None]:
+    """Open the tenant-scoped session authorized by a signed campaign run.
+
+    Public campaign links do not know an institution before their run is read,
+    while the workflow tables correctly require one under RLS.  Resolve only
+    the exact run named by ``app.external_id`` under the narrow lookup policy,
+    then reopen the working session with that run's institution/location scope.
+
+    Callers must verify the action-token signature before using this helper.
+    An unknown run deliberately yields the lookup-scoped session so the normal
+    ``session.get(..., run_id)`` path returns ``None`` without widening access.
+    """
+    async with get_system_db_session(
+        "campaign_link_lookup",
+        external_id=run_id,
+    ) as lookup_session:
+        scope = (
+            await lookup_session.execute(
+                text(
+                    "SELECT institution_id::text AS institution_id, "
+                    "location_id::text AS location_id "
+                    "FROM automation_workflow_runs WHERE id::text = :run_id"
+                ),
+                {"run_id": run_id},
+            )
+        ).one_or_none()
+        if scope is None:
+            yield lookup_session
+            return
+
+    async with get_system_db_session(
+        "celery",
+        institution_id=scope.institution_id,
+        location_id=scope.location_id,
+        external_id=f"campaign_link:{run_id}",
+    ) as session:
+        yield session
+
+
+@asynccontextmanager
+async def get_superadmin_system_db_session(
+    external_id: str,
+) -> AsyncGenerator[AsyncSession, None]:
+    """Open a cross-tenant session for trusted global background scans.
+
+    Tenant-scoped system contexts intentionally cannot see rows belonging to
+    other institutions. Global schedulers and health scans therefore use the
+    same explicit SUPER_ADMIN RLS identity instead of depending on a database
+    role having BYPASSRLS privileges.
+    """
+    async with get_system_db_session(
+        "user",
+        role="SUPER_ADMIN",
+        user_id="00000000-0000-0000-0000-000000000000",
+        external_id=external_id,
+    ) as session:
+        yield session
 
 
 async def create_tables() -> None:

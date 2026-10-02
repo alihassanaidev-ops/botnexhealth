@@ -86,16 +86,10 @@ async def _ensure_partition(conn, year: int, month: int) -> bool:
     )
 
     if not existed:
-        # Grant DML to the runtime role on the new partition. Parent-
-        # level GRANTs do NOT propagate to partitions in PostgreSQL —
-        # without this, a fresh partition would 403 ``nexhealth_app``
-        # writes the moment ``timestamp >= start_date``.
-        await conn.execute(
-            text(
-                f"DO $$ BEGIN IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'nexhealth_app') "
-                f"THEN GRANT SELECT, INSERT ON {name} TO nexhealth_app; END IF; END $$"
-            )
-        )
+        # Runtime access is granted on the partitioned parent. PostgreSQL
+        # routes parent INSERTs to children without a direct child grant. A
+        # child grant would let callers name the child directly and bypass the
+        # parent's row-level policy, because RLS policies are table-specific.
         logger.info("Created audit partition %s [%s, %s)", name, start, end)
         return True
     return False

@@ -8,16 +8,27 @@ availability linking, subdomain/location_id) lives here.
 from __future__ import annotations
 
 import logging
-from datetime import date
-from typing import TYPE_CHECKING, Any
+from dataclasses import dataclass
+from datetime import date, datetime, timedelta
+import re
+from typing import TYPE_CHECKING, Any, Literal
 
-from src.app.api.helpers import fetch_all_pages, handle_nexhealth_request
+from src.app.api.helpers import handle_nexhealth_request
 from src.app.nexhealth.api_contract import (
     NexHealthAPIContract,
     normalize_nexhealth_api_contract,
 )
-from src.app.nexhealth.pagination import fetch_all_pages as fetch_all_pages_v3
-from src.app.pms.base import PMSAdapter, SupportsAppointmentTypeCreation, SupportsAvailabilityLinking
+from src.app.nexhealth.pagination import (
+    extract_list_items,
+    extract_page_info,
+    fetch_all_pages,
+)
+from src.app.pms.base import (
+    PMSAdapter,
+    SupportsAppointmentConfirmation,
+    SupportsAppointmentTypeCreation,
+    SupportsAvailabilityLinking,
+)
 from src.app.pms.models import (
     BookingRequest,
     BookingResult,
@@ -25,13 +36,20 @@ from src.app.pms.models import (
     SetupStep,
     SlotSearchResult,
     UniversalAppointmentType,
+    UniversalClinicalNote,
+    UniversalDocumentType,
     UniversalLocation,
     UniversalOperatory,
     UniversalPatient,
+    UniversalPatientDocument,
+    UniversalPatientPage,
     UniversalProvider,
+    UniversalRecallType,
     UniversalSlot,
+    UniversalTreatmentPlan,
 )
 from src.app.pms.nexhealth import mappers
+from src.app.services.sms_privacy import safe_error_summary
 
 if TYPE_CHECKING:
     from src.app.models.institution import Institution
@@ -41,6 +59,26 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 PREFIX = "nh"
+AppointmentCancellationMode = Literal[
+    "active_only",
+    "cancelled_only",
+    "active_and_cancelled",
+]
+_DIRECT_RESCHEDULE_PATCH_PMS_KEYS = frozenset(
+    {
+        "dentrix",
+        "dentrixenterprise",
+        "eaglesoft",
+        "opendental",
+    }
+)
+
+
+@dataclass(frozen=True)
+class _SlotValidationResult:
+    ok: bool
+    end_time: str | None = None
+    error: str | None = None
 
 
 def _strip(prefixed_id: str) -> str:
@@ -106,7 +144,163 @@ def _normalize_phone_for_nexhealth(phone: str | None) -> str | None:
     return digits[:10]
 
 
-class NexHealthAdapter(PMSAdapter, SupportsAppointmentTypeCreation, SupportsAvailabilityLinking):
+def _appointment_cancelled_filters(
+    mode: AppointmentCancellationMode,
+) -> tuple[bool, ...]:
+    """Return explicit NexHealth ``cancelled`` filters for list reads.
+
+    Stable v3 changed the default ``GET /appointments`` behavior: omitting the
+    filter now returns active, cancelled, and EHR-deleted rows. Calling code must
+    choose a mode instead of inheriting that upstream default.
+    """
+    if mode == "active_only":
+        return (False,)
+    if mode == "cancelled_only":
+        return (True,)
+    if mode == "active_and_cancelled":
+        return (False, True)
+    raise ValueError(f"Unsupported appointment cancellation mode: {mode!r}")
+
+
+def _appointment_identity(appt: dict[str, Any]) -> str | None:
+    value = appt.get("id") or appt.get("appointment_id")
+    return str(value) if value not in (None, "") else None
+
+
+def _parse_slot_datetime(value: Any) -> datetime | None:
+    if isinstance(value, datetime):
+        return value
+    if value in (None, ""):
+        return None
+    text = str(value).strip()
+    if not text:
+        return None
+    if text.endswith("Z"):
+        text = f"{text[:-1]}+00:00"
+    try:
+        return datetime.fromisoformat(text)
+    except ValueError:
+        return None
+
+
+def _has_utc_offset(value: datetime) -> bool:
+    return value.tzinfo is not None and value.utcoffset() is not None
+
+
+def _same_slot_datetime(left: Any, right: Any) -> bool:
+    left_dt = _parse_slot_datetime(left)
+    right_dt = _parse_slot_datetime(right)
+    if left_dt and right_dt:
+        if _has_utc_offset(left_dt) and _has_utc_offset(right_dt):
+            return left_dt == right_dt
+        return left_dt.replace(tzinfo=None) == right_dt.replace(tzinfo=None)
+    return str(left).strip() == str(right).strip()
+
+
+def _slot_search_date(slot_start: str) -> str | None:
+    parsed = _parse_slot_datetime(slot_start)
+    if parsed:
+        return parsed.date().isoformat()
+    text = str(slot_start or "").strip()
+    if "T" in text:
+        return text.split("T", 1)[0] or None
+    if len(text) >= 10:
+        return text[:10]
+    return None
+
+
+def _format_slot_datetime(value: datetime) -> str:
+    return value.isoformat()
+
+
+def _add_minutes(slot_start: str, minutes: int | None) -> datetime | None:
+    if not minutes:
+        return None
+    parsed = _parse_slot_datetime(slot_start)
+    if not parsed:
+        return None
+    return parsed + timedelta(minutes=minutes)
+
+
+def _raw_id(value: Any) -> str | None:
+    if value in (None, ""):
+        return None
+    return _strip(str(value))
+
+
+def _normalize_pms_key(value: str | None) -> str | None:
+    if not value or not value.strip():
+        return None
+    return re.sub(r"[^a-z0-9]+", "", value.lower())
+
+
+def _direct_reschedule_patch_supported(pms_name: str | None) -> bool:
+    key = _normalize_pms_key(pms_name)
+    return bool(key and key in _DIRECT_RESCHEDULE_PATCH_PMS_KEYS)
+
+
+def _pms_name_from_sync_payload(payload: dict[str, Any]) -> str | None:
+    return next(iter(_pms_name_candidates_from_sync_payload(payload)), None)
+
+
+def _pms_name_candidates_from_sync_payload(payload: dict[str, Any]) -> list[str]:
+    candidates: list[str] = []
+    for key in ("display_name", "name", "type", "vendor", "pms", "software"):
+        value = payload.get(key)
+        if isinstance(value, str) and value.strip():
+            candidates.append(value.strip())
+    return candidates
+
+
+def _select_direct_reschedule_pms_name(candidates: list[str]) -> str | None:
+    for candidate in candidates:
+        if _direct_reschedule_patch_supported(candidate):
+            return candidate
+    return candidates[0] if candidates else None
+
+
+def _slot_core_matches_booking(slot: UniversalSlot, req: BookingRequest) -> bool:
+    if not _same_slot_datetime(slot.start, req.slot_start):
+        return False
+    if _raw_id(slot.provider_id) != _raw_id(req.provider_id):
+        return False
+    if (
+        req.appointment_type_id
+        and slot.appointment_type_id
+        and _raw_id(slot.appointment_type_id) != _raw_id(req.appointment_type_id)
+    ):
+        return False
+    if req.operatory_id and _raw_id(slot.operatory_id) != _raw_id(req.operatory_id):
+        return False
+    return True
+
+
+def _booking_end_time_for_slot(
+    slot: UniversalSlot,
+    req: BookingRequest,
+    duration_minutes: int | None,
+) -> str | None:
+    if req.slot_end:
+        if slot.end:
+            return req.slot_end if _same_slot_datetime(slot.end, req.slot_end) else None
+        computed = _add_minutes(slot.start, duration_minutes)
+        if computed and _same_slot_datetime(computed, req.slot_end):
+            return req.slot_end
+        return None
+
+    if slot.end:
+        return slot.end
+
+    computed = _add_minutes(slot.start, duration_minutes)
+    return _format_slot_datetime(computed) if computed else None
+
+
+class NexHealthAdapter(
+    PMSAdapter,
+    SupportsAppointmentConfirmation,
+    SupportsAppointmentTypeCreation,
+    SupportsAvailabilityLinking,
+):
     source = "nexhealth"
 
     def __init__(
@@ -116,31 +310,41 @@ class NexHealthAdapter(PMSAdapter, SupportsAppointmentTypeCreation, SupportsAvai
         *,
         subdomain: str | None = None,
         location_id: str | None = None,
+        api_contract: NexHealthAPIContract | str | None = None,
+        direct_reschedule_pms_name: str | None = None,
         owns_client: bool = False,
     ) -> None:
         self._client = client
         self._institution = institution
         self._subdomain = subdomain
         self._location_id = location_id
+        self._api_contract = normalize_nexhealth_api_contract(
+            api_contract or NexHealthAPIContract.LEGACY_V2
+        )
+        self._direct_reschedule_pms_name = direct_reschedule_pms_name
         self._owns_client = owns_client
+        self.credential_mode: str | None = None
+        self.api_key_hash: str | None = None
 
     @classmethod
-    async def create(cls, institution: Institution, location: InstitutionLocation) -> NexHealthAdapter:
+    async def create(
+        cls, institution: Institution, location: InstitutionLocation
+    ) -> NexHealthAdapter:
         """Build a NexHealth adapter scoped to an institution + location.
 
-        The platform shares a single NexHealth account, so the API key comes
-        from global settings. Per-clinic isolation is provided exclusively by
-        ``location.nexhealth_subdomain`` and ``location.nexhealth_location_id``;
-        we fail closed if either is missing to prevent a misconfigured clinic
-        from silently routing to whichever subdomain happens to be in the
-        global env.
+        Hybrid credential mode is explicit: ``institution`` mode uses only the
+        institution's stored key, while ``platform`` mode uses only the shared
+        platform key. A missing selected credential fails closed. Location
+        scoping still comes from ``location.nexhealth_subdomain`` and
+        ``location.nexhealth_location_id``.
         """
         from src.app.config import settings as global_settings
-        from src.app.dependencies import get_nexhealth_client_dependency
+        from src.app.dependencies import (
+            get_nexhealth_client_for_credential,
+            resolve_nexhealth_credential,
+        )
 
-        api_key = global_settings.nexhealth_api_key
-        if not api_key:
-            raise RuntimeError("NEXHEALTH_API_KEY is not configured")
+        credential = resolve_nexhealth_credential(institution)
 
         subdomain = location.nexhealth_subdomain
         location_id = location.nexhealth_location_id
@@ -154,14 +358,73 @@ class NexHealthAdapter(PMSAdapter, SupportsAppointmentTypeCreation, SupportsAvai
         # and token caching survive across requests. Creating a fresh
         # AsyncClient per adapter leaks sockets if a caller misses close()
         # and collapses under concurrent Retell/function traffic.
-        client = await get_nexhealth_client_dependency()
-        return cls(
+        # Client comes from the resolved credential, so a clinic-owned key gets
+        # its own client, token cache and rate-limit bucket.
+        client = await get_nexhealth_client_for_credential(credential)
+        direct_reschedule_pms_name = None
+        internal_institution_id = getattr(institution, "id", None)
+        internal_location_id = getattr(location, "id", None)
+        if internal_institution_id and internal_location_id:
+            direct_reschedule_pms_name = (
+                await cls._direct_reschedule_pms_name_for_location(
+                    institution_id=str(internal_institution_id),
+                    location_id=str(internal_location_id),
+                )
+            )
+        adapter = cls(
             client,
             institution,
             subdomain=subdomain,
             location_id=location_id,
+            api_contract=global_settings.nexhealth_api_contract,
+            direct_reschedule_pms_name=direct_reschedule_pms_name,
             owns_client=False,
         )
+        adapter.credential_mode = credential.mode
+        adapter.api_key_hash = credential.api_key_hash
+        return adapter
+
+    @staticmethod
+    async def _direct_reschedule_pms_name_for_location(
+        *, institution_id: str, location_id: str
+    ) -> str | None:
+        try:
+            from sqlalchemy import select
+
+            from src.app.database import get_system_db_session
+            from src.app.models.nexhealth_sync_status import NexHealthSyncStatus
+
+            async with get_system_db_session(
+                "celery",
+                institution_id=institution_id,
+                location_id=location_id,
+                external_id=location_id,
+            ) as session:
+                row = (
+                    await session.execute(
+                        select(NexHealthSyncStatus).where(
+                            NexHealthSyncStatus.institution_id == institution_id,
+                            NexHealthSyncStatus.location_id == location_id,
+                        )
+                    )
+                ).scalar_one_or_none()
+                if row is None:
+                    return None
+
+                candidates = [
+                    candidate.strip()
+                    for candidate in (row.sync_source_name, row.sync_source_type)
+                    if candidate and candidate.strip()
+                ]
+                payload = row.emr_payload if isinstance(row.emr_payload, dict) else {}
+                candidates.extend(_pms_name_candidates_from_sync_payload(payload))
+                return _select_direct_reschedule_pms_name(candidates)
+        except Exception as exc:
+            logger.warning(
+                "Failed to resolve NexHealth direct reschedule PMS support: %s",
+                type(exc).__name__,
+            )
+            return None
 
     async def close(self) -> None:
         if self._owns_client and self._client:
@@ -179,7 +442,9 @@ class NexHealthAdapter(PMSAdapter, SupportsAppointmentTypeCreation, SupportsAvai
 
     # ── Patients ─────────────────────────────────────────────────────────
 
-    async def search_patients(self, query: str, **kwargs: Any) -> list[UniversalPatient]:
+    async def search_patients(
+        self, query: str, **kwargs: Any
+    ) -> list[UniversalPatient]:
         params = self._default_params()
         # Send EVERY criterion the caller supplied, not just the first one.
         # NexHealth AND-combines name/email/phone/date_of_birth server-side, so
@@ -205,16 +470,26 @@ class NexHealthAdapter(PMSAdapter, SupportsAppointmentTypeCreation, SupportsAvai
             params["name"] = name
         # NexHealth requires at least one search criterion; preserve prior
         # behavior of falling back to the raw query if nothing else was set.
-        if not any(k in params for k in ("email", "phone_number", "date_of_birth", "name")):
+        if not any(
+            k in params for k in ("email", "phone_number", "date_of_birth", "name")
+        ):
             params["name"] = query
 
-        params.setdefault("page", 1)
-        params.setdefault("per_page", 10)
-        if kwargs.get("include"):
+        if self._api_contract is NexHealthAPIContract.STABLE_V3:
+            params.setdefault("per_page", 10)
+        else:
+            params.setdefault("page", 1)
+            params.setdefault("per_page", 10)
+        if (
+            kwargs.get("include")
+            and self._api_contract is NexHealthAPIContract.LEGACY_V2
+        ):
             params["include[]"] = kwargs["include"]
 
-        raw = await handle_nexhealth_request(self._client, "GET", "/patients", params=params)
-        patients = raw.get("data", {}).get("patients", [])
+        raw = await handle_nexhealth_request(
+            self._client, "GET", "/patients", params=params
+        )
+        patients = extract_list_items(raw, collection_key="patients")
 
         # Phone fallback: callers often dial from a number that isn't on their
         # record. NexHealth AND-combines criteria, so a mismatched phone excludes
@@ -232,18 +507,30 @@ class NexHealthAdapter(PMSAdapter, SupportsAppointmentTypeCreation, SupportsAvai
             raw = await handle_nexhealth_request(
                 self._client, "GET", "/patients", params=retry_params
             )
-            patients = raw.get("data", {}).get("patients", [])
+            patients = extract_list_items(raw, collection_key="patients")
 
         return [mappers.to_patient(p) for p in patients]
 
-    async def get_patient(self, patient_id: str) -> UniversalPatient | None:
+    async def get_patient(
+        self,
+        patient_id: str,
+        include: list[str] | None = None,
+    ) -> UniversalPatient | None:
         """Fetch a single patient by NexHealth ID.
 
         Returns ``None`` if the patient cannot be found. Used to read the
         email address NexHealth has on file (collected at intake) rather than
-        trusting a value transcribed by the voice agent during a call.
+        trusting a value transcribed by the voice agent during a call, and to
+        read appointment context.
+
+        `include` works here on BOTH contracts. v3 removed includes from the
+        patient *list* endpoint, but the single-patient read still honours them
+        — verified live against production on both v2 and v3, which is what
+        makes this the replacement for the list-level includes.
         """
         params = self._default_params()
+        if include:
+            params["include[]"] = include
         try:
             raw = await handle_nexhealth_request(
                 self._client, "GET", f"/patients/{_strip(patient_id)}", params=params
@@ -255,6 +542,102 @@ class NexHealthAdapter(PMSAdapter, SupportsAppointmentTypeCreation, SupportsAvai
         if not isinstance(patient, dict) or not patient.get("id"):
             return None
         return mappers.to_patient(patient)
+
+    async def browse_patients(
+        self,
+        *,
+        cursor: str | None = None,
+        page_size: int = 25,
+        name: str | None = None,
+        status: str = "active",
+    ) -> UniversalPatientPage:
+        """Proxy one NexHealth patient page using stable-v3 cursors.
+
+        ``location_strict`` is essential: without it NexHealth may search the
+        whole EHR even though a location_id was supplied. Non-patient contacts
+        are excluded, while inactive records are explicit rather than inherited
+        from an upstream default that has changed before.
+        """
+        params = self._default_params()
+        params.update(
+            {
+                "per_page": min(max(page_size, 1), 100),
+                "location_strict": True,
+                "non_patient": False,
+                "sort": "id",
+            }
+        )
+        if name:
+            params["name"] = name
+        if status == "active":
+            params["inactive"] = False
+        elif status == "inactive":
+            params["inactive"] = True
+        elif status != "all":
+            raise ValueError(f"Unsupported patient status filter: {status!r}")
+
+        if cursor:
+            direction, separator, value = cursor.partition(":")
+            if not separator or not value or direction not in {"next", "previous"}:
+                raise ValueError("Invalid NexHealth patient cursor")
+            params["end_cursor" if direction == "next" else "start_cursor"] = value
+
+        raw = await handle_nexhealth_request(
+            self._client, "GET", "/patients", params=params
+        )
+        rows = extract_list_items(raw, collection_key="patients")
+        page_info = extract_page_info(raw)
+        has_next = bool(page_info.get("has_next_page"))
+        has_previous = bool(page_info.get("has_previous_page"))
+        end_cursor = page_info.get("end_cursor")
+        start_cursor = page_info.get("start_cursor")
+        total = raw.get("count") if isinstance(raw.get("count"), int) else None
+        return UniversalPatientPage(
+            items=[mappers.to_patient(row) for row in rows],
+            total=total,
+            next_cursor=(
+                f"next:{end_cursor}"
+                if has_next and end_cursor not in (None, "")
+                else None
+            ),
+            previous_cursor=(
+                f"previous:{start_cursor}"
+                if has_previous and start_cursor not in (None, "")
+                else None
+            ),
+            has_next_page=has_next and end_cursor not in (None, ""),
+            has_previous_page=has_previous and start_cursor not in (None, ""),
+        )
+
+    async def list_patients(
+        self,
+        *,
+        updated_since: str | None = None,
+        max_items: int = 1000,
+    ) -> list[dict[str, Any]]:
+        """List raw NexHealth patients for this location.
+
+        Used by campaign patient/contact backfill and reconciliation. It returns
+        raw payloads because ``NexHealthProjectionService.upsert_patient`` needs
+        NexHealth-specific fields such as ``location_ids`` and ``bio``.
+        """
+        params = self._default_params()
+        if updated_since:
+            params["updated_since"] = updated_since
+
+        async def fetch(page_params: dict[str, Any]) -> dict[str, Any]:
+            p = {**params, **page_params}
+            return await handle_nexhealth_request(
+                self._client, "GET", "/patients", params=p
+            )
+
+        return await fetch_all_pages(
+            fetch,
+            api_contract=self._api_contract,
+            collection_key="patients",
+            per_page=50,
+            max_items=max_items,
+        )
 
     async def create_patient(self, req: PatientCreateRequest) -> dict[str, Any]:
         from src.app.api.models import (
@@ -286,7 +669,9 @@ class NexHealthAdapter(PMSAdapter, SupportsAppointmentTypeCreation, SupportsAvai
         return {
             "success": raw.get("code") is not False,
             "patient_id": f"{PREFIX}-{user.get('id')}" if user.get("id") else None,
-            "message": f"Patient {user.get('first_name')} created successfully." if user.get("id") else raw.get("error", "Failed"),
+            "message": f"Patient {user.get('first_name')} created successfully."
+            if user.get("id")
+            else raw.get("error", "Failed"),
         }
 
     # ── Appointment Types ────────────────────────────────────────────────
@@ -294,8 +679,10 @@ class NexHealthAdapter(PMSAdapter, SupportsAppointmentTypeCreation, SupportsAvai
     async def list_appointment_types(self) -> list[UniversalAppointmentType]:
         params = self._default_params()
         params["include[]"] = ["descriptors"]
-        raw = await handle_nexhealth_request(self._client, "GET", "/appointment_types", params=params)
-        data = raw.get("data", [])
+        raw = await handle_nexhealth_request(
+            self._client, "GET", "/appointment_types", params=params
+        )
+        data = extract_list_items(raw, collection_key="appointment_types")
         return [mappers.to_appointment_type(at) for at in data]
 
     # ── Providers ────────────────────────────────────────────────────────
@@ -303,11 +690,23 @@ class NexHealthAdapter(PMSAdapter, SupportsAppointmentTypeCreation, SupportsAvai
     async def list_providers(self) -> list[UniversalProvider]:
         params = self._default_params()
 
-        async def fetch(page: int, per_page: int) -> dict[str, Any]:
-            p = {**params, "page": page, "per_page": per_page, "include[]": ["availabilities", "appointment_types"]}
-            return await handle_nexhealth_request(self._client, "GET", "/providers", params=p)
+        async def fetch(page_params: dict[str, Any]) -> dict[str, Any]:
+            p = {
+                **params,
+                **page_params,
+                "include[]": ["availabilities", "appointment_types"],
+            }
+            return await handle_nexhealth_request(
+                self._client, "GET", "/providers", params=p
+            )
 
-        all_raw = await fetch_all_pages(fetch, per_page=50, max_items=200)
+        all_raw = await fetch_all_pages(
+            fetch,
+            api_contract=self._api_contract,
+            collection_key="providers",
+            per_page=50,
+            max_items=200,
+        )
         return [mappers.to_provider(p) for p in all_raw]
 
     # ── Appointment Queries ─────────────────────────────────────────────
@@ -320,44 +719,333 @@ class NexHealthAdapter(PMSAdapter, SupportsAppointmentTypeCreation, SupportsAvai
             # Scan pages until we find at least one active appointment.
             # We keep this bounded for latency/cost safety.
             per_page = 50
+            end_cursor: str | None = None
             for page in range(1, 11):
                 params = self._default_params()
-                params["start_date"] = date_str
-                params["end_date"] = date_str
-                params["provider_id"] = _strip(provider_id)
-                params["page"] = page
+                # NexHealth /appointments expects `start`/`end` (not start_date/end_date).
+                params["start"] = date_str
+                params["end"] = date_str
+                if self._api_contract is NexHealthAPIContract.STABLE_V3:
+                    params["provider_ids[]"] = [_strip(provider_id)]
+                else:
+                    params["provider_id"] = _strip(provider_id)
+                params["cancelled"] = False
                 params["per_page"] = per_page
+                if self._api_contract is NexHealthAPIContract.STABLE_V3:
+                    if end_cursor:
+                        params["end_cursor"] = end_cursor
+                else:
+                    params["page"] = page
 
                 raw = await handle_nexhealth_request(
                     self._client, "GET", "/appointments", params=params
                 )
-                data = raw.get("data", [])
-                if not isinstance(data, list):
+                data = extract_list_items(raw, collection_key="appointments")
+                raw_data = raw.get("data") if isinstance(raw, dict) else None
+                has_supported_list_shape = isinstance(raw_data, list) or (
+                    isinstance(raw_data, dict)
+                    and any(
+                        isinstance(raw_data.get(key), list)
+                        for key in ("appointments", "items")
+                    )
+                )
+                if not data and not has_supported_list_shape:
                     logger.warning(
-                        f"Unexpected appointments payload type while checking provider schedule: {type(data)}"
+                        "Unexpected appointments payload type while checking provider schedule: %s",
+                        type(raw_data),
                     )
                     return True
 
                 for appt in data:
-                    cancelled = bool(appt.get("cancelled", False) or appt.get("canceled", False))
+                    cancelled = bool(
+                        appt.get("cancelled", False) or appt.get("canceled", False)
+                    )
                     if not cancelled:
                         return True
 
-                # No more pages to scan.
+                if self._api_contract is NexHealthAPIContract.STABLE_V3:
+                    page_info = extract_page_info(raw)
+                    if not page_info or not page_info.get("has_next_page"):
+                        break
+                    next_cursor = page_info.get("end_cursor")
+                    if not next_cursor:
+                        logger.warning(
+                            "Appointments cursor response has next page but no end_cursor"
+                        )
+                        break
+                    end_cursor = str(next_cursor)
+                    continue
+
+                # No more offset pages to scan.
                 if len(data) < per_page:
                     break
 
             return False
         except Exception as e:
-            logger.warning(f"Failed to check provider appointments: {e}")
+            # Item 39: a NexHealth error quotes the request and response, both
+            # of which carry patient records. Summarised, never interpolated.
+            logger.warning(
+                "Failed to check provider appointments: %s", safe_error_summary(e)
+            )
             return True  # safe fallback — don't hide slots
+
+    async def get_appointment(self, appointment_id: str) -> dict[str, Any] | None:
+        """Fetch a single appointment's current record from NexHealth.
+
+        Returns the raw appointment dict (carrying ``cancelled``/``start_time``)
+        or ``None`` if it cannot be read. Used by the dispatch-time revalidator
+        (Plan 09) so a cancelled or rescheduled appointment is not messaged.
+        Goes through ``handle_nexhealth_request`` so the shared API key's
+        rate-limit/pacing wrapper still applies.
+        """
+        params = self._default_params()
+        try:
+            raw = await handle_nexhealth_request(
+                self._client,
+                "GET",
+                f"/appointments/{_strip(appointment_id)}",
+                params=params,
+            )
+        except Exception:
+            return None
+        data = raw.get("data")
+        if isinstance(data, list):
+            data = data[0] if data else None
+        if not isinstance(data, dict) or not data.get("id"):
+            return None
+        return data
+
+    async def list_appointments(
+        self,
+        *,
+        start_date: str,
+        end_date: str,
+        max_items: int = 1000,
+        cancellation_mode: AppointmentCancellationMode = "active_only",
+    ) -> list[dict[str, Any]]:
+        """List raw NexHealth appointments for this location/date window.
+
+        Used by Plan 09 backfill and reconciliation. This intentionally returns
+        raw appointment dictionaries because the projection only needs a small
+        scheduling subset and NexHealth payloads vary by PMS. ``cancellation_mode``
+        is explicit because stable v3 changed the omitted ``cancelled`` filter
+        to include EHR-deleted appointments. The call still goes through
+        ``handle_nexhealth_request`` + ``fetch_all_pages`` so the shared client,
+        auth, and rate limiter remain authoritative.
+        """
+        params = self._default_params()
+        all_rows: list[dict[str, Any]] = []
+        seen_ids: set[str] = set()
+
+        for cancelled in _appointment_cancelled_filters(cancellation_mode):
+
+            async def fetch(page_params: dict[str, Any]) -> dict[str, Any]:
+                p = {
+                    **params,
+                    # NexHealth /appointments expects `start`/`end` (not start_date/end_date).
+                    "start": start_date,
+                    "end": end_date,
+                    "cancelled": cancelled,
+                    **page_params,
+                }
+                return await handle_nexhealth_request(
+                    self._client, "GET", "/appointments", params=p
+                )
+
+            rows = await fetch_all_pages(
+                fetch,
+                api_contract=self._api_contract,
+                collection_key="appointments",
+                per_page=50,
+                max_items=max_items,
+            )
+            for row in rows:
+                identity = _appointment_identity(row)
+                if identity:
+                    if identity in seen_ids:
+                        continue
+                    seen_ids.add(identity)
+                all_rows.append(row)
+
+        return all_rows
+
+    async def list_patient_recalls(
+        self, *, patient_id: str | None = None, max_items: int = 500
+    ) -> list[dict[str, Any]]:
+        """List patient recall records for this location from NexHealth.
+
+        NexHealth exposes recall queues (``GET /patient_recalls``) scoped by subdomain +
+        location (capability "View patient recalls"). Each record carries a
+        ``patient_id`` and a ``date_due``; the recall scanner derives "overdue"
+        from the due date. Paged via the shared ``fetch_all_pages`` helper so the
+        shared API key's rate limiter/pacing wrapper still governs the pull.
+        """
+        params = self._default_params()
+        if patient_id:
+            params["patient_id"] = _strip(patient_id)
+
+        async def fetch(page_params: dict[str, Any]) -> dict[str, Any]:
+            p = {**params, **page_params}
+            return await handle_nexhealth_request(
+                # `/recalls` does not exist — it 404s on BOTH v2 and v3. The real
+                # route is `/patient_recalls`; verified live, 8,862 rows for one
+                # clinic. This call had never succeeded.
+                self._client,
+                "GET",
+                "/patient_recalls",
+                params=p,
+            )
+
+        return await fetch_all_pages(
+            fetch,
+            api_contract=self._api_contract,
+            collection_key="patient_recalls",
+            per_page=50,
+            max_items=max_items,
+        )
+
+    async def list_clinical_notes(
+        self, patient_id: str, *, max_items: int = 500
+    ) -> list[UniversalClinicalNote]:
+        """List PHI-minimized clinical-note metadata for one patient."""
+        params = {**self._default_params(), "patient_id": _strip(patient_id)}
+
+        async def fetch(page_params: dict[str, Any]) -> dict[str, Any]:
+            p = {**params, **page_params}
+            return await handle_nexhealth_request(
+                self._client,
+                "GET",
+                "/clinical_notes",
+                params=p,
+            )
+
+        rows = await fetch_all_pages(
+            fetch,
+            api_contract=self._api_contract,
+            collection_key="clinical_notes",
+            per_page=50,
+            max_items=max_items,
+        )
+        return [mappers.to_clinical_note(row) for row in rows]
+
+    async def list_document_types(
+        self, *, active: bool | None = None, max_items: int = 500
+    ) -> list[UniversalDocumentType]:
+        """List the location's document type catalog from NexHealth."""
+        params = self._default_params()
+        if active is not None:
+            params["active"] = active
+
+        async def fetch(page_params: dict[str, Any]) -> dict[str, Any]:
+            p = {**params, **page_params}
+            return await handle_nexhealth_request(
+                self._client,
+                "GET",
+                "/document_types",
+                params=p,
+            )
+
+        rows = await fetch_all_pages(
+            fetch,
+            api_contract=self._api_contract,
+            collection_key="document_types",
+            per_page=50,
+            max_items=max_items,
+        )
+        return [mappers.to_document_type(row) for row in rows]
+
+    async def list_patient_documents(
+        self, patient_id: str, *, max_items: int = 500
+    ) -> list[UniversalPatientDocument]:
+        """List PHI-minimized document metadata for one patient."""
+        params: dict[str, Any] = {}
+        if self._subdomain:
+            params["subdomain"] = self._subdomain
+
+        raw_patient_id = _strip(patient_id)
+        raw = await handle_nexhealth_request(
+            self._client,
+            "GET",
+            f"/patients/{raw_patient_id}/documents",
+            params=params,
+        )
+        rows = extract_list_items(raw, collection_key="documents")[:max_items]
+        return [
+            mappers.to_patient_document(row, patient_id=raw_patient_id) for row in rows
+        ]
+
+    async def list_recall_types(
+        self, *, max_items: int = 500
+    ) -> list[UniversalRecallType]:
+        """List the location's recall type catalog from NexHealth."""
+        params = self._default_params()
+
+        async def fetch(page_params: dict[str, Any]) -> dict[str, Any]:
+            p = {**params, **page_params}
+            return await handle_nexhealth_request(
+                self._client,
+                "GET",
+                "/recall_types",
+                params=p,
+            )
+
+        rows = await fetch_all_pages(
+            fetch,
+            api_contract=self._api_contract,
+            collection_key="recall_types",
+            per_page=50,
+            max_items=max_items,
+        )
+        return [mappers.to_recall_type(row) for row in rows]
+
+    async def list_treatment_plans(
+        self,
+        patient_id: str,
+        *,
+        status: str | None = None,
+        max_items: int = 500,
+    ) -> list[UniversalTreatmentPlan]:
+        """List PHI-minimized treatment-plan metadata for one patient."""
+        params = {**self._default_params(), "patient_id": _strip(patient_id)}
+        if status:
+            params["status"] = status
+
+        async def fetch(page_params: dict[str, Any]) -> dict[str, Any]:
+            p = {**params, **page_params}
+            return await handle_nexhealth_request(
+                self._client,
+                "GET",
+                "/treatment_plans",
+                params=p,
+            )
+
+        rows = await fetch_all_pages(
+            fetch,
+            api_contract=self._api_contract,
+            collection_key="treatment_plans",
+            per_page=50,
+            max_items=max_items,
+        )
+        return [mappers.to_treatment_plan(row) for row in rows]
 
     # ── Operatories ──────────────────────────────────────────────────────
 
     async def list_operatories(self) -> list[UniversalOperatory]:
-        params = {**self._default_params(), "page": 1, "per_page": 50}
-        raw = await handle_nexhealth_request(self._client, "GET", "/operatories", params=params)
-        data = raw.get("data", [])
+        params = self._default_params()
+
+        async def fetch(page_params: dict[str, Any]) -> dict[str, Any]:
+            p = {**params, **page_params}
+            return await handle_nexhealth_request(
+                self._client, "GET", "/operatories", params=p
+            )
+
+        data = await fetch_all_pages(
+            fetch,
+            api_contract=self._api_contract,
+            collection_key="operatories",
+            per_page=50,
+            max_items=500,
+        )
         return [mappers.to_operatory(op) for op in data]
 
     # ── Slots ────────────────────────────────────────────────────────────
@@ -369,6 +1057,7 @@ class NexHealthAdapter(PMSAdapter, SupportsAppointmentTypeCreation, SupportsAvai
         provider_id: str | list[str] | None = None,
         appointment_type_id: str | None = None,
         operatory_ids: list[str] | None = None,
+        tz_offset: str | None = None,
     ) -> list[UniversalSlot]:
         result = await self.find_available_slots(
             start_date=start_date,
@@ -376,6 +1065,7 @@ class NexHealthAdapter(PMSAdapter, SupportsAppointmentTypeCreation, SupportsAvai
             provider_id=provider_id,
             appointment_type_id=appointment_type_id,
             operatory_ids=operatory_ids,
+            tz_offset=tz_offset,
         )
         return result.slots
 
@@ -386,7 +1076,9 @@ class NexHealthAdapter(PMSAdapter, SupportsAppointmentTypeCreation, SupportsAvai
         provider_id: str | list[str] | None = None,
         appointment_type_id: str | None = None,
         operatory_ids: list[str] | None = None,
+        tz_offset: str | None = None,
     ) -> SlotSearchResult:
+        del tz_offset
         params: dict[str, Any] = {
             "start_date": start_date,
             "days": days,
@@ -411,7 +1103,12 @@ class NexHealthAdapter(PMSAdapter, SupportsAppointmentTypeCreation, SupportsAvai
         if operatory_ids:
             params["operatory_ids[]"] = [_strip(oid) for oid in operatory_ids]
 
-        raw = await handle_nexhealth_request(self._client, "GET", "/appointment_slots", params=params)
+        raw = await handle_nexhealth_request(
+            self._client,
+            "GET",
+            self._api_contract.slot_search_path,
+            params=params,
+        )
         # NexHealth returns nested: data = [{lid, pid, slots: [...], next_available_date}]
         # When a provider group has no slots in the window, next_available_date
         # holds the next date that does (or null if none within ~180 days).
@@ -420,9 +1117,11 @@ class NexHealthAdapter(PMSAdapter, SupportsAppointmentTypeCreation, SupportsAvai
         for group in raw.get("data", []):
             group_pid = group.get("pid")
             group_lid = group.get("lid")
+            group_operatory_id = group.get("operatory_id") or group.get("oid")
             for slot in group.get("slots", []):
                 slot["_pid"] = group_pid
                 slot["_lid"] = group_lid
+                slot["_operatory_id"] = group_operatory_id
                 result.append(mappers.to_slot(slot, appointment_type_id))
             next_date = group.get("next_available_date")
             if next_date and group_pid is not None:
@@ -437,17 +1136,146 @@ class NexHealthAdapter(PMSAdapter, SupportsAppointmentTypeCreation, SupportsAvai
 
     # ── Booking ──────────────────────────────────────────────────────────
 
+    async def _appointment_type_duration_minutes(
+        self, appointment_type_id: str | None
+    ) -> int | None:
+        if not appointment_type_id:
+            return None
+        wanted = _raw_id(appointment_type_id)
+        try:
+            appointment_types = await self.list_appointment_types()
+        except Exception as exc:
+            logger.warning(
+                "Failed to load appointment type duration for slot validation: %s",
+                exc,
+            )
+            return None
+
+        for appointment_type in appointment_types:
+            candidates = {
+                _raw_id(appointment_type.id),
+                _raw_id(appointment_type.source_id),
+                _raw_id(
+                    appointment_type.source_metadata.get("nh_appt_type_id")
+                    if appointment_type.source_metadata
+                    else None
+                ),
+            }
+            if wanted in candidates:
+                return appointment_type.duration_minutes
+        return None
+
+    def _match_selected_slot(
+        self,
+        slots: list[UniversalSlot],
+        req: BookingRequest,
+        duration_minutes: int | None,
+    ) -> str | None:
+        for slot in slots:
+            if not _slot_core_matches_booking(slot, req):
+                continue
+            end_time = _booking_end_time_for_slot(slot, req, duration_minutes)
+            if end_time:
+                return end_time
+        return None
+
+    async def _validate_selected_slot_before_booking(
+        self, req: BookingRequest
+    ) -> _SlotValidationResult:
+        start_date = _slot_search_date(req.slot_start)
+        if not start_date:
+            return _SlotValidationResult(
+                ok=False,
+                error="Selected appointment time is invalid. Please offer fresh slots.",
+            )
+
+        try:
+            slot_result = await self.find_available_slots(
+                start_date=start_date,
+                days=1,
+                provider_id=req.provider_id,
+                appointment_type_id=req.appointment_type_id,
+                operatory_ids=[req.operatory_id] if req.operatory_id else None,
+            )
+        except Exception as exc:
+            logger.warning("Failed to validate selected NexHealth slot: %s", exc)
+            return _SlotValidationResult(
+                ok=False,
+                error="Unable to validate the selected slot. Please offer fresh slots.",
+            )
+
+        duration_minutes = req.duration_min
+        end_time = self._match_selected_slot(slot_result.slots, req, duration_minutes)
+        if end_time:
+            return _SlotValidationResult(ok=True, end_time=end_time)
+
+        core_match = any(
+            _slot_core_matches_booking(slot, req) for slot in slot_result.slots
+        )
+        core_match_without_end = any(
+            _slot_core_matches_booking(slot, req) and not slot.end
+            for slot in slot_result.slots
+        )
+        if (
+            core_match_without_end
+            and duration_minutes is None
+            and req.appointment_type_id
+        ):
+            duration_minutes = await self._appointment_type_duration_minutes(
+                req.appointment_type_id
+            )
+            end_time = self._match_selected_slot(
+                slot_result.slots,
+                req,
+                duration_minutes,
+            )
+            if end_time:
+                return _SlotValidationResult(ok=True, end_time=end_time)
+
+        if core_match_without_end:
+            return _SlotValidationResult(
+                ok=False,
+                error=(
+                    "Unable to validate the selected slot duration. "
+                    "Please offer fresh slots."
+                ),
+            )
+
+        if core_match:
+            return _SlotValidationResult(
+                ok=False,
+                error="Selected slot is no longer available. Please offer fresh slots.",
+            )
+
+        return _SlotValidationResult(
+            ok=False,
+            error="Selected slot is no longer available. Please offer fresh slots.",
+        )
+
     async def book_appointment(self, req: BookingRequest) -> BookingResult:
         from src.app.api.models import CreateAppointmentBody, CreateAppointmentRequest
+
+        validation = await self._validate_selected_slot_before_booking(req)
+        if not validation.ok:
+            return BookingResult(
+                success=False,
+                source="nexhealth",
+                status="error",
+                error=validation.error or "Selected slot is no longer available.",
+            )
 
         body = CreateAppointmentBody(
             patient_id=_strip(req.patient_id),
             provider_id=_strip(req.provider_id),
             start_time=req.slot_start,
-            end_time=req.slot_end,
+            end_time=req.slot_end or validation.end_time,
             operatory_id=_strip(req.operatory_id) if req.operatory_id else None,
-            appointment_type_id=_strip(req.appointment_type_id) if req.appointment_type_id else None,
-            descriptor_ids=[_strip(d) for d in req.descriptor_ids] if req.descriptor_ids else None,
+            appointment_type_id=_strip(req.appointment_type_id)
+            if req.appointment_type_id
+            else None,
+            descriptor_ids=[_strip(d) for d in req.descriptor_ids]
+            if req.descriptor_ids
+            else None,
             note=req.note,
         )
         request_body = CreateAppointmentRequest(appt=body)
@@ -457,7 +1285,11 @@ class NexHealthAdapter(PMSAdapter, SupportsAppointmentTypeCreation, SupportsAvai
 
         try:
             raw = await handle_nexhealth_request(
-                self._client, "POST", "/appointments", params=params, json=request_body.model_dump()
+                self._client,
+                "POST",
+                "/appointments",
+                params=params,
+                json=request_body.model_dump(),
             )
             if raw.get("code") is False or raw.get("error"):
                 return BookingResult(
@@ -465,6 +1297,7 @@ class NexHealthAdapter(PMSAdapter, SupportsAppointmentTypeCreation, SupportsAvai
                     source="nexhealth",
                     status="error",
                     error=raw.get("error") or raw.get("description") or "Unknown error",
+                    message="Selected slot could not be booked. Please offer fresh slots.",
                 )
             result = mappers.to_booking_result(raw, success=True)
             # Carry the requested appointment type through so downstream
@@ -473,7 +1306,9 @@ class NexHealthAdapter(PMSAdapter, SupportsAppointmentTypeCreation, SupportsAvai
                 result.appointment_type_id = _strip(req.appointment_type_id)
             return result
         except Exception as e:
-            return BookingResult(success=False, source="nexhealth", status="error", error=str(e))
+            return BookingResult(
+                success=False, source="nexhealth", status="error", error=str(e)
+            )
 
     async def cancel_appointment(self, appointment_id: str) -> BookingResult:
         from src.app.api.models import CancelAppointmentBody, CancelAppointmentRequest
@@ -483,15 +1318,65 @@ class NexHealthAdapter(PMSAdapter, SupportsAppointmentTypeCreation, SupportsAvai
 
         try:
             raw = await handle_nexhealth_request(
-                self._client, "PATCH", f"/appointments/{_strip(appointment_id)}", params=params, json=body.model_dump()
+                self._client,
+                "PATCH",
+                f"/appointments/{_strip(appointment_id)}",
+                params=params,
+                json=body.model_dump(),
             )
             if raw.get("code") is False:
-                return BookingResult(success=False, source="nexhealth", status="error", error=raw.get("error", "Failed"))
-            return BookingResult(success=True, source="nexhealth", status="cancelled", message="Appointment cancelled successfully.")
+                return BookingResult(
+                    success=False,
+                    source="nexhealth",
+                    status="error",
+                    error=raw.get("error", "Failed"),
+                )
+            return BookingResult(
+                success=True,
+                source="nexhealth",
+                status="cancelled",
+                message="Appointment cancelled successfully.",
+            )
         except Exception as e:
-            return BookingResult(success=False, source="nexhealth", status="error", error=str(e))
+            return BookingResult(
+                success=False, source="nexhealth", status="error", error=str(e)
+            )
 
-    async def reschedule_appointment(self, old_appointment_id: str, new_booking: BookingRequest) -> BookingResult:
+    async def confirm_appointment(self, appointment_id: str) -> BookingResult:
+        from src.app.api.models import ConfirmAppointmentBody, ConfirmAppointmentRequest
+
+        body = ConfirmAppointmentRequest(appt=ConfirmAppointmentBody(confirmed=True))
+        params = self._default_params()
+
+        try:
+            raw = await handle_nexhealth_request(
+                self._client,
+                "PATCH",
+                f"/appointments/{_strip(appointment_id)}",
+                params=params,
+                json=body.model_dump(),
+            )
+            if raw.get("code") is False:
+                return BookingResult(
+                    success=False,
+                    source="nexhealth",
+                    status="error",
+                    error=raw.get("error", "Failed"),
+                )
+            return BookingResult(
+                success=True,
+                source="nexhealth",
+                status="confirmed",
+                message="Appointment confirmed successfully.",
+            )
+        except Exception as e:
+            return BookingResult(
+                success=False, source="nexhealth", status="error", error=str(e)
+            )
+
+    async def reschedule_appointment(
+        self, old_appointment_id: str, new_booking: BookingRequest
+    ) -> BookingResult:
         # Book the new slot first so the patient never loses coverage if the new
         # booking fails. Only cancel the old appointment after the new one is
         # confirmed.
@@ -500,20 +1385,117 @@ class NexHealthAdapter(PMSAdapter, SupportsAppointmentTypeCreation, SupportsAvai
             return book_result
 
         cancel_result = await self.cancel_appointment(old_appointment_id)
-        if not cancel_result.success and "already cancelled" not in (cancel_result.error or "").lower():
+        if (
+            not cancel_result.success
+            and "already cancelled" not in (cancel_result.error or "").lower()
+        ):
             book_result.message = (
                 "Rescheduled (new booked) but failed to cancel old appointment: "
                 f"{cancel_result.error}. Please cancel manually."
             )
         else:
-            book_result.message = "Rescheduled successfully (new booked, old cancelled)."
+            book_result.message = (
+                "Rescheduled successfully (new booked, old cancelled)."
+            )
         return book_result
+
+    async def reschedule_appointment_v2(
+        self, old_appointment_id: str, new_booking: BookingRequest
+    ) -> BookingResult:
+        if not self._can_patch_reschedule_directly():
+            return await self.reschedule_appointment(old_appointment_id, new_booking)
+
+        validation = await self._validate_selected_slot_before_booking(new_booking)
+        if not validation.ok:
+            return BookingResult(
+                success=False,
+                source="nexhealth",
+                status="error",
+                error=validation.error or "Selected slot is no longer available.",
+            )
+
+        end_time = new_booking.slot_end or validation.end_time
+        if not end_time:
+            return await self.reschedule_appointment(old_appointment_id, new_booking)
+
+        return await self._patch_reschedule_appointment(
+            old_appointment_id,
+            new_booking,
+            end_time=end_time,
+        )
+
+    def _can_patch_reschedule_directly(self) -> bool:
+        if self._api_contract is not NexHealthAPIContract.STABLE_V3:
+            return False
+
+        # reschedule_appointment_v2: NexHealth stable v3 direct appointment
+        # updates are supported only for appointment-update PMSes: Dentrix,
+        # Dentrix Enterprise, Eaglesoft, and Open Dental. Denticon appears in
+        # the migration guide but not the endpoint reference, so do not enable
+        # it without explicit confirmation.
+        return _direct_reschedule_patch_supported(self._direct_reschedule_pms_name)
+
+    async def _patch_reschedule_appointment(
+        self,
+        old_appointment_id: str,
+        new_booking: BookingRequest,
+        *,
+        end_time: str,
+    ) -> BookingResult:
+        appt: dict[str, Any] = {
+            "start_time": new_booking.slot_start,
+            "end_time": end_time,
+        }
+        if new_booking.operatory_id:
+            appt["operatory_id"] = _strip(new_booking.operatory_id)
+        if new_booking.note:
+            appt["note"] = new_booking.note
+
+        params = self._default_params()
+
+        try:
+            raw = await handle_nexhealth_request(
+                self._client,
+                "PATCH",
+                f"/appointments/{_strip(old_appointment_id)}",
+                params=params,
+                json={"appt": appt},
+            )
+            if raw.get("code") is False:
+                return BookingResult(
+                    success=False,
+                    source="nexhealth",
+                    status="error",
+                    error=raw.get("error", "Failed"),
+                )
+            result = mappers.to_booking_result(raw, success=True)
+            result.status = "rescheduled"
+            result.message = "Rescheduled successfully."
+            if not result.id:
+                result.id = f"{PREFIX}-{_strip(old_appointment_id)}"
+            if not result.start:
+                result.start = new_booking.slot_start
+            if not result.end:
+                result.end = end_time
+            if not result.patient_id:
+                result.patient_id = new_booking.patient_id
+            if not result.provider_id:
+                result.provider_id = new_booking.provider_id
+            if not result.appointment_type_id and new_booking.appointment_type_id:
+                result.appointment_type_id = _strip(new_booking.appointment_type_id)
+            return result
+        except Exception as e:
+            return BookingResult(
+                success=False, source="nexhealth", status="error", error=str(e)
+            )
 
     # ── Locations ────────────────────────────────────────────────────────
 
     async def list_locations(self) -> list[UniversalLocation]:
         params: dict[str, Any] = {"page": 1, "per_page": 25}
-        raw = await handle_nexhealth_request(self._client, "GET", "/institutions", params=params)
+        raw = await handle_nexhealth_request(
+            self._client, "GET", "/institutions", params=params
+        )
         data = raw.get("data", [])
 
         locations: list[UniversalLocation] = []
@@ -524,21 +1506,61 @@ class NexHealthAdapter(PMSAdapter, SupportsAppointmentTypeCreation, SupportsAvai
         return locations
 
     async def get_location(self, location_id: str) -> UniversalLocation | None:
+        """The practice's own record for one location, including its timezone.
+
+        The subdomain is not required by the endpoint — the id alone resolves.
+        It is sent because a platform-wide API key can see every tenant, so an
+        unscoped lookup on a stale or mistyped ``nexhealth_location_id`` would
+        quietly return another practice's location rather than nothing.
+        """
+        params: dict[str, Any] = {}
+        if self._subdomain:
+            params["subdomain"] = self._subdomain
         try:
-            raw = await handle_nexhealth_request(self._client, "GET", f"/locations/{_strip(location_id)}")
+            raw = await handle_nexhealth_request(
+                self._client,
+                "GET",
+                f"/locations/{_strip(location_id)}",
+                params=params,
+            )
             loc = raw.get("data", {})
             return mappers.to_location(loc, subdomain=self._subdomain) if loc else None
         except Exception:
+            # Still None rather than raising: every caller is a background
+            # sweep that must carry on to the next location. Logged so a
+            # persistently failing subdomain is visible.
+            logger.warning(
+                "nexhealth get_location failed subdomain=%s location_id=%s",
+                self._subdomain,
+                location_id,
+                exc_info=True,
+            )
             return None
 
     # ── Setup ────────────────────────────────────────────────────────────
 
     async def get_setup_steps(self) -> list[SetupStep]:
         return [
-            SetupStep(id="select_types", label="Select appointment types", description="Choose which appointment types to offer"),
-            SetupStep(id="set_durations", label="Set durations", description="Set how long each appointment type takes"),
-            SetupStep(id="link_operatories", label="Assign operatories", description="Link rooms/chairs to appointment types"),
-            SetupStep(id="set_schedules", label="Set provider schedules", description="Configure provider availability by day"),
+            SetupStep(
+                id="select_types",
+                label="Select appointment types",
+                description="Choose which appointment types to offer",
+            ),
+            SetupStep(
+                id="set_durations",
+                label="Set durations",
+                description="Set how long each appointment type takes",
+            ),
+            SetupStep(
+                id="link_operatories",
+                label="Assign operatories",
+                description="Link rooms/chairs to appointment types",
+            ),
+            SetupStep(
+                id="set_schedules",
+                label="Set provider schedules",
+                description="Configure provider availability by day",
+            ),
         ]
 
     # ── NexHealth-specific setup (optional capabilities) ─────────────────
@@ -546,13 +1568,24 @@ class NexHealthAdapter(PMSAdapter, SupportsAppointmentTypeCreation, SupportsAvai
     async def list_pms_descriptors(self) -> list[dict]:
         params = self._default_params()
         raw = await handle_nexhealth_request(
-            self._client, "GET", f"/locations/{self._location_id}/appointment_descriptors", params=params
+            self._client,
+            "GET",
+            f"/locations/{self._location_id}/appointment_descriptors",
+            params=params,
         )
         return raw.get("data", [])
 
     async def create_appointment_type(
-        self, name: str, duration_minutes: int, descriptor_ids: list[str]
+        self,
+        name: str,
+        duration_minutes: int,
+        descriptor_ids: list[str],
+        *,
+        provider_ids: list[str] | None = None,
+        operatory_ids: list[str] | None = None,
+        bookable_online: bool | None = None,
     ) -> UniversalAppointmentType:
+        del provider_ids, operatory_ids, bookable_online
         params = self._default_params()
         # NexHealth REST convention: write endpoints expect the resource
         # wrapped under the singular resource name. A flat body returns
@@ -565,7 +1598,9 @@ class NexHealthAdapter(PMSAdapter, SupportsAppointmentTypeCreation, SupportsAvai
                 "appointment_descriptor_ids": [_strip(d) for d in descriptor_ids],
             }
         }
-        raw = await handle_nexhealth_request(self._client, "POST", "/appointment_types", params=params, json=body)
+        raw = await handle_nexhealth_request(
+            self._client, "POST", "/appointment_types", params=params, json=body
+        )
         return mappers.to_appointment_type(raw.get("data", {}))
 
     async def update_appointment_type(
@@ -574,7 +1609,11 @@ class NexHealthAdapter(PMSAdapter, SupportsAppointmentTypeCreation, SupportsAvai
         name: str | None = None,
         duration_minutes: int | None = None,
         descriptor_ids: list[str] | None = None,
+        provider_ids: list[str] | None = None,
+        operatory_ids: list[str] | None = None,
+        bookable_online: bool | None = None,
     ) -> UniversalAppointmentType:
+        del provider_ids, operatory_ids, bookable_online
         params = self._default_params()
         payload: dict[str, Any] = {}
         if name is not None:
@@ -582,6 +1621,7 @@ class NexHealthAdapter(PMSAdapter, SupportsAppointmentTypeCreation, SupportsAvai
         if duration_minutes is not None:
             payload["minutes"] = duration_minutes
         if descriptor_ids is not None:
+
             def _to_int(value: str) -> int | str:
                 stripped = _strip(value)
                 try:
@@ -599,6 +1639,15 @@ class NexHealthAdapter(PMSAdapter, SupportsAppointmentTypeCreation, SupportsAvai
             json={"appointment_type": payload},
         )
         return mappers.to_appointment_type(raw.get("data", {}))
+
+    async def delete_appointment_type(self, appointment_type_id: str) -> None:
+        params = self._default_params()
+        await handle_nexhealth_request(
+            self._client,
+            "DELETE",
+            f"/appointment_types/{_strip(appointment_type_id)}",
+            params=params,
+        )
 
     async def link_availability(
         self,
@@ -619,7 +1668,11 @@ class NexHealthAdapter(PMSAdapter, SupportsAppointmentTypeCreation, SupportsAvai
             "end_time": end_time,
         }
         return await handle_nexhealth_request(
-            self._client, "POST", "/availabilities", params=params, json={"availability": body}
+            self._client,
+            "POST",
+            self._api_contract.working_windows_path,
+            params=params,
+            json={self._api_contract.working_window_wrapper_key: body},
         )
 
     async def update_availability(
@@ -635,7 +1688,9 @@ class NexHealthAdapter(PMSAdapter, SupportsAppointmentTypeCreation, SupportsAvai
         params = self._default_params()
         body: dict[str, Any] = {}
         if appointment_type_ids is not None:
-            body["appointment_type_ids"] = [int(_strip(aid)) for aid in appointment_type_ids]
+            body["appointment_type_ids"] = [
+                int(_strip(aid)) for aid in appointment_type_ids
+            ]
         if days is not None:
             body["days"] = days
         if start_time is not None:
@@ -648,37 +1703,32 @@ class NexHealthAdapter(PMSAdapter, SupportsAppointmentTypeCreation, SupportsAvai
             body["active"] = active
 
         raw = await handle_nexhealth_request(
-            self._client, "PATCH", f"/availabilities/{_strip(availability_id)}",
-            params=params, json={"availability": body},
+            self._client,
+            "PATCH",
+            f"{self._api_contract.working_windows_path}/{_strip(availability_id)}",
+            params=params,
+            json={self._api_contract.working_window_wrapper_key: body},
         )
         return raw.get("data", {})
 
-    # Availabilities are the slowest read we make: NexHealth pre-expands them
-    # into one row per date, and the provider-embedded fetch below pulls every
-    # provider's set in one go. Give it more headroom than the 30s client
-    # default, and no retries — a call that already blew a 60s budget will blow
-    # it again, and the default 3 retries would turn one slow load into four.
+    # No practical cap on work windows. NexHealth pre-expands them into one row
+    # per date, so a real schedule is thousands of rows — measured live: 2,735
+    # for one location, 2,045 for its busiest provider — and the number grows
+    # with how far ahead the PMS expands. Any cap here truncates silently: the
+    # return value carries no signal, so callers treat a short list as complete.
+    # Three of them do real damage with it — the setup display, the bulk-link
+    # preview whose matched_count drives batched writes, and the Retell
+    # appointment-type gate, which rejects a legitimate type when the linking
+    # window falls past the cut.
     #
-    # NOTE: CloudFront caps the /api/* origin read at 30s (infra stack.py sets
-    # no read_timeout on that behavior), so until that is raised the browser
-    # still gives up first. This budget helps callers that reach the ALB
-    # directly, and stops the backend burning ~2 minutes on a hung upstream.
-    _AVAILABILITY_TIMEOUT_SECONDS = 60.0
-    # One clinic's busiest provider is ~2k upcoming rows; the location total is
-    # ~2.7k. Cap well above that so a real schedule is never truncated, but
-    # still bounded against a runaway.
-    _WORKING_HOURS_MAX_ITEMS = 20000
+    # This is a runaway backstop, not a data limit: it sits far above any
+    # plausible schedule, and cursor pagination stops on has_next_page long
+    # before it. Hitting it means something is wrong, not that a clinic is big.
+    _WORKING_HOURS_MAX_ITEMS = 1_000_000
 
     async def list_availabilities(self, **kwargs: Any) -> list[dict]:
         provider_id = kwargs.pop("provider_id", None)
-        # Default ON. Past work windows are never useful to any caller — the
-        # setup UI shows upcoming schedules and the voice agent books forward —
-        # and NexHealth pre-expands availabilities into one row per date, so a
-        # practice's history is by far the largest part of this payload. This
-        # used to default to False, which left the embedded path below
-        # unfiltered while the direct call hardcoded True: the two sources
-        # disagreed, and the permissive one was the expensive one.
-        ignore_past_dates = bool(kwargs.get("ignore_past_dates", True))
+        ignore_past_dates = bool(kwargs.get("ignore_past_dates", False))
 
         params = {
             **self._default_params(),
@@ -691,113 +1741,66 @@ class NexHealthAdapter(PMSAdapter, SupportsAppointmentTypeCreation, SupportsAvai
         if "include[]" not in params:
             params["include[]"] = ["appointment_types"]
 
-        if self._working_hours_contract is NexHealthAPIContract.STABLE_V3:
-            return await self._list_working_hours_v3(
+        async def fetch(page_params: dict[str, Any]) -> dict[str, Any]:
+            p = {**params, **page_params}
+            return await handle_nexhealth_request(
+                self._client,
+                "GET",
+                self._api_contract.working_windows_path,
+                params=p,
+            )
+
+        direct_items = await fetch_all_pages(
+            fetch,
+            api_contract=self._api_contract,
+            collection_key=self._api_contract.working_windows_path.strip("/"),
+            per_page=100,
+            max_items=self._WORKING_HOURS_MAX_ITEMS,
+        )
+
+        # NexHealth's v2 /availabilities endpoint can return 200 with no rows for
+        # normal PMS-synced provider schedules. Those same work windows are
+        # exposed on /providers when availabilities are included, so that
+        # embedded source is the fallback read path for setup.
+        #
+        # Only reach for it when the primary read came back empty. It is by far
+        # the most expensive call we make — it pulls EVERY provider's embedded
+        # rows regardless of which provider was asked for (1.57 MB, ~26s for one
+        # clinic). Measured on v3: /working_hours returned 3,645 rows and the
+        # fallback contributed 0 additional ids to the merged result, so paying
+        # for it unconditionally doubled the request time for nothing.
+        # v3 ONLY. On v2 the two sources are complementary, not redundant:
+        # /availabilities returned 1,386 rows for a provider whose true total is
+        # 2,036, with the embedded path supplying the rest. Skipping it there
+        # silently loses a third of the schedule. On v3 /working_hours is a
+        # superset, so the fallback is pure cost.
+        skip_fallback = self._api_contract is NexHealthAPIContract.STABLE_V3 and bool(
+            direct_items
+        )
+        provider_items: list[dict] = []
+        if not skip_fallback:
+            provider_items = await self._list_provider_embedded_availabilities(
                 provider_id=_strip(provider_id) if provider_id else None,
                 ignore_past_dates=ignore_past_dates,
             )
-
-        raw = await handle_nexhealth_request(
-            self._client,
-            "GET",
-            "/availabilities",
-            params=params,
-            timeout=self._AVAILABILITY_TIMEOUT_SECONDS,
-            max_retries=0,
-        )
-        direct_items = raw.get("data", [])
-        if not isinstance(direct_items, list):
-            direct_items = []
-
-        # NexHealth's /availabilities endpoint can return 200 with no rows for
-        # normal PMS-synced provider schedules. Those same work windows are
-        # exposed on /providers when availabilities are included, so merge that
-        # embedded source as the display/read path for setup.
-        provider_items = await self._list_provider_embedded_availabilities(
-            provider_id=_strip(provider_id) if provider_id else None,
-            ignore_past_dates=ignore_past_dates,
-        )
 
         merged: dict[str, dict] = {}
         for item in [*direct_items, *provider_items]:
             item_id = item.get("id")
             key = str(item_id) if item_id is not None else repr(sorted(item.items()))
             merged[key] = item
-        return list(merged.values())
-
-    @property
-    def _working_hours_contract(self) -> NexHealthAPIContract:
-        """Contract for the work-window route only.
-
-        Scoped deliberately: v3 is the only version that exposes `label`
-        (NOTE / Lunch / genuine working hour) and the only one that honours
-        ignore_past_dates server-side. Every other route stays on the
-        client-wide version until the full migration lands.
-        """
-        from src.app.config import settings as global_settings
-
-        return normalize_nexhealth_api_contract(
-            getattr(global_settings, "nexhealth_working_hours_api_version", "v2")
-        )
-
-    async def _list_working_hours_v3(
-        self,
-        *,
-        provider_id: str | None = None,
-        ignore_past_dates: bool = True,
-    ) -> list[dict]:
-        """Read work windows from v3 /working_hours.
-
-        Replaces both v2 read paths at once. v2 needed the /providers embedded
-        fallback because /availabilities returns nothing for PMS-synced
-        schedules, and that fallback pulled every provider's rows on every
-        request. v3 filters by provider server-side and drops past dates before
-        sending, so one paginated call covers it.
-        """
-        contract = NexHealthAPIContract.STABLE_V3
-        headers = {
-            "Accept": contract.accept_header,
-            "Nex-Api-Version": contract.api_version_header,
-        }
-        base = {
-            **self._default_params(),
-            "ignore_past_dates": "true" if ignore_past_dates else "false",
-            # v3 omits appointment_types unless asked. Without this the Retell
-            # appointment-type validation (handlers._validate_appointment_type_
-            # for_provider) sees an empty allowed set and rejects every booking,
-            # and the setup UI reports every window as unlinked.
-            "include[]": ["appointment_types"],
-        }
-        if provider_id:
-            base["provider_id"] = provider_id
-
-        async def fetch_page(page_params: dict[str, Any]) -> dict[str, Any]:
-            return await handle_nexhealth_request(
-                self._client,
-                "GET",
-                contract.working_windows_path,
-                params={**base, **page_params},
-                timeout=self._AVAILABILITY_TIMEOUT_SECONDS,
-                max_retries=0,
-                headers_override=headers,
-            )
-
-        rows = await fetch_all_pages_v3(
-            fetch_page,
-            api_contract=contract,
-            collection_key="working_hours",
-            per_page=100,
-            max_items=self._WORKING_HOURS_MAX_ITEMS,
-        )
-        return [self._normalize_working_hour(row) for row in rows]
+        return [self._normalize_working_hour(row) for row in merged.values()]
 
     @staticmethod
     def _normalize_working_hour(row: dict) -> dict:
-        """Map a v3 working_hour onto the shape the rest of the code expects.
+        """Flatten v3-only fields onto the shape the rest of the code expects.
 
-        v3 replaced `synced` with `source`, and added `label`. Both are carried
-        through so the UI can tell a genuine working window from a synced
-        OpenDental note or lunch block — the distinction v2 makes impossible.
+        v3 replaced `synced` with `source`, and added `label` — a nested
+        ``{"id", "name"}`` object. The label is the ONLY thing that separates a
+        genuine bookable working window (no label) from a synced PMS note
+        ("NOTE") or a break ("Lunch"); v2 exposes nothing that distinguishes
+        them, verified field-by-field against production. Both are carried
+        through flat so the API layer and UI can act on them.
         """
         item = dict(row)
         source = item.get("source")
@@ -807,9 +1810,9 @@ class NexHealthAdapter(PMSAdapter, SupportsAppointmentTypeCreation, SupportsAvai
         if isinstance(label, dict):
             item["label_name"] = label.get("name")
             item["label_id"] = label.get("id")
-        elif label is None:
-            item["label_name"] = None
-            item["label_id"] = None
+        else:
+            item.setdefault("label_name", None)
+            item.setdefault("label_id", None)
         return item
 
     async def _list_provider_embedded_availabilities(
@@ -820,23 +1823,23 @@ class NexHealthAdapter(PMSAdapter, SupportsAppointmentTypeCreation, SupportsAvai
     ) -> list[dict]:
         params = self._default_params()
 
-        async def fetch(page: int, per_page: int) -> dict[str, Any]:
+        async def fetch(page_params: dict[str, Any]) -> dict[str, Any]:
             p = {
                 **params,
-                "page": page,
-                "per_page": per_page,
+                **page_params,
                 "include[]": ["availabilities", "appointment_types"],
             }
             return await handle_nexhealth_request(
-                self._client,
-                "GET",
-                "/providers",
-                params=p,
-                timeout=self._AVAILABILITY_TIMEOUT_SECONDS,
-                max_retries=0,
+                self._client, "GET", "/providers", params=p
             )
 
-        providers = await fetch_all_pages(fetch, per_page=50, max_items=200)
+        providers = await fetch_all_pages(
+            fetch,
+            api_contract=self._api_contract,
+            collection_key="providers",
+            per_page=50,
+            max_items=200,
+        )
         today = date.today().isoformat()
         items: list[dict] = []
 
@@ -848,7 +1851,8 @@ class NexHealthAdapter(PMSAdapter, SupportsAppointmentTypeCreation, SupportsAvai
             provider_name = (
                 provider.get("name")
                 or " ".join(
-                    part for part in [provider.get("first_name"), provider.get("last_name")]
+                    part
+                    for part in [provider.get("first_name"), provider.get("last_name")]
                     if part
                 )
                 or None

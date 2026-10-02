@@ -18,13 +18,34 @@ from src.app.api.routes.institution_portal import router as institution_portal_r
 from src.app.api.routes.institution_setup import router as institution_setup_router
 from src.app.api.routes.calls import router as calls_router
 from src.app.api.routes.contacts import router as contacts_router
+from src.app.api.routes.appointment_sync import router as appointment_sync_router
 from src.app.api.routes.dashboard import router as dashboard_router
+from src.app.api.routes.usage_reporting import router as usage_reporting_router
+from src.app.api.routes.do_not_contact import router as do_not_contact_router
+from src.app.api.routes.campaign_booking import router as campaign_booking_router
+from src.app.api.routes.campaign_identity_routes import router as campaign_identity_router
+from src.app.api.routes.enquiry_intake import router as enquiry_intake_router
+from src.app.api.routes.enquiries import router as enquiries_router
+from src.app.api.routes.enquiry_intake_admin import router as enquiry_intake_admin_router
+from src.app.api.routes.form_integrations import router as form_integrations_router
+from src.app.api.routes.form_webhooks import router as form_webhooks_router
+from src.app.api.routes.campaign_registration import router as campaign_registration_router
+from src.app.api.routes.campaign_links import router as campaign_links_router
+from src.app.api.routes.email_compliance import router as email_compliance_router
 from src.app.api.routes.group import router as group_router
 from src.app.api.routes.custom_fields import router as custom_fields_router
 from src.app.api.routes.workflow_statuses import router as workflow_statuses_router
 from src.app.api.routes.notifications import router as notifications_router
 from src.app.api.routes.callbacks import router as callbacks_router
+from src.app.api.routes.campaign_email_templates import (
+    router as campaign_email_templates_router,
+)
+from src.app.api.routes.email_sending_identities import (
+    router as email_sending_identities_router,
+)
+from src.app.api.routes.email_inbox_settings import router as email_inbox_settings_router
 from src.app.api.routes.email_templates import router as email_templates_router
+from src.app.api.routes.inbox import router as inbox_router
 from src.app.api.routes.sms_templates import router as sms_templates_router
 from src.app.api.routes.notification_preferences import router as notification_preferences_router
 from src.app.api.routes.notification_recipients import router as notification_recipients_router
@@ -34,7 +55,20 @@ from src.app.api.routes.twilio import router as twilio_router
 from src.app.api.routes.twilio_webhooks import router as twilio_webhooks_router
 from src.app.api.routes.sms import admin_router as admin_sms_router
 from src.app.api.routes.sms import institution_router as institution_sms_router
-from src.app.api.routes.dead_letter import router as dead_letter_router
+from src.app.api.routes.dead_letter import (
+    router as dead_letter_router,
+)
+from src.app.api.routes.institution_undeliverables import (
+    router as institution_dead_letter_router,
+)
+from src.app.api.routes.automation_workflows import router as automation_workflows_router
+from src.app.api.routes.quiet_hours_exceptions import router as quiet_hours_exceptions_router
+from src.app.api.routes.automation_templates import router as automation_templates_router
+from src.app.api.routes.campaign_analytics import router as campaign_analytics_router
+from src.app.api.routes.outbound_voice import router as outbound_voice_router
+from src.app.api.routes.retell_sms import router as retell_sms_router
+from src.app.api.routes.nexhealth_webhooks import router as nexhealth_webhooks_router
+from src.app.api.routes.gotracker_webhooks import router as gotracker_webhooks_router
 
 from slowapi import _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
@@ -88,6 +122,7 @@ async def lifespan(app: FastAPI):
                             JOIN pg_namespace n ON c.relnamespace = n.oid
                             WHERE n.nspname = 'public'
                               AND c.relkind = 'r'
+                              AND c.relispartition = false
                               AND c.relrowsecurity = false
                               AND EXISTS (
                                   SELECT 1 FROM information_schema.columns
@@ -240,6 +275,24 @@ def create_app() -> FastAPI:
     app.include_router(retell_router, prefix="/api/v1")
     app.include_router(retell_webhook_router, prefix="/api/v1")
     app.include_router(twilio_webhooks_router, prefix="/api/v1")
+    app.include_router(nexhealth_webhooks_router, prefix="/api/v1")
+    app.include_router(gotracker_webhooks_router, prefix="/api/v1")
+    # Provider-signed lead-form deliveries (Meta leadgen, Typeform responses).
+    app.include_router(form_webhooks_router, prefix="/api/v1")
+
+    # Test Suite — call agent functions directly, without Retell. Mounted only
+    # when a key is configured AND the environment is not production, so in
+    # production the routes do not exist rather than existing behind a check.
+    if settings.test_suite_enabled:
+        from src.app.api.routes.test_suite import router as test_suite_router
+
+        app.include_router(test_suite_router, prefix="/api/v1")
+        logger.warning(
+            "Test Suite mounted at /api/v1/test-suite (env=%s, writes=%s). "
+            "Non-production only.",
+            settings.app_env,
+            settings.test_suite_allow_writes,
+        )
 
     # Admin routes
     app.include_router(auth_router, prefix="/api")
@@ -252,13 +305,30 @@ def create_app() -> FastAPI:
     app.include_router(institution_setup_router, prefix="/api")
     app.include_router(calls_router, prefix="/api")
     app.include_router(contacts_router, prefix="/api")
+    app.include_router(appointment_sync_router, prefix="/api")
     app.include_router(dashboard_router, prefix="/api")
+    app.include_router(usage_reporting_router, prefix="/api")
+    app.include_router(do_not_contact_router, prefix="/api")
+    app.include_router(email_compliance_router, prefix="/api")
+    # Public, token-authenticated: a patient opens these from a message, not a login.
+    app.include_router(campaign_links_router, prefix="/api")
+    app.include_router(campaign_booking_router, prefix="/api")
+    app.include_router(campaign_registration_router, prefix="/api")
+    app.include_router(campaign_identity_router, prefix="/api")
+    app.include_router(enquiry_intake_router, prefix="/api")
+    app.include_router(enquiry_intake_admin_router, prefix="/api")
+    app.include_router(form_integrations_router, prefix="/api")
+    app.include_router(enquiries_router, prefix="/api")
     app.include_router(group_router, prefix="/api")
     app.include_router(custom_fields_router, prefix="/api")
     app.include_router(workflow_statuses_router, prefix="/api")
     app.include_router(notifications_router, prefix="/api")
     app.include_router(callbacks_router, prefix="/api")
     app.include_router(email_templates_router, prefix="/api")
+    app.include_router(campaign_email_templates_router, prefix="/api")
+    app.include_router(email_sending_identities_router, prefix="/api")
+    app.include_router(email_inbox_settings_router, prefix="/api")
+    app.include_router(inbox_router, prefix="/api")
     app.include_router(sms_templates_router, prefix="/api")
     app.include_router(notification_preferences_router, prefix="/api")
     app.include_router(notification_recipients_router, prefix="/api")
@@ -268,6 +338,13 @@ def create_app() -> FastAPI:
     app.include_router(admin_sms_router, prefix="/api")
     app.include_router(institution_sms_router, prefix="/api")
     app.include_router(dead_letter_router, prefix="/api")
+    app.include_router(institution_dead_letter_router, prefix="/api")
+    app.include_router(automation_workflows_router, prefix="/api")
+    app.include_router(quiet_hours_exceptions_router, prefix="/api")
+    app.include_router(automation_templates_router, prefix="/api")
+    app.include_router(campaign_analytics_router, prefix="/api")
+    app.include_router(outbound_voice_router, prefix="/api")
+    app.include_router(retell_sms_router, prefix="/api")
 
     return app
 

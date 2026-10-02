@@ -1,0 +1,585 @@
+import { describe, it, expect, beforeEach, vi } from "vitest"
+import { render, screen, waitFor } from "@testing-library/react"
+import userEvent from "@testing-library/user-event"
+import { MemoryRouter, Route, Routes, useLocation } from "react-router-dom"
+import { toast } from "sonner"
+import CampaignDetail from "@/pages/CampaignDetail"
+
+vi.mock("@/context/LocationContext", () => ({
+    useSelectedLocationId: () => "loc-1",
+}))
+import {
+    deleteCampaign,
+    enrollContactInCampaign,
+    enrollCampaignAudience,
+    getCampaign,
+    getCampaignAudience,
+    getCampaignAnalytics,
+    getCampaignSplitAnalytics,
+    getCampaignOverview,
+    getUsageByCampaign,
+    getUsageSummary,
+    listCampaignRuns,
+    previewCampaignAudience,
+    saveCampaignAudience,
+} from "@/lib/automation-api"
+import { listContacts } from "@/lib/contacts-api"
+
+vi.mock("@/lib/automation-api", () => ({
+    getCampaign: vi.fn(),
+    getCampaignOverview: vi.fn(),
+    getCampaignAnalytics: vi.fn(),
+    getCampaignSplitAnalytics: vi.fn(),
+    listCampaignRuns: vi.fn(),
+    getUsageSummary: vi.fn(),
+    getUsageByCampaign: vi.fn(),
+    getCampaignAudience: vi.fn(),
+    saveCampaignAudience: vi.fn(),
+    previewCampaignAudience: vi.fn(),
+    enrollCampaignAudience: vi.fn(),
+    pauseCampaign: vi.fn(),
+    resumeCampaign: vi.fn(),
+    archiveCampaign: vi.fn(),
+    enrollContactInCampaign: vi.fn(),
+    cancelCampaignRun: vi.fn(),
+    deleteCampaign: vi.fn(),
+    emergencyHaltCampaign: vi.fn(),
+}))
+vi.mock("@/lib/contacts-api", () => ({ listContacts: vi.fn() }))
+vi.mock("sonner", () => ({ toast: { error: vi.fn(), success: vi.fn(), info: vi.fn() } }))
+
+const campaign = getCampaign as ReturnType<typeof vi.fn>
+const overview = getCampaignOverview as ReturnType<typeof vi.fn>
+const analytics = getCampaignAnalytics as ReturnType<typeof vi.fn>
+const splitAnalytics = getCampaignSplitAnalytics as ReturnType<typeof vi.fn>
+const runs = listCampaignRuns as ReturnType<typeof vi.fn>
+const usageSummary = getUsageSummary as ReturnType<typeof vi.fn>
+const usageByCampaign = getUsageByCampaign as ReturnType<typeof vi.fn>
+const audience = getCampaignAudience as ReturnType<typeof vi.fn>
+const previewAudience = previewCampaignAudience as ReturnType<typeof vi.fn>
+const saveAudience = saveCampaignAudience as ReturnType<typeof vi.fn>
+const enrollAudience = enrollCampaignAudience as ReturnType<typeof vi.fn>
+const remove = deleteCampaign as ReturnType<typeof vi.fn>
+const enrollContact = enrollContactInCampaign as ReturnType<typeof vi.fn>
+const contacts = listContacts as ReturnType<typeof vi.fn>
+const errorToast = toast.error as ReturnType<typeof vi.fn>
+const successToast = toast.success as ReturnType<typeof vi.fn>
+
+beforeEach(() => {
+    campaign.mockReset()
+    overview.mockReset()
+    analytics.mockReset()
+    splitAnalytics.mockReset()
+    runs.mockReset()
+    usageSummary.mockReset()
+    usageByCampaign.mockReset()
+    audience.mockReset()
+    previewAudience.mockReset()
+    saveAudience.mockReset()
+    enrollAudience.mockReset()
+    remove.mockReset()
+    enrollContact.mockReset()
+    contacts.mockReset()
+    errorToast.mockReset()
+    successToast.mockReset()
+
+    campaign.mockResolvedValue({
+        id: "wf-1",
+        name: "Recall campaign",
+        status: "active",
+        trigger_type: "schedule",
+        definition: null,
+        current_version_id: "ver-1",
+        created_at: "2026-07-01T00:00:00Z",
+        updated_at: "2026-07-01T00:00:00Z",
+    })
+    overview.mockResolvedValue({
+        workflow_id: "wf-1",
+        workflow_name: "Recall campaign",
+        workflow_status: "active",
+        trigger_type: "schedule",
+        location_id: "loc-1",
+        latest_version: null,
+        readiness: {
+            overall_status: "pass",
+            blockers_count: 0,
+            warnings_count: 0,
+            unknown_count: 0,
+            estimate_basis: "unknown",
+            generated_at: "2026-07-18T00:00:00Z",
+        },
+        channels: ["sms"],
+        run_counts: { running: 0, waiting: 0, pending: 0, completed: 2 },
+        outcome_counts: {},
+        response_counts: {},
+        open_handoff_count: 1,
+        channel_attempts: {},
+        recent_outcomes: [],
+        generated_at: "2026-07-18T00:00:00Z",
+    })
+    // No A/B test on this campaign — the common case, and the one that must
+    // not render an empty experiment panel.
+    splitAnalytics.mockResolvedValue({
+        workflow_id: "wf-1",
+        workflow_name: "Recall campaign",
+        category: "recall",
+        start_date: "2026-06-19",
+        end_date: "2026-07-18",
+        min_arm_enrollments: 100,
+        splits: [],
+        generated_at: "2026-07-18T09:00:00Z",
+        rollup_fresh_at: null,
+    })
+    analytics.mockResolvedValue({
+        workflow_id: "wf-1",
+        workflow_name: "Recall campaign",
+        category: "recall",
+        start_date: "2026-06-19",
+        end_date: "2026-07-18",
+        summary: {
+            enrollments: 12,
+            sms_sent: 10,
+            sms_delivered: 9,
+            sms_failed: 1,
+            sms_replied: 4,
+            voice_attempted: 0,
+            voice_answered: 0,
+            email_sent: 0,
+            email_clicked: 0,
+            confirmed: 0,
+            booked: 3,
+            staff_handoff: 1,
+        },
+        channels: [
+            { channel: "sms", attempted: 10, delivered: 9, failed: 1, responded: 4 },
+        ],
+        outcomes: [
+            {
+                key: "booked",
+                label: "Recall Booked",
+                group: "success",
+                count: 3,
+                rate: 0.25,
+                description: "Patient booked from recall outreach.",
+            },
+        ],
+        trend: [
+            {
+                date: "2026-07-18",
+                enrollments: 12,
+                sends: 10,
+                responses: 4,
+                confirmed: 0,
+                booked: 3,
+                handoffs: 1,
+                total_cost: 8.5,
+            },
+        ],
+        cost: {
+            currency: "USD",
+            total_cost: 8.5,
+            cost_per_booking: 2.83333,
+            cost_per_confirmation: null,
+        },
+        generated_at: "2026-07-18T00:00:00Z",
+        rollup_fresh_at: "2026-07-18T00:05:00Z",
+    })
+    runs.mockResolvedValue({ items: [], limit: 50, next_cursor: null })
+    usageSummary.mockResolvedValue({ currency: "USD", total_cost: 8.5, channels: [] })
+    usageByCampaign.mockResolvedValue({ campaigns: [] })
+    audience.mockResolvedValue({
+        workflow_id: "wf-1",
+        location_id: "loc-1",
+        segment: {
+            has_no_future_appointment: true,
+            contact_channel_available: ["sms"],
+        },
+        exclusions: {
+            no_consent: true,
+            do_not_contact: true,
+            suppressed: true,
+            contacted_within_days: 1,
+            max_contacts_per_rolling_7_days: 3,
+            already_enrolled_active: true,
+            already_booked: true,
+            missing_required_merge_context: true,
+        },
+        persisted: true,
+        updated_at: "2026-07-18T00:00:00Z",
+    })
+    previewAudience.mockResolvedValue({
+        preview_id: "prev-1",
+        workflow_id: "wf-1",
+        workflow_version_id: "ver-1",
+        location_id: "loc-1",
+        segment: {},
+        exclusions: {},
+        total_candidates: 9,
+        included_count: 6,
+        excluded_count: 3,
+        counts_by_reason: { do_not_contact: 2, already_booked: 1 },
+        samples: [
+            {
+                contact_id: "c-1",
+                display_name: "Jordan Rivera",
+                phone_masked: "(***) ***-1010",
+                email_masked: null,
+                status: "included",
+                reasons: [],
+            },
+            {
+                contact_id: "c-2",
+                display_name: "Taylor Kim",
+                phone_masked: "(***) ***-2020",
+                email_masked: null,
+                status: "excluded",
+                reasons: ["do_not_contact"],
+            },
+        ],
+        warnings: ["NexHealth unsubscribe hints are not projected yet."],
+        estimate_basis: "Computed from local contacts.",
+        generated_at: "2026-07-18T00:00:00Z",
+        expires_at: "2026-07-18T00:30:00Z",
+    })
+    saveAudience.mockResolvedValue({})
+    enrollAudience.mockResolvedValue({
+        workflow_id: "wf-1",
+        workflow_version_id: "ver-1",
+        preview_id: "prev-1",
+        enqueued: 6,
+        skipped: 0,
+        counts_by_reason: {},
+    })
+    remove.mockResolvedValue(undefined)
+    contacts.mockResolvedValue({
+        items: [
+            {
+                id: "contact-dnc",
+                full_name: "DNC Patient",
+                phone_masked: "+1******0100",
+            },
+        ],
+        limit: 10,
+        next_cursor: null,
+    })
+})
+
+describe("CampaignDetail lifecycle actions", () => {
+    it("shows the backend DNC reason when manual enrollment is rejected", async () => {
+        const user = userEvent.setup()
+        enrollContact.mockRejectedValue({
+            response: {
+                data: {
+                    detail: "Patient has an active all-channel DNC restriction and cannot be enrolled.",
+                },
+            },
+        })
+        render(
+            <MemoryRouter initialEntries={["/campaigns/wf-1"]}>
+                <Routes>
+                    <Route path="/campaigns/:id" element={<CampaignDetail />} />
+                </Routes>
+            </MemoryRouter>,
+        )
+
+        await screen.findByText("Recall campaign")
+        await user.click(screen.getByRole("button", { name: "Enroll" }))
+        await user.click(await screen.findByRole("button", { name: "Enroll" }))
+
+        await waitFor(() => {
+            expect(errorToast).toHaveBeenCalledWith(
+                "Patient has an active all-channel DNC restriction and cannot be enrolled.",
+            )
+        })
+        expect(successToast).not.toHaveBeenCalled()
+    })
+
+    it("deletes a campaign after confirmation and returns to the campaign list", async () => {
+        const user = userEvent.setup()
+        render(
+            <MemoryRouter initialEntries={["/campaigns/wf-1"]}>
+                <Routes>
+                    <Route path="/campaigns/:id" element={<CampaignDetail />} />
+                    <Route path="/institution-admin/campaigns" element={<div>Campaign list</div>} />
+                </Routes>
+            </MemoryRouter>,
+        )
+
+        await screen.findByText("Recall campaign")
+        await user.click(screen.getByRole("button", { name: /more actions/i }))
+        await user.click(await screen.findByRole("menuitem", { name: /delete campaign/i }))
+        await user.click(screen.getByRole("button", { name: "Delete campaign" }))
+
+        await waitFor(() => {
+            expect(remove).toHaveBeenCalledWith("wf-1")
+        })
+        expect(await screen.findByText("Campaign list")).toBeInTheDocument()
+    })
+})
+
+function LocationDisplay() {
+    const location = useLocation()
+    return <div>{location.pathname}{location.search}</div>
+}
+
+describe("CampaignDetail executions tab", () => {
+    it("links a run to its visual execution in the workflow builder", async () => {
+        const user = userEvent.setup()
+        runs.mockResolvedValue({
+            items: [
+                {
+                    id: "run-1",
+                    workflow_id: "wf-1",
+                    workflow_version_id: "ver-1",
+                    status: "completed",
+                    current_step_id: "exit-1",
+                    current_step_type: "exit",
+                    outcome: "confirmed",
+                    blocked_reason: null,
+                    contact_id: "contact-1",
+                    contact_name: "Browser Phone QA",
+                    next_due_at: null,
+                    latest_event_at: "2026-07-24T17:24:00Z",
+                    started_at: "2026-07-24T17:23:00Z",
+                    completed_at: "2026-07-24T17:24:00Z",
+                    created_at: "2026-07-24T17:23:00Z",
+                },
+            ],
+            limit: 50,
+            next_cursor: null,
+        })
+
+        render(
+            <MemoryRouter initialEntries={["/campaigns/wf-1"]}>
+                <Routes>
+                    <Route path="/campaigns/:id" element={<CampaignDetail />} />
+                    <Route path="/institution-admin/campaigns/:id/builder" element={<LocationDisplay />} />
+                </Routes>
+            </MemoryRouter>,
+        )
+
+        await screen.findByText("Recall campaign")
+        expect(screen.queryByRole("tab", { name: "Operations" })).not.toBeInTheDocument()
+        await user.click(screen.getByRole("tab", { name: "Executions" }))
+        await user.click(await screen.findByRole("button", { name: "Inspect" }))
+
+        expect(await screen.findByText(
+            "/institution-admin/campaigns/wf-1/builder?view=executions&run=run-1",
+        )).toBeInTheDocument()
+    })
+})
+
+describe("CampaignDetail outcome reporting", () => {
+    function renderPage() {
+        render(
+            <MemoryRouter initialEntries={["/campaigns/wf-1"]}>
+                <Routes>
+                    <Route path="/campaigns/:id" element={<CampaignDetail />} />
+                </Routes>
+            </MemoryRouter>,
+        )
+    }
+
+    it("reports the outcome under the label its campaign category gives it", async () => {
+        const user = userEvent.setup()
+        renderPage()
+
+        await screen.findByText("Recall campaign")
+        await user.click(screen.getByRole("tab", { name: "Outcomes" }))
+
+        // "Recall Booked", not an anonymous count — the figure is only useful
+        // when it names what the campaign was trying to achieve. It reads twice:
+        // once as a headline stat and once in the breakdown.
+        await waitFor(() =>
+            expect(screen.getAllByText("Recall Booked")).toHaveLength(2),
+        )
+        expect(screen.getByText("Patient booked from recall outreach.")).toBeInTheDocument()
+        expect(screen.getByText("25.0%")).toBeInTheDocument()
+    })
+
+    it("compares A/B branches side by side and names the leader", async () => {
+        const user = userEvent.setup()
+        splitAnalytics.mockResolvedValue({
+            workflow_id: "wf-1",
+            workflow_name: "Recall campaign",
+            category: "recall",
+            start_date: "2026-06-19",
+            end_date: "2026-07-18",
+            min_arm_enrollments: 100,
+            splits: [
+                {
+                    node_id: "ab",
+                    subject: "Reminder wording",
+                    primary_outcome_key: "booked",
+                    primary_outcome_label: "Recall Booked",
+                    has_enough_volume: true,
+                    branches: [
+                        {
+                            label: "Variant A",
+                            weight: 50,
+                            enrollments: 1000,
+                            summary: { enrollments: 1000, booked: 100 },
+                            outcomes: [
+                                {
+                                    key: "booked",
+                                    label: "Recall Booked",
+                                    group: "success",
+                                    count: 100,
+                                    rate: 0.1,
+                                    description: "Patient booked from recall outreach.",
+                                },
+                            ],
+                            total_cost: 0,
+                            cost_per_booking: null,
+                            primary_rate: 0.1,
+                            lift: -0.1667,
+                            is_leader: false,
+                        },
+                        {
+                            label: "Variant B",
+                            weight: 50,
+                            enrollments: 1000,
+                            summary: { enrollments: 1000, booked: 120 },
+                            outcomes: [
+                                {
+                                    key: "booked",
+                                    label: "Recall Booked",
+                                    group: "success",
+                                    count: 120,
+                                    rate: 0.12,
+                                    description: "Patient booked from recall outreach.",
+                                },
+                            ],
+                            total_cost: 0,
+                            cost_per_booking: null,
+                            primary_rate: 0.12,
+                            lift: 0.2,
+                            is_leader: true,
+                        },
+                    ],
+                },
+            ],
+            generated_at: "2026-07-18T09:00:00Z",
+            rollup_fresh_at: "2026-07-18T08:00:00Z",
+        })
+        renderPage()
+
+        await screen.findByText("Recall campaign")
+        await user.click(screen.getByRole("tab", { name: "Outcomes" }))
+
+        await screen.findByText("A/B test: Reminder wording")
+        expect(screen.getByText("Variant A")).toBeInTheDocument()
+        expect(screen.getByText("Variant B")).toBeInTheDocument()
+        // The rate each arm is judged on, and the relative gap between them —
+        // the two numbers the whole feature exists to produce.
+        expect(screen.getByText("12.0%")).toBeInTheDocument()
+        expect(screen.getByText("+20%")).toBeInTheDocument()
+        expect(screen.getByText("Leading")).toBeInTheDocument()
+    })
+
+    it("withholds the winner until each branch has enough contacts to mean it", async () => {
+        const user = userEvent.setup()
+        splitAnalytics.mockResolvedValue({
+            workflow_id: "wf-1",
+            workflow_name: "Recall campaign",
+            category: "recall",
+            start_date: "2026-06-19",
+            end_date: "2026-07-18",
+            min_arm_enrollments: 100,
+            splits: [
+                {
+                    node_id: "ab",
+                    subject: null,
+                    primary_outcome_key: "booked",
+                    primary_outcome_label: "Recall Booked",
+                    has_enough_volume: false,
+                    branches: [
+                        {
+                            label: "Variant A",
+                            weight: 50,
+                            enrollments: 9,
+                            summary: { enrollments: 9, booked: 1 },
+                            outcomes: [],
+                            total_cost: 0,
+                            cost_per_booking: null,
+                            primary_rate: 0.1111,
+                            lift: null,
+                            is_leader: false,
+                        },
+                        {
+                            label: "Variant B",
+                            weight: 50,
+                            enrollments: 8,
+                            summary: { enrollments: 8, booked: 3 },
+                            outcomes: [],
+                            total_cost: 0,
+                            cost_per_booking: null,
+                            primary_rate: 0.375,
+                            lift: null,
+                            is_leader: false,
+                        },
+                    ],
+                },
+            ],
+            generated_at: "2026-07-18T09:00:00Z",
+            rollup_fresh_at: null,
+        })
+        renderPage()
+
+        await screen.findByText("Recall campaign")
+        await user.click(screen.getByRole("tab", { name: "Outcomes" }))
+
+        // Variant B is ahead on the raw rate, but on 8 contacts that is noise.
+        // The rates still show; the verdict does not.
+        await screen.findByText(/needs 100 per branch before a winner is called/)
+        expect(screen.getByText("37.5%")).toBeInTheDocument()
+        expect(screen.queryByText("Leading")).not.toBeInTheDocument()
+    })
+
+    it("shows no experiment panel on a campaign that runs no split", async () => {
+        const user = userEvent.setup()
+        renderPage()
+
+        await screen.findByText("Recall campaign")
+        await user.click(screen.getByRole("tab", { name: "Outcomes" }))
+
+        await screen.findByText("Patient booked from recall outreach.")
+        expect(screen.queryByText(/A\/B test/)).not.toBeInTheDocument()
+    })
+
+    it("says why revenue is missing rather than showing an unexplained number", async () => {
+        const user = userEvent.setup()
+        renderPage()
+
+        await screen.findByText("Recall campaign")
+        await user.click(screen.getByRole("tab", { name: "Outcomes" }))
+
+        expect(
+            await screen.findByText(/Revenue attributed to this campaign is not reported yet/),
+        ).toBeInTheDocument()
+    })
+
+    it("keeps the campaign page usable when the rollup read fails", async () => {
+        const user = userEvent.setup()
+        analytics.mockRejectedValue(new Error("rollup unavailable"))
+        renderPage()
+
+        await screen.findByText("Recall campaign")
+        await user.click(screen.getByRole("tab", { name: "Outcomes" }))
+
+        expect(
+            await screen.findByText(/Outcome reporting is unavailable/),
+        ).toBeInTheDocument()
+        expect(errorToast).not.toHaveBeenCalled()
+    })
+
+    it("shows how stale the figures are, since they come from a daily rollup", async () => {
+        const user = userEvent.setup()
+        renderPage()
+
+        await screen.findByText("Recall campaign")
+        await user.click(screen.getByRole("tab", { name: "Outcomes" }))
+
+        expect(await screen.findByText(/rolled up/)).toBeInTheDocument()
+    })
+})

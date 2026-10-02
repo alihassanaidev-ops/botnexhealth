@@ -1,0 +1,690 @@
+"""Appointment working-set projection + NexHealth event-ledger claim (Plan 09).
+
+Two responsibilities, both keyed to the appointment working set:
+
+* ``claim_event`` — event-level idempotency at webhook receipt (D-4). A redelivery
+  of the same logical event is recognised here instead of re-running the trigger.
+* ``upsert_appointment`` — maintain the disposable projection and classify the
+  change (new / rescheduled / unchanged / cancelled) so the webhook can re-enroll
+  on a reschedule (D-1) and revalidation can trust a fresh row (D-2).
+
+Callable under both the webhook session context ('nexhealth_webhooks') and Celery
+('celery') — the RLS policy on both tables allows those contexts.
+"""
+
+from __future__ import annotations
+
+import logging
+from dataclasses import dataclass
+from datetime import datetime, timezone
+from typing import Any, Literal
+from uuid import uuid4
+
+from sqlalchemy.dialects.postgresql import insert as pg_insert
+from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from src.app.models.appointment_working_set import AppointmentWorkingSet
+from src.app.models.contact import Contact
+from src.app.models.contact_location_access import ContactLocationAccess
+from src.app.models.nexhealth_webhook_event import (
+    NexHealthWebhookEvent,
+    NexHealthWebhookStatus,
+)
+from src.app.models.patient_working_set import PatientWorkingSet
+from src.app.pms.gotracker.statuses import is_non_attending_status
+from src.app.services.retention_policy import default_nexhealth_webhook_raw_retain_until
+from src.app.services.sms_privacy import (
+    payload_hash,
+    redact_payload,
+    sanitize_provider_error,
+)
+
+logger = logging.getLogger(__name__)
+
+ChangeKind = Literal["new", "rescheduled", "unchanged", "cancelled"]
+PatientChangeKind = Literal["new", "updated", "unchanged"]
+
+# A PROCESSING claim older than this is assumed abandoned (crashed worker) and
+# may be reclaimed by a redelivery.
+_PROCESSING_TTL_SECONDS = 300
+
+
+def _as_utc(dt: datetime) -> datetime:
+    return dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc)
+
+
+def _parse_dt(value: str | None) -> datetime | None:
+    if not value:
+        return None
+    try:
+        dt = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except (ValueError, TypeError):
+        return None
+    return dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc)
+
+
+def _parse_flow_time(
+    value: str | None, *, appointment_at: str | None
+) -> datetime | None:
+    """Parse Tracker flow timestamps, including its time-only CheckIn fields."""
+    parsed = _parse_dt(value)
+    if parsed is not None:
+        return parsed
+    if not value or not appointment_at:
+        return None
+    appointment = _parse_dt(appointment_at)
+    if appointment is None:
+        return None
+    try:
+        clock = value.strip().removesuffix("Z").split("T", 1)[-1]
+        return datetime.fromisoformat(
+            f"{appointment.date().isoformat()}T{clock}"
+        ).replace(tzinfo=appointment.tzinfo or timezone.utc)
+    except (TypeError, ValueError):
+        return None
+
+
+def _same_instant(a: datetime | None, b: datetime | None) -> bool:
+    if a is None or b is None:
+        return a is b
+    return abs((a - b).total_seconds()) < 1.0
+
+
+def _has_status_snapshot(
+    gotracker_status_id: int | None,
+    is_confirmed: bool | None,
+    is_preconfirmed: bool | None,
+) -> bool:
+    return (
+        gotracker_status_id is not None
+        or is_confirmed is not None
+        or is_preconfirmed is not None
+    )
+
+
+def _gotracker_status_label(status_id: int | None) -> str | None:
+    if status_id is None:
+        return None
+    return {
+        1: "booked",
+        2: "booked_waiting",
+        3: "cancelled",
+        4: "late",
+        5: "no_show",
+        6: "office_cancel",
+        7: "pending",
+        8: "short_cancel",
+        9: "waiting",
+    }.get(status_id, str(status_id))
+
+
+def _apply_gotracker_status_snapshot(
+    row: AppointmentWorkingSet,
+    *,
+    gotracker_status_id: int | None,
+    is_confirmed: bool | None,
+    is_preconfirmed: bool | None,
+    source: str | None,
+    synced_at: datetime,
+) -> None:
+    if gotracker_status_id is not None:
+        row.gotracker_status_id = gotracker_status_id
+        row.gotracker_status_label = _gotracker_status_label(gotracker_status_id)
+    if is_confirmed is not None:
+        row.is_confirmed = is_confirmed
+    if is_preconfirmed is not None:
+        row.is_preconfirmed = is_preconfirmed
+    if _has_status_snapshot(gotracker_status_id, is_confirmed, is_preconfirmed):
+        row.last_status_source = source
+        row.last_status_synced_at = synced_at
+
+
+def _refresh_event_payload(
+    row: NexHealthWebhookEvent,
+    *,
+    source_event_id: str | None,
+    payload: dict[str, Any] | None,
+    raw_payload: str | None,
+    now: datetime,
+) -> None:
+    if source_event_id:
+        row.source_event_id = source_event_id
+    if payload is not None:
+        row.payload_hash = payload_hash(payload)
+        redacted = redact_payload(payload)
+        row.redacted_payload = (
+            redacted if isinstance(redacted, dict) else {"payload": redacted}
+        )
+    if raw_payload is not None:
+        row.raw_payload = raw_payload
+        row.raw_payload_retain_until = default_nexhealth_webhook_raw_retain_until(now)
+
+
+@dataclass
+class UpsertResult:
+    row: AppointmentWorkingSet
+    change: ChangeKind
+    previous_start_time: datetime | None
+    state_changed: bool = False
+
+
+@dataclass
+class PatientUpsertResult:
+    row: PatientWorkingSet
+    contact: Contact
+    change: PatientChangeKind
+
+
+class NexHealthProjectionService:
+    def __init__(self, session: AsyncSession) -> None:
+        self.session = session
+
+    async def claim_event(
+        self,
+        *,
+        institution_id: str,
+        appointment_id: str | None = None,
+        patient_id: str | None = None,
+        event_type: str,
+        dedup_key: str,
+        source_event_id: str | None = None,
+        payload: dict[str, Any] | None = None,
+        raw_payload: str | None = None,
+    ) -> bool:
+        """Claim an event for processing. Returns False if already seen (skip).
+
+        Race-safe: the unique (institution_id, dedup_key) constraint turns a
+        concurrent/replayed delivery into an IntegrityError we treat as "already
+        claimed". A previously FAILED event is re-claimable (retry).
+        """
+        existing = (
+            await self.session.execute(
+                select(NexHealthWebhookEvent).where(
+                    NexHealthWebhookEvent.institution_id == institution_id,
+                    NexHealthWebhookEvent.dedup_key == dedup_key,
+                )
+            )
+        ).scalar_one_or_none()
+
+        if existing is not None:
+            now = datetime.now(timezone.utc)
+            is_stale_processing = (
+                existing.status == NexHealthWebhookStatus.PROCESSING.value
+                and existing.updated_at is not None
+                and (now - _as_utc(existing.updated_at)).total_seconds()
+                > _PROCESSING_TTL_SECONDS
+            )
+            if (
+                existing.status == NexHealthWebhookStatus.FAILED.value
+                or is_stale_processing
+            ):
+                # Retry a failed event, or reclaim a PROCESSING row abandoned by a
+                # crashed worker so a redelivery is not blocked forever.
+                existing.status = NexHealthWebhookStatus.PROCESSING.value
+                existing.attempts += 1
+                existing.updated_at = now
+                _refresh_event_payload(
+                    existing,
+                    source_event_id=source_event_id,
+                    payload=payload,
+                    raw_payload=raw_payload,
+                    now=now,
+                )
+                return True
+            return False
+
+        now = datetime.now(timezone.utc)
+        event = NexHealthWebhookEvent(
+            institution_id=institution_id,
+            nexhealth_appointment_id=appointment_id,
+            nexhealth_patient_id=patient_id,
+            event_type=event_type,
+            dedup_key=dedup_key,
+            status=NexHealthWebhookStatus.PROCESSING.value,
+            attempts=1,
+            source_event_id=source_event_id,
+        )
+        _refresh_event_payload(
+            event,
+            source_event_id=source_event_id,
+            payload=payload,
+            raw_payload=raw_payload,
+            now=now,
+        )
+        self.session.add(event)
+        try:
+            async with self.session.begin_nested():
+                await self.session.flush()
+        except IntegrityError:
+            return False
+        return True
+
+    async def complete_event(
+        self, *, institution_id: str, dedup_key: str, error: str | None = None
+    ) -> NexHealthWebhookEvent | None:
+        row = (
+            await self.session.execute(
+                select(NexHealthWebhookEvent).where(
+                    NexHealthWebhookEvent.institution_id == institution_id,
+                    NexHealthWebhookEvent.dedup_key == dedup_key,
+                )
+            )
+        ).scalar_one_or_none()
+        if row is None:
+            return None
+        row.status = (
+            NexHealthWebhookStatus.FAILED.value
+            if error
+            else NexHealthWebhookStatus.COMPLETED.value
+        )
+        row.last_error = sanitize_provider_error(error) if error else None
+        row.updated_at = datetime.now(timezone.utc)
+        return row
+
+    async def upsert_appointment(
+        self,
+        *,
+        institution_id: str,
+        appointment_id: str,
+        location_id: str | None,
+        nexhealth_patient_id: str | None,
+        contact_id: str | None,
+        start_time: str | None,
+        event: str,
+        cancelled: bool,
+        provider_id: str | None = None,
+        appointment_type_id: str | None = None,
+        appointment_reason: str | None = None,
+        gotracker_status_id: int | None = None,
+        is_confirmed: bool | None = None,
+        is_preconfirmed: bool | None = None,
+        flow_state: str | None = None,
+        flow_changed_at: str | None = None,
+        checked_in_at: str | None = None,
+        in_chair_at: str | None = None,
+        out_chair_at: str | None = None,
+        checked_out_at: str | None = None,
+        status_source: str | None = None,
+    ) -> UpsertResult:
+        """UPSERT the projection row and classify the change vs the stored state."""
+        incoming_start = _parse_dt(start_time)
+        incoming_flow_changed_at = _parse_dt(flow_changed_at)
+        incoming_checked_in_at = _parse_flow_time(
+            checked_in_at, appointment_at=start_time
+        )
+        incoming_in_chair_at = _parse_flow_time(in_chair_at, appointment_at=start_time)
+        incoming_out_chair_at = _parse_flow_time(
+            out_chair_at, appointment_at=start_time
+        )
+        incoming_checked_out_at = _parse_flow_time(
+            checked_out_at, appointment_at=start_time
+        )
+        now = datetime.now(timezone.utc)
+
+        row = (
+            await self.session.execute(
+                select(AppointmentWorkingSet).where(
+                    AppointmentWorkingSet.institution_id == institution_id,
+                    AppointmentWorkingSet.nexhealth_appointment_id == appointment_id,
+                )
+            )
+        ).scalar_one_or_none()
+
+        new_status = (
+            "cancelled"
+            if cancelled or is_non_attending_status(gotracker_status_id)
+            else "scheduled"
+        )
+
+        if row is None:
+            row = AppointmentWorkingSet(
+                id=str(uuid4()),
+                institution_id=institution_id,
+                location_id=location_id,
+                nexhealth_appointment_id=appointment_id,
+                nexhealth_patient_id=nexhealth_patient_id,
+                contact_id=contact_id,
+                provider_id=provider_id,
+                appointment_type_id=appointment_type_id,
+                appointment_reason=appointment_reason,
+                start_time=incoming_start,
+                status=new_status,
+                gotracker_status_id=gotracker_status_id,
+                gotracker_status_label=_gotracker_status_label(gotracker_status_id),
+                is_confirmed=is_confirmed,
+                is_preconfirmed=is_preconfirmed,
+                last_status_source=status_source,
+                last_status_synced_at=now
+                if _has_status_snapshot(
+                    gotracker_status_id, is_confirmed, is_preconfirmed
+                )
+                else None,
+                flow_state=flow_state,
+                flow_changed_at=incoming_flow_changed_at,
+                checked_in_at=incoming_checked_in_at,
+                in_chair_at=incoming_in_chair_at,
+                out_chair_at=incoming_out_chair_at,
+                checked_out_at=incoming_checked_out_at,
+                last_event=event,
+                last_synced_at=now,
+            )
+            self.session.add(row)
+            change: ChangeKind = "cancelled" if cancelled else "new"
+            return UpsertResult(
+                row=row,
+                change=change,
+                previous_start_time=None,
+                state_changed=flow_state is not None,
+            )
+
+        prev_start = row.start_time
+        prev_status = row.status
+
+        # Update stored state.
+        row.location_id = location_id or row.location_id
+        row.nexhealth_patient_id = nexhealth_patient_id or row.nexhealth_patient_id
+        row.contact_id = contact_id or row.contact_id
+        row.provider_id = provider_id or getattr(row, "provider_id", None)
+        previous_type_id = getattr(row, "appointment_type_id", None)
+        if appointment_type_id is not None:
+            row.appointment_type_id = appointment_type_id
+            # A changed type with no resolved label must not retain the old
+            # type's reason and silently match the wrong campaign.
+            if appointment_type_id != previous_type_id:
+                row.appointment_reason = appointment_reason
+        if appointment_reason is not None:
+            row.appointment_reason = appointment_reason
+        previous_flow_state = getattr(row, "flow_state", None)
+        previous_flow_changed_at = getattr(row, "flow_changed_at", None)
+        flow_changed = flow_state is not None and (
+            flow_state != previous_flow_state
+            or (
+                incoming_flow_changed_at is not None
+                and incoming_flow_changed_at != previous_flow_changed_at
+            )
+        )
+        if flow_state is not None:
+            row.flow_state = flow_state
+        if incoming_flow_changed_at is not None:
+            row.flow_changed_at = incoming_flow_changed_at
+        if incoming_checked_in_at is not None:
+            row.checked_in_at = incoming_checked_in_at
+        if incoming_in_chair_at is not None:
+            row.in_chair_at = incoming_in_chair_at
+        if incoming_out_chair_at is not None:
+            row.out_chair_at = incoming_out_chair_at
+        if incoming_checked_out_at is not None:
+            row.checked_out_at = incoming_checked_out_at
+        _apply_gotracker_status_snapshot(
+            row,
+            gotracker_status_id=gotracker_status_id,
+            is_confirmed=is_confirmed,
+            is_preconfirmed=is_preconfirmed,
+            source=status_source,
+            synced_at=now,
+        )
+        row.last_event = event
+        row.last_synced_at = now
+        row.updated_at = now
+        row.status = new_status
+        if incoming_start is not None:
+            row.start_time = incoming_start
+
+        if cancelled:
+            change = "cancelled"
+        elif prev_status == "cancelled":
+            # Re-activated (uncancelled) — treat as new scheduling.
+            change = (
+                "rescheduled"
+                if not _same_instant(prev_start, incoming_start)
+                else "new"
+            )
+        elif incoming_start is not None and not _same_instant(
+            prev_start, incoming_start
+        ):
+            change = "rescheduled"
+        else:
+            change = "unchanged"
+
+        return UpsertResult(
+            row=row,
+            change=change,
+            previous_start_time=prev_start,
+            state_changed=flow_changed,
+        )
+
+    async def record_gotracker_writeback(
+        self,
+        *,
+        institution_id: str,
+        appointment_id: str,
+        location_id: str | None,
+        status_id: int | None = None,
+        confirmed: bool | None = None,
+        preconfirmed: bool | None = None,
+        start_time: str | None = None,
+        provider_id: str | None = None,
+    ) -> AppointmentWorkingSet:
+        """Reflect a successful GoTracker writeback in the local projection."""
+        incoming_start = _parse_dt(start_time)
+        now = datetime.now(timezone.utc)
+        row = (
+            await self.session.execute(
+                select(AppointmentWorkingSet).where(
+                    AppointmentWorkingSet.institution_id == institution_id,
+                    AppointmentWorkingSet.nexhealth_appointment_id == appointment_id,
+                )
+            )
+        ).scalar_one_or_none()
+        if row is None:
+            row = AppointmentWorkingSet(
+                id=str(uuid4()),
+                institution_id=institution_id,
+                location_id=location_id,
+                nexhealth_appointment_id=appointment_id,
+                provider_id=provider_id,
+                start_time=incoming_start,
+                status="cancelled"
+                if is_non_attending_status(status_id)
+                else "scheduled",
+                last_event="workflow.writeback",
+                last_synced_at=now,
+            )
+            self.session.add(row)
+
+        row.location_id = location_id or row.location_id
+        row.provider_id = provider_id or row.provider_id
+        if incoming_start is not None:
+            row.start_time = incoming_start
+        if is_non_attending_status(status_id):
+            row.status = "cancelled"
+        elif status_id is not None:
+            row.status = "scheduled"
+        _apply_gotracker_status_snapshot(
+            row,
+            gotracker_status_id=status_id,
+            is_confirmed=confirmed,
+            is_preconfirmed=preconfirmed,
+            source="workflow_writeback",
+            synced_at=now,
+        )
+        row.last_writeback_at = now
+        row.updated_at = now
+        return row
+
+    async def upsert_patient(
+        self,
+        *,
+        institution_id: str,
+        patient: dict[str, Any],
+        local_location_ids: list[str],
+        nexhealth_location_ids: list[str],
+        event: str,
+    ) -> PatientUpsertResult:
+        """Refresh local contact + patient projection from a NexHealth patient payload."""
+        patient_id = _clean_str(patient.get("id"))
+        if not patient_id:
+            raise ValueError("patient payload missing id")
+
+        bio = patient.get("bio") if isinstance(patient.get("bio"), dict) else {}
+        first_name = _clean_str(patient.get("first_name"))
+        last_name = _clean_str(patient.get("last_name"))
+        full_name = _clean_str(patient.get("name")) or _join_name(first_name, last_name)
+        email = _clean_str(patient.get("email")) if "email" in patient else None
+        phone = _patient_phone(bio)
+        dob = _clean_str(bio.get("date_of_birth")) if "date_of_birth" in bio else None
+        inactive = bool(patient.get("inactive", False))
+        unsubscribe_sms = bool(patient.get("unsubscribe_sms", False))
+        preferred_language = _clean_str(patient.get("preferred_language"))
+        is_new_patient = bool(bio.get("new_patient", False))
+        now = datetime.now(timezone.utc)
+
+        contact = (
+            await self.session.execute(
+                select(Contact).where(
+                    Contact.institution_id == institution_id,
+                    Contact.nexhealth_patient_id == patient_id,
+                )
+            )
+        ).scalar_one_or_none()
+
+        contact_created = False
+        if contact is None:
+            contact = Contact(
+                institution_id=institution_id,
+                nexhealth_patient_id=patient_id,
+                first_name=first_name,
+                last_name=last_name,
+                full_name=full_name,
+                is_new_patient=is_new_patient,
+            )
+            contact_created = True
+            self.session.add(contact)
+        else:
+            if first_name is not None:
+                contact.first_name = first_name
+            if last_name is not None:
+                contact.last_name = last_name
+            if full_name is not None:
+                contact.full_name = full_name
+            contact.is_new_patient = is_new_patient
+            contact.anonymized_at = None
+            contact.updated_at = now
+
+        if "email" in patient:
+            contact.email = email
+        if _patient_has_phone_key(bio):
+            contact.phone = phone
+        if "date_of_birth" in bio:
+            contact.date_of_birth = dob
+
+        await self.session.flush()
+
+        for location_id in local_location_ids:
+            await self.session.execute(
+                pg_insert(ContactLocationAccess)
+                .values(
+                    institution_id=institution_id,
+                    contact_id=str(contact.id),
+                    location_id=location_id,
+                )
+                .on_conflict_do_nothing(index_elements=["contact_id", "location_id"])
+            )
+
+        row = (
+            await self.session.execute(
+                select(PatientWorkingSet).where(
+                    PatientWorkingSet.institution_id == institution_id,
+                    PatientWorkingSet.nexhealth_patient_id == patient_id,
+                )
+            )
+        ).scalar_one_or_none()
+
+        primary_location_id = local_location_ids[0] if local_location_ids else None
+        if row is None:
+            row = PatientWorkingSet(
+                institution_id=institution_id,
+                primary_location_id=primary_location_id,
+                contact_id=str(contact.id),
+                nexhealth_patient_id=patient_id,
+                nexhealth_location_ids=nexhealth_location_ids,
+                first_name=first_name,
+                last_name=last_name,
+                full_name=full_name,
+                preferred_language=preferred_language,
+                inactive=inactive,
+                unsubscribe_sms=unsubscribe_sms,
+                is_new_patient=is_new_patient,
+                last_event=event,
+                last_synced_at=now,
+            )
+            self.session.add(row)
+            change: PatientChangeKind = "new"
+        else:
+            changed = (
+                row.contact_id != str(contact.id)
+                or row.primary_location_id != primary_location_id
+                or row.nexhealth_location_ids != nexhealth_location_ids
+                or row.first_name != first_name
+                or row.last_name != last_name
+                or row.full_name != full_name
+                or row.preferred_language != preferred_language
+                or row.inactive != inactive
+                or row.unsubscribe_sms != unsubscribe_sms
+                or row.is_new_patient != is_new_patient
+            )
+            row.primary_location_id = primary_location_id or row.primary_location_id
+            row.contact_id = str(contact.id)
+            row.nexhealth_location_ids = nexhealth_location_ids
+            row.first_name = first_name
+            row.last_name = last_name
+            row.full_name = full_name
+            row.preferred_language = preferred_language
+            row.inactive = inactive
+            row.unsubscribe_sms = unsubscribe_sms
+            row.is_new_patient = is_new_patient
+            row.last_event = event
+            row.last_synced_at = now
+            row.updated_at = now
+            change = "updated" if changed or contact_created else "unchanged"
+
+        return PatientUpsertResult(row=row, contact=contact, change=change)
+
+
+def _clean_str(value: Any) -> str | None:
+    if value in (None, ""):
+        return None
+    text = str(value).strip()
+    return text or None
+
+
+def _join_name(first_name: str | None, last_name: str | None) -> str | None:
+    name = " ".join(part for part in (first_name, last_name) if part)
+    return name or None
+
+
+def _patient_has_phone_key(bio: dict[str, Any]) -> bool:
+    return any(
+        key in bio
+        for key in (
+            "phone_number",
+            "cell_phone_number",
+            "home_phone_number",
+            "work_phone_number",
+        )
+    )
+
+
+def _patient_phone(bio: dict[str, Any]) -> str | None:
+    for key in (
+        "phone_number",
+        "cell_phone_number",
+        "home_phone_number",
+        "work_phone_number",
+    ):
+        value = _clean_str(bio.get(key))
+        if value:
+            return value
+    return None

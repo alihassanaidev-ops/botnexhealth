@@ -149,8 +149,12 @@ class MfaStatus:
         methods: list[str] = []
         if self.webauthn_count > 0:
             methods.append("webauthn")
-        if self.totp_enabled and (
-            role != UserRole.SUPER_ADMIN.value or settings.allow_super_admin_totp
+        if (
+            self.totp_enabled
+            and (
+                role != UserRole.SUPER_ADMIN.value
+                or settings.allow_super_admin_totp
+            )
         ):
             methods.append("totp")
         if self.email_code_allowed_for_role(role):

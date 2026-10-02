@@ -28,6 +28,7 @@ async def get_available_slots(
     provider_id: str | None = None,
     appointment_type_id: str | None = None,
     operatory_ids: list[str] | None = Query(None),
+    tz_offset: str | None = Query(None, description="Clinic UTC offset, e.g. -04:00"),
     buffer_minutes: int = Query(0, ge=0, le=1440, description="Minimum lead-time in minutes from now"),
     pms: PMSAdapter = Depends(get_institution_pms),
 ):
@@ -38,13 +39,14 @@ async def get_available_slots(
         provider_id=provider_id,
         appointment_type_id=appointment_type_id,
         operatory_ids=operatory_ids,
+        tz_offset=tz_offset,
     )
 
     # 2. Auto-fetch provider settings if provider_id given
     location = getattr(request.state, "location", None)
     provider_cutoff = None
-    normalized_provider_id = provider_id.removeprefix("nh-") if provider_id else None
-    provider_source_id = f"nh-{normalized_provider_id}" if normalized_provider_id else None
+    provider_source_id = _source_id_for_pms(pms.source, provider_id)
+    normalized_provider_id = _strip_source_prefix(provider_id)
     if provider_id and location:
         async with get_db_session() as session:
             prov = (await session.execute(
@@ -101,3 +103,22 @@ async def get_available_slots(
         )
 
     return slots
+
+
+def _strip_source_prefix(value: str | None) -> str | None:
+    if not value or "-" not in value:
+        return value
+    prefix, raw_id = value.split("-", 1)
+    return raw_id if prefix in {"nh", "gt"} else value
+
+
+def _source_id_for_pms(source: str, provider_id: str | None) -> str | None:
+    if not provider_id:
+        return None
+    if provider_id.startswith(("nh-", "gt-")):
+        return provider_id
+    if source == "nexhealth":
+        return f"nh-{provider_id}"
+    if source == "gotracker":
+        return f"gt-{provider_id}"
+    return provider_id

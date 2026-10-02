@@ -160,6 +160,93 @@ async def get_current_institution_admin(
     return current_user
 
 
+async def get_current_institution_or_super_admin(
+    current_user: Annotated[User, Depends(get_current_active_user)]
+) -> User:
+    """
+    Ensure user has INSTITUTION_ADMIN role, or SUPER_ADMIN acting on a named
+    institution.
+
+    Used by the per-institution email surfaces (campaign templates, sending
+    identity), where a platform administrator legitimately administers any
+    tenant. A super admin carries no ``institution_id`` of their own, so routes
+    behind this boundary must resolve the target through
+    :func:`resolve_target_institution` rather than reading it off the user.
+    """
+    if current_user.role not in (
+        UserRole.INSTITUTION_ADMIN.value,
+        UserRole.SUPER_ADMIN.value,
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Requires INSTITUTION_ADMIN or SUPER_ADMIN role",
+        )
+    return current_user
+
+
+async def get_current_institution_location_or_super_admin(
+    current_user: Annotated[User, Depends(get_current_active_user)],
+    location_id: str | None = None,
+) -> User:
+    """Allow platform, institution, or location admins for location-owned setup.
+
+    Location admins are pinned here, before a handler opens a session. This is
+    intentionally a separate boundary from sending-domain administration:
+    receiving controls are operational settings for one clinic, while DNS and
+    sender verification remain institution/platform responsibilities.
+    """
+    if current_user.role not in (
+        UserRole.SUPER_ADMIN.value,
+        UserRole.INSTITUTION_ADMIN.value,
+        UserRole.LOCATION_ADMIN.value,
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Requires SUPER_ADMIN, INSTITUTION_ADMIN, or LOCATION_ADMIN role",
+        )
+    if current_user.role == UserRole.LOCATION_ADMIN.value:
+        if not current_user.location_id:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Location-scoped account is missing location assignment",
+            )
+        if location_id and str(location_id) != str(current_user.location_id):
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Cannot administer another location",
+            )
+    return current_user
+
+
+def resolve_target_institution(user: User, institution_id: str | None) -> str:
+    """Which institution this request acts on.
+
+    A tenant admin is pinned to their own institution: an explicit id is
+    accepted only when it matches, so a stray query parameter can never widen
+    the request. A super admin has no institution of their own and must name
+    one — that keeps a platform-wide account from silently acting on nothing,
+    or on whichever tenant happened to be first.
+    """
+    if user.role == UserRole.SUPER_ADMIN.value:
+        if not institution_id:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="institution_id is required for platform administrators",
+            )
+        return institution_id
+
+    if not user.institution_id:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail="No institution"
+        )
+    if institution_id and institution_id != str(user.institution_id):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Cannot act on another institution",
+        )
+    return str(user.institution_id)
+
+
 async def get_current_location_admin(
     current_user: Annotated[User, Depends(get_current_active_user)]
 ) -> User:

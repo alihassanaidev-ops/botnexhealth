@@ -6,6 +6,13 @@ import { ErrorBoundary } from './components/ErrorBoundary'
 import { router } from './router'
 import { installChunkErrorReload } from './lib/chunk-reload'
 import './index.css'
+// @ui-variant classic
+import './styles/classic-ui.css'
+
+import { applyUiMode } from "@/lib/ui-mode"
+
+// Before the first render, so the stylesheet never flashes the other look.
+applyUiMode()
 
 // Recover automatically when a deploy invalidates the chunk an open tab needs.
 installChunkErrorReload()

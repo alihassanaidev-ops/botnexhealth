@@ -27,6 +27,8 @@ MFA_TICKET = "mfa_ticket"
 SUPER_ADMIN = "get_current_admin"
 SUPER_ADMIN_STRICT = "get_current_super_admin"
 INSTITUTION_ADMIN = "get_current_institution_admin"
+INSTITUTION_OR_SUPER_ADMIN = "get_current_institution_or_super_admin"
+INSTITUTION_LOCATION_OR_SUPER_ADMIN = "get_current_institution_location_or_super_admin"
 INSTITUTION_USER = "get_current_institution_user"
 LOCATION_ADMIN = "get_current_location_admin"
 INSTITUTION_OR_LOCATION_ADMIN = "get_current_institution_or_location_admin"
@@ -38,6 +40,36 @@ ACTIVE_USER = "get_current_active_user"
 
 ROUTES_BY_BOUNDARY: dict[str, tuple[str, ...]] = {
     PUBLIC: (
+        # Patient-facing campaign action link. Authenticated by a signed,
+        # run-scoped, expiring token in the URL rather than a session — the
+        # patient opens it straight from a text message, with no login.
+        "GET /api/campaigns/link/{action}",
+        # The slot picker behind a booking link — same signed, run-scoped,
+        # expiring token, and the patient still never logs in.
+        "GET /api/campaigns/link/{action}/appointment-types",
+        # Cancelling is two-step on purpose: the GET only describes what would
+        # be cancelled, because link previews follow GETs. The POST does it.
+        "GET /api/campaigns/link/cancel/appointment",
+        "POST /api/campaigns/link/cancel/appointment",
+        "GET /api/campaigns/link/{action}/slots",
+        "POST /api/campaigns/link/{action}/slots",
+        # Lead-to-patient registration. Public for the same reason as the rest
+        # of this group — the patient arrives from a text with no login — but it
+        # is the only one that creates a record in the practice software, so the
+        # register token is issued solely by a patient_registration step and has
+        # no merge-field placeholder a campaign author could scatter into copy.
+        "GET /api/campaigns/link/register/details",
+        "POST /api/campaigns/link/register",
+        # The identity step. Public like the rest — the patient arrives from a
+        # message with no session — and it is what the others lean on: this is
+        # where a person proves they are who the link assumes, before an action
+        # discloses an appointment or destroys one.
+        "GET /api/campaigns/link/identify/context",
+        "POST /api/campaigns/link/identify",
+        # External form intake (Decision C). Public in the session sense, but
+        # not unauthenticated: the path carries a per-form bearer token that is
+        # stored hashed, and a source may additionally require a body HMAC.
+        "POST /api/enquiries/intake/{token}",
         "GET /livez",
         "GET /readyz",
         "POST /api/auth/login",
@@ -47,6 +79,7 @@ ROUTES_BY_BOUNDARY: dict[str, tuple[str, ...]] = {
         "POST /api/auth/set-password",
         "POST /api/auth/refresh",
         "POST /api/auth/logout",
+        "GET /api/email/unsubscribe",
     ),
     MFA_TICKET: (
         "POST /api/auth/mfa/webauthn/register/options",
@@ -65,16 +98,41 @@ ROUTES_BY_BOUNDARY: dict[str, tuple[str, ...]] = {
         "POST /api/v1/retell/webhook",
         "POST /api/v1/twilio/webhooks/inbound-sms",
         "POST /api/v1/twilio/webhooks/sms-status",
+        "POST /api/v1/nexhealth/webhooks/appointments",
+        "POST /api/v1/nexhealth/webhooks/patients",
+        "POST /api/v1/nexhealth/webhooks/sync-status",
+        "POST /api/v1/nexhealth/webhooks/shadow/appointments",
+        "POST /api/v1/nexhealth/webhooks/shadow/patients",
+        "POST /api/v1/nexhealth/webhooks/shadow/sync-status",
+        "POST /api/v1/gotracker/webhooks/{location_id}",
+        "POST /api/email/webhooks/resend",
+        # Lead-form deliveries. Meta signs with the platform app secret, and
+        # Typeform with the per-form secret we registered.
+        # Meta's subscription handshake. Answers only when the query echoes the
+        # configured verify token, and it is a GET that changes nothing.
+        "GET /api/v1/forms/webhooks/meta",
+        "POST /api/v1/forms/webhooks/meta",
+        "POST /api/v1/forms/webhooks/typeform/{form_id}",
     ),
-    TICKET_AUTH: (
-        "GET /api/institution/events",
-    ),
+    TICKET_AUTH: ("GET /api/institution/events",),
     ACTIVE_USER: (
+        # The inbox serves five roles from one set of endpoints; the narrowing
+        # is enforced in InboxService, not per-handler, so a new endpoint cannot
+        # forget a scope check. Group admins are refused the conversation
+        # endpoints there and get /activity, which carries no patient content.
+        "GET /api/inbox/scopes",
+        "GET /api/inbox/threads",
+        "GET /api/inbox/threads/{thread_id}",
+        "POST /api/inbox/threads/{thread_id}/assign",
+        "POST /api/inbox/threads/{thread_id}/resolve",
+        "POST /api/inbox/threads/{thread_id}/reply",
+        "GET /api/inbox/activity",
         "GET /api/v1/health",
         "GET /api/auth/users/me",
         "GET /api/auth/mfa/status",
         "POST /api/auth/mfa/recovery-codes/regenerate",
         "GET /api/auth/mfa/webauthn",
+        "GET /api/retell-sms/profiles",
         "DELETE /api/auth/mfa/webauthn/{credential_pk}",
         "POST /api/auth/mfa/totp/disable",
         # Step-up flow — gated by an authenticated session plus an
@@ -101,6 +159,7 @@ ROUTES_BY_BOUNDARY: dict[str, tuple[str, ...]] = {
         "GET /api/institution/setup/appointment-types",
         "GET /api/institution/setup/operatories",
         "GET /api/institution/setup/descriptors",
+        "GET /api/institution/setup/reasons",
         "GET /api/institution/setup/availabilities",
         "GET /api/institution/setup/operating-hours",
         "GET /api/institution/setup/breaks",
@@ -126,6 +185,8 @@ ROUTES_BY_BOUNDARY: dict[str, tuple[str, ...]] = {
         "POST /api/institution/contacts/{contact_id}/reveal/phone",
         "GET /api/institution/dashboard/summary",
         "GET /api/institution/dashboard/monthly-metrics",
+        "GET /api/institution/usage/summary",
+        "GET /api/institution/usage/by-campaign",
         "GET /api/institution/custom-fields/definitions",
         "GET /api/institution/notifications",
         "GET /api/institution/notifications/unread-count",
@@ -136,6 +197,12 @@ ROUTES_BY_BOUNDARY: dict[str, tuple[str, ...]] = {
         "PUT /api/institution/notification-preferences",
         "POST /api/institution/events/ticket",
     ),
+    INSTITUTION_LOCATION_OR_SUPER_ADMIN: (
+        "GET /api/institution/email-inbox-settings",
+        "PUT /api/institution/email-inbox-settings",
+        "GET /api/institution/email-sending-identities",
+        "GET /api/institution/campaign-email-templates",
+    ),
     SUPER_ADMIN: (
         "GET /api/v1/nexhealth/institutions",
         "GET /api/v1/nexhealth/institutions/{institution_id}",
@@ -145,7 +212,21 @@ ROUTES_BY_BOUNDARY: dict[str, tuple[str, ...]] = {
         "POST /api/auth/admin/users/{user_id}/unlock",
         "GET /api/admin/institutions/retell/agents",
         "GET /api/admin/institutions/retell/agents/{agent_id}",
+        "GET /api/admin/institutions/retell/chat-agents",
+        "GET /api/admin/institutions/retell/chat-agents/{agent_id}",
+        "GET /api/admin/institutions/retell/phone-numbers",
+        "POST /api/retell-sms/profiles",
+        "PATCH /api/retell-sms/profiles/{profile_id}",
+        "DELETE /api/retell-sms/profiles/{profile_id}",
         "GET /api/admin/institutions/nexhealth/locations",
+        # Per-institution NexHealth credential management. Both guard on
+        # get_current_admin, so SUPER_ADMIN only — they read and verify a
+        # clinic's own API key.
+        "GET /api/admin/institutions/{slug}/nexhealth/locations",
+        "POST /api/admin/institutions/{slug}/nexhealth/verify",
+        "GET /api/admin/institutions/{slug}/nexhealth/webhook",
+        "POST /api/admin/institutions/{slug}/nexhealth/webhook/connect",
+        "POST /api/admin/institutions/{slug}/nexhealth/webhook/verify",
         "GET /api/admin/institutions/audit-logs",
         "GET /api/admin/institutions",
         "POST /api/admin/institutions",
@@ -162,7 +243,13 @@ ROUTES_BY_BOUNDARY: dict[str, tuple[str, ...]] = {
         "GET /api/admin/institutions/{slug}/locations",
         "GET /api/admin/institutions/{slug}/locations/{loc_slug}",
         "PATCH /api/admin/institutions/{slug}/locations/{loc_slug}",
+        "POST /api/admin/institutions/{slug}/locations/{loc_slug}/gotracker/webhook/reconnect",
+        "POST /api/admin/institutions/{slug}/locations/{loc_slug}/twilio/webhook",
         "DELETE /api/admin/institutions/{slug}/locations/{loc_slug}",
+        "GET /api/admin/institutions/{slug}/locations/{loc_slug}/outbound-voice-profiles",
+        "POST /api/admin/institutions/{slug}/locations/{loc_slug}/outbound-voice-profiles",
+        "PATCH /api/admin/institutions/{slug}/locations/{loc_slug}/outbound-voice-profiles/{profile_id}",
+        "DELETE /api/admin/institutions/{slug}/locations/{loc_slug}/outbound-voice-profiles/{profile_id}",
         "POST /api/admin/institutions/{slug}/locations/{loc_slug}/sync",
         "POST /api/admin/institutions/{slug}/locations/{loc_slug}/invite",
         "GET /api/admin/institutions/{slug}/locations/{loc_slug}/users",
@@ -172,6 +259,10 @@ ROUTES_BY_BOUNDARY: dict[str, tuple[str, ...]] = {
         "GET /api/admin/institutions/{slug}/locations/{loc_slug}/breaks",
         "POST /api/admin/institutions/{slug}/locations/{loc_slug}/breaks",
         "DELETE /api/admin/institutions/{slug}/locations/{loc_slug}/breaks/{break_id}",
+        "GET /api/admin/institutions/{slug}/provisioning",
+        "PATCH /api/admin/institutions/{slug}/provisioning",
+        "DELETE /api/admin/institutions/{slug}/provisioning/twilio",
+        "GET /api/admin/institutions/{slug}/twilio/phone-numbers",
         "GET /api/admin/users",
         "PATCH /api/admin/users/{user_id}",
         "DELETE /api/admin/users/{user_id}",
@@ -187,8 +278,35 @@ ROUTES_BY_BOUNDARY: dict[str, tuple[str, ...]] = {
         "GET /api/admin/dead-letter-events",
         "POST /api/admin/dead-letter-events/{event_id}/discard",
         "POST /api/admin/dead-letter-events/{event_id}/replay",
+        "POST /api/outbound-voice/profiles",
+        "PATCH /api/outbound-voice/profiles/{profile_id}",
+        "DELETE /api/outbound-voice/profiles/{profile_id}",
     ),
     INSTITUTION_ADMIN: (
+        # Intake credentials for a clinic's own forms. Institution-scoped
+        # because a token lands leads in one tenant, and issuing one is a
+        # decision about that clinic's data rather than a location's.
+        # The leads that landed. Institution-scoped: a lead has no location
+        # until staff or a campaign assigns one, so scoping reads by location
+        # would hide exactly the ones needing attention.
+        "GET /api/institution/enquiries",
+        "POST /api/institution/enquiries",
+        "GET /api/institution/enquiries/{enquiry_id}",
+        "PATCH /api/institution/enquiries/{enquiry_id}",
+        "POST /api/institution/enquiries/{enquiry_id}/enrol",
+        "GET /api/institution/enquiry-sources",
+        "POST /api/institution/enquiry-sources",
+        "PATCH /api/institution/enquiry-sources/{source_id}",
+        "POST /api/institution/enquiry-sources/{source_id}/rotate",
+        # Connecting a form provider stores an access token and decides where a
+        # stranger's contact details land, so writing is admin-only. Reading is
+        # wider — see INSTITUTION_OR_LOCATION_USER below.
+        "POST /api/institution/form-integrations/oauth/start",
+        "POST /api/institution/form-integrations/oauth/callback",
+        "POST /api/institution/form-integrations/connections/{connection_id}/sync",
+        "DELETE /api/institution/form-integrations/connections/{connection_id}",
+        "PATCH /api/institution/form-integrations/forms/{form_id}",
+        "PUT /api/institution/form-integrations/forms/{form_id}/mappings",
         "POST /api/institution/users/invite-institution-admin",
         "GET /api/institution/users",
         "POST /api/institution/users/invite",
@@ -202,6 +320,10 @@ ROUTES_BY_BOUNDARY: dict[str, tuple[str, ...]] = {
         "GET /api/institution/roi/calculate",
         "GET /api/institution/audit-logs",
         "GET /api/institution/dashboard/aggregate",
+        "POST /api/institution/do-not-contact",
+        "DELETE /api/institution/do-not-contact",
+        "DELETE /api/institution/do-not-contact/entries/{record_type}/{record_id}",
+        "GET /api/institution/do-not-contact",
         "POST /api/institution/custom-fields/definitions",
         "PATCH /api/institution/custom-fields/definitions/{definition_id}",
         "DELETE /api/institution/custom-fields/definitions/{definition_id}",
@@ -226,6 +348,13 @@ ROUTES_BY_BOUNDARY: dict[str, tuple[str, ...]] = {
         "PUT /api/institution/notification-recipients/{recipient_id}",
         "DELETE /api/institution/notification-recipients/{recipient_id}",
     ),
+    INSTITUTION_USER: (
+        # Institution-wide kill switch. Location admins can stop their own
+        # campaign, but cannot stop or release outbound sends for every clinic.
+        "GET /api/automation/workflows/outbound-halt",
+        "POST /api/automation/workflows/outbound-halt",
+        "DELETE /api/automation/workflows/outbound-halt",
+    ),
     LOCATION_ADMIN: (
         "GET /api/institution/location/users",
         "POST /api/institution/location/users/{user_id}/deactivate",
@@ -233,6 +362,70 @@ ROUTES_BY_BOUNDARY: dict[str, tuple[str, ...]] = {
         "GET /api/institution/location/audit-logs",
     ),
     INSTITUTION_OR_LOCATION_ADMIN: (
+        # Campaign managers share one named campaign:configure permission.
+        # Handlers and RLS additionally pin location admins to their clinic.
+        # Per-location value inputs. Wider than the institution-level ROI
+        # routes above on purpose: these are the numbers a single clinic knows
+        # and the institution does not — its own appointment value and front
+        # desk rate. require_location_scope pins a location admin to their own
+        # clinic, so the wider boundary does not widen what any one of them can
+        # reach.
+        "GET /api/institution/locations/{loc_slug}/roi/config",
+        "PUT /api/institution/locations/{loc_slug}/roi/config",
+        "DELETE /api/institution/locations/{loc_slug}/roi/config",
+        "GET /api/institution/locations/{loc_slug}/roi/calculate",
+        "GET /api/compliance/quiet-hours/exceptions",
+        "POST /api/compliance/quiet-hours/exceptions",
+        "PATCH /api/compliance/quiet-hours/exceptions/{exception_id}",
+        "DELETE /api/compliance/quiet-hours/exceptions/{exception_id}",
+        "GET /api/automation/workflows/node-capabilities",
+        "GET /api/automation/workflows/pms-appointment-statuses",
+        "GET /api/automation/workflows/event-catalog",
+        "POST /api/automation/workflows",
+        "POST /api/automation/workflows/draft",
+        "GET /api/automation/workflows",
+        "PATCH /api/automation/workflows/{workflow_id}",
+        "POST /api/automation/workflows/{workflow_id}/publish",
+        "POST /api/automation/workflows/{workflow_id}/pause",
+        "POST /api/automation/workflows/{workflow_id}/resume",
+        "POST /api/automation/workflows/{workflow_id}/archive",
+        "DELETE /api/automation/workflows/{workflow_id}",
+        "POST /api/automation/templates/{template_id}/instantiate",
+        "POST /api/automation/workflows/{workflow_id}/bulk-enroll",
+        "POST /api/automation/workflows/validate",
+        "GET /api/automation/workflows/phone-country-regions",
+        "POST /api/automation/workflows/dry-run",
+        "GET /api/automation/workflows/channel-readiness",
+        "POST /api/automation/workflows/{workflow_id}/launch-checklist/preview",
+        "PUT /api/automation/workflows/{workflow_id}/audience",
+        "POST /api/automation/workflows/{workflow_id}/audience/enroll",
+        # Bulk enrollment from a file, same boundary as the audience enroll
+        # route it shares its caps and gates with: a location admin reaches it
+        # only for a campaign _get_workflow_or_404 has already pinned to their
+        # own clinic.
+        "POST /api/automation/workflows/{workflow_id}/enroll/csv",
+        "POST /api/automation/workflows/{workflow_id}/emergency-halt",
+        # Narrowed from any institution-scoped role by Item 33: a practice's
+        # integration state is operational detail, and STAFF could read it until
+        # then. Also carries the sync:read permission.
+        "GET /api/institution/appointment-sync",
+        # Tenant operators see only rows admitted by dead_letter_events RLS;
+        # location admins are additionally pinned to their own location.
+        "GET /api/institution/undeliverables",
+        "POST /api/institution/undeliverables/{event_id}/discard",
+        "POST /api/institution/undeliverables/{event_id}/replay",
+        "GET /api/automation/workflows/merge-fields",
+        "GET /api/automation/workflows/llm-models",
+        "GET /api/automation/workflows/{workflow_id}/launch-checklist",
+        "GET /api/automation/workflows/{workflow_id}/overview",
+        "GET /api/automation/workflows/{workflow_id}/versions",
+        "GET /api/automation/workflows/{workflow_id}/analytics",
+        "GET /api/automation/workflows/{workflow_id}/analytics/splits",
+        "GET /api/automation/workflows/{workflow_id}/operations",
+        "GET /api/automation/workflows/{workflow_id}/audience",
+        "POST /api/automation/workflows/{workflow_id}/audience/preview",
+        "GET /api/automation/workflows/{workflow_id}/runs/{run_id}/timeline",
+        "GET /api/automation/campaign-analytics",
         "POST /api/v1/pms/appointment-types",
         "POST /api/v1/pms/setup/availabilities",
         "PATCH /api/v1/pms/setup/availabilities/{availability_id}",
@@ -243,10 +436,12 @@ ROUTES_BY_BOUNDARY: dict[str, tuple[str, ...]] = {
         "POST /api/institution/setup/appointment-types",
         "PATCH /api/institution/setup/appointment-types/{source_id}",
         "DELETE /api/institution/setup/appointment-types/{source_id}",
+        "PATCH /api/institution/setup/operatories/{operatory_id}",
         "POST /api/institution/setup/availabilities",
         "POST /api/institution/setup/availabilities/bulk-link-range/preview",
         "POST /api/institution/setup/availabilities/bulk-link-range/apply",
         "PATCH /api/institution/setup/availabilities/{source_id}",
+        "DELETE /api/institution/setup/availabilities/{source_id}/override",
         "POST /api/institution/setup/sync",
         "PUT /api/institution/setup/operating-hours",
         "POST /api/institution/setup/breaks",
@@ -256,6 +451,8 @@ ROUTES_BY_BOUNDARY: dict[str, tuple[str, ...]] = {
         "DELETE /api/institution/locations/{loc_slug}/insurance-plans/{plan_id}",
         "POST /api/institution/contacts/{contact_id}/merge",
         "POST /api/institution/contacts/{contact_id}/unmerge",
+        "POST /api/institution/contacts",
+        "PATCH /api/institution/contacts/{contact_id}",
         "POST /api/institution/statuses",
         "PATCH /api/institution/statuses/{status_id}",
         "DELETE /api/institution/statuses/{status_id}",
@@ -263,9 +460,29 @@ ROUTES_BY_BOUNDARY: dict[str, tuple[str, ...]] = {
         "POST /api/institution/sms-notification-recipients",
         "PUT /api/institution/sms-notification-recipients/{recipient_id}",
         "DELETE /api/institution/sms-notification-recipients/{recipient_id}",
+        "GET /api/automation/workflows/{workflow_id}",
+        "POST /api/automation/workflows/{workflow_id}/enroll",
+        "GET /api/automation/workflows/{workflow_id}/runs",
+        "GET /api/automation/workflows/{workflow_id}/runs/{run_id}",
+        "POST /api/automation/workflows/{workflow_id}/runs/{run_id}/cancel",
+        "GET /api/automation/templates",
+        "GET /api/automation/templates/{template_id}",
     ),
     INSTITUTION_OR_LOCATION_USER: (
+        # A form's name and its answer keys are what the workflow builder's
+        # trigger picker shows, and a location admin edits workflows. Reading
+        # them is therefore wider than the admin-only writes above.
+        "GET /api/institution/form-integrations/providers",
+        "GET /api/institution/form-integrations/connections",
+        "GET /api/institution/form-integrations/forms",
+        "GET /api/institution/form-integrations/forms/{form_id}",
+        "GET /api/institution/form-integrations/forms/{form_id}/submissions",
+        "GET /api/outbound-voice/profiles",
+        "GET /api/outbound-voice/profiles/{profile_id}",
+        "GET /api/outbound-voice/attempts",
         "GET /api/v1/pms/patients",
+        "GET /api/v1/pms/patients/{patient_id}/communication",
+        "GET /api/v1/pms/patients/page",
         "POST /api/v1/pms/patients",
         "GET /api/v1/pms/slots",
         "POST /api/v1/pms/appointments",
@@ -299,6 +516,7 @@ ROUTES_BY_BOUNDARY: dict[str, tuple[str, ...]] = {
         "GET /api/group/me",
         "GET /api/group/dashboard",
         "GET /api/group/institution/{institution_id}/dashboard",
+        "GET /api/group/usage-summary",
     ),
     SUPER_ADMIN_STRICT: (
         # Break-glass MFA reset — strictly SUPER_ADMIN, not the broader
@@ -306,6 +524,42 @@ ROUTES_BY_BOUNDARY: dict[str, tuple[str, ...]] = {
         # user's MFA is the rare operation where the
         # institution-admin-as-acceptable-admin shortcut does not apply.
         "POST /api/auth/admin/users/{user_id}/mfa/reset",
+        # Provisioning creates an SES identity, tenant, configuration set and
+        # DNS records against capped quotas; deletion destroys them. Onboarding
+        # operations, not a self-service button a clinic can hold down — and an
+        # institution admin acting as "an admin" is not sufficient here.
+        "POST /api/institution/email-sending-identities/provision",
+        "DELETE /api/institution/email-sending-identities/{identity_id}",
+        "POST /api/institution/email-sending-identities/{identity_id}/activate",
+        "POST /api/institution/email-sending-identities/{identity_id}/deactivate",
+        "POST /api/institution/email-sending-identities/{identity_id}/activate-inbound",
+        "POST /api/institution/email-sending-identities/{identity_id}/deactivate-inbound",
+    ),
+    INSTITUTION_OR_SUPER_ADMIN: (
+        # The practice-wide switch for automatic staff alerts. Deciding that
+        # nobody is emailed is an institution-level choice, unlike the per-user
+        # preferences beside it, which any authenticated user sets for
+        # themselves.
+        "PUT /api/institution/notification-preferences/institution",
+        # Clinic-authored campaign email templates. Institution-scoped content
+        # a clinic admin owns for their own institution, and a platform admin
+        # administers for any institution they name explicitly.
+        "POST /api/institution/campaign-email-templates",
+        "GET /api/institution/campaign-email-templates/merge-fields",
+        "POST /api/institution/campaign-email-templates/preview/live",
+        "GET /api/institution/campaign-email-templates/{key}",
+        "PUT /api/institution/campaign-email-templates/{key}",
+        "DELETE /api/institution/campaign-email-templates/{key}",
+        "GET /api/institution/campaign-email-templates/{key}/preview",
+        # Sending identities: a clinic admin reads status, edits display fields
+        # and re-checks verification. Provisioning and deletion stay super-admin
+        # only (above) because they create and destroy real AWS resources.
+        "PUT /api/institution/email-sending-identities/{identity_id}",
+        "POST /api/institution/email-sending-identities/{identity_id}/verify",
+        "POST /api/institution/email-sending-identities/{identity_id}/addresses",
+        "PUT /api/institution/email-sending-identities/addresses/{address_id}",
+        "POST /api/institution/email-sending-identities/addresses/{address_id}/default",
+        "DELETE /api/institution/email-sending-identities/addresses/{address_id}",
     ),
 }
 
@@ -314,6 +568,8 @@ AUTH_BOUNDARIES = {
     SUPER_ADMIN,
     SUPER_ADMIN_STRICT,
     INSTITUTION_ADMIN,
+    INSTITUTION_OR_SUPER_ADMIN,
+    INSTITUTION_LOCATION_OR_SUPER_ADMIN,
     INSTITUTION_USER,
     LOCATION_ADMIN,
     INSTITUTION_OR_LOCATION_ADMIN,
@@ -327,6 +583,8 @@ BOUNDARY_PRECEDENCE = (
     SUPER_ADMIN,
     SUPER_ADMIN_STRICT,
     INSTITUTION_ADMIN,
+    INSTITUTION_OR_SUPER_ADMIN,
+    INSTITUTION_LOCATION_OR_SUPER_ADMIN,
     INSTITUTION_USER,
     LOCATION_ADMIN,
     INSTITUTION_OR_LOCATION_ADMIN,
@@ -340,6 +598,15 @@ ALLOWED_ROLES_BY_BOUNDARY: dict[str, set[UserRole]] = {
     SUPER_ADMIN: {UserRole.SUPER_ADMIN},
     SUPER_ADMIN_STRICT: {UserRole.SUPER_ADMIN},
     INSTITUTION_ADMIN: {UserRole.INSTITUTION_ADMIN},
+    # The per-institution email surfaces. A super admin administers any tenant
+    # and must name it explicitly; resolve_target_institution refuses a tenant
+    # admin who names an institution other than their own.
+    INSTITUTION_OR_SUPER_ADMIN: {UserRole.INSTITUTION_ADMIN, UserRole.SUPER_ADMIN},
+    INSTITUTION_LOCATION_OR_SUPER_ADMIN: {
+        UserRole.SUPER_ADMIN,
+        UserRole.INSTITUTION_ADMIN,
+        UserRole.LOCATION_ADMIN,
+    },
     INSTITUTION_USER: {UserRole.INSTITUTION_ADMIN},
     LOCATION_ADMIN: {UserRole.LOCATION_ADMIN},
     INSTITUTION_OR_LOCATION_ADMIN: {
@@ -436,11 +703,11 @@ def _auth_dependency(boundary: str) -> Callable:
 
 def test_route_matrix_has_no_duplicate_expectations():
     expected_routes = [
-        route
-        for routes in ROUTES_BY_BOUNDARY.values()
-        for route in routes
+        route for routes in ROUTES_BY_BOUNDARY.values() for route in routes
     ]
-    duplicates = sorted(route for route, count in Counter(expected_routes).items() if count > 1)
+    duplicates = sorted(
+        route for route, count in Counter(expected_routes).items() if count > 1
+    )
 
     assert duplicates == []
 
@@ -498,7 +765,9 @@ async def test_endpoint_rbac_role_matrix(route_key: str):
         auth_deps.get_current_location_staff_or_admin,
     ),
 )
-async def test_location_scoped_boundaries_require_location_assignment(dependency: Callable):
+async def test_location_scoped_boundaries_require_location_assignment(
+    dependency: Callable,
+):
     for role in (UserRole.LOCATION_ADMIN, UserRole.STAFF):
         user = _user(role, location_id=None)
         with pytest.raises(HTTPException) as exc:
@@ -518,11 +787,18 @@ async def test_active_user_boundary_rejects_inactive_accounts():
 def test_internal_admin_surfaces_remain_super_admin_only():
     for route_key, boundary in EXPECTED_ROUTE_BOUNDARIES.items():
         _method, path = route_key.split(" ", 1)
-        if path.startswith((
-            "/api/admin/",
-            "/api/auth/admin/",
-            "/api/v1/nexhealth/",
-        )):
+        if path.startswith(
+            (
+                "/api/admin/",
+                "/api/auth/admin/",
+                "/api/v1/nexhealth/",
+                "/api/v1/gotracker/",
+            )
+        ) and not path.startswith("/api/v1/nexhealth/webhooks/"):
+            if path.startswith("/api/v1/gotracker/webhooks/"):
+                continue
+            # Webhook endpoints are externally called with signature verification,
+            # not admin surfaces — they use SIGNED_WEBHOOK boundary instead.
             assert boundary in {SUPER_ADMIN, SUPER_ADMIN_STRICT}
 
 
@@ -548,3 +824,49 @@ def test_staff_cannot_cross_mutation_boundaries_at_dependency_layer():
         if boundary not in mutation_boundaries:
             continue
         assert UserRole.STAFF not in ALLOWED_ROLES_BY_BOUNDARY[boundary], route_key
+
+
+# ---------------------------------------------------------------------------
+# Which institution a request acts on
+# ---------------------------------------------------------------------------
+#
+# The INSTITUTION_OR_SUPER_ADMIN boundary lets two very different callers reach
+# the same handler, so the target institution can no longer be read off the
+# user. These cover the resolution itself: a tenant admin cannot be widened by
+# a query parameter, and a platform admin cannot act without naming a tenant.
+
+
+def test_institution_admin_is_pinned_to_their_own_institution():
+    user = _user(UserRole.INSTITUTION_ADMIN)
+    assert auth_deps.resolve_target_institution(user, None) == str(user.institution_id)
+
+
+def test_institution_admin_may_name_their_own_institution():
+    user = _user(UserRole.INSTITUTION_ADMIN)
+    resolved = auth_deps.resolve_target_institution(user, str(user.institution_id))
+    assert resolved == str(user.institution_id)
+
+
+def test_institution_admin_cannot_name_another_institution():
+    user = _user(UserRole.INSTITUTION_ADMIN)
+    with pytest.raises(HTTPException) as exc:
+        auth_deps.resolve_target_institution(
+            user, "cccccccc-cccc-cccc-cccc-cccccccccccc"
+        )
+    assert exc.value.status_code == 403
+
+
+def test_super_admin_must_name_an_institution():
+    """A platform admin has none of their own; acting on an unnamed tenant is a
+    bug, not a default."""
+    with pytest.raises(HTTPException) as exc:
+        auth_deps.resolve_target_institution(_user(UserRole.SUPER_ADMIN), None)
+    assert exc.value.status_code == 400
+
+
+def test_super_admin_acts_on_the_institution_they_name():
+    target = "cccccccc-cccc-cccc-cccc-cccccccccccc"
+    assert (
+        auth_deps.resolve_target_institution(_user(UserRole.SUPER_ADMIN), target)
+        == target
+    )

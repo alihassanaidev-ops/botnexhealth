@@ -74,6 +74,8 @@ function makeAvailability(overrides: Partial<CachedAvailability>): CachedAvailab
         synced: true,
         label_name: null,
         is_bookable_window: true,
+        status: "open",
+        types_overridden: false,
         source_metadata: null,
         synced_at: null,
         ...overrides,
@@ -81,11 +83,28 @@ function makeAvailability(overrides: Partial<CachedAvailability>): CachedAvailab
 }
 
 /** N dated windows, one per day starting tomorrow. */
+/**
+ * N dated windows spread across the coming week, several per day.
+ *
+ * The list opens on a 7-day range, so rows must land inside it; spreading them
+ * over multiple days also exercises the per-date grouping headers.
+ */
 function datedWindows(count: number): CachedAvailability[] {
     return Array.from({ length: count }, (_, i) =>
         makeAvailability({
             source_id: `dated-${i}`,
-            specific_date: addDays(todayISO(), i + 1),
+            specific_date: addDays(todayISO(), (i % 6) + 1),
+            begin_time: `${String(8 + Math.floor(i / 6)).padStart(2, "0")}:00`,
+        })
+    )
+}
+
+/** N dated windows beyond the default week — used to prove the range narrows. */
+function farFutureWindows(count: number): CachedAvailability[] {
+    return Array.from({ length: count }, (_, i) =>
+        makeAvailability({
+            source_id: `far-${i}`,
+            specific_date: addDays(todayISO(), 20 + i),
         })
     )
 }
@@ -100,17 +119,25 @@ function recurringWindows(count: number): CachedAvailability[] {
     )
 }
 
-function mountWith(availabilities: CachedAvailability[], canLinkAvailability = false) {
+function mountWith(availabilities: CachedAvailability[]) {
     const apiGet = api.get as ReturnType<typeof vi.fn>
     apiGet.mockImplementation((url: string) => {
         if (url === "/auth/users/me") return Promise.resolve({ data: USER })
         if (url.startsWith("/institution/setup/locations")) return Promise.resolve({ data: [LOCATION] })
-        if (url.startsWith("/institution/setup/overview")) {
-            return Promise.resolve({ data: { can_link_availability: canLinkAvailability } })
-        }
         if (url.startsWith("/institution/setup/providers")) return Promise.resolve({ data: [PROVIDER] })
         if (url.startsWith("/institution/setup/appointment-types")) return Promise.resolve({ data: [APPT_TYPE] })
         if (url.startsWith("/institution/setup/operatories")) return Promise.resolve({ data: [OPERATORY] })
+        // Drives canLinkAvailability, which gates the appointment-type filter,
+        // the "Work Windows" heading and the linking UI. Without it the page
+        // renders in "Live Slots" mode and none of that exists.
+        if (url.startsWith("/institution/setup/overview"))
+            return Promise.resolve({
+                data: {
+                    can_link_availability: true,
+                    can_create_work_windows: true,
+                    can_clear_working_window_override: false,
+                },
+            })
         if (url.startsWith("/institution/setup/availabilities")) return Promise.resolve({ data: availabilities })
         return Promise.resolve({ data: [] })
     })
@@ -125,28 +152,6 @@ function mountWith(availabilities: CachedAvailability[], canLinkAvailability = f
         </MemoryRouter>
     )
 }
-
-describe("Bulk appointment-type linking", () => {
-    it("is capability-gated and opens with the provider's visible operatories selected", async () => {
-        const user = userEvent.setup()
-        mountWith(datedWindows(2), true)
-
-        const openButton = await screen.findByRole("button", { name: /link date range/i })
-        await user.click(openButton)
-
-        expect(screen.getByRole("heading", { name: /link date range/i })).toBeInTheDocument()
-        expect(screen.getByText("Operatories: All visible operatories")).toBeInTheDocument()
-        expect(screen.getByRole("button", { name: "Apply" })).toBeDisabled()
-        expect(screen.getByText(/recurring weekly rules are not changed/i)).toBeInTheDocument()
-    })
-
-    it("stays hidden when the PMS does not support availability linking", async () => {
-        mountWith(datedWindows(2), false)
-
-        await waitFor(() => expect(rowCount()).toBe(2))
-        expect(screen.queryByRole("button", { name: /link date range/i })).not.toBeInTheDocument()
-    })
-})
 
 /** Work-window rows are identified by their "Edit Linking" button. */
 function rowCount() {
@@ -279,13 +284,15 @@ describe("Past-dated windows", () => {
         expect(screen.queryByText("Expired")).not.toBeInTheDocument()
     })
 
-    it("offers no control to bring them back", async () => {
+    it("are reachable only through Show expired, not a second past-dates control", async () => {
+        // This branch keeps a "Show expired" toggle. What must NOT exist is a
+        // competing control for the same thing — a date-range lower bound and an
+        // "include past dates" checkbox contradicted each other.
         mountWith(datedWindows(3))
 
         await waitFor(() => expect(rowCount()).toBe(3))
-        expect(screen.queryByRole("checkbox", { name: /past/i })).not.toBeInTheDocument()
-        expect(screen.queryByText(/include past/i)).not.toBeInTheDocument()
-        expect(screen.queryByText(/show expired/i)).not.toBeInTheDocument()
+        expect(screen.getByRole("checkbox", { name: /show expired/i })).toBeInTheDocument()
+        expect(screen.queryByRole("checkbox", { name: /include past/i })).not.toBeInTheDocument()
     })
 })
 
@@ -316,11 +323,36 @@ describe("Inactive windows", () => {
         ])
 
         await waitFor(() => expect(screen.getByText(/Work Windows for/)).toBeInTheDocument())
-        expect(screen.queryByText(/without linked/i)).not.toBeInTheDocument()
+        // The banner counts unlinked windows; an inactive one generates no
+        // slots so it must not appear there. queryAllByText because the
+        // empty-state copy also mentions linking.
+        expect(screen.queryAllByText(/window(s)? without linked/i)).toHaveLength(0)
     })
 })
 
 describe("Notes and breaks (v3 labels)", () => {
+    it("shows derived closed periods without any linking controls", async () => {
+        mountWith([
+            makeAvailability({
+                id: "closed:2026-09-01:3:3:00:00:00:09:00:00",
+                source_id: "closed-period",
+                specific_date: addDays(todayISO(), 1),
+                begin_time: "00:00",
+                end_time: "09:00",
+                synced: false,
+                status: "closed",
+                appointment_type_ids: [],
+                appointment_type_names: [],
+                is_bookable_window: false,
+            }),
+        ])
+
+        await waitFor(() => expect(screen.getByText(/Work Windows for/)).toBeInTheDocument())
+        expect(screen.getByText("Closed — read-only")).toBeInTheDocument()
+        expect(screen.queryByRole("button", { name: /edit linking/i })).not.toBeInTheDocument()
+        expect(screen.queryByText(/Appointment Types:/i)).not.toBeInTheDocument()
+    })
+
     it("shows non-bookable rows with their label, and can hide them", async () => {
         // NexHealth returns Lunch blocks and synced OpenDental notes in the same
         // collection as real working hours. For one clinic that was 659 of 2,045
@@ -344,7 +376,7 @@ describe("Notes and breaks (v3 labels)", () => {
         expect(screen.getByText("Lunch")).toBeInTheDocument()
         expect(screen.getByText("NOTE")).toBeInTheDocument()
 
-        await user.click(screen.getByRole("checkbox", { name: /show notes & breaks/i }))
+        await user.click(screen.getByRole("checkbox", { name: /show closed periods, notes & breaks/i }))
 
         await waitFor(() => expect(rowCount()).toBe(1))
         expect(screen.queryByText("Lunch")).not.toBeInTheDocument()
@@ -373,15 +405,24 @@ describe("Notes and breaks (v3 labels)", () => {
         ])
 
         await waitFor(() => expect(rowCount()).toBe(2))
-        expect(screen.queryByRole("checkbox", { name: /show notes & breaks/i })).toBeInTheDocument()
+        expect(screen.queryByRole("checkbox", { name: /show closed periods, notes & breaks/i })).toBeInTheDocument()
     })
 })
 
 describe("Date range filter", () => {
-    it("narrows the list to the chosen window and resets to page 1", async () => {
+    it("opens on the coming week and hides windows beyond it", async () => {
+        // The default is deliberately narrow: NexHealth pre-expands work windows
+        // one row per date, so an open-ended default buries the week an operator
+        // is actually working on under thousands of future rows.
+        mountWith([...datedWindows(10), ...farFutureWindows(8)])
+
+        await waitFor(() => expect(screen.getByText(/Work Windows for/)).toBeInTheDocument())
+        await waitFor(() => expect(rowCount()).toBe(10))
+    })
+
+    it("reveals the later windows when widened, and resets to page 1", async () => {
         const user = userEvent.setup()
-        // 40 windows one per day: a "Next 7 days" range must keep exactly 7.
-        mountWith(datedWindows(40))
+        mountWith([...datedWindows(30), ...farFutureWindows(8)])
 
         await waitFor(() => expect(rowCount()).toBe(25))
 
@@ -390,42 +431,44 @@ describe("Date range filter", () => {
         expect(screen.getByText("Page 2 of 2")).toBeInTheDocument()
 
         await user.click(screen.getByRole("button", { name: /filter by date range/i }))
-        await user.click(await screen.findByRole("button", { name: "Next 7 days" }))
+        await user.click(await screen.findByRole("button", { name: "Next 30 days" }))
 
-        // datedWindows starts at tomorrow, so a 7-day window from today holds 6.
-        await waitFor(() => expect(rowCount()).toBe(6))
-        // Narrowed below one page, so the pager is gone rather than stuck on page 2.
-        expect(screen.queryByText(/^Showing/)).not.toBeInTheDocument()
-        expect(screen.getByText(/\(filtered\)/)).toBeInTheDocument()
+        // 30 in-week + 8 far-future = 38, so page 1 fills and the pager grows.
+        await waitFor(() => expect(screen.getByText("Page 1 of 2")).toBeInTheDocument())
+        expect(rowCount()).toBe(25)
+        expect(pagerText()).toBe("Showing 1–25 of 38 dated windows")
     })
 
-    it("restores the full list when the range filter is cleared", async () => {
+    it("returns to the default week when filters are cleared", async () => {
         const user = userEvent.setup()
-        mountWith(datedWindows(40))
+        mountWith([...datedWindows(10), ...farFutureWindows(8)])
 
-        await waitFor(() => expect(rowCount()).toBe(25))
+        await waitFor(() => expect(rowCount()).toBe(10))
 
         await user.click(screen.getByRole("button", { name: /filter by date range/i }))
-        await user.click(await screen.findByRole("button", { name: "Next 7 days" }))
-        await waitFor(() => expect(rowCount()).toBe(6))
+        await user.click(await screen.findByRole("button", { name: "Next 30 days" }))
+        await waitFor(() => expect(rowCount()).toBe(18))
 
         await user.click(screen.getByRole("button", { name: /clear filters/i }))
-        await waitFor(() => expect(rowCount()).toBe(25))
-        expect(screen.getByText("Page 1 of 2")).toBeInTheDocument()
+        await waitFor(() => expect(rowCount()).toBe(10))
     })
 
     it("keeps recurring rules visible regardless of the range", async () => {
-        const user = userEvent.setup()
-        mountWith([...recurringWindows(2), ...datedWindows(40)])
+        mountWith([...recurringWindows(2), ...datedWindows(10), ...farFutureWindows(8)])
 
-        await waitFor(() => expect(rowCount()).toBe(27))
-
-        await user.click(screen.getByRole("button", { name: /filter by date range/i }))
-        await user.click(await screen.findByRole("button", { name: "Next 7 days" }))
-
-        // 2 recurring + 6 dated: recurring rules repeat forever, so no range excludes them.
-        await waitFor(() => expect(rowCount()).toBe(8))
+        // 2 recurring + 10 in-week. Recurring rules repeat forever, so no range
+        // excludes them — but the far-future dated rows are still filtered out.
+        await waitFor(() => expect(rowCount()).toBe(12))
         expect(screen.getByText(/Recurring weekly windows/i)).toBeInTheDocument()
+    })
+
+    it("groups the dated rows under a heading per date", async () => {
+        mountWith(datedWindows(12))
+
+        await waitFor(() => expect(rowCount()).toBe(12))
+        // datedWindows spreads across 6 days, so 6 date headings.
+        const headings = screen.getAllByText(/\d{4}$/)
+        expect(headings.length).toBeGreaterThanOrEqual(6)
     })
 })
 

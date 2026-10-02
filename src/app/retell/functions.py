@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 from contextvars import ContextVar
 from typing import TYPE_CHECKING, Any, Callable, Coroutine, Optional
 
@@ -90,6 +91,28 @@ def _safe_key_list(value: Any) -> str:
     return ",".join(keys) if keys else "empty"
 
 
+_UNRESOLVED_TEMPLATE = re.compile(r"^\s*\{\{[^{}]+\}\}\s*$")
+
+
+def _omit_unresolved_template_args(
+    args: dict[str, Any],
+) -> tuple[dict[str, Any], list[str]]:
+    """Drop top-level Retell arguments that are unresolved template tokens.
+
+    Retell can send the literal ``{{variable_name}}`` when a dynamic variable
+    is absent. Treat that exact whole-value shape as an omitted optional
+    argument while preserving normal text that merely contains braces.
+    """
+    omitted = sorted(
+        key
+        for key, value in args.items()
+        if isinstance(value, str) and _UNRESOLVED_TEMPLATE.fullmatch(value)
+    )
+    if not omitted:
+        return args, []
+    return {key: value for key, value in args.items() if key not in omitted}, omitted
+
+
 def _agent_id_debug_value(agent_id: str | None) -> str:
     return hash_for_logging(agent_id) if agent_id else "missing"
 
@@ -130,7 +153,9 @@ def _extract_call_id(
     """
     candidates = (
         ("payload.call_id", request.call_id),
+        ("payload.chat_id", payload.get("chat_id")),
         ("payload.call.call_id", _dict_value(payload.get("call")).get("call_id")),
+        ("payload.chat.chat_id", _dict_value(payload.get("chat")).get("chat_id")),
         ("payload.chat.call_id", _dict_value(payload.get("chat")).get("call_id")),
         ("payload.tool_call_id", payload.get("tool_call_id")),
         (
@@ -272,10 +297,13 @@ async def handle_function_call(
                 payload["call_id"] = query_call_id
 
         request = FunctionCallRequest.model_validate(payload)
+        request.args, omitted_template_args = _omit_unresolved_template_args(
+            request.args
+        )
 
         # Resolve call_id from every place Retell can put it (voice payloads
-        # nest under ``call.call_id``; chat/debug variants use
-        # ``chat.call_id``; tool-call invocations expose ``tool_call_id``).
+        # nest under ``call.call_id``; chat variants use ``chat_id`` or
+        # ``chat.chat_id``; tool-call invocations expose ``tool_call_id``).
         # Query-string ``?call_id=`` was already merged into ``payload``
         # above, so it's seen as ``payload.call_id`` by the helper —
         # nothing more to do here.
@@ -288,6 +316,12 @@ async def handle_function_call(
             f"Function call received: call={call_id_hash}, function={request.function_name}, "
             f"call_id_source={call_id_source}"
         )
+        if omitted_template_args:
+            logger.warning(
+                "Omitted unresolved Retell template arguments: "
+                f"call={call_id_hash}, function={request.function_name}, "
+                f"arg_keys={','.join(omitted_template_args)}"
+            )
 
         # Get handler from registry
         handler = _function_registry.get(request.function_name)

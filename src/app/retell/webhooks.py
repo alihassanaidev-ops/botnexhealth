@@ -210,8 +210,28 @@ class RetellCallWebhook(BaseModel):
     scrubbed_transcript_with_tool_calls: list[dict] | None = None
     disconnection_reason: str | None = None
     scrubbed_call_analysis: CallAnalysisData | None = None
+    scrubbed_metadata: dict[str, Any] = Field(default_factory=dict)
+    scrubbed_retell_llm_dynamic_variables: dict[str, Any] = Field(default_factory=dict)
     # Dynamic variables collected during the call (name, email, etc.)
     collected_dynamic_variables: dict[str, Any] = Field(default_factory=dict)
+    # Non-PHI call metadata Retell echoes back. Outbound campaign calls stamp
+    # workflow_run_id here (VoiceNodeExecutor) so usage metering can attribute
+    # the call's minutes to its workflow run (Plan 11 M-1/M-4).
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+    @property
+    def effective_metadata(self) -> dict[str, Any]:
+        """Return Retell metadata, supporting PII-scrubbed agent payloads."""
+        return self.metadata or self.scrubbed_metadata or {}
+
+    @property
+    def effective_dynamic_variables(self) -> dict[str, Any]:
+        """Return collected/dynamic variables, supporting PII-scrubbed payloads."""
+        return (
+            self.collected_dynamic_variables
+            or self.scrubbed_retell_llm_dynamic_variables
+            or {}
+        )
 
 
 class RetellWebhookEvent(BaseModel):
@@ -223,6 +243,27 @@ class RetellWebhookEvent(BaseModel):
 
 class RetellAgentLookupError(RuntimeError):
     """Raised when a Retell agent lookup fails for retryable infrastructure reasons."""
+
+
+def _campaign_voice_outcome(call: RetellCallWebhook) -> str:
+    """Return the workflow business outcome from Retell analysis when present."""
+    from src.app.services.automation.voice_outcome import map_disconnection_reason
+
+    analysis = call.call_analysis or call.scrubbed_call_analysis
+    custom = analysis.custom_analysis_data if analysis else {}
+    outcome = custom.get("call_outcome")
+    if isinstance(outcome, str) and outcome:
+        return outcome
+    return map_disconnection_reason(call.disconnection_reason, call.call_status)
+
+
+def _campaign_voice_context(call: RetellCallWebhook) -> dict[str, str]:
+    """Return only custom analysis fields approved as workflow action inputs."""
+    from src.app.services.automation.voice_outcome import extract_workflow_outcome_context
+
+    analysis = call.call_analysis or call.scrubbed_call_analysis
+    custom = analysis.custom_analysis_data if analysis else {}
+    return extract_workflow_outcome_context(custom)
 
 
 async def _resolve_institution_location_from_agent(agent_id: str | None):
@@ -264,6 +305,72 @@ async def _resolve_institution_location_from_agent(agent_id: str | None):
         hash_for_logging(agent_id),
     )
     return None, None
+
+
+async def _resolve_institution_location_from_outbound_attempt(
+    call_id: str,
+    institution_id: str,
+):
+    """Resolve an outbound workflow call from its durable provider correlation key."""
+    try:
+        from src.app.database import get_system_db_session
+        from src.app.models.institution import Institution
+        from src.app.models.institution_location import InstitutionLocation
+        from src.app.models.outbound_voice import WorkflowVoiceAttempt
+
+        async with get_system_db_session(
+            "celery",
+            institution_id=institution_id,
+            external_id=call_id,
+        ) as session:
+            result = await session.execute(
+                select(InstitutionLocation, Institution)
+                .select_from(WorkflowVoiceAttempt)
+                .join(
+                    InstitutionLocation,
+                    WorkflowVoiceAttempt.location_id == InstitutionLocation.id,
+                )
+                .join(
+                    Institution,
+                    Institution.id == WorkflowVoiceAttempt.institution_id,
+                )
+                .where(
+                    WorkflowVoiceAttempt.retell_call_id == call_id,
+                    WorkflowVoiceAttempt.institution_id == institution_id,
+                    InstitutionLocation.institution_id == Institution.id,
+                )
+            )
+            row = result.first()
+            if row:
+                return row[0], row[1]
+    except Exception as exc:
+        logger.error(
+            "Retell outbound call lookup failed; webhook will be marked retryable: "
+            "call_hash=%s error=%s",
+            hash_for_logging(call_id),
+            safe_error_summary(exc),
+        )
+        raise RetellAgentLookupError(
+            "Retell outbound call lookup failed; retry webhook"
+        ) from exc
+
+    return None, None
+
+
+async def _resolve_institution_location_from_call(call: RetellCallWebhook):
+    """Resolve outbound workflow calls by call ID, then fall back to agent routing."""
+    if (call.direction or "").lower() == "outbound":
+        institution_id = call.effective_metadata.get("institution_id")
+        if isinstance(institution_id, str) and institution_id:
+            location, institution = (
+                await _resolve_institution_location_from_outbound_attempt(
+                    call.call_id,
+                    institution_id,
+                )
+            )
+            if location and institution:
+                return location, institution
+    return await _resolve_institution_location_from_agent(call.agent_id)
 
 
 async def _begin_webhook_processing(call_id: str, event_type: str) -> tuple[bool, str]:
@@ -367,6 +474,9 @@ async def _finish_webhook_processing(
 async def process_retell_call_ended_event(payload: dict[str, Any]) -> dict[str, Any]:
     """Send the patient the appointment-confirmation SMS at call end.
 
+    GoTracker patient messaging is campaign-owned and bypasses this legacy
+    hook. NexHealth and no-PMS behavior remains as described below.
+
     Approach B: the body is rendered from the institution's editable
     ``appointment_booked`` SMS template, populated with the authoritative PMS
     booking (real provider name + slot time) resolved from the ``book_appointment``
@@ -399,14 +509,27 @@ async def process_retell_call_ended_event(payload: dict[str, Any]) -> dict[str, 
                 safe_error_summary(exc),
             )
 
-    # Agent-lookup infra failures must stay retryable (raise); a missing mapping
-    # is a terminal no-op.
-    location, institution = await _resolve_institution_location_from_agent(
-        call.agent_id
-    )
+    # Outbound workflow attempts are authoritative for tenancy. Agent mapping is
+    # retained only as the fallback for inbound and non-workflow calls.
+    location, institution = await _resolve_institution_location_from_call(call)
     if not location or not institution:
         await _finish("COMPLETED")
         return {"status": "ignored", "reason": "no_agent_mapping"}
+
+    from src.app.services.patient_communication import (
+        patient_communication_requires_campaign,
+    )
+
+    if patient_communication_requires_campaign(institution.pms_type):
+        # GoTracker acceptance can mean only that the Connector write is queued.
+        # A campaign owns the pending/written/failed copy and timing; this legacy
+        # hook must not send a second or prematurely confirmed patient message.
+        await _finish("COMPLETED", institution_id=str(institution.id))
+        logger.info(
+            "call_ended patient SMS skipped: call_hash=%s reason=gotracker_campaign_only",
+            hash_for_logging(call_id),
+        )
+        return {"status": "skipped", "reason": "gotracker_campaign_only"}
 
     from src.app.database import get_system_db_session
     from src.app.models.sms_template import SmsTemplateType
@@ -722,7 +845,8 @@ async def process_retell_call_analyzed_event(
     ``asyncio.run``) AND directly from tests. Mirrors the legacy inline
     behaviour exactly:
 
-      1. Resolve institution + location from ``agent_id``.
+      1. Resolve outbound workflow calls by ``retell_call_id``; otherwise use
+         the inbound agent-to-location mapping.
       2. ``PostCallService`` writes the contact + call rows.
       3. Enqueue downstream tasks (recording upload, notification email,
          in-app notification, auto-SMS) — same pattern as before, the
@@ -749,11 +873,10 @@ async def process_retell_call_analyzed_event(
         processing_call_id = event.call.call_id
         processing_event_type = event.event
 
-        # Resolve institution + location from agent_id. A no-match is a
-        # configuration no-op; lookup exceptions are retryable and must not be
-        # converted into a COMPLETED idempotency row.
-        location, institution = await _resolve_institution_location_from_agent(
-            event.call.agent_id
+        # The stored voice attempt is authoritative for outbound calls. Agent
+        # mapping remains the fallback for inbound and non-workflow calls.
+        location, institution = await _resolve_institution_location_from_call(
+            event.call
         )
 
         # NOTE: the audit row for this webhook is written ONCE at the bottom
@@ -791,7 +914,7 @@ async def process_retell_call_analyzed_event(
                 # Merge top-level collected_dynamic_variables so the service can use them
                 # as a source for name/email when custom_analysis_data fields are missing.
                 analysis_dict["collected_dynamic_variables"] = (
-                    event.call.collected_dynamic_variables or {}
+                    event.call.effective_dynamic_variables
                 )
 
                 from src.app.retell.models import RetellCallData
@@ -851,6 +974,38 @@ async def process_retell_call_analyzed_event(
                     )
 
                 await session.commit()
+
+            # ── Usage metering: record voice minutes after DB commit (Plan 11 M-1) ──
+            # Retell bills connected minutes; meter every analyzed call with a
+            # duration. Idempotent on the Retell call id so replayed webhooks
+            # never double-count. workflow_run_id (stamped by VoiceNodeExecutor)
+            # attributes outbound campaign minutes to their run.
+            try:
+                from decimal import Decimal
+
+                from src.app.services.usage_metering_service import record_usage_event
+
+                _dur_ms = event.call.duration_ms
+                if _dur_ms and _dur_ms > 0:
+                    await record_usage_event(
+                        institution_id=institution.id,
+                        location_id=location.id if location else None,
+                        channel="voice",
+                        direction=(mapped_call_data.direction or "outbound"),
+                        provider="retell",
+                        minutes=Decimal(_dur_ms) / Decimal(60000),
+                        dials=1,
+                        provider_message_id=event.call.call_id,
+                        idempotency_key=f"retell:{event.call.call_id}",
+                        workflow_run_id=event.call.effective_metadata.get("workflow_run_id"),
+                        workflow_id=event.call.effective_metadata.get("workflow_id"),
+                    )
+            except Exception as usage_err:
+                logger.error(
+                    "Failed to record voice usage: call_hash=%s error=%s",
+                    hash_for_logging(event.call.call_id),
+                    safe_error_summary(usage_err),
+                )
 
             # ── Recording upload: enqueue S3 upload after DB commit ──
             _rec_url = event.call.recording_url or event.call.scrubbed_recording_url
@@ -950,11 +1105,128 @@ async def process_retell_call_analyzed_event(
                     safe_error_summary(in_app_enqueue_err),
                 )
 
+            # ── AI callback: enqueue after commit (durable via Celery) ─────
+            # If this inbound call was classified needs_callback and the clinic
+            # has opted into AI callbacks (an active callback_requested workflow),
+            # schedule an outbound callback. Skip outbound-originated calls so an
+            # AI callback that itself asks for a callback can't loop.
+            try:
+                from src.app.models.call import CallDirection, CallStatus
+                from src.app.tasks.automation_workflow import trigger_callback_workflows
+
+                if (
+                    saved_call.call_status == CallStatus.NEEDS_CALLBACK.value
+                    and saved_call.call_direction != CallDirection.OUTBOUND.value
+                ):
+                    _preferred = saved_call.preferred_callback_datetime
+                    trigger_callback_workflows.apply_async(
+                        kwargs={
+                            "institution_id": institution.id,
+                            "call_id": saved_call.id,
+                            "contact_id": saved_call.contact_id,
+                            "location_id": location.id if location else None,
+                            "preferred_callback_at_iso": (
+                                _preferred.isoformat() if _preferred else None
+                            ),
+                        },
+                        queue="workflow",
+                    )
+            except Exception as callback_enqueue_err:
+                logger.error(
+                    "Failed to enqueue AI callback trigger: call_hash=%s error=%s",
+                    hash_for_logging(event.call.call_id),
+                    safe_error_summary(callback_enqueue_err),
+                )
+
+            # ── Outbound voice outcome: resume a parked workflow run (Plan 03) ──
+            # For an outbound campaign call, map the dial outcome and resume the run
+            # that is parked WAITING on this call (matched by retell_call_id). The
+            # task no-ops for fire-and-forget / non-campaign outbound calls.
+            try:
+                from src.app.models.call import CallDirection
+                from src.app.tasks.automation_workflow import resume_voice_outcome
+
+                if (
+                    saved_call.call_direction == CallDirection.OUTBOUND.value
+                    and saved_call.retell_call_id
+                ):
+                    outcome = _campaign_voice_outcome(event.call)
+                    resume_voice_outcome.apply_async(
+                        kwargs={
+                            "institution_id": institution.id,
+                            "retell_call_id": saved_call.retell_call_id,
+                            "call_outcome": outcome,
+                            "outcome_context": _campaign_voice_context(event.call),
+                            # Raw provider signal, recorded on the attempt row for the
+                            # UI/debugging (already persisted on the Call row too).
+                            "disconnection_reason": event.call.disconnection_reason,
+                        },
+                        queue="workflow",
+                    )
+            except Exception as voice_outcome_err:
+                logger.error(
+                    "Failed to enqueue voice outcome resume: call_hash=%s error=%s",
+                    hash_for_logging(event.call.call_id),
+                    safe_error_summary(voice_outcome_err),
+                )
+
+            _scrubbed_analysis = event.call.scrubbed_call_analysis
+            _custom_analysis = (
+                _scrubbed_analysis.custom_analysis_data if _scrubbed_analysis else {}
+            )
+            _fallback_from = (
+                _custom_analysis.get("from_number")
+                or _custom_analysis.get("phone_number")
+                or _custom_analysis.get("patient_phone")
+            )
+            if mapped_call_data.direction == "inbound":
+                _patient_phone = mapped_call_data.from_number or _fallback_from
+            elif mapped_call_data.direction == "outbound":
+                _patient_phone = mapped_call_data.to_number or _fallback_from
+            else:
+                _patient_phone = (
+                    mapped_call_data.from_number
+                    or mapped_call_data.to_number
+                    or _fallback_from
+                )
+
+            location_id_hash = hash_for_logging(str(location.id)) if location else None
+
             # Patient appointment-confirmation SMS is now sent on ``call_ended``
             # (Approach B — our own editable template populated from the
             # authoritative PMS booking), see ``process_retell_call_ended_event``.
             # The old Retell ``send_sms`` auto-SMS on call_analyzed was retired so
             # the patient isn't texted twice.
+
+            # ── Spoken opt-out → location DNC (V-2) ────────────────────────
+            # Detection is config-gated (do-not-guess): off until the real Retell
+            # opt-out analysis field name is set in `retell_optout_analysis_key`.
+            # When it fires, suppress ALL channels for the location (owner decision).
+            try:
+                from src.app.services.automation.voice_optout_service import (
+                    detect_voice_optout,
+                    suppress_voice_optout,
+                )
+
+                if location and detect_voice_optout(_custom_analysis):
+                    await suppress_voice_optout(
+                        institution_id=institution.id,
+                        location_id=str(location.id),
+                        contact_id=saved_call.contact_id,
+                        phone=_patient_phone,
+                        call_id=event.call.call_id,
+                    )
+                    logger.info(
+                        "Spoken opt-out suppressed: call_hash=%s location_hash=%s",
+                        hash_for_logging(event.call.call_id),
+                        location_id_hash or "none",
+                    )
+            except Exception as optout_err:
+                logger.error(
+                    "Failed to process spoken opt-out: call_hash=%s error=%s",
+                    hash_for_logging(event.call.call_id),
+                    safe_error_summary(optout_err),
+                )
 
         await _finish_webhook_processing(
             processing_call_id,

@@ -1,7 +1,7 @@
 """Add staff-authored notes on call records.
 
 Revision ID: 20260831_call_notes
-Revises: 20260830_sms_staff_templates
+Revises: 20260830_campaign_enquiries
 
 The note body is application-encrypted PHI, so the table gets the same
 FORCE RLS treatment as ``calls``: a note is reachable exactly when its parent
@@ -18,9 +18,6 @@ from __future__ import annotations
 from alembic import op
 
 revision = "20260831_call_notes"
-# Chained onto production's head. On staging this sits after the enquiry
-# store; production never took that chain, and call_notes depends on none
-# of it — only calls, institutions, institution_locations and users.
 down_revision = "20260830_sms_staff_templates"
 branch_labels = None
 depends_on = None

@@ -10,34 +10,33 @@ import {
     ArrowRight,
     CalendarDays,
     Clock,
+    DollarSign,
+    TrendingUp,
     Users,
     Percent,
     Timer,
-    MapPin,
-    Activity,
     Home,
 } from "lucide-react"
 
 import { PageHeader } from "@/components/PageHeader"
+import { type PageArtName } from "@/assets/icons"
+import { Art } from "@/components/Art"
+import { isClassicUi } from "@/lib/ui-mode"
 import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
 import { Skeleton } from "@/components/ui/skeleton"
 import { Input } from "@/components/ui/input"
-import {
-    Select,
-    SelectContent,
-    SelectItem,
-    SelectTrigger,
-    SelectValue,
-} from "@/components/ui/select"
 import { toast } from "sonner"
-import { useAuth } from "@/context/AuthContext"
 import { useInstitution } from "@/context/InstitutionContext"
+import { useLocationContext } from "@/context/LocationContext"
 import { useSSE } from "@/hooks/useSSE"
 import type { DashboardSummary, CallbackQueueItem } from "@/types"
 import { callerLabel, getInitials } from "@/components/calls/format"
 import { cn } from "@/lib/utils"
-import { getDashboardSummary, getAggregateDashboard } from "@/lib/dashboard-api"
+import { getDashboardSummary, getMonthlyMetrics } from "@/lib/dashboard-api"
+import type { MonthlyMetricPoint } from "@/lib/dashboard-api"
+import { TrendChart } from "@/components/dashboard/TrendChart"
+import { calculateLocationROI } from "@/lib/institution-portal-api"
 import { resolveCallback } from "@/lib/calls-api"
 import { STATUS_OPTIONS } from "@/lib/constants"
 import { DateRangePicker } from "@/components/dashboard/DateRangePicker"
@@ -69,6 +68,20 @@ function formatDuration(seconds: number | null): string {
     return s > 0 ? `${m}m ${s}s` : `${m}m`
 }
 
+interface DashboardValue {
+    revenue: number
+    staffCostSaved: number | null
+    totalValue: number
+    netValue: number
+}
+
+const formatMoney = (value: number) =>
+    value.toLocaleString(undefined, {
+        style: "currency",
+        currency: "USD",
+        maximumFractionDigits: 0,
+    })
+
 // ── Volume Card Configs ──────────────────────────────────────────────────────
 
 type RangeCardKey =
@@ -79,14 +92,6 @@ type RangeCardKey =
     | "emergency"
     | "new_patients"
     | "booking_rate"
-
-type MonthlyMetricKey =
-    | "appointments_booked_month"
-    | "needs_booking_month"
-    | "needs_callback_month"
-    | "emergency_month"
-    | "new_patients_month"
-    | "booking_rate_month"
     | "avg_call_duration_seconds"
 
 interface MetricCardConfig<TKey extends string> {
@@ -98,12 +103,22 @@ interface MetricCardConfig<TKey extends string> {
     suffix?: string
 }
 
-// Range-scoped cards — driven by the date-range picker, sourced from summary.range.
+// The cards. One row, every card scoped to the date-range picker.
+//
+// There used to be a second "Monthly Metrics" row underneath, fixed to the
+// calendar month regardless of the picker. Three of its four cards repeated the
+// row above with the same label, icon and colour, and on a no-PMS dashboard all
+// four did — so "Appointments Booked 14" sat directly above "Appointments
+// Booked 0" with nothing on screen explaining that the second ignored the
+// filter. Early in a month it always read near zero, which is indistinguishable
+// from a broken panel. Avg Call Duration was the one metric it added, and
+// summary.range has carried it all along.
 const RANGE_CARD_CONFIG: MetricCardConfig<RangeCardKey>[] = [
     { label: "Total Calls", key: "total_calls" as const, icon: Phone, accentColor: "violet", glowRgb: "139,92,246" },
     { label: "Appointments Booked", key: "appointments_booked" as const, icon: CalendarDays, accentColor: "emerald", glowRgb: "16,185,129" },
     { label: "New Patients", key: "new_patients" as const, icon: Users, accentColor: "sky", glowRgb: "14,165,233" },
     { label: "Booking Rate", key: "booking_rate" as const, icon: Percent, accentColor: "amber", glowRgb: "245,158,11", suffix: "%" },
+    { label: "Avg Call Duration", key: "avg_call_duration_seconds" as const, icon: Timer, accentColor: "violet", glowRgb: "139,92,246" },
 ]
 
 const NO_PMS_RANGE_CARD_CONFIG: MetricCardConfig<RangeCardKey>[] = [
@@ -111,68 +126,7 @@ const NO_PMS_RANGE_CARD_CONFIG: MetricCardConfig<RangeCardKey>[] = [
     { label: "Needs Callback", key: "needs_callback" as const, icon: Clock, accentColor: "amber", glowRgb: "245,158,11" },
     { label: "Emergency", key: "emergency" as const, icon: AlertCircle, accentColor: "red", glowRgb: "239,68,68" },
     { label: "New Patients", key: "new_patients" as const, icon: Users, accentColor: "sky", glowRgb: "14,165,233" },
-]
-
-const METRIC_CARDS_CONFIG: MetricCardConfig<MonthlyMetricKey>[] = [
-    {
-        label: "Appointments Booked",
-        key: "appointments_booked_month" as const,
-        icon: CalendarDays,
-        accentColor: "emerald",
-        glowRgb: "16,185,129",
-    },
-    {
-        label: "New Patients",
-        key: "new_patients_month" as const,
-        icon: Users,
-        accentColor: "sky",
-        glowRgb: "14,165,233",
-    },
-    {
-        label: "Booking Rate",
-        key: "booking_rate_month" as const,
-        icon: Percent,
-        accentColor: "amber",
-        glowRgb: "245,158,11",
-    },
-    {
-        label: "Avg Call Duration",
-        key: "avg_call_duration_seconds" as const,
-        icon: Timer,
-        accentColor: "violet",
-        glowRgb: "139,92,246",
-    },
-]
-
-const NO_PMS_METRIC_CARDS_CONFIG: MetricCardConfig<MonthlyMetricKey>[] = [
-    {
-        label: "Needs Booking",
-        key: "needs_booking_month" as const,
-        icon: CalendarDays,
-        accentColor: "emerald",
-        glowRgb: "16,185,129",
-    },
-    {
-        label: "Needs Callback",
-        key: "needs_callback_month" as const,
-        icon: Clock,
-        accentColor: "amber",
-        glowRgb: "245,158,11",
-    },
-    {
-        label: "Emergency",
-        key: "emergency_month" as const,
-        icon: AlertCircle,
-        accentColor: "red",
-        glowRgb: "239,68,68",
-    },
-    {
-        label: "New Patients",
-        key: "new_patients_month" as const,
-        icon: Users,
-        accentColor: "sky",
-        glowRgb: "14,165,233",
-    },
+    { label: "Avg Call Duration", key: "avg_call_duration_seconds" as const, icon: Timer, accentColor: "violet", glowRgb: "139,92,246" },
 ]
 
 const STATUS_COLOR_MAP = Object.fromEntries(
@@ -238,6 +192,25 @@ function useAnimatedCount(target: number | undefined, duration = 600): number {
     return displayed
 }
 
+
+// @ui-variant refresh
+// Artwork for the metric cards, keyed by label — the same metric appears in
+// the range, monthly and no-PMS configs and should look identical in each.
+// "Emergency" is deliberately absent: its red accent chip is carrying the
+// meaning, and a neutral illustration would throw that away.
+const CARD_ART: Partial<Record<string, PageArtName>> = {
+    "Total Calls": "calls",
+    "Appointments Booked": "scheduling",
+    "New Patients": "patients",
+    "Booking Rate": "dashboard",
+    "Needs Booking": "scheduling",
+    "Needs Callback": "callbackQueue",
+    "Avg Call Duration": "calls",
+    "Revenue Generated": "revenueGenerated",
+    "Staff Cost Saved": "staffCostSaved",
+    "Net Value": "netValue",
+}
+
 // ── Glass Card ───────────────────────────────────────────────────────────────
 
 interface GlassCardProps {
@@ -288,9 +261,14 @@ function GlassCard({
             <div className="relative p-6">
                 <div className="flex items-center justify-between mb-5">
                     <span className="text-sm font-medium text-muted-foreground">{label}</span>
-                    <div className="grid shrink-0 place-items-center rounded-xl bg-foreground p-2.5 shadow-[0_10px_24px_rgba(15,23,42,0.14)]">
-                        <Icon className="h-4 w-4 text-background" />
-                    </div>
+                    {/* @ui-variant classic: the !isClassicUi() guard and the Icon branch */}
+                    {CARD_ART[label] && !isClassicUi() ? (
+                        <Art name={CARD_ART[label]!} className="ui-artwork size-12 shrink-0" />
+                    ) : (
+                        <div className="grid shrink-0 place-items-center rounded-xl bg-foreground p-2.5 shadow-[0_10px_24px_rgba(15,23,42,0.14)]">
+                            <Icon className="h-4 w-4 text-background" />
+                        </div>
+                    )}
                 </div>
                 <div className="text-5xl font-extralight tabular-nums tracking-tight text-foreground animate-count-fade">
                     {formatValue
@@ -369,6 +347,7 @@ function QueueItem({ item, onResolved }: QueueItemProps) {
                                 callId={item.call_id}
                                 masked={item.phone_masked}
                                 available={item.phone_reveal_available}
+                                revealed={item.phone_revealed}
                                 className="mt-1 text-xs"
                             />
                         )}
@@ -458,74 +437,69 @@ function TagBar({ tag, label, count, total, pct, colorClass, barColor }: TagBarP
 // ── Dashboard Page ────────────────────────────────────────────────────────────
 
 export default function Dashboard() {
-    const { user } = useAuth()
     const { hasPms, pmsType, isLoading: institutionLoading } = useInstitution()
+    const { selectedLocation } = useLocationContext()
     const { lastEvent } = useSSE()
     const [summary, setSummary] = useState<DashboardSummary | null>(null)
     const [loading, setLoading] = useState(true)
-    const [selectedLocationSlug, setSelectedLocationSlug] = useState<string>("all")
-    const [locations, setLocations] = useState<{ slug: string; name: string }[]>([])
-    const [aggregateMetrics, setAggregateMetrics] = useState<{
-        appointments_booked_month: number
-        needs_booking_month: number
-        needs_callback_month: number
-        emergency_month: number
-        new_patients_month: number
-        booking_rate_month: number
-        avg_call_duration_seconds: number
-    } | null>(null)
+    const [trendPoints, setTrendPoints] = useState<MonthlyMetricPoint[]>([])
+    const [value, setValue] = useState<DashboardValue | null>(null)
 
     const [range, setRange] = useState<DateRangeValue>(() => lastNDaysRange(7))
 
     const fetchSummary = useCallback(async () => {
+        if (!selectedLocation) {
+            setSummary(null)
+            setTrendPoints([])
+            setValue(null)
+            setLoading(false)
+            return
+        }
+        setLoading(true)
         try {
-            const locationSlug = selectedLocationSlug === "all" ? undefined : selectedLocationSlug
+            const locationSlug = selectedLocation.slug
             const summaryData = await getDashboardSummary(locationSlug, range)
             setSummary(summaryData)
 
-            // KPI cards are now sourced from /summary for ALL roles. The
-            // backend scopes them by extra_conditions (user.location_id
-            // for STAFF/LOCATION_ADMIN, the selected slug for
-            // INSTITUTION_ADMIN, or institution-wide when no slug is
-            // supplied), so a location admin sees real numbers instead
-            // of the hardcoded zeroes that were here before.
-            setAggregateMetrics({
-                appointments_booked_month: summaryData.appointments_booked_month ?? 0,
-                needs_booking_month: summaryData.needs_booking_month ?? 0,
-                needs_callback_month: summaryData.needs_callback_month ?? 0,
-                emergency_month: summaryData.emergency_month ?? 0,
-                new_patients_month: summaryData.new_patients_month ?? 0,
-                booking_rate_month: summaryData.booking_rate_month ?? 0,
-                avg_call_duration_seconds: summaryData.avg_call_duration_seconds ?? 0,
-            })
-
-            // The location switcher list still comes from the aggregate
-            // endpoint (institution-admin only — it's the only place
-            // that returns clinic_comparison). LOCATION_ADMIN/STAFF
-            // can't switch anyway.
-            const isInstitutionAdmin = user?.role === "INSTITUTION_ADMIN"
-            if (isInstitutionAdmin) {
-                try {
-                    const aggregateData = await getAggregateDashboard()
-                    setLocations(
-                        aggregateData.clinic_comparison.map((c) => ({
-                            slug: c.location_slug,
-                            name: c.location_name,
-                        }))
-                    )
-                } catch {
-                    /* keep prior locations on transient failure */
-                }
-            } else {
-                setLocations([])
+            // The trend takes the same window as the cards, so the chart and
+            // the numbers above it can never describe different periods. The
+            // endpoint buckets adaptively — daily up to 31 days, then weekly,
+            // then monthly — and zero-fills, so a sparse range still charts a
+            // continuous axis.
+            try {
+                const trend = await getMonthlyMetrics({ locationSlug, range })
+                setTrendPoints(trend.points)
+            } catch {
+                setTrendPoints([])
             }
+
+            // Revenue is only meaningful once somebody has entered what an
+            // appointment is worth, so an unconfigured tenant gets no cards
+            // rather than a row of zeroes. The endpoint says so with a 400.
+            // Same window as everything else on the page.
+            //
+            // The sidebar's active location is authoritative for every card,
+            // trend point, and value calculation on this page.
+            const roiWindow = { startDate: range.startDate, endDate: range.endDate }
+            try {
+                const roi = await calculateLocationROI(locationSlug, roiWindow)
+                setValue({
+                    revenue: roi.total_revenue_generated,
+                    staffCostSaved: roi.staff_cost_saved ?? null,
+                    totalValue: roi.total_value,
+                    netValue: roi.net_value,
+                })
+            } catch {
+                setValue(null)
+            }
+
         } catch (error: unknown) {
             const message = error instanceof Error ? error.message : "Failed to load dashboard"
             toast.error(message)
         } finally {
             setLoading(false)
         }
-    }, [selectedLocationSlug, user?.role, range])
+    }, [selectedLocation, range])
 
     useEffect(() => {
         fetchSummary()
@@ -547,7 +521,12 @@ export default function Dashboard() {
     const totalTagCount = tagCounts.reduce((sum, tc) => sum + tc.count, 0)
     const isNoPmsDashboard = !institutionLoading && (pmsType === "none" || !hasPms)
     const rangeCardConfig = isNoPmsDashboard ? NO_PMS_RANGE_CARD_CONFIG : RANGE_CARD_CONFIG
-    const metricCardConfig = isNoPmsDashboard ? NO_PMS_METRIC_CARDS_CONFIG : METRIC_CARDS_CONFIG
+    // Nine cards across two rows of four left one stranded on a line of its own.
+    // Avg Call Duration is the one that reads as happily beside money as beside
+    // counts, so it moves to whichever row needs a fourth.
+    const countCards = value
+        ? rangeCardConfig.filter((card) => card.key !== "avg_call_duration_seconds")
+        : rangeCardConfig
     const bookingQuickLink = isNoPmsDashboard
         ? { label: "Needs Booking", tags: ["needs_booking"] }
         : { label: "Booked Today", tags: ["appointment_booked"] }
@@ -561,27 +540,12 @@ export default function Dashboard() {
 
             <div className="relative z-10 p-8 pt-6 space-y-6">
                 <PageHeader
+                    art="dashboard"
                     icon={Home}
                     title="Dashboard"
                     description={<>{todayStr} · Call activity overview.</>}
                     actions={
                         <>
-                            {user?.role === "INSTITUTION_ADMIN" && (
-                                <Select value={selectedLocationSlug} onValueChange={setSelectedLocationSlug}>
-                                    <SelectTrigger className="w-[180px] h-8 text-xs">
-                                        <MapPin className="mr-2 h-3.5 w-3.5" />
-                                        <SelectValue placeholder="Select location" />
-                                    </SelectTrigger>
-                                    <SelectContent>
-                                        <SelectItem value="all">All Locations</SelectItem>
-                                        {locations.map((loc) => (
-                                            <SelectItem key={loc.slug} value={loc.slug}>
-                                                {loc.name}
-                                            </SelectItem>
-                                        ))}
-                                    </SelectContent>
-                                </Select>
-                            )}
                             <DateRangePicker value={range} onChange={setRange} />
                             <Button
                                 variant="outline"
@@ -597,9 +561,11 @@ export default function Dashboard() {
                     }
                 />
 
-                {/* Range-scoped cards (driven by the date-range picker) */}
-                <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-4">
-                    {rangeCardConfig.map(({ label, key, icon, accentColor, glowRgb, suffix }) => (
+                {/* Counts for the selected range. Four so the row always fills;
+                    Avg Call Duration joins the value row below, or comes back
+                    here as a fifth when there is no value row to join. */}
+                <div className={`grid gap-4 md:grid-cols-2 ${value ? "lg:grid-cols-4" : "lg:grid-cols-5"}`}>
+                    {countCards.map(({ label, key, icon, accentColor, glowRgb, suffix }) => (
                         <GlassCard
                             key={key}
                             label={label}
@@ -608,35 +574,32 @@ export default function Dashboard() {
                             accentColor={accentColor}
                             glowRgb={glowRgb}
                             suffix={suffix}
+                            formatValue={
+                                key === "avg_call_duration_seconds" ? formatDuration : undefined
+                            }
                             loading={loading}
                         />
                     ))}
                 </div>
 
-                {/* Metric cards */}
-                {aggregateMetrics && (
-                    <div>
-                        <div className="flex items-center gap-2 mb-3">
-                            <Activity className="h-4 w-4 text-muted-foreground/50" />
-                            <span className="text-xs font-semibold uppercase tracking-widest text-muted-foreground/50">Monthly Metrics</span>
-                        </div>
-                        <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-4">
-                            {metricCardConfig.map(({ label, key, icon, accentColor, glowRgb }) => (
-                                <GlassCard
-                                    key={key}
-                                    label={label}
-                                    value={aggregateMetrics?.[key] ?? 0}
-                                    icon={icon}
-                                    accentColor={accentColor}
-                                    glowRgb={glowRgb}
-                                    loading={loading}
-                                    suffix={key === "booking_rate_month" ? "%" : ""}
-                                    formatValue={key === "avg_call_duration_seconds" ? formatDuration : undefined}
-                                />
-                            ))}
-                        </div>
+                {/* Value generated, same window as the counts above. Absent
+                    until the financials are saved — see fetchSummary.
+                    Total Value is deliberately not a card: it is revenue plus
+                    staff saving, and with no subscription cost recorded it is
+                    the same number as Net Value sitting next to it. */}
+                {value && (
+                    <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-4">
+                        <GlassCard label="Avg Call Duration" value={summary?.range?.avg_call_duration_seconds ?? 0} icon={Timer} accentColor="violet" glowRgb="139,92,246" formatValue={formatDuration} loading={loading} />
+                        <GlassCard label="Revenue Generated" value={value.revenue} icon={DollarSign} accentColor="emerald" glowRgb="16,185,129" formatValue={formatMoney} loading={loading} />
+                        <GlassCard label="Staff Cost Saved" value={value.staffCostSaved ?? 0} icon={Clock} accentColor="sky" glowRgb="14,165,233" formatValue={value.staffCostSaved === null ? () => "—" : formatMoney} loading={loading} />
+                        <GlassCard label="Net Value" value={value.netValue} icon={TrendingUp} accentColor="amber" glowRgb="245,158,11" formatValue={formatMoney} loading={loading} />
                     </div>
                 )}
+
+                {/* Trend over the selected range. The cards answer "how many";
+                    this answers "is that better than before", which is the
+                    question the date picker was there to ask. */}
+                <TrendChart points={trendPoints} loading={loading} />
 
                 {/* Bottom grid: tag breakdown + callback queue */}
                 <div className="grid gap-6 lg:grid-cols-2">

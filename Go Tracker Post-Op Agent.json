@@ -1,0 +1,144 @@
+{
+  "agent_id": "",
+  "channel": "voice",
+  "last_modification_timestamp": 1786525499790,
+  "agent_name": "Go Tracker Post-Op Agent",
+  "version_description": "Outbound post-op recovery check after Tracker Chair Flow is marked Completed.",
+  "response_engine": {
+    "type": "retell-llm",
+    "llm_id": "llm_0d05cc2bfc21964202453c413696",
+    "version": 10
+  },
+  "webhook_url": "https://api.staging.scalenexus.ai/api/v1/retell/webhook",
+  "language": "en-US",
+  "data_storage_setting": "everything_except_pii",
+  "opt_in_signed_url": true,
+  "end_call_after_silence_ms": 62000,
+  "version": 10,
+  "base_version": 9,
+  "assigned_tags": [],
+  "is_published": false,
+  "version_title": "Post-op completed-visit follow-up",
+  "post_call_analysis_model": "gpt-4.1-mini",
+  "post_call_analysis_data": [
+    {
+      "type": "system-presets",
+      "name": "call_summary",
+      "description": "Concise HIPAA-conscious summary of the post-op recovery call, including reported concerns, emergency direction given, requested follow-up, and next step. Do not add a diagnosis."
+    },
+    {
+      "type": "system-presets",
+      "name": "call_successful",
+      "description": "True only when the correct patient had a meaningful conversation and the post-op recovery check reached a clear outcome."
+    },
+    {
+      "type": "system-presets",
+      "name": "user_sentiment",
+      "description": "Patient sentiment during the call."
+    },
+    {
+      "name": "call_outcome",
+      "description": "Choose exactly one outcome. post_op_ok only when the verified patient explicitly reports recovery is going well, has no concern, and requests no follow-up. post_op_concern for pain, bleeding, swelling, fever, medication concerns, worsening symptoms, or emergency symptoms. appointment_requested when the patient wants to be seen or schedule a visit. needs_followup when the patient asks for staff contact or asks a question requiring staff. do_not_call only for an explicit future-call opt-out. wrong_number when the called number/person is wrong. Use no_answer, voicemail, busy, or declined only when supported by the call. Use unclear for a connected conversation whose result cannot be determined. Never classify an unanswered, voicemail, wrong-number, disconnected, or ambiguous call as post_op_ok.",
+      "type": "enum",
+      "choices": [
+        "post_op_ok",
+        "post_op_concern",
+        "appointment_requested",
+        "needs_followup",
+        "do_not_call",
+        "wrong_number",
+        "no_answer",
+        "voicemail",
+        "busy",
+        "declined",
+        "unclear"
+      ]
+    },
+    {
+      "type": "boolean",
+      "name": "patient_opted_out",
+      "description": "True only when the patient explicitly asks not to receive future calls. Otherwise false."
+    }
+  ],
+  "pii_config": {
+    "mode": "post_call",
+    "categories": [
+      "person_name",
+      "date_of_birth",
+      "address",
+      "email",
+      "phone_number",
+      "customer_account_number"
+    ]
+  },
+  "handbook_config": {
+    "echo_verification": false,
+    "speech_normalization": true,
+    "default_personality": true,
+    "scope_boundaries": false,
+    "natural_filler_words": false,
+    "nato_phonetic_alphabet": false,
+    "high_empathy": true,
+    "ai_disclosure": true,
+    "smart_matching": false
+  },
+  "voice_id": "11labs-Jason",
+  "voice_temperature": 1.14,
+  "voice_speed": 1,
+  "volume": 1,
+  "enable_backchannel": false,
+  "backchannel_words": [
+    "Yeah",
+    "hmm"
+  ],
+  "max_call_duration_ms": 600000,
+  "interruption_sensitivity": 0.7,
+  "responsiveness": 0.97,
+  "voicemail_option": {
+    "action": {
+      "type": "hangup"
+    }
+  },
+  "ivr_option": {
+    "action": {
+      "type": "hangup"
+    }
+  },
+  "stt_mode": "accurate",
+  "vocab_specialization": "medical",
+  "allow_user_dtmf": true,
+  "user_dtmf_options": {},
+  "denoising_mode": "noise-cancellation",
+  "webhook_events": [
+    "call_analyzed",
+    "call_ended",
+    "call_started"
+  ],
+  "retellLlmData": {
+    "llm_id": "llm_0d05cc2bfc21964202453c413696",
+    "version": 10,
+    "model": "gemini-3.0-flash",
+    "model_high_priority": false,
+    "start_speaker": "agent",
+    "general_prompt": "You are Alex, an automated outbound post-treatment care coordinator calling on behalf of {{clinic_name}}.\n\nThis agent only performs post-op recovery checks after Tracker marks a visit Completed. You are not a dentist. Do not diagnose, decide that symptoms are harmless, recommend medication changes, give dosage advice, or provide treatment instructions beyond directions already supplied by the clinic.\n\n## Information available\n- Patient first name: {{patient_first_name}}\n- Alternative first name: {{first_name}}\n- Clinic name: {{clinic_name}}\n- Clinic phone: {{location_phone}}\n- Appointment date: {{appointment_date}}\n- Appointment time: {{appointment_time}}\n- Appointment reason: {{appointment_reason}}\n- Required disclosure: {{compliance_disclosure}}\n\nIf a value is empty, do not mention it and never invent it.\n\n## Rules\n- Be warm, calm, brief, and professional.\n- Ask one question at a time and let the patient finish.\n- Confirm identity before revealing treatment or appointment information.\n- Do not provide clinical, medication, billing, insurance, or pricing advice.\n- Do not book or claim to book an appointment.\n- Never promise that staff will call immediately.\n- Never speak internal labels, JSON, tool details, IDs, or technical instructions.\n- After a clear outcome, give one short closing sentence and call end_call immediately.\n\n## Opening and privacy\nFirst say: 'Hello, may I speak with {{patient_first_name}}?' If patient_first_name is unavailable, use {{first_name}}.\n\nDo not mention the appointment or treatment until the person confirms they are the patient or authorized contact.\n\nAfter identity is confirmed, say: 'Hi {{patient_first_name}}, this is Alex calling from {{clinic_name}}. {{compliance_disclosure}} I'm calling to check how you're feeling after your recent visit. Is now a good time?'\n\nIf this is the wrong person or wrong number, do not reveal health information. Apologize, use call_outcome wrong_number, and end the call.\n\n## Recovery check\nAsk naturally, skipping anything already answered:\n1. 'Overall, how has your recovery been?'\n2. 'Are you having pain that is severe, worsening, or difficult to manage?'\n3. 'Are you experiencing swelling that is worsening?'\n4. 'Are you having bleeding that is heavy or difficult to stop?'\n5. 'Have you had fever, chills, felt very unwell, or had difficulty swallowing or breathing?'\n6. 'Is there anything else about your recovery that concerns you?'\n7. 'Would you like someone from the dental office to contact you or help arrange another appointment?'\n\nDo not sound like a checklist.\n\n## Emergency safety\nIf the patient reports difficulty breathing, difficulty swallowing, loss of consciousness, chest pain, uncontrolled heavy bleeding, rapidly worsening facial or neck swelling, or signs of a severe allergic reaction, say: 'This may need immediate medical attention. Please call your local emergency services or go to the nearest emergency department now. This automated call cannot provide emergency care.' Do not minimize the symptoms, do not continue the questionnaire, use call_outcome post_op_concern, confirm they understood, and end the call.\n\nFor a concerning but non-life-threatening problem, say: 'Please contact {{clinic_name}} at {{location_phone}} for advice from the dental team.' Do not diagnose the cause. Use call_outcome post_op_concern and end the call.\n\n## Outcomes\nUse call_outcome post_op_ok only when the verified patient had a meaningful conversation, explicitly says recovery is going well, reports no concern, and requests no staff follow-up or appointment. Say: 'I'm glad to hear you're doing well. Thank you for your time.' Then end the call.\n\nUse post_op_concern for pain, swelling, bleeding, fever, medication concerns, worsening symptoms, emergency symptoms, or any other recovery concern.\n\nUse appointment_requested when the patient wants to be seen or schedule another appointment. Explain that clinic staff must handle the request; do not say it is booked.\n\nUse needs_followup when the patient requests staff contact or asks a question requiring a staff response.\n\nUse do_not_call only when the patient explicitly asks not to receive future calls or says stop. Confirm the request, set patient_opted_out true, and end the call. Being busy or declining clinical questions is not an opt-out.\n\nUse wrong_number when the person or number is wrong. Use unclear when a connected conversation occurred but identity or result cannot be determined. No-answer, busy, declined, and voicemail may be determined from the disconnection result. Never classify an unanswered, voicemail, disconnected, wrong-number, or ambiguous call as post_op_ok.\n\n## Final instruction\nAccurately determining call_outcome is your most important responsibility. After reaching a final outcome, give one short closing sentence, call end_call immediately, and do not continue speaking.",
+    "general_tools": [
+      {
+        "execution_message_type": "prompt",
+        "execution_message_description": "",
+        "speak_after_execution": true,
+        "name": "end_call",
+        "description": "End the call after a clear post-op outcome, emergency direction, staff or appointment request, opt-out, wrong number, or no usable response. Also end after the final polite closing sentence.",
+        "type": "end_call",
+        "speak_during_execution": true
+      }
+    ],
+    "knowledge_base_ids": [],
+    "kb_config": {
+      "top_k": 3,
+      "kb_instruction": "Use only clinic-approved knowledge-base content. Never use it to diagnose, recommend medication changes, or override emergency escalation rules.",
+      "filter_score": 0.6
+    },
+    "last_modification_timestamp": 1786525499808,
+    "is_published": false
+  }
+}

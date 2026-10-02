@@ -81,7 +81,7 @@ def upgrade() -> None:
     # 2. Drop the existing indexes so their names are free for the
     #    parent partitioned table. ALTER TABLE RENAME does NOT rename
     #    the indexes or the PK constraint attached to the table, so
-    #    without this DROP the next CREATE INDEX / PK collides on name.
+    #    without this DROP the next CREATE INDEX IF NOT EXISTS / PK collides on name.
     for index_name in (
         "ix_audit_logs_action",
         "ix_audit_logs_actor",
@@ -111,7 +111,7 @@ def upgrade() -> None:
     #    table whose PK is a non-superset of the partition columns.
     op.execute(
         """
-        CREATE TABLE audit_logs (
+        CREATE TABLE IF NOT EXISTS audit_logs (
             id              uuid                     NOT NULL,
             "timestamp"     timestamp with time zone NOT NULL,
             actor           varchar(50)              NOT NULL,
@@ -142,7 +142,7 @@ def upgrade() -> None:
         # column reference (column 'timestamp' is a reserved word).
         index_column_id = column.strip('"')
         op.execute(
-            f"CREATE INDEX ix_audit_logs_{index_column_id} "
+            f"CREATE INDEX IF NOT EXISTS ix_audit_logs_{index_column_id} "
             f"ON audit_logs ({column})"
         )
 
@@ -288,7 +288,7 @@ def downgrade() -> None:
 
     op.execute(
         """
-        CREATE TABLE audit_logs (
+        CREATE TABLE IF NOT EXISTS audit_logs (
             id              uuid                     NOT NULL,
             "timestamp"     timestamp with time zone NOT NULL,
             actor           varchar(50)              NOT NULL,

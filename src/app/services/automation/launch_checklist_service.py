@@ -1,0 +1,1420 @@
+"""Campaign launch-readiness checklist (Plan 02).
+
+This composes existing validation/readiness services into one product-facing
+object. It is intentionally read-only: publish validation remains authoritative,
+while this report explains the launch state and dependency gaps in one place.
+"""
+
+from __future__ import annotations
+
+import inspect
+from dataclasses import dataclass, field
+from datetime import datetime, timedelta, timezone
+from typing import Any, Literal
+
+from sqlalchemy import func, select
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from src.app.models.appointment_working_set import AppointmentWorkingSet
+from src.app.models.automation_workflow import AutomationWorkflow
+from src.app.models.campaign_audience import CampaignAudiencePreview
+from src.app.models.institution import Institution
+from src.app.models.institution_location import InstitutionLocation
+from src.app.models.gotracker_webhook_subscription import (
+    GoTrackerWebhookSubscription,
+    GoTrackerWebhookSubscriptionStatus,
+)
+from src.app.models.nexhealth_webhook_subscription import (
+    NexHealthWebhookSubscription,
+    NexHealthWebhookSubscriptionStatus,
+)
+from src.app.models.nexhealth_sync_status import NexHealthSyncStatus
+from src.app.pms.nexhealth import backing_systems
+from src.app.services.location_timezone import is_timezone_unset
+from src.app.services.automation.channel_readiness import ChannelReadinessService
+from src.app.services.automation.definition_schema import (
+    ConditionNode,
+    EventTrigger,
+    ExitNode,
+    PmsRecallSource,
+    RetellSmsConversationNode,
+    ScheduleTrigger,
+    SendEmailNode,
+    SendSmsNode,
+    SendVoiceNode,
+    WorkflowDefinition,
+)
+from src.app.services.automation.gotracker_recall_readiness import (
+    assess_gotracker_recall_history,
+)
+from src.app.services.automation.nexhealth_sync_status_service import assess_sync_status
+from src.app.services.automation.pms_capability_service import (
+    PmsCapabilityService,
+    pms_name_candidates,
+)
+from src.app.services.automation.retell_sms_policy import RETELL_SMS_POLICY
+from src.app.services.automation.validation_service import WorkflowValidationService
+
+ChecklistStatus = Literal["pass", "warning", "blocked", "unknown"]
+
+_SEND_NODE_TYPES = (
+    SendSmsNode,
+    RetellSmsConversationNode,
+    SendEmailNode,
+    SendVoiceNode,
+)
+# Triggers that can enroll a large cohort in one go, so the checklist insists on
+# audience review before launch.
+_BROAD_TRIGGER_TYPES = {"schedule"}
+# Triggers whose runs carry appointment context worth validating up front.
+_APPOINTMENT_TRIGGER_TYPES = {"event", "schedule"}
+_STATUS_EVENT_TRIGGER_TYPES = {"internal_status"}
+_FRESHNESS_WINDOW = timedelta(hours=24)
+_SMS_STOP_COPY = "All SMS steps include automatic STOP copy at send time."
+
+
+def starts_from_event(definition: WorkflowDefinition, event_key: str) -> bool:
+    """Whether any trigger subscribes to ``event_key``.
+
+    Checklist sections used to key off a trigger *type*. Several of those types
+    collapsed into ``event``, so the question that still discriminates is which
+    event a campaign listens for.
+    """
+    return any(
+        isinstance(trigger, EventTrigger) and event_key in trigger.event_keys
+        for trigger in definition.triggers
+    )
+
+
+def uses_pms_recall_source(definition: WorkflowDefinition) -> bool:
+    """Whether any trigger pulls its cohort from the PMS recall list.
+
+    Gates the checks that only make sense for PMS-sourced recall — the
+    ``patient_recalls`` capability requirement and GoTracker's history-sync
+    precondition. A scheduled campaign running an audience segment needs
+    neither.
+    """
+    return any(
+        isinstance(trigger, ScheduleTrigger)
+        and isinstance(trigger.source, PmsRecallSource)
+        for trigger in definition.triggers
+    )
+
+
+@dataclass(frozen=True)
+class CampaignLaunchChecklistItem:
+    id: str
+    section: str
+    label: str
+    status: ChecklistStatus
+    message: str
+    fix_href: str | None = None
+    metadata: dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass(frozen=True)
+class CampaignLaunchChecklist:
+    workflow_id: str
+    workflow_version_id: str | None
+    location_id: str | None
+    overall_status: ChecklistStatus
+    blockers_count: int
+    warnings_count: int
+    unknown_count: int
+    estimated_audience: int | None
+    estimated_send_volume: dict[str, int] | None
+    estimated_cost_cents: int | None
+    estimate_basis: str
+    generated_at: datetime
+    items: list[CampaignLaunchChecklistItem]
+
+
+class CampaignLaunchChecklistService:
+    """Builds a launch-readiness report for a saved workflow or draft preview."""
+
+    def __init__(self, session: AsyncSession) -> None:
+        self.session = session
+
+    async def build(
+        self,
+        workflow: AutomationWorkflow,
+        *,
+        institution_id: str,
+        definition_dict: dict[str, Any] | None = None,
+        location_id: str | None = None,
+    ) -> CampaignLaunchChecklist:
+        effective_definition = definition_dict or workflow.definition
+        effective_location_id = (
+            location_id if location_id is not None else workflow.location_id
+        )
+        location_id_text = str(effective_location_id) if effective_location_id else None
+
+        items: list[CampaignLaunchChecklistItem] = []
+        issues = await WorkflowValidationService(
+            self.session,
+            # Compliance classification/content checks are managed by Retell.
+            readiness_checker=ChannelReadinessService(self.session),
+        ).validate(
+            effective_definition or {},
+            institution_id=institution_id,
+            location_id=location_id_text,
+        )
+        errors = [i for i in issues if i.severity == "error"]
+        warnings = [i for i in issues if i.severity == "warning"]
+
+        items.append(
+            CampaignLaunchChecklistItem(
+                id="workflow_validation",
+                section="workflow",
+                label="Workflow structure",
+                status="blocked" if errors else "warning" if warnings else "pass",
+                message=(
+                    f"{len(errors)} blocking validation issue(s), {len(warnings)} warning(s)."
+                    if errors or warnings
+                    else "Workflow schema, graph links, and server validation pass."
+                ),
+                fix_href="#validation",
+                metadata={
+                    "errors": [_issue_payload(i) for i in errors],
+                    "warnings": [_issue_payload(i) for i in warnings],
+                },
+            )
+        )
+
+        try:
+            definition = WorkflowDefinition.model_validate(effective_definition or {})
+        except Exception:
+            return self._finalize(
+                workflow=workflow,
+                location_id=location_id_text,
+                items=items,
+                estimated_audience=None,
+                estimated_send_volume=None,
+                estimated_cost_cents=None,
+                estimate_basis="Definition is invalid; estimates are unavailable.",
+            )
+
+        send_nodes = [n for n in definition.nodes if isinstance(n, _SEND_NODE_TYPES)]
+        items += self._merge_field_items(warnings)
+        items += await self._timezone_items(
+            definition, location_id=location_id_text
+        )
+        items += await self._channel_items(
+            definition,
+            institution_id=institution_id,
+            location_id=location_id_text,
+        )
+        # Compliance classification is managed by Retell for now.
+        # items += self._compliance_items(definition, send_nodes, errors, warnings)
+        items += self._quiet_hours_item(send_nodes)
+        items += self._callback_items(definition)
+        items += await self._pms_capability_items(
+            workflow,
+            definition,
+            institution_id=institution_id,
+            location_id=location_id_text,
+        )
+        items += await self._nexhealth_items(
+            definition,
+            institution_id=institution_id,
+            location_id=location_id_text,
+        )
+        items += self._handoff_items(definition)
+
+        latest_preview = await self._latest_audience_preview(str(workflow.id))
+        audience_status, audience_message, estimated_audience = self._audience_status(
+            definition, latest_preview
+        )
+        items.append(
+            CampaignLaunchChecklistItem(
+                id="audience_estimate",
+                section="audience",
+                label="Audience estimate and exclusions",
+                status=audience_status,
+                message=audience_message,
+                fix_href="/institution-admin/campaigns/audience",
+                metadata={
+                    "trigger_type": definition.trigger.type,
+                    "preview_id": str(latest_preview.id) if latest_preview else None,
+                    "included_count": latest_preview.included_count
+                    if latest_preview
+                    else None,
+                    "excluded_count": latest_preview.excluded_count
+                    if latest_preview
+                    else None,
+                    "counts_by_reason": latest_preview.counts_by_reason
+                    if latest_preview
+                    else {},
+                    "expires_at": latest_preview.expires_at.isoformat()
+                    if latest_preview
+                    else None,
+                },
+            )
+        )
+
+        per_contact = _planned_sends_per_contact(send_nodes)
+        estimated_send_volume: dict[str, int] | None = (
+            {
+                channel: count * estimated_audience
+                for channel, count in per_contact.items()
+            }
+            if estimated_audience is not None
+            else None
+        )
+        estimated_cost_cents: int | None = None
+        estimate_basis = (
+            "Audience preview provides the current count."
+            if estimated_audience is not None
+            else "Audience preview is not available yet; showing planned sends per enrolled contact."
+        )
+        items.append(
+            CampaignLaunchChecklistItem(
+                id="send_volume_cost",
+                section="estimates",
+                label="Estimated send volume",
+                status="warning" if estimated_send_volume is not None else "unknown",
+                message=(
+                    f"Previewed audience can attempt {_format_volume(estimated_send_volume)}."
+                    if estimated_send_volume is not None
+                    else "Exact send volume needs an audience count. "
+                    f"Per enrolled contact, this workflow can attempt {_format_volume(per_contact)}."
+                ),
+                fix_href="/institution-admin/campaigns/audience",
+                metadata={
+                    "planned_sends_per_contact": per_contact,
+                    "estimated_send_volume": estimated_send_volume,
+                },
+            )
+        )
+
+        return self._finalize(
+            workflow=workflow,
+            location_id=location_id_text,
+            items=items,
+            estimated_audience=estimated_audience,
+            estimated_send_volume=estimated_send_volume,
+            estimated_cost_cents=estimated_cost_cents,
+            estimate_basis=estimate_basis,
+        )
+
+    def _finalize(
+        self,
+        *,
+        workflow: AutomationWorkflow,
+        location_id: str | None,
+        items: list[CampaignLaunchChecklistItem],
+        estimated_audience: int | None,
+        estimated_send_volume: dict[str, int] | None,
+        estimated_cost_cents: int | None,
+        estimate_basis: str,
+    ) -> CampaignLaunchChecklist:
+        blockers = sum(1 for i in items if i.status == "blocked")
+        warnings = sum(1 for i in items if i.status == "warning")
+        unknowns = sum(1 for i in items if i.status == "unknown")
+        overall: ChecklistStatus
+        if blockers:
+            overall = "blocked"
+        elif warnings or unknowns:
+            overall = "warning"
+        else:
+            overall = "pass"
+        return CampaignLaunchChecklist(
+            workflow_id=str(workflow.id),
+            workflow_version_id=(
+                str(workflow.current_version_id)
+                if workflow.current_version_id
+                else None
+            ),
+            location_id=location_id,
+            overall_status=overall,
+            blockers_count=blockers,
+            warnings_count=warnings,
+            unknown_count=unknowns,
+            estimated_audience=estimated_audience,
+            estimated_send_volume=estimated_send_volume,
+            estimated_cost_cents=estimated_cost_cents,
+            estimate_basis=estimate_basis,
+            generated_at=datetime.now(timezone.utc),
+            items=items,
+        )
+
+    @staticmethod
+    def _merge_field_items(warnings: list[Any]) -> list[CampaignLaunchChecklistItem]:
+        merge_warnings = [
+            i for i in warnings if (i.code or "").startswith("merge_field_")
+        ]
+        if not merge_warnings:
+            return [
+                CampaignLaunchChecklistItem(
+                    id="merge_fields",
+                    section="content",
+                    label="Merge-field readiness",
+                    status="pass",
+                    message="All detected merge fields are known for the selected trigger and channel.",
+                    fix_href="#message-editor",
+                )
+            ]
+        return [
+            CampaignLaunchChecklistItem(
+                id="merge_fields",
+                section="content",
+                label="Merge-field readiness",
+                status="warning",
+                message=f"{len(merge_warnings)} merge-field warning(s) need review.",
+                fix_href="#message-editor",
+                metadata={"warnings": [_issue_payload(i) for i in merge_warnings]},
+            )
+        ]
+
+    async def _channel_items(
+        self,
+        definition: WorkflowDefinition,
+        *,
+        institution_id: str,
+        location_id: str | None,
+    ) -> list[CampaignLaunchChecklistItem]:
+        used_channels = _channels_used(definition)
+        if not used_channels:
+            return [
+                CampaignLaunchChecklistItem(
+                    id="channel_provisioning",
+                    section="channels",
+                    label="Channel provisioning",
+                    status="pass",
+                    message="No SMS, email, or voice send steps are configured.",
+                    fix_href="/institution-admin/settings",
+                )
+            ]
+        if not location_id:
+            return [
+                CampaignLaunchChecklistItem(
+                    id="channel_provisioning",
+                    section="channels",
+                    label="Channel provisioning",
+                    status="unknown",
+                    message="Select a location to verify SMS, email, and voice setup.",
+                    fix_href="/institution-admin/settings",
+                    metadata={"used_channels": sorted(used_channels)},
+                )
+            ]
+
+        report = await ChannelReadinessService(self.session).readiness_for_location(
+            institution_id=institution_id,
+            location_id=location_id,
+        )
+        ready = {
+            "sms": report.sms,
+            "email": report.email,
+            "voice": report.voice_configurable,
+        }
+        details = [d for d in report.details if d["channel"] in used_channels]
+        missing = [d for d in details if not d["ready"]]
+        return [
+            CampaignLaunchChecklistItem(
+                id="channel_provisioning",
+                section="channels",
+                label="Channel provisioning",
+                status="warning" if missing else "pass",
+                message=(
+                    f"{', '.join(d['channel'].upper() for d in missing)} setup is missing."
+                    if missing
+                    else "All channels used by this workflow are provisioned for the location."
+                ),
+                fix_href="/institution-admin/settings",
+                metadata={
+                    "used_channels": sorted(used_channels),
+                    "ready": {k: v for k, v in ready.items() if k in used_channels},
+                    "details": details,
+                },
+            )
+        ]
+
+    @staticmethod
+    def _compliance_items(
+        definition: WorkflowDefinition,
+        send_nodes: list[Any],
+        errors: list[Any],
+        warnings: list[Any],
+    ) -> list[CampaignLaunchChecklistItem]:
+        content_class = (
+            definition.compliance.content_class if definition.compliance else None
+        )
+        consent_required = (
+            definition.compliance.consent_required if definition.compliance else None
+        )
+        compliance_errors = [
+            i
+            for i in errors
+            if i.code
+            in {"consent_required", "promotional_in_exempt_class", "phi_in_body"}
+        ]
+        compliance_warnings = [
+            i
+            for i in warnings
+            if i.code
+            in {
+                "content_class_unset",
+                "sensitive_clinical_in_body",
+                "ai_voice_disclosure_required",
+                "ai_voice_marketing_needs_express_consent",
+            }
+        ]
+
+        if compliance_errors:
+            classification_status: ChecklistStatus = "blocked"
+            classification_msg = (
+                f"{len(compliance_errors)} compliance issue(s) block launch."
+            )
+        elif compliance_warnings:
+            classification_status = "warning"
+            classification_msg = (
+                f"{len(compliance_warnings)} compliance warning(s) need review."
+            )
+        elif send_nodes:
+            classification_status = "pass"
+            classification_msg = f"Content class is {content_class}; consent_required={consent_required}."
+        else:
+            classification_status = "pass"
+            classification_msg = (
+                "No outbound send steps require content classification."
+            )
+
+        suppression_status: ChecklistStatus = "pass"
+        suppression_msg = "Send-time DNC, opt-out suppression, and channel consent gates are enforced."
+        if send_nodes and content_class is None:
+            suppression_status = "warning"
+            suppression_msg = "Set a content class so channel consent basis is explicit before launch."
+        elif send_nodes and consent_required is False:
+            suppression_status = "warning"
+            suppression_msg = "Consent records are not required by this definition; suppression/DNC still applies."
+
+        sms_nodes = [n for n in send_nodes if isinstance(n, SendSmsNode)]
+        stop_status: ChecklistStatus = "pass"
+        disabled_stop_nodes = [n for n in sms_nodes if not n.include_opt_out_footer]
+        if not sms_nodes:
+            stop_msg = "No SMS steps require STOP footer copy."
+        elif disabled_stop_nodes:
+            stop_status = "warning"
+            stop_msg = (
+                f"{len(disabled_stop_nodes)} SMS step(s) disable the automatic STOP footer. "
+                "Add opt-out copy to the message manually when required."
+            )
+        else:
+            stop_msg = _SMS_STOP_COPY
+
+        return [
+            CampaignLaunchChecklistItem(
+                id="compliance_classification",
+                section="compliance",
+                label="Compliance classification",
+                status=classification_status,
+                message=classification_msg,
+                fix_href="#compliance",
+                metadata={
+                    "content_class": content_class,
+                    "consent_required": consent_required,
+                    "errors": [_issue_payload(i) for i in compliance_errors],
+                    "warnings": [_issue_payload(i) for i in compliance_warnings],
+                },
+            ),
+            CampaignLaunchChecklistItem(
+                id="consent_suppression",
+                section="compliance",
+                label="Consent and suppression coverage",
+                status=suppression_status,
+                message=suppression_msg,
+                fix_href="#compliance",
+            ),
+            CampaignLaunchChecklistItem(
+                id="sms_stop_help_copy",
+                section="compliance",
+                label="SMS STOP copy",
+                status=stop_status,
+                message=stop_msg,
+                fix_href="#message-editor",
+            ),
+        ]
+
+    @staticmethod
+    def _quiet_hours_item(send_nodes: list[Any]) -> list[CampaignLaunchChecklistItem]:
+        quiet_off = [
+            n.id for n in send_nodes if getattr(n, "respect_quiet_hours", True) is False
+        ]
+        if quiet_off:
+            return [
+                CampaignLaunchChecklistItem(
+                    id="quiet_hours",
+                    section="compliance",
+                    label="Quiet hours and send windows",
+                    status="warning",
+                    message="Some send steps bypass quiet-hour scheduling.",
+                    fix_href="#message-editor",
+                    metadata={"node_ids": quiet_off},
+                )
+            ]
+        return [
+            CampaignLaunchChecklistItem(
+                id="quiet_hours",
+                section="compliance",
+                label="Quiet hours and send windows",
+                status="pass",
+                message="Send steps respect the location quiet-hours gate.",
+                fix_href="#message-editor",
+            )
+        ]
+
+    async def _pms_capability_items(
+        self,
+        workflow: AutomationWorkflow,
+        definition: WorkflowDefinition,
+        *,
+        institution_id: str,
+        location_id: str | None,
+    ) -> list[CampaignLaunchChecklistItem]:
+        requirements = _pms_capability_requirements(workflow, definition)
+        if not requirements:
+            return [
+                CampaignLaunchChecklistItem(
+                    id="pms_capability",
+                    section="data",
+                    label="PMS feature support",
+                    status="pass",
+                    message="This workflow does not require a PMS-specific optional resource.",
+                    fix_href="/institution-admin/settings",
+                )
+            ]
+        if not location_id:
+            return [
+                CampaignLaunchChecklistItem(
+                    id="pms_capability",
+                    section="data",
+                    label="PMS feature support",
+                    status="blocked",
+                    message="Select a location to verify PMS support for this campaign.",
+                    fix_href="/institution-admin/settings",
+                    metadata={"requirements": requirements},
+                )
+            ]
+
+        institution = await self.session.get(Institution, institution_id)
+        location = await self.session.get(InstitutionLocation, location_id)
+        if institution is None or location is None:
+            return [
+                CampaignLaunchChecklistItem(
+                    id="pms_capability",
+                    section="data",
+                    label="PMS feature support",
+                    status="blocked",
+                    message="Institution or location could not be found for PMS capability checks.",
+                    fix_href="/institution-admin/settings",
+                    metadata={"requirements": requirements},
+                )
+            ]
+
+        evaluation = await PmsCapabilityService(self.session).evaluate_location(
+            institution=institution,
+            location=location,
+            requirements=requirements,
+        )
+        return [
+            CampaignLaunchChecklistItem(
+                id="pms_capability",
+                section="data",
+                label="PMS feature support",
+                status="pass" if evaluation.supported else "blocked",
+                message=evaluation.message,
+                fix_href="/institution-admin/settings",
+                metadata=evaluation.as_dict(),
+            )
+        ]
+
+
+    async def _timezone_items(
+        self,
+        definition: WorkflowDefinition,
+        *,
+        location_id: str | None,
+    ) -> list[CampaignLaunchChecklistItem]:
+        """Warn when a location has never had its timezone confirmed.
+
+        Everything time-sensitive reads it: quiet hours, calendar waits, and the
+        cron a scheduled campaign fires on. The column defaults to "UTC" and a
+        genuinely-UTC clinic is indistinguishable from one nobody configured, so
+        the failure is silent — a call held until a window that looked open, and
+        no error anywhere. This is the one place an author would see it.
+        """
+        if not location_id:
+            return []
+        location = await self.session.get(InstitutionLocation, location_id)
+        if location is None or not is_timezone_unset(location):
+            return []
+
+        # Only worth raising on a campaign that actually sends something; a
+        # definition with no send steps is unaffected by the clinic's clock.
+        if not any(isinstance(node, _SEND_NODE_TYPES) for node in definition.nodes):
+            return []
+
+        return [
+            CampaignLaunchChecklistItem(
+                id="location_timezone",
+                section="compliance",
+                label="Location timezone",
+                status="warning",
+                message=(
+                    "This location is still on the default UTC timezone. Quiet "
+                    "hours and any scheduled send will be judged against UTC "
+                    "rather than the clinic's local time — a 2pm call can be "
+                    "held as if it were the evening."
+                ),
+                fix_href="/institution-admin/settings",
+            )
+        ]
+
+    async def _backing_system_items(
+        self,
+        definition: WorkflowDefinition,
+        *,
+        institution_id: str,
+        location_id: str | None,
+    ) -> list[CampaignLaunchChecklistItem]:
+        """Block a recall campaign on a system that cannot report recalls.
+
+        "NexHealth" is a façade over seventeen practice systems, and five of
+        them expose no recall data at all. Without this the campaign publishes
+        cleanly, scans nightly and enrols nobody — indistinguishable from a
+        clinic that simply has no overdue patients.
+        """
+        if not uses_pms_recall_source(definition) or not location_id:
+            return []
+
+        sync = await self._sync_status(institution_id, location_id)
+        source_name = (
+            backing_systems.resolve_system_name(pms_name_candidates(sync))
+            if sync is not None
+            else None
+        )
+
+        if source_name is None:
+            return [
+                CampaignLaunchChecklistItem(
+                    id="pms_backing_system",
+                    section="data",
+                    label="Practice software capability",
+                    status="warning",
+                    message=(
+                        "We have not yet learned which practice software backs "
+                        "this location, so we cannot confirm it reports recalls."
+                    ),
+                )
+            ]
+
+        reason = backing_systems.unavailable_reason("patient_recalls", source_name)
+        if reason:
+            return [
+                CampaignLaunchChecklistItem(
+                    id="pms_backing_system",
+                    section="data",
+                    label="Practice software capability",
+                    status="blocked",
+                    message=(
+                        f"{reason} A recall campaign here would never enrol "
+                        "anyone; use a different trigger for this location."
+                    ),
+                )
+            ]
+
+        return [
+            CampaignLaunchChecklistItem(
+                id="pms_backing_system",
+                section="data",
+                label="Practice software capability",
+                status="pass",
+                message=(
+                    f"{backing_systems.display_name(source_name)} reports "
+                    "patient recalls."
+                ),
+            )
+        ]
+
+    async def _nexhealth_items(
+        self,
+        definition: WorkflowDefinition,
+        *,
+        institution_id: str,
+        location_id: str | None,
+    ) -> list[CampaignLaunchChecklistItem]:
+        if definition.trigger.type in _STATUS_EVENT_TRIGGER_TYPES:
+            return [
+                CampaignLaunchChecklistItem(
+                    id="nexhealth_readiness",
+                    section="data",
+                    label="Source appointment context",
+                    status="pass",
+                    message=(
+                        "This workflow uses appointment context carried from "
+                        "the triggering patient status event."
+                    ),
+                    fix_href="/institution-admin/campaigns",
+                )
+            ]
+        if definition.trigger.type not in _APPOINTMENT_TRIGGER_TYPES:
+            return [
+                CampaignLaunchChecklistItem(
+                    id="nexhealth_readiness",
+                    section="data",
+                    label="NexHealth data freshness",
+                    status="pass",
+                    message="This trigger does not require NexHealth appointment data.",
+                    fix_href="/institution-admin/settings",
+                )
+            ]
+        if not location_id:
+            return [
+                CampaignLaunchChecklistItem(
+                    id="nexhealth_readiness",
+                    section="data",
+                    label="NexHealth data freshness",
+                    status="blocked",
+                    message="Appointment and recall triggers require a location with NexHealth configuration.",
+                    fix_href="/institution-admin/settings",
+                )
+            ]
+
+        location = await self.session.get(InstitutionLocation, location_id)
+        if location and _is_gotracker_location(location):
+            return await self._gotracker_items(
+                definition,
+                institution_id=institution_id,
+                location_id=location_id,
+                location=location,
+            )
+
+        # Only meaningful once we know this is a configured NexHealth location:
+        # the capability matrix describes the systems sitting behind NexHealth.
+        if location is not None and location.nexhealth_subdomain:
+            backing = await self._backing_system_items(
+                definition, institution_id=institution_id, location_id=location_id
+            )
+            if any(item.status == "blocked" for item in backing):
+                # A system that cannot report recalls makes every downstream
+                # data check moot; report the cause rather than its symptoms.
+                return backing
+        if (
+            not location
+            or not location.nexhealth_subdomain
+            or not location.nexhealth_location_id
+        ):
+            return [
+                CampaignLaunchChecklistItem(
+                    id="nexhealth_readiness",
+                    section="data",
+                    label="NexHealth data freshness",
+                    status="blocked",
+                    message="Location is missing NexHealth subdomain or location id.",
+                    fix_href="/institution-admin/settings",
+                )
+            ]
+
+        subscription = await self._subscription(institution_id, location_id)
+        if subscription is None:
+            return [
+                await self._sync_status_item(institution_id, location_id),
+                CampaignLaunchChecklistItem(
+                    id="nexhealth_readiness",
+                    section="data",
+                    label="NexHealth data freshness",
+                    status="warning",
+                    message="No local NexHealth appointment webhook subscription row exists for this location.",
+                    fix_href="/institution-admin/settings",
+                ),
+            ]
+        if subscription.status != NexHealthWebhookSubscriptionStatus.ACTIVE.value:
+            return [
+                await self._sync_status_item(institution_id, location_id),
+                CampaignLaunchChecklistItem(
+                    id="nexhealth_readiness",
+                    section="data",
+                    label="NexHealth data freshness",
+                    status="warning",
+                    message=f"NexHealth webhook subscription is {subscription.status}.",
+                    fix_href="/institution-admin/settings",
+                    metadata={"subscription_id": str(subscription.id)},
+                ),
+            ]
+
+        newest = await self._newest_projection_sync(institution_id, location_id)
+        if newest is None:
+            return [
+                await self._sync_status_item(institution_id, location_id),
+                CampaignLaunchChecklistItem(
+                    id="nexhealth_readiness",
+                    section="data",
+                    label="NexHealth data freshness",
+                    status="unknown",
+                    message="Webhook subscription is active, but no appointment projection rows are available yet.",
+                    fix_href="/institution-admin/settings",
+                    metadata={"subscription_id": str(subscription.id)},
+                ),
+            ]
+        newest = _as_utc(newest)
+        age = datetime.now(timezone.utc) - newest
+        return [
+            await self._sync_status_item(institution_id, location_id),
+            CampaignLaunchChecklistItem(
+                id="nexhealth_readiness",
+                section="data",
+                label="NexHealth data freshness",
+                status="warning" if age > _FRESHNESS_WINDOW else "pass",
+                message=(
+                    "Appointment projection is stale; live send-time revalidation still runs."
+                    if age > _FRESHNESS_WINDOW
+                    else "Appointment webhook subscription and projection freshness look current."
+                ),
+                fix_href="/institution-admin/settings",
+                metadata={
+                    "subscription_id": str(subscription.id),
+                    "last_synced_at": newest.isoformat(),
+                    "freshness_window_hours": int(
+                        _FRESHNESS_WINDOW.total_seconds() / 3600
+                    ),
+                },
+            ),
+        ]
+
+    async def _gotracker_items(
+        self,
+        definition: WorkflowDefinition,
+        *,
+        institution_id: str,
+        location_id: str,
+        location: InstitutionLocation,
+    ) -> list[CampaignLaunchChecklistItem]:
+        if not getattr(location, "gotracker_product_key_encrypted", None):
+            return [
+                CampaignLaunchChecklistItem(
+                    id="gotracker_readiness",
+                    section="data",
+                    label="GoTracker webhook readiness",
+                    status="blocked",
+                    message="Location is missing its GoTracker product key.",
+                    fix_href="/institution-admin/settings",
+                )
+            ]
+
+        history_items = await self._gotracker_recall_history_items(
+            definition,
+            institution_id=institution_id,
+            location=location,
+        )
+
+        subscription = await self._gotracker_subscription(institution_id, location_id)
+        if subscription is None:
+            return [
+                CampaignLaunchChecklistItem(
+                    id="gotracker_readiness",
+                    section="data",
+                    label="GoTracker webhook readiness",
+                    status="warning",
+                    message="No local GoTracker webhook subscription row exists for this location.",
+                    fix_href="/institution-admin/settings",
+                )
+            ] + history_items
+        if subscription.status != GoTrackerWebhookSubscriptionStatus.ACTIVE.value:
+            return [
+                CampaignLaunchChecklistItem(
+                    id="gotracker_readiness",
+                    section="data",
+                    label="GoTracker webhook readiness",
+                    status="warning",
+                    message=f"GoTracker webhook subscription is {subscription.status}.",
+                    fix_href="/institution-admin/settings",
+                    metadata={"subscription_id": str(subscription.id)},
+                )
+            ] + history_items
+
+        newest = await self._newest_projection_sync(institution_id, location_id)
+        last_event = (
+            _as_utc(subscription.last_event_at).isoformat()
+            if subscription.last_event_at
+            else None
+        )
+        if newest is None:
+            return [
+                CampaignLaunchChecklistItem(
+                    id="gotracker_readiness",
+                    section="data",
+                    label="GoTracker webhook readiness",
+                    status="unknown",
+                    message="GoTracker subscription is active, but no appointment projection rows are available yet.",
+                    fix_href="/institution-admin/settings",
+                    metadata={
+                        "subscription_id": str(subscription.id),
+                        "last_event_at": last_event,
+                        "event_types": subscription.event_types,
+                    },
+                )
+            ] + history_items
+        newest = _as_utc(newest)
+        age = datetime.now(timezone.utc) - newest
+        return [
+            CampaignLaunchChecklistItem(
+                id="gotracker_readiness",
+                section="data",
+                label="GoTracker webhook readiness",
+                status="warning" if age > _FRESHNESS_WINDOW else "pass",
+                message=(
+                    "GoTracker appointment projection is stale; dispatch-time revalidation still checks the latest local projection."
+                    if age > _FRESHNESS_WINDOW
+                    else "GoTracker subscription and appointment projection freshness look current."
+                ),
+                fix_href="/institution-admin/settings",
+                metadata={
+                    "subscription_id": str(subscription.id),
+                    "last_event_at": last_event,
+                    "last_synced_at": newest.isoformat(),
+                    "event_types": subscription.event_types,
+                    "freshness_window_hours": int(
+                        _FRESHNESS_WINDOW.total_seconds() / 3600
+                    ),
+                },
+            )
+        ] + history_items
+
+    async def _gotracker_recall_history_items(
+        self,
+        definition: WorkflowDefinition,
+        *,
+        institution_id: str,
+        location: InstitutionLocation,
+    ) -> list[CampaignLaunchChecklistItem]:
+        if not uses_pms_recall_source(definition):
+            return []
+
+        institution = await self.session.get(Institution, institution_id)
+        if institution is None:
+            return [
+                CampaignLaunchChecklistItem(
+                    id="gotracker_recall_history",
+                    section="data",
+                    label="GoTracker recall history sync",
+                    status="blocked",
+                    message="Institution could not be found for GoTracker recall history checks.",
+                    fix_href="/institution-admin/settings",
+                )
+            ]
+
+        adapter = None
+        try:
+            from src.app.pms.factory import get_adapter_for_institution_location
+
+            adapter = await get_adapter_for_institution_location(institution, location)
+            assessment = await assess_gotracker_recall_history(adapter)
+        except Exception as exc:  # noqa: BLE001 - fail closed for launch readiness.
+            return [
+                CampaignLaunchChecklistItem(
+                    id="gotracker_recall_history",
+                    section="data",
+                    label="GoTracker recall history sync",
+                    status="blocked",
+                    message=(
+                        "GoTracker appointment-history sync status could not be "
+                        "read; recall should not run for this location."
+                    ),
+                    fix_href="/institution-admin/settings",
+                    metadata={"error_type": type(exc).__name__},
+                )
+            ]
+        finally:
+            if adapter is not None:
+                await adapter.close()
+
+        return [
+            CampaignLaunchChecklistItem(
+                id="gotracker_recall_history",
+                section="data",
+                label="GoTracker recall history sync",
+                status="pass" if assessment.complete else "blocked",
+                message=assessment.message,
+                fix_href="/institution-admin/settings",
+                metadata={
+                    "reason": assessment.reason,
+                    **assessment.metadata,
+                },
+            )
+        ]
+
+    async def _sync_status_item(
+        self, institution_id: str, location_id: str
+    ) -> CampaignLaunchChecklistItem:
+        sync_status = await self._sync_status(institution_id, location_id)
+        assessment = assess_sync_status(sync_status)
+        metadata = {
+            "last_checked_at": (
+                _as_utc(sync_status.last_checked_at).isoformat()
+                if sync_status and sync_status.last_checked_at
+                else None
+            ),
+            "read_status": sync_status.read_status if sync_status else None,
+            "write_status": sync_status.write_status if sync_status else None,
+            "stale_after_hours": 24,
+        }
+        if sync_status is None:
+            return CampaignLaunchChecklistItem(
+                id="nexhealth_sync_status",
+                section="data",
+                label="NexHealth PMS sync health",
+                status="warning",
+                message="PMS sync status has not been checked yet.",
+                fix_href="/institution-admin/settings",
+                metadata=metadata,
+            )
+        if assessment.read_healthy is False:
+            return CampaignLaunchChecklistItem(
+                id="nexhealth_sync_status",
+                section="data",
+                label="NexHealth PMS sync health",
+                status="blocked",
+                message="PMS read sync is unhealthy; appointment data may be stale.",
+                fix_href="/institution-admin/settings",
+                metadata=metadata,
+            )
+        if assessment.stale:
+            return CampaignLaunchChecklistItem(
+                id="nexhealth_sync_status",
+                section="data",
+                label="NexHealth PMS sync health",
+                status="warning",
+                message="PMS sync status is stale; wait for the sync poller or check NexHealth.",
+                fix_href="/institution-admin/settings",
+                metadata=metadata,
+            )
+        if assessment.write_healthy is False:
+            return CampaignLaunchChecklistItem(
+                id="nexhealth_sync_status",
+                section="data",
+                label="NexHealth PMS sync health",
+                status="warning",
+                message="PMS write sync is unhealthy; read-only outreach can continue, write-back actions should stay gated.",
+                fix_href="/institution-admin/settings",
+                metadata=metadata,
+            )
+        if assessment.read_healthy is None or assessment.write_healthy is None:
+            return CampaignLaunchChecklistItem(
+                id="nexhealth_sync_status",
+                section="data",
+                label="NexHealth PMS sync health",
+                status="warning",
+                message="PMS sync status is present but not recognized as healthy.",
+                fix_href="/institution-admin/settings",
+                metadata=metadata,
+            )
+        return CampaignLaunchChecklistItem(
+            id="nexhealth_sync_status",
+            section="data",
+            label="NexHealth PMS sync health",
+            status="pass",
+            message="PMS read/write sync health is current.",
+            fix_href="/institution-admin/settings",
+            metadata=metadata,
+        )
+
+    def _handoff_items(
+        self, definition: WorkflowDefinition
+    ) -> list[CampaignLaunchChecklistItem]:
+        voice_nodes = [n for n in definition.nodes if isinstance(n, SendVoiceNode)]
+        waits_for_outcome = [n.id for n in voice_nodes if n.wait_for_outcome]
+        if not voice_nodes:
+            return [
+                CampaignLaunchChecklistItem(
+                    id="staff_handoff",
+                    section="operations",
+                    label="Staff handoff/failure routing",
+                    status="pass",
+                    message="No AI voice handoff path is required for this workflow.",
+                    fix_href="/institution-admin/callbacks",
+                )
+            ]
+        if waits_for_outcome:
+            return [
+                CampaignLaunchChecklistItem(
+                    id="staff_handoff",
+                    section="operations",
+                    label="Staff handoff/failure routing",
+                    status="pass",
+                    message="Voice outcome feedback is enabled for at least one voice step.",
+                    fix_href="/institution-admin/callbacks",
+                    metadata={"node_ids": waits_for_outcome},
+                )
+            ]
+        return [
+            CampaignLaunchChecklistItem(
+                id="staff_handoff",
+                section="operations",
+                label="Staff handoff/failure routing",
+                status="warning",
+                message="Voice steps are fire-and-forget; confirm staff monitors failed/needs-callback calls.",
+                fix_href="/institution-admin/callbacks",
+                metadata={"node_ids": [n.id for n in voice_nodes]},
+            )
+        ]
+
+    @staticmethod
+    def _callback_items(
+        definition: WorkflowDefinition,
+    ) -> list[CampaignLaunchChecklistItem]:
+        if not starts_from_event(definition, "call.inbound.completed"):
+            return []
+
+        voice_nodes = [n for n in definition.nodes if isinstance(n, SendVoiceNode)]
+        waits_for_outcome = [n.id for n in voice_nodes if n.wait_for_outcome]
+        return [
+            CampaignLaunchChecklistItem(
+                id="callback_queue_source",
+                section="operations",
+                label="Callback queue source",
+                status="pass",
+                message="Callback-requested workflows enroll from the existing callback classification queue.",
+                fix_href="/institution-admin/callbacks",
+            ),
+            CampaignLaunchChecklistItem(
+                id="callback_voice_profile",
+                section="channels",
+                label="Callback voice profile",
+                status="pass" if voice_nodes else "blocked",
+                message=(
+                    "Callback automation includes an outbound AI voice step."
+                    if voice_nodes
+                    else "Callback automation needs an outbound AI voice step."
+                ),
+                fix_href="#message-editor",
+                metadata={"node_ids": [n.id for n in voice_nodes]},
+            ),
+            CampaignLaunchChecklistItem(
+                id="voice_outcome_wait",
+                section="operations",
+                label="Voice outcome wait",
+                status="pass" if waits_for_outcome else "warning",
+                message=(
+                    "At least one voice step waits for Retell call_outcome before branching."
+                    if waits_for_outcome
+                    else "Enable wait_for_outcome so Retell outcomes can drive callback branches."
+                ),
+                fix_href="#message-editor",
+                metadata={"node_ids": waits_for_outcome or [n.id for n in voice_nodes]},
+            ),
+            CampaignLaunchChecklistItem(
+                id="callback_staff_fallback",
+                section="operations",
+                label="Staff fallback behavior",
+                status="pass" if _has_staff_handoff_exit(definition) else "warning",
+                message=(
+                    "A staff handoff exit is configured for unresolved callback outcomes."
+                    if _has_staff_handoff_exit(definition)
+                    else "Add a staff_handoff or handoff exit for ambiguous or failed callback outcomes."
+                ),
+                fix_href="#message-editor",
+            ),
+        ]
+
+    @staticmethod
+    def _audience_status(
+        definition: WorkflowDefinition,
+        latest_preview: CampaignAudiencePreview | None,
+    ) -> tuple[ChecklistStatus, str, int | None]:
+        if latest_preview is not None:
+            if latest_preview.included_count > 0:
+                return (
+                    "pass",
+                    (
+                        f"Latest preview includes {latest_preview.included_count} patient(s) "
+                        f"and excludes {latest_preview.excluded_count}."
+                    ),
+                    latest_preview.included_count,
+                )
+            return (
+                "warning",
+                f"Latest preview has no included patients and excludes {latest_preview.excluded_count}.",
+                0,
+            )
+        trigger_type = definition.trigger.type
+        if trigger_type in _BROAD_TRIGGER_TYPES:
+            return (
+                "blocked",
+                "Broad campaign audience size is unknown until audience preview is available.",
+                None,
+            )
+        if trigger_type == "manual":
+            return (
+                "warning",
+                "Audience is selected at enrollment/import time; preview exclusions are not available yet.",
+                None,
+            )
+        return (
+            "unknown",
+            "This event-triggered campaign has no fixed audience before matching events arrive.",
+            None,
+        )
+
+    async def _latest_audience_preview(
+        self, workflow_id: str
+    ) -> CampaignAudiencePreview | None:
+        try:
+            result = await self.session.execute(
+                select(CampaignAudiencePreview)
+                .where(
+                    CampaignAudiencePreview.workflow_id == workflow_id,
+                    CampaignAudiencePreview.expires_at > datetime.now(timezone.utc),
+                )
+                .order_by(CampaignAudiencePreview.created_at.desc())
+                .limit(1)
+            )
+        except StopAsyncIteration:
+            return None
+        preview = result.scalar_one_or_none()
+        if inspect.isawaitable(preview):
+            close = getattr(preview, "close", None)
+            if callable(close):
+                close()
+            return None
+        return preview
+
+    async def _subscription(
+        self, institution_id: str, location_id: str
+    ) -> NexHealthWebhookSubscription | None:
+        result = await self.session.execute(
+            select(NexHealthWebhookSubscription)
+            .where(
+                NexHealthWebhookSubscription.institution_id == institution_id,
+                NexHealthWebhookSubscription.location_id == location_id,
+            )
+            .limit(1)
+        )
+        return result.scalar_one_or_none()
+
+    async def _gotracker_subscription(
+        self, institution_id: str, location_id: str
+    ) -> GoTrackerWebhookSubscription | None:
+        result = await self.session.execute(
+            select(GoTrackerWebhookSubscription)
+            .where(
+                GoTrackerWebhookSubscription.institution_id == institution_id,
+                GoTrackerWebhookSubscription.location_id == location_id,
+            )
+            .limit(1)
+        )
+        return result.scalar_one_or_none()
+
+    async def _sync_status(
+        self, institution_id: str, location_id: str
+    ) -> NexHealthSyncStatus | None:
+        result = await self.session.execute(
+            select(NexHealthSyncStatus)
+            .where(
+                NexHealthSyncStatus.institution_id == institution_id,
+                NexHealthSyncStatus.location_id == location_id,
+            )
+            .limit(1)
+        )
+        return result.scalar_one_or_none()
+
+    async def _newest_projection_sync(
+        self, institution_id: str, location_id: str
+    ) -> datetime | None:
+        result = await self.session.execute(
+            select(func.max(AppointmentWorkingSet.last_synced_at)).where(
+                AppointmentWorkingSet.institution_id == institution_id,
+                AppointmentWorkingSet.location_id == location_id,
+            )
+        )
+        return result.scalar_one_or_none()
+
+
+def _issue_payload(issue: Any) -> dict[str, Any]:
+    return {
+        "severity": issue.severity,
+        "node_id": issue.node_id,
+        "field_path": list(issue.field_path),
+        "message": issue.message,
+        "code": issue.code,
+    }
+
+
+def _channels_used(definition: WorkflowDefinition) -> set[str]:
+    channels: set[str] = set()
+    for node in definition.nodes:
+        if isinstance(node, (SendSmsNode, RetellSmsConversationNode)):
+            channels.add("sms")
+        elif isinstance(node, SendEmailNode):
+            channels.add("email")
+        elif isinstance(node, SendVoiceNode):
+            channels.add("voice")
+    return channels
+
+
+def _has_staff_handoff_exit(definition: WorkflowDefinition) -> bool:
+    exits_by_id = {
+        node.id: node for node in definition.nodes if isinstance(node, ExitNode)
+    }
+    handoff_outcomes = {"handoff", "staff_handoff"}
+    for exit_node in exits_by_id.values():
+        if exit_node.outcome in handoff_outcomes:
+            return True
+    for node in definition.nodes:
+        if not isinstance(node, ConditionNode):
+            continue
+        for target_id in (node.true_next_node_id, node.false_next_node_id):
+            target = exits_by_id.get(target_id)
+            if target and target.outcome in handoff_outcomes:
+                return True
+    return False
+
+
+def _is_gotracker_location(location: InstitutionLocation) -> bool:
+    product_key = getattr(location, "gotracker_product_key_encrypted", None)
+    base_url = getattr(location, "gotracker_base_url", None)
+    return bool(
+        (isinstance(product_key, str) and product_key.strip())
+        or (isinstance(base_url, str) and base_url.strip())
+    )
+
+
+def _pms_capability_requirements(
+    workflow: AutomationWorkflow,
+    definition: WorkflowDefinition,
+) -> list[str]:
+    from src.app.services.patient_communication import pms_context_requirements
+
+    requirements: list[str] = []
+    if uses_pms_recall_source(definition):
+        requirements.append("patient_recalls")
+    if getattr(workflow, "category", None) == "treatment":
+        requirements.append("treatment_plans")
+    requirements.extend(pms_context_requirements(definition.pms_context_fields))
+    return list(dict.fromkeys(requirements))
+
+
+def _planned_sends_per_contact(send_nodes: list[Any]) -> dict[str, int]:
+    volume = {"sms": 0, "email": 0, "voice": 0}
+    for node in send_nodes:
+        attempts = int(getattr(node, "max_attempts", 1) or 1)
+        if isinstance(node, SendSmsNode):
+            volume["sms"] += attempts
+        elif isinstance(node, RetellSmsConversationNode):
+            # Conversation replies are demand-driven; expose the hidden platform
+            # ceiling instead of pretending this is one fixed send.
+            volume["sms"] += RETELL_SMS_POLICY.max_patient_turns
+        elif isinstance(node, SendEmailNode):
+            volume["email"] += attempts
+        elif isinstance(node, SendVoiceNode):
+            volume["voice"] += attempts
+    return {k: v for k, v in volume.items() if v > 0}
+
+
+def _format_volume(volume: dict[str, int]) -> str:
+    if not volume:
+        return "0 sends"
+    return ", ".join(f"{count} {channel}" for channel, count in volume.items())
+
+
+def _as_utc(value: datetime) -> datetime:
+    return value if value.tzinfo else value.replace(tzinfo=timezone.utc)

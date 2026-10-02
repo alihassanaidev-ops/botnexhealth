@@ -7,6 +7,21 @@ export default {
   ],
   theme: {
 	extend: {
+		// The small end of the type scale, with a floor.
+		//
+		// These stay in rem so they grow on a large display, but max() stops
+		// them collapsing on a laptop: against a ~14.5px root, a bare 0.75rem
+		// `text-xs` lands at 10.9px and `2xs` at 9.9px, which is where the
+		// "some text is genuinely tiny" complaint came from. The floors bite
+		// below roughly a 16px root and fall away above it, so nothing is
+		// capped on the screens that can afford the size.
+		//
+		// Line heights are unitless so they follow whichever value wins.
+		fontSize: {
+			'2xs': ['max(0.68rem, 11px)', { lineHeight: '1.35' }],
+			xs: ['max(0.75rem, 12px)', { lineHeight: '1.35' }],
+			sm: ['max(0.875rem, 13px)', { lineHeight: '1.45' }],
+		},
 		colors: {
 			border: 'hsl(var(--border))',
 			input: 'hsl(var(--input))',
@@ -60,10 +75,16 @@ export default {
 				ring: 'hsl(var(--sidebar-ring))'
 			}
 		},
+		// Bound to the token scale rather than arithmetic off a single
+		// --radius. Deriving md/sm by subtracting pixels made the steps
+		// drift as --radius changed; naming each one keeps the rounding
+		// consistent between a button, a card and a dialog.
 		borderRadius: {
-			lg: 'var(--radius)',
-			md: 'calc(var(--radius) - 2px)',
-			sm: 'calc(var(--radius) - 4px)'
+			sm: 'var(--radius-sm)',
+			md: 'var(--radius-md)',
+			lg: 'var(--radius-lg)',
+			xl: 'var(--radius-xl)',
+			'2xl': 'var(--radius-2xl)'
 		},
 		keyframes: {
 			'accordion-down': {

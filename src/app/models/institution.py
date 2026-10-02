@@ -175,6 +175,10 @@ class Institution(Base):
     slug: Mapped[str] = mapped_column(String(100), unique=True, nullable=False, index=True)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
     location_limit: Mapped[int] = mapped_column(Integer, default=1, nullable=False, server_default="1")
+    #: Per-clinic ceiling on simultaneous outbound calls (Item 18). NULL means
+    #: "use the platform default" rather than "no limit", so a clinic that has
+    #: never been tuned is still bounded.
+    outbound_call_limit: Mapped[int | None] = mapped_column(Integer, nullable=True)
 
     # Optional DSO / practice-group umbrella. NULL for standalone institutions.
     # A GROUP_ADMIN gets read-only oversight across all institutions sharing a group_id.
@@ -206,10 +210,11 @@ class Institution(Base):
     # Billing email for invoices
     billing_email: Mapped[str | None] = mapped_column(String(255), nullable=True)
 
-    # PMS integration mode. "nexhealth" = backed by the NexHealth PMS (sync,
-    # booking, providers, etc.). "none" = call-intelligence-only tenant that
-    # lives solely on our platform — no PMS sync, no booking/availability; the
-    # Retell agent only collects call data. See has_pms / the PMS adapter guard.
+    # PMS integration mode. "nexhealth" and "gotracker" are adapter-backed
+    # PMS modes (sync, booking, providers, etc.). "none" is a call-
+    # intelligence-only tenant that lives solely on our platform — no PMS sync,
+    # no booking/availability; the Retell agent only collects call data. See
+    # has_pms / the PMS adapter guard.
     pms_type: Mapped[str] = mapped_column(
         String(20),
         nullable=False,
@@ -219,6 +224,30 @@ class Institution(Base):
 
     # NexHealth credentials (encrypted)
     nexhealth_api_key_encrypted: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # Which NexHealth account this institution's traffic authenticates as.
+    # An explicit super-admin choice, NOT inferred from whether a key happens to
+    # be stored: "institution" with a missing or undecryptable key must fail loudly
+    # rather than quietly borrowing the shared platform account.
+    #   platform — use the global NEXHEALTH_API_KEY
+    #   institution — use this institution's stored key, and only that
+    nexhealth_credential_mode: Mapped[str] = mapped_column(
+        String(32), nullable=False, server_default="platform", default="platform"
+    )
+
+    # Twilio sub-account credentials (encrypted) — per-institution outbound SMS
+    twilio_account_sid_encrypted: Mapped[str | None] = mapped_column(Text, nullable=True)
+    twilio_auth_token_encrypted: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+    # Email sending identity — per-institution from-address for outbound email
+    #: Master switch for the automatic staff notification emails (call summary,
+    #: urgent alert, appointment alert). Off means the practice manages these
+    #: through the dashboard instead of the inbox. Patient-facing mail is a
+    #: separate promise to the patient and is never gated by this.
+    staff_notification_emails_enabled: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, server_default="true", default=True,
+    )
+    email_from_address: Mapped[str | None] = mapped_column(String(320), nullable=True)
+    email_from_name: Mapped[str | None] = mapped_column(String(255), nullable=True)
 
     # Timestamps
     created_at: Mapped[datetime] = mapped_column(
@@ -255,6 +284,22 @@ class Institution(Base):
     def nexhealth_api_key(self, value: str | None) -> None:
         """Encrypt and store NexHealth API key."""
         self.nexhealth_api_key_encrypted = encrypt_value(value)
+
+    @property
+    def twilio_account_sid(self) -> str | None:
+        return decrypt_value(self.twilio_account_sid_encrypted)
+
+    @twilio_account_sid.setter
+    def twilio_account_sid(self, value: str | None) -> None:
+        self.twilio_account_sid_encrypted = encrypt_value(value)
+
+    @property
+    def twilio_auth_token(self) -> str | None:
+        return decrypt_value(self.twilio_auth_token_encrypted)
+
+    @twilio_auth_token.setter
+    def twilio_auth_token(self, value: str | None) -> None:
+        self.twilio_auth_token_encrypted = encrypt_value(value)
 
     def __repr__(self) -> str:
         return f"<Institution(id={self.id}, name='{self.name}', slug='{self.slug}')>"

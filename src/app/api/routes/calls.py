@@ -26,11 +26,11 @@ from src.app.models.call import Call
 from src.app.models.call_note import MAX_NOTE_LENGTH, CallNote
 from src.app.models.contact import Contact
 from src.app.models.custom_field import EntityType
-from src.app.models.institution import Institution
 from src.app.models.user import User, UserRole
 from src.app.services.audit import log_audit_background, phi_reveal_audit
 from src.app.services.custom_field_service import CustomFieldService
 from src.app.services.pii_masking import mask_brackets, mask_transcript
+from src.app.services.phi_visibility import serves_phi_inline
 from src.app.services.workflow_status_service import WorkflowStatusService
 from src.app.services.event_bus import publish_event
 from src.app.services.sms_privacy import hash_for_logging, mask_phone, safe_error_summary
@@ -92,8 +92,8 @@ class CallRecord(BaseModel):
     # only via the audited POST /{call_id}/reveal/phone endpoint.
     phone_masked: str | None = None
     phone_reveal_available: bool = False
-    # True when phone_masked already holds the full number (no-PMS location
-    # admins), so the UI renders it plainly instead of offering a reveal.
+    # True when phone_masked already holds the full number, so the UI renders
+    # it plainly instead of offering a reveal beside a complete value.
     phone_revealed: bool = False
 
 
@@ -123,11 +123,11 @@ class CallDetail(CallRecord):
     # audited reveal endpoints. NULL/absent when Retell redaction is off.
     scrubbed_transcript: list[dict] | None = None
     scrubbed_recording_url: str | None = None
-    # False when the served transcript is the raw, unmasked one (no-PMS
-    # location admins). The UI drops its "Redacted view" banner on False.
+    # False when the served transcript is the raw, unmasked one. The UI drops
+    # its "Redacted view" banner on False.
     transcript_redacted: bool = True
-    # Playable recording URL served inline for no-PMS location admins. Every
-    # other caller still goes through POST /{id}/reveal/recording.
+    # Playable recording URL served inline to clinic roles. SUPER_ADMIN still
+    # goes through POST /{id}/reveal/recording, behind break-glass.
     recording_url: str | None = None
     custom_fields: list[CustomFieldValueOut] = []
 
@@ -215,8 +215,7 @@ def _call_to_record(
             never exposes full PHI. The detail endpoint passes
             ``redact_phi=False`` for authorised roles.
         expose_contact: When True, the caller's full phone number is served
-            inline instead of the masked form. Reserved for no-PMS location
-            admins — see ``_nopms_unredacted``.
+            inline instead of the masked form — see ``_reads_phi_inline``.
     """
     contact_out: ContactSummary | None = None
     phone_masked: str | None = None
@@ -281,57 +280,64 @@ def _call_to_record(
     )
 
 
-def _location_scope_id(current_user: User) -> str | None:
-    """For LOCATION_ADMIN / STAFF, return the location_id to filter by.
+def _location_scope_id(
+    current_user: User, requested_location_id: str | None = None
+) -> str | None:
+    """Return the effective location filter for the current user.
 
-    Returns None for INSTITUTION_ADMIN (no per-location filter — they see
-    all calls in their institution).
+    Location-scoped users are pinned to their assigned location. Institution
+    admins may explicitly select one location; omitting it preserves the
+    aggregate behavior for non-UI callers.
 
     Replaces the legacy `_location_agent_filter` that did a string match
     against InstitutionLocation.retell_agent_id. Calls now have a direct
     ``location_id`` foreign key (set at webhook time via the agent_id →
     location mapping) so we can scope authoritatively without a roundtrip.
     """
-    if current_user.role not in (UserRole.LOCATION_ADMIN.value, UserRole.STAFF.value):
-        return None
-    if not current_user.location_id:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Location assignment required",
-        )
-    return str(current_user.location_id)
+    if current_user.role in (UserRole.LOCATION_ADMIN.value, UserRole.STAFF.value):
+        if not current_user.location_id:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Location assignment required",
+            )
+        assigned_location_id = str(current_user.location_id)
+        if requested_location_id and str(requested_location_id) != assigned_location_id:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Not authorized for this location",
+            )
+        return assigned_location_id
+    if current_user.role == UserRole.INSTITUTION_ADMIN.value and requested_location_id:
+        return str(requested_location_id)
+    return None
 
 
 # Back-compat shim: callbacks.py imports this name. Keep it as a sync helper
 # returning the location_id (string) — callers should pair with
 # `Call.location_id == <id>`, not `Call.agent_used == <id>`.
-async def _location_agent_filter(session, current_user: User) -> str | None:  # noqa: ARG001
+async def _location_agent_filter(
+    session, current_user: User, requested_location_id: str | None = None
+) -> str | None:  # noqa: ARG001
     """Deprecated alias — returns the location_id filter for LOCATION_ADMIN/STAFF."""
-    return _location_scope_id(current_user)
+    return _location_scope_id(current_user, requested_location_id)
 
 
-async def _nopms_unredacted(session, current_user: User) -> bool:
+def _reads_phi_inline(current_user: User) -> bool:
     """Whether this user reads call content unmasked, inline.
 
-    No-PMS tenants have no practice-management system holding the chart, so
-    the dashboard *is* the record and the clinic's own LOCATION_ADMIN is its
-    primary operator. For them we skip name masking and serve the raw
-    transcript directly instead of the scrubbed preview.
+    Delegates to the one shared policy in ``services.phi_visibility`` — see that
+    module for why clinic administrators no longer click through a reveal step.
 
-    PMS tenants (NexHealth / GoTracker) are unaffected and keep the audited
-    reveal flow, as do every other role — STAFF, INSTITUTION_ADMIN and the
-    platform-level SUPER_ADMIN.
+    This replaced a narrower rule that served content inline only to the
+    LOCATION_ADMIN of a *no-PMS* tenant. The PMS distinction turned out to be
+    the wrong axis: whether a clinic happens to run NexHealth says nothing about
+    whether its own administrator may read its own patients' phone numbers, and
+    it made Kadri's admins click through a gate that Olive Tree's did not.
+    Dropping it also drops a per-request ``SELECT`` on ``institutions``.
+
+    STAFF and SUPER_ADMIN keep the audited reveal flow.
     """
-    if current_user.role != UserRole.LOCATION_ADMIN.value:
-        return False
-    if not current_user.institution_id:
-        return False
-    institution = (
-        await session.execute(
-            select(Institution).where(Institution.id == current_user.institution_id)
-        )
-    ).scalar_one_or_none()
-    return institution is not None and not institution.has_pms
+    return serves_phi_inline(current_user)
 
 
 async def _get_scoped_call(
@@ -501,6 +507,7 @@ async def list_calls(
     ),
     date_from: date | None = Query(None),
     date_to: date | None = Query(None),
+    location_id: Annotated[str | None, Query()] = None,
 ) -> CallsListResponse:
     """
     List calls for the authenticated institution.
@@ -524,7 +531,9 @@ async def list_calls(
 
     async with get_db_session() as session:
         conditions = [Call.institution_id == current_user.institution_id]
-        location_agent_id = await _location_agent_filter(session, current_user)
+        location_agent_id = await _location_agent_filter(
+            session, current_user, location_id
+        )
         if location_agent_id:
             conditions.append(Call.location_id == location_agent_id)
 
@@ -597,7 +606,7 @@ async def list_calls(
             .all()
         )
 
-        unredacted = await _nopms_unredacted(session, current_user)
+        unredacted = _reads_phi_inline(current_user)
         items = [
             _call_to_record(c, redact_phi=not unredacted, expose_contact=unredacted)
             for c in rows
@@ -654,24 +663,33 @@ async def get_call(
     async with get_db_session() as session:
         call = await _get_scoped_call(session, call_id, current_user)
 
-        # Load custom field values
+        # SUPER_ADMIN is platform-level and not in the circle of care — redact PHI.
+        # All other institution-scoped roles may view patient names for care operations.
+        unredacted = _reads_phi_inline(current_user)
+        redact = current_user.role == UserRole.SUPER_ADMIN.value
+
+        # Load custom field values. A field an institution marked PHI follows the
+        # same policy as everything else on this response: a clinic role that is
+        # already reading the raw transcript inline should not then click Reveal
+        # for one field off the same call. Keeping the two rules apart left a
+        # seam with nothing behind it — the click was not protecting information
+        # the same response had already served.
         cf_svc = CustomFieldService(session)
         cf_pairs = await cf_svc.get_values_for_entity(
             current_user.institution_id,
             "call",
             call.id,
         )
-        custom_fields = [_custom_field_response(defn, val) for defn, val in cf_pairs]
+        custom_fields = [
+            _custom_field_response(defn, val, reveal=unredacted)
+            for defn, val in cf_pairs
+        ]
 
-        # SUPER_ADMIN is platform-level and not in the circle of care — redact PHI.
-        # All other institution-scoped roles may view patient names for care operations.
-        unredacted = await _nopms_unredacted(session, current_user)
-        redact = current_user.role == UserRole.SUPER_ADMIN.value
         base = _call_to_record(call, redact_phi=redact, expose_contact=unredacted)
 
-        # Masked scrubbed preview by default. No-PMS location admins get the
-        # decrypted raw turns inline — the reveal endpoint stays available and
-        # audited for everyone, this only changes what renders without it.
+        # Masked scrubbed preview by default; clinic roles get the decrypted raw
+        # turns inline. The reveal endpoint stays available and audited for
+        # everyone — this only changes what renders without it.
         if unredacted:
             transcript_turns = call.transcript_with_tool_calls
         else:

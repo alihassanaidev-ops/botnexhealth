@@ -79,11 +79,28 @@ PROTECTED_TABLES: tuple[str, ...] = (
     "dead_letter_events",
     "retell_webhook_events",
     "retell_function_invocations",
+    "workflow_statuses",
     # call_metrics_daily is added in migration 20260513_metrics; it is
     # institution-scoped and RLS-enabled at table-creation time. Listing
     # it here satisfies the
     # tests/unit/test_rls_protected_tables_coverage.py invariant.
     "call_metrics_daily",
+    # Outbound automation workflow engine tables are added by
+    # 20260702_auto_workflow_core for existing databases. They are
+    # listed here too because the baseline creates all current SQLAlchemy
+    # models on fresh local/test databases.
+    "automation_workflows",
+    "automation_workflow_versions",
+    "automation_workflow_runs",
+    "automation_workflow_step_executions",
+    "automation_workflow_timers",
+    "automation_workflow_events",
+    # Plan 12 compliance gate halt table — added by 20260703_outbound_halt
+    # for existing databases; listed here so fresh databases get RLS too.
+    "outbound_emergency_halts",
+    # Plan 11 usage-metering ingestion table — added by 20260704_usage_events
+    # for existing databases; listed here so fresh databases get RLS too.
+    "usage_events",
 )
 
 
@@ -424,6 +441,30 @@ def _location_scoped_expr(table: str) -> str:
     """
 
 
+def _automation_workflow_expr(table: str) -> str:
+    return f"""
+        app_rls_is_super_admin()
+        OR (
+            app_rls_context_type() IN ('celery', 'dead_letter')
+            AND {table}.institution_id = app_rls_institution_id()
+            AND (
+                app_rls_location_id() IS NULL
+                OR {table}.location_id IS NULL
+                OR {table}.location_id = app_rls_location_id()
+            )
+        )
+        OR (
+            app_rls_context_type() = 'user'
+            AND {table}.institution_id = app_rls_institution_id()
+            AND (
+                app_rls_role() = 'INSTITUTION_ADMIN'
+                OR {table}.location_id IS NULL
+                OR {table}.location_id = app_rls_location_id()
+            )
+        )
+    """
+
+
 def _location_only_expr(table: str) -> str:
     return f"""
         app_rls_is_super_admin()
@@ -439,6 +480,28 @@ def _location_only_expr(table: str) -> str:
                     OR il.id = app_rls_location_id()
                   )
             )
+        )
+    """
+
+
+def _usage_events_expr() -> str:
+    return _automation_workflow_expr("usage_events").replace(
+        "app_rls_context_type() IN ('celery', 'dead_letter')",
+        "app_rls_context_type() IN ('celery', 'dead_letter', 'usage_metering')",
+    )
+
+
+def _outbound_halt_expr() -> str:
+    return """
+        app_rls_is_super_admin()
+        OR (
+            app_rls_context_type() IN ('celery', 'dead_letter')
+            AND outbound_emergency_halts.institution_id = app_rls_institution_id()
+        )
+        OR (
+            app_rls_context_type() = 'user'
+            AND outbound_emergency_halts.institution_id = app_rls_institution_id()
+            AND app_rls_role() = 'INSTITUTION_ADMIN'
         )
     """
 
@@ -807,6 +870,27 @@ def _all_policies_sql() -> tuple[str, ...]:
             "retell_function_invocations",
             _retell_events_expr("retell_function_invocations"),
         ),
+        ("workflow_statuses", _institution_owned_expr("workflow_statuses")),
+        ("automation_workflows", _automation_workflow_expr("automation_workflows")),
+        (
+            "automation_workflow_versions",
+            _automation_workflow_expr("automation_workflow_versions"),
+        ),
+        ("automation_workflow_runs", _automation_workflow_expr("automation_workflow_runs")),
+        (
+            "automation_workflow_step_executions",
+            _automation_workflow_expr("automation_workflow_step_executions"),
+        ),
+        (
+            "automation_workflow_timers",
+            _automation_workflow_expr("automation_workflow_timers"),
+        ),
+        (
+            "automation_workflow_events",
+            _automation_workflow_expr("automation_workflow_events"),
+        ),
+        ("outbound_emergency_halts", _outbound_halt_expr()),
+        ("usage_events", _usage_events_expr()),
     )
     out: list[str] = []
     for table, expr in spec:

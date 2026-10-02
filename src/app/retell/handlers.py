@@ -31,7 +31,11 @@ from src.app.models.institution_provider import InstitutionProvider
 from src.app.models.insurance_plan import InsurancePlan
 from src.app.models.location_break import LocationBreak
 from src.app.models.location_operating_hours import LocationOperatingHours
-from src.app.pms.base import PMSAdapter, SupportsAvailabilityLinking
+from src.app.pms.base import (
+    PMSAdapter,
+    SupportsAppointmentConfirmation,
+    SupportsAvailabilityLinking,
+)
 from src.app.pms.factory import get_adapter_for_institution_location
 from src.app.pms.models import BookingRequest, PatientCreateRequest
 from src.app.retell.functions import (
@@ -142,12 +146,15 @@ async def _validate_appointment_type_for_provider(
     raw_provider_id = provider_id.removeprefix("nh-")
     raw_appt_id = appointment_type_id.removeprefix("nh-")
     try:
-        # Past dates MUST stay in for this check. Appointment-type links live on
-        # whichever work window the PMS attached them to, and at a real clinic
-        # every one of them sat on a past-dated row (69 of 69 for one provider).
-        # Filtering past dates here empties allowed_ids and rejects every
-        # booking. The setup UI still drops them — this is a validation lookup,
-        # not a schedule display.
+        # Past dates MUST stay in for this check, stated explicitly rather than
+        # relying on the adapter default — the default differs across branches
+        # and a merge that flips it silently breaks every booking.
+        #
+        # Appointment-type links live on whichever work window the PMS attached
+        # them to, and at a real clinic every one of them was on a past-dated
+        # row (69 of 69 for one provider, 12 of 12 for another). Filtering past
+        # dates here empties allowed_ids, and this gate then rejects every
+        # booking, reschedule and slot search for that provider.
         availabilities = await ctx.adapter.list_availabilities(
             provider_id=raw_provider_id,
             ignore_past_dates=False,
@@ -206,6 +213,63 @@ def _patient_lookup_criteria(args: dict[str, Any]) -> list[str]:
         if args.get(key):
             criteria.append(label)
     return criteria
+
+
+def _source_id_for_pms(source: str, provider_id: str | None) -> str | None:
+    if not provider_id:
+        return None
+    if provider_id.startswith(("nh-", "gt-")):
+        return provider_id
+    if source == "nexhealth":
+        return f"nh-{provider_id}"
+    if source == "gotracker":
+        return f"gt-{provider_id}"
+    return provider_id
+
+
+def _strip_source_prefix(value: str | None) -> str | None:
+    if not value or "-" not in value:
+        return value
+    prefix, raw_id = value.split("-", 1)
+    return raw_id if prefix in {"nh", "gt"} else value
+
+
+def _provider_display_name(row: Any) -> str | None:
+    name = str(getattr(row, "name", "") or "").strip()
+    if not name:
+        name = " ".join(
+            str(part).strip()
+            for part in (
+                getattr(row, "first_name", None),
+                getattr(row, "last_name", None),
+            )
+            if part
+        ).strip()
+    return name or None
+
+
+def _missing_provider_source_ids(source: str, slots: list[Any]) -> set[str]:
+    source_ids: set[str] = set()
+    for slot in slots:
+        if str(getattr(slot, "provider_name", "") or "").strip():
+            continue
+        provider_id = str(getattr(slot, "provider_id", "") or "").strip()
+        source_id = _source_id_for_pms(source, provider_id)
+        if source_id:
+            source_ids.add(source_id)
+    return source_ids
+
+
+def _apply_provider_names_to_slots(
+    source: str, slots: list[Any], provider_names: dict[str, str]
+) -> None:
+    for slot in slots:
+        if str(getattr(slot, "provider_name", "") or "").strip():
+            continue
+        provider_id = str(getattr(slot, "provider_id", "") or "").strip()
+        source_id = _source_id_for_pms(source, provider_id)
+        if source_id and provider_names.get(source_id):
+            slot.provider_name = provider_names[source_id]
 
 
 # ============================================================================
@@ -508,6 +572,8 @@ async def lookup_patient(args: dict[str, Any]) -> dict[str, Any]:
 
     supplied_name = _supplied_patient_name(args)
     query = supplied_name or ""
+    verification_args = args
+    match_strategy = "full_name"
 
     full_detail_include = [
         "upcoming_appts",
@@ -538,7 +604,7 @@ async def lookup_patient(args: dict[str, Any]) -> dict[str, Any]:
     verified_patients: list[Any] = []
     failure_reasons: list[str] = []
     for patient in patients:
-        passed, failure_reason = _identity_gate_passes(patient, args)
+        passed, failure_reason = _identity_gate_passes(patient, verification_args)
         if passed:
             verified_patients.append(patient)
         elif failure_reason:
@@ -567,19 +633,22 @@ async def lookup_patient(args: dict[str, Any]) -> dict[str, Any]:
                 "source": "retell_lookup_patient",
                 "detail_level": detail_level,
                 "identity_gate": "passed",
+                "match_strategy": match_strategy,
                 "search_criteria": _patient_lookup_criteria(args),
             },
         ):
             payload_patient = verified_patient
             if detail_level == "full":
-                full_patients = await ctx.adapter.search_patients(
-                    query,
-                    name=supplied_name,
-                    email=args.get("email"),
-                    phone_number=args.get("phone_number"),
-                    date_of_birth=args.get("date_of_birth"),
-                    include=full_detail_include,
+                # Read the identified patient directly rather than re-running the
+                # list search with includes. v3 removed includes from the patient
+                # LIST endpoint, so the old path returned a patient with no
+                # upcoming appointment and no last visit — silently, with no
+                # error. The single-patient read still honours includes on both
+                # contracts, and it costs one request instead of a second search.
+                detailed = await ctx.adapter.get_patient(
+                    patient_id, include=full_detail_include
                 )
+                full_patients = [detailed] if detailed else []
                 payload_patient = next(
                     (
                         patient
@@ -689,7 +758,7 @@ async def create_patient(args: dict[str, Any]) -> dict[str, Any]:
         if not args.get(field):
             return {"error": f"{field} is required."}
 
-    gender = str(args["gender"]).strip()
+    gender = str(args["gender"]).strip().lower().capitalize()
     if gender not in {"Female", "Male", "Other"}:
         return {"error": "gender must be one of: Female, Male, Other."}
 
@@ -757,6 +826,8 @@ async def find_appointment_slots(args: dict[str, Any]) -> dict[str, Any]:
     """Find available appointment slots.
 
     Supports optional ``buffer_minutes`` — minimum lead-time from now.
+    GoTracker can search with its default 15-minute slot length when no
+    appointment type is configured; other PMS adapters still require one.
     Slots starting before now + buffer are excluded.
     """
     start_date = args.get("start_date")
@@ -764,13 +835,14 @@ async def find_appointment_slots(args: dict[str, Any]) -> dict[str, Any]:
         return {"error": "start_date is required."}
 
     appt_type_id = args.get("appointment_type_id")
-    if not appt_type_id:
-        return {"error": "appointment_type_id is required."}
 
     try:
         ctx = await _resolve_context()
     except ValueError as e:
         return {"error": str(e)}
+
+    if not appt_type_id and ctx.adapter.source != "gotracker":
+        return {"error": "appointment_type_id is required."}
 
     raw_provider = args.get("provider_id")
     provider_ids: list[str] | None = None
@@ -804,17 +876,18 @@ async def find_appointment_slots(args: dict[str, Any]) -> dict[str, Any]:
 
         # Apply provider-level filters (buffer + time restriction)
         try:
+            # Voice booking must never offer a slot that is already in the
+            # past. Callers can request a larger lead time explicitly.
             buffer_minutes = max(0, int(args.get("buffer_minutes", 0)))
         except (TypeError, ValueError):
             return {"error": "buffer_minutes must be an integer >= 0."}
 
         normalized_provider_id = (
-            str(provider_id).removeprefix("nh-") if provider_id else None
+            _strip_source_prefix(str(provider_id)) if provider_id else None
         )
-        provider_source_id = (
-            f"nh-{normalized_provider_id}" if normalized_provider_id else None
-        )
+        provider_source_id = _source_id_for_pms(ctx.adapter.source, provider_id)
         provider_cutoff = None
+        provider_names: dict[str, str] = {}
 
         if ctx.location:
             async with get_system_db_session(
@@ -840,6 +913,39 @@ async def find_appointment_slots(args: dict[str, Any]) -> dict[str, Any]:
                             buffer_minutes, provider_buffer
                         )
                         provider_cutoff = prov.same_day_cutoff_time
+
+                provider_source_ids = _missing_provider_source_ids(
+                    ctx.adapter.source, slots
+                )
+                if provider_source_ids:
+                    provider_rows = (
+                        (
+                            await session.execute(
+                                select(
+                                    InstitutionProvider.source_id,
+                                    InstitutionProvider.name,
+                                    InstitutionProvider.first_name,
+                                    InstitutionProvider.last_name,
+                                ).where(
+                                    InstitutionProvider.institution_id
+                                    == str(ctx.institution.id),
+                                    InstitutionProvider.location_id
+                                    == str(ctx.location.id),
+                                    InstitutionProvider.source == ctx.adapter.source,
+                                    InstitutionProvider.source_id.in_(
+                                        sorted(provider_source_ids)
+                                    ),
+                                    InstitutionProvider.is_active.is_(True),
+                                )
+                            )
+                        )
+                        .all()
+                    )
+                    provider_names = {
+                        row.source_id: display_name
+                        for row in provider_rows
+                        if (display_name := _provider_display_name(row))
+                    }
 
                 # Per-location operating hours + breaks (lunch / blackout
                 # windows). Loaded regardless of provider so the voice agent
@@ -882,6 +988,9 @@ async def find_appointment_slots(args: dict[str, Any]) -> dict[str, Any]:
         elif buffer_minutes > 0:
             slots = apply_buffer(slots, buffer_minutes)
 
+        if provider_names:
+            _apply_provider_names_to_slots(ctx.adapter.source, slots, provider_names)
+
         # Apply same-day cutoff time restriction
         if provider_cutoff and normalized_provider_id and ctx.location:
             tz_str = ctx.location.timezone or "UTC"
@@ -919,6 +1028,12 @@ async def find_appointment_slots(args: dict[str, Any]) -> dict[str, Any]:
             message = (
                 f"No availability on {start_date}. "
                 f"The next available date is {next_available_date}."
+            )
+        elif provider_id:
+            message = (
+                f"No availability was found for this provider from {start_date} "
+                "in the requested date range. Try another date range or transfer "
+                "the caller to the office for help."
             )
         else:
             message = (
@@ -1026,15 +1141,46 @@ async def cancel_appointment(args: dict[str, Any]) -> dict[str, Any]:
         return {"success": False, "error": "Failed to cancel appointment"}
 
 
-@register_function("reschedule_appointment")
+@register_function("confirm_appointment")
 @audit(
-    AuditAction.RESCHEDULE_APPOINTMENT,
+    AuditAction.CONFIRM_APPOINTMENT,
     resource=lambda args: (
-        f"reschedule:old={hash_for_logging(str(args.get('old_appointment_id'))) if args.get('old_appointment_id') else 'unknown'}"
+        f"appointment:{hash_for_logging(str(args.get('appointment_id'))) if args.get('appointment_id') else 'unknown'}"
     ),
 )
-async def reschedule_appointment(args: dict[str, Any]) -> dict[str, Any]:
-    """Reschedule an appointment (cancel old + book new)."""
+async def confirm_appointment(args: dict[str, Any]) -> dict[str, Any]:
+    """Mark an existing appointment confirmed."""
+    appointment_id = args.get("appointment_id")
+    if not appointment_id:
+        return {"error": "appointment_id is required."}
+
+    try:
+        ctx = await _resolve_context()
+    except ValueError as e:
+        return {"success": False, "error": str(e)}
+
+    if not isinstance(ctx.adapter, SupportsAppointmentConfirmation):
+        return {
+            "success": False,
+            "error": "Appointment confirmation is not supported for this PMS.",
+        }
+
+    try:
+        result = await ctx.adapter.confirm_appointment(appointment_id)
+        return result.model_dump()
+    except Exception as e:
+        logger.error(
+            "Failed to confirm appointment: %s",
+            safe_error_summary(e),
+        )
+        return {"success": False, "error": "Failed to confirm appointment"}
+
+
+async def _reschedule_appointment_impl(
+    args: dict[str, Any],
+    *,
+    use_v2: bool,
+) -> dict[str, Any]:
     old_id = args.get("old_appointment_id")
     if not old_id:
         return {"error": "old_appointment_id is required."}
@@ -1043,38 +1189,77 @@ async def reschedule_appointment(args: dict[str, Any]) -> dict[str, Any]:
     for field in required:
         if not args.get(field):
             return {"error": f"{field} is required for the new booking."}
-    if not args.get("appointment_type_id"):
-        return {"error": "appointment_type_id is required for the new booking."}
 
     try:
         ctx = await _resolve_context()
     except ValueError as e:
         return {"success": False, "error": str(e)}
 
-    validation_error = await _validate_appointment_type_for_provider(
-        ctx, args.get("provider_id"), args.get("appointment_type_id")
-    )
-    if validation_error:
-        return {"success": False, "error": validation_error}
+    if ctx.adapter is None:
+        return {"success": False, "error": "PMS integration is not configured."}
 
-    try:
-        result = await ctx.adapter.reschedule_appointment(
-            old_id,
-            BookingRequest(
-                patient_id=args["patient_id"],
-                provider_id=args["provider_id"],
-                slot_start=args["start_time"],
-                slot_end=args.get("end_time"),
-                operatory_id=args.get("operatory_id"),
-                appointment_type_id=args.get("appointment_type_id"),
-                descriptor_ids=args.get("descriptor_ids", []),
-                note=args.get("note"),
-            ),
+    if ctx.adapter.source != "gotracker":
+        if not args.get("appointment_type_id"):
+            return {"error": "appointment_type_id is required for the new booking."}
+        validation_error = await _validate_appointment_type_for_provider(
+            ctx, args.get("provider_id"), args.get("appointment_type_id")
         )
-        return result.model_dump()
+        if validation_error:
+            return {"success": False, "error": validation_error}
+
+    new_booking = BookingRequest(
+        patient_id=args["patient_id"],
+        provider_id=args["provider_id"],
+        slot_start=args["start_time"],
+        slot_end=args.get("end_time"),
+        duration_min=args.get("duration_min"),
+        operatory_id=args.get("operatory_id"),
+        appointment_type_id=(
+            None if ctx.adapter.source == "gotracker" else args.get("appointment_type_id")
+        ),
+        descriptor_ids=args.get("descriptor_ids", []),
+        note=args.get("note"),
+    )
+    if use_v2:
+        result = await ctx.adapter.reschedule_appointment_v2(old_id, new_booking)
+    else:
+        result = await ctx.adapter.reschedule_appointment(old_id, new_booking)
+    return result.model_dump()
+
+
+@register_function("reschedule_appointment")
+@audit(
+    AuditAction.RESCHEDULE_APPOINTMENT,
+    resource=lambda args: (
+        f"reschedule:old={hash_for_logging(str(args.get('old_appointment_id'))) if args.get('old_appointment_id') else 'unknown'}"
+    ),
+)
+async def reschedule_appointment(args: dict[str, Any]) -> dict[str, Any]:
+    """Reschedule an appointment."""
+    try:
+        return await _reschedule_appointment_impl(args, use_v2=False)
     except Exception as e:
         logger.error(
             "Failed to reschedule: %s",
+            safe_error_summary(e),
+        )
+        return {"success": False, "error": "Failed to reschedule"}
+
+
+@register_function("reschedule_appointment_v2")
+@audit(
+    AuditAction.RESCHEDULE_APPOINTMENT,
+    resource=lambda args: (
+        f"reschedule_v2:old={hash_for_logging(str(args.get('old_appointment_id'))) if args.get('old_appointment_id') else 'unknown'}"
+    ),
+)
+async def reschedule_appointment_v2(args: dict[str, Any]) -> dict[str, Any]:
+    """Reschedule an appointment using the newest supported PMS write path."""
+    try:
+        return await _reschedule_appointment_impl(args, use_v2=True)
+    except Exception as e:
+        logger.error(
+            "Failed to reschedule v2: %s",
             safe_error_summary(e),
         )
         return {"success": False, "error": "Failed to reschedule"}
@@ -1212,7 +1397,9 @@ async def list_providers(args: dict[str, Any]) -> dict[str, Any]:
         if patient_age is not None and ctx.location:
             filtered = []
             for p in providers:
-                rule = age_rules.get(f"nh-{p.id}") or age_rules.get(str(p.id))
+                rule = age_rules.get(p.id) or age_rules.get(
+                    _source_id_for_pms(ctx.adapter.source, p.id) or p.id
+                )
                 if rule is None:
                     # No local cache entry — include by default
                     filtered.append(p)

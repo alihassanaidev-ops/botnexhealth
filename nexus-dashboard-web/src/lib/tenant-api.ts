@@ -83,7 +83,15 @@ export async function listAppointmentTypes(locationId?: string): Promise<CachedA
 }
 
 export async function createAppointmentType(
-    payload: { name: string; duration_minutes: number; descriptor_ids: string[] },
+    payload: {
+        name: string;
+        duration_minutes: number;
+        descriptor_ids?: string[];
+        reason_ids?: string[];
+        provider_ids?: string[];
+        operatory_ids?: string[];
+        bookable_online?: boolean;
+    },
     locationId?: string
 ): Promise<CachedAppointmentType> {
     const { data } = await api.post<CachedAppointmentType>(
@@ -102,7 +110,15 @@ export async function deleteAppointmentType(
 
 export async function updateAppointmentType(
     sourceId: string,
-    payload: { name?: string; duration_minutes?: number; descriptor_ids?: string[] },
+    payload: {
+        name?: string;
+        duration_minutes?: number;
+        descriptor_ids?: string[];
+        reason_ids?: string[];
+        provider_ids?: string[];
+        operatory_ids?: string[];
+        bookable_online?: boolean;
+    },
     locationId?: string
 ): Promise<CachedAppointmentType> {
     const { data } = await api.patch<CachedAppointmentType>(
@@ -114,9 +130,28 @@ export async function updateAppointmentType(
 
 // ── Operatories ─────────────────────────────────────────────────────────
 
-export async function listOperatories(locationId?: string): Promise<CachedOperatory[]> {
-    const { data } = await api.get<unknown>(`${BASE}/operatories${qs(locationId)}`);
+export async function listOperatories(
+    locationId?: string,
+    options?: { includeHidden?: boolean }
+): Promise<CachedOperatory[]> {
+    const params = new URLSearchParams();
+    if (locationId) params.set("location_id", locationId);
+    if (options?.includeHidden) params.set("include_hidden", "true");
+    const q = params.toString() ? `?${params.toString()}` : "";
+    const { data } = await api.get<unknown>(`${BASE}/operatories${q}`);
     return unwrapArray<CachedOperatory>(data, `${BASE}/operatories`);
+}
+
+export async function updateOperatory(
+    operatoryId: string,
+    payload: { is_hidden: boolean },
+    locationId?: string
+): Promise<CachedOperatory> {
+    const { data } = await api.patch<CachedOperatory>(
+        `${BASE}/operatories/${operatoryId}${qs(locationId)}`,
+        payload
+    );
+    return data;
 }
 
 // ── Descriptors ─────────────────────────────────────────────────────────
@@ -126,15 +161,29 @@ export async function listDescriptors(locationId?: string): Promise<CachedDescri
     return unwrapArray<CachedDescriptor>(data, `${BASE}/descriptors`);
 }
 
+/** GoTracker-native reasons, cached during the normal practice sync. */
+export async function listReasons(locationId?: string): Promise<CachedDescriptor[]> {
+    const { data } = await api.get<unknown>(`${BASE}/reasons${qs(locationId)}`);
+    return unwrapArray<CachedDescriptor>(data, `${BASE}/reasons`);
+}
+
 // ── Availabilities ──────────────────────────────────────────────────────
 
 export async function listAvailabilities(
     locationId?: string,
-    providerSourceId?: string
+    providerSourceId?: string,
+    options?: {
+        startDate?: string;
+        days?: number;
+        includeClosed?: boolean;
+    }
 ): Promise<CachedAvailability[]> {
     const params = new URLSearchParams();
     if (locationId) params.set("location_id", locationId);
     if (providerSourceId) params.set("provider_source_id", providerSourceId);
+    if (options?.startDate) params.set("start_date", options.startDate);
+    if (options?.days) params.set("days", String(options.days));
+    if (options?.includeClosed) params.set("include_closed", "true");
     const q = params.toString() ? `?${params.toString()}` : "";
     const { data } = await api.get<unknown>(`${BASE}/availabilities${q}`);
     return unwrapArray<CachedAvailability>(data, `${BASE}/availabilities`);
@@ -146,11 +195,13 @@ export interface BulkLinkRangePreview {
     day_count: number;
     matched_count: number;
     windows: CachedAvailability[];
+    /** Max work windows the API accepts per apply call. */
     batch_size: number;
+    /** Seconds to wait between apply calls so the PMS quota is not exhausted. */
     batch_pause_seconds: number;
 }
 
-/** Preview the dated work windows a range link would change. */
+/** Work windows a range-link would touch. Read-only — nothing is written. */
 export async function previewBulkLinkRange(
     payload: {
         provider_id: string;
@@ -167,7 +218,7 @@ export async function previewBulkLinkRange(
     return data;
 }
 
-/** Apply one server-bounded batch from a range preview. */
+/** Link one throttled batch (at most `batch_size` windows) from a preview. */
 export async function applyBulkLinkRange(
     payload: {
         availability_ids: string[];
@@ -219,6 +270,16 @@ export async function updateAvailability(
     const { data } = await api.patch<CachedAvailability>(
         `${BASE}/availabilities/${sourceId}${qs(locationId)}`,
         payload
+    );
+    return data;
+}
+
+export async function clearAvailabilityOverride(
+    sourceId: string,
+    locationId?: string
+): Promise<CachedAvailability> {
+    const { data } = await api.delete<CachedAvailability>(
+        `${BASE}/availabilities/${sourceId}/override${qs(locationId)}`
     );
     return data;
 }

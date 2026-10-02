@@ -145,6 +145,23 @@ class SmsHistoryLog(Base):
         index=True
     )
 
+    # Campaign attribution (Plan 11): the workflow run/version that sent this SMS,
+    # stamped at send time so the delivery-status webhook can attribute usage/spend
+    # to the campaign in /by-campaign. Plain nullable tags (no FK) — attribution
+    # only, and workflows are immutable/versioned so referential coupling isn't needed.
+    workflow_run_id: Mapped[str | None] = mapped_column(
+        UUID(as_uuid=False), nullable=True
+    )
+    workflow_id: Mapped[str | None] = mapped_column(
+        UUID(as_uuid=False), nullable=True
+    )
+    conversation_thread_id: Mapped[str | None] = mapped_column(
+        UUID(as_uuid=False),
+        ForeignKey("campaign_conversation_threads.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
+
     # --- Encrypted field properties ---
 
     @property

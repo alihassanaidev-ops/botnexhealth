@@ -177,6 +177,7 @@ export default function GroupDashboard() {
     return (
         <div className="relative flex-1 space-y-6 bg-background p-8 pt-6">
             <PageHeader
+                art="groups"
                 icon={Layers}
                 title={title}
                 description={

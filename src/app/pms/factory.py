@@ -24,30 +24,48 @@ async def get_adapter_for_institution_location(
 ) -> PMSAdapter:
     """Create a fresh PMS adapter scoped to a specific location.
 
-    The platform shares one NexHealth account; per-clinic isolation comes
-    from the location's nexhealth_subdomain + nexhealth_location_id, so a
-    location is mandatory.
+    NexHealth uses the institution's explicitly selected platform or clinic-owned
+    key plus location subdomain/id. GoTracker uses a Synchronizer product key
+    scoped to the location. Either way, a location is mandatory so calls cannot
+    leak across clinics.
     """
     from src.app.config import settings
 
     # Call-intelligence-only tenants have no PMS. This is the single chokepoint
     # for every booking/availability/provider/sync route (all depend on
     # get_institution_pms), so guarding here blocks them all with one clean 409.
-    if getattr(institution, "pms_type", "nexhealth") == "none":
+    pms_type = getattr(institution, "pms_type", "nexhealth") or "nexhealth"
+    if pms_type == "none":
         raise HTTPException(
             status_code=409,
             detail="This institution does not use a PMS; booking and scheduling are unavailable.",
         )
 
-    if not settings.nexhealth_api_key:
-        raise ValueError("NEXHEALTH_API_KEY is not configured")
+    if pms_type == "nexhealth":
+        if (
+            not getattr(institution, "nexhealth_api_key_encrypted", None)
+            and not settings.nexhealth_api_key
+        ):
+            raise ValueError("NexHealth API key is not configured")
 
-    from src.app.pms.nexhealth.adapter import NexHealthAdapter
-    adapter = await NexHealthAdapter.create(institution, location=location)
+        from src.app.pms.nexhealth.adapter import NexHealthAdapter
+
+        adapter = await NexHealthAdapter.create(institution, location=location)
+    elif pms_type == "gotracker":
+        from src.app.pms.gotracker.adapter import GoTrackerAdapter
+
+        adapter = await GoTrackerAdapter.create(institution, location=location)
+    else:
+        raise HTTPException(
+            status_code=409,
+            detail=f"Unsupported PMS integration: {pms_type}",
+        )
 
     logger.info(
         "Created %s adapter for institution '%s' location '%s'",
-        adapter.source, institution.slug, location.slug,
+        adapter.source,
+        institution.slug,
+        location.slug,
     )
     return adapter
 
@@ -64,7 +82,9 @@ async def get_institution_pms(
     from src.app.models.institution_location import InstitutionLocation
 
     if not current_user.institution_id:
-        raise HTTPException(status_code=400, detail="User is not associated with an institution")
+        raise HTTPException(
+            status_code=400, detail="User is not associated with an institution"
+        )
 
     scoped_location_id = str(loc_id) if loc_id else None
     path_location_id = request.path_params.get("location_id")
@@ -73,13 +93,20 @@ async def get_institution_pms(
 
     if current_user.role in (UserRole.LOCATION_ADMIN.value, UserRole.STAFF.value):
         if not current_user.location_id:
-            raise HTTPException(status_code=403, detail="Location-scoped account is missing location assignment")
+            raise HTTPException(
+                status_code=403,
+                detail="Location-scoped account is missing location assignment",
+            )
 
         user_location_id = str(current_user.location_id)
         if scoped_location_id and scoped_location_id != user_location_id:
-            raise HTTPException(status_code=403, detail="Not authorized for this location")
+            raise HTTPException(
+                status_code=403, detail="Not authorized for this location"
+            )
         if path_location_id and path_location_id != user_location_id:
-            raise HTTPException(status_code=403, detail="Not authorized for this location")
+            raise HTTPException(
+                status_code=403, detail="Not authorized for this location"
+            )
 
         scoped_location_id = user_location_id
     elif not scoped_location_id and path_location_id:

@@ -21,6 +21,7 @@ from src.app.config import settings
 from src.app.models.institution_location import InstitutionLocation
 from src.app.models.sms_history_log import SmsHistoryLog, SmsStatus
 from src.app.services.dead_letter import should_retry_vendor_error
+from src.app.services.messaging_credentials import TenantTwilioCredentialResolver
 from src.app.services.retention_policy import (
     default_sms_body_retain_until,
     default_sms_row_retain_until,
@@ -40,17 +41,25 @@ class SmsService:
     def __init__(self, session: AsyncSession):
         self.session = session
 
-    def _get_twilio_client(self) -> Client:
-        """Initialise and return a Twilio REST client using platform credentials."""
-        account_sid = settings.twillio_sid
-        auth_token = settings.twillio_api_secret
+    def _get_twilio_client(
+        self,
+        account_sid: str | None = None,
+        auth_token: str | None = None,
+    ) -> Client:
+        """Return a Twilio REST client.
 
-        if not account_sid or not auth_token:
+        Uses per-institution sub-account credentials when supplied; falls back
+        to platform-level credentials from settings.
+        """
+        sid = account_sid or settings.twillio_sid
+        token = auth_token or settings.twillio_api_secret
+
+        if not sid or not token:
             raise RuntimeError(
                 "Twilio credentials not configured (TWILLIO_SID / TWILLIO_API_SECRET)"
             )
 
-        return Client(account_sid, auth_token)
+        return Client(sid, token)
 
     async def send_sms(
         self,
@@ -60,6 +69,9 @@ class SmsService:
         institution_location_id: str,
         patient_contact_id: str | None = None,
         call_id: str | None = None,
+        workflow_run_id: str | None = None,
+        workflow_id: str | None = None,
+        conversation_thread_id: str | None = None,
         include_opt_out_footer: bool = True,
         include_clinic_identity: bool = True,
     ) -> SmsHistoryLog:
@@ -73,6 +85,10 @@ class SmsService:
             institution_location_id: The location associated with this message.
             patient_contact_id: Optional ID of the Contact receiving this message.
             call_id: Optional associated Retell Call ID.
+            workflow_run_id: Optional campaign run that sent this SMS (Plan 11
+                attribution — carried to the delivery webhook's usage event).
+            workflow_id: Optional campaign/workflow id for per-campaign spend.
+            conversation_thread_id: Optional run-scoped campaign conversation thread.
             include_opt_out_footer: Append the standard STOP copy when absent.
             include_clinic_identity: Prefix the location name when absent.
 
@@ -146,13 +162,18 @@ class SmsService:
                 institution_location_id=institution_location_id,
                 patient_contact_id=patient_contact_id,
                 call_id=call_id,
+                workflow_run_id=workflow_run_id,
+                workflow_id=workflow_id,
+                conversation_thread_id=conversation_thread_id,
                 to_number_hash=identity.phone_hash,
                 to_number_masked=identity.phone_masked,
                 last_status_at=now,
                 retain_until=default_sms_row_retain_until(
                     now, metadata_days=_sms_meta_days, body_days=_sms_body_days
                 ),
-                body_retain_until=default_sms_body_retain_until(now, days=_sms_body_days),
+                body_retain_until=default_sms_body_retain_until(
+                    now, days=_sms_body_days
+                ),
             )
             sms_log.to_number = to_number
             sms_log.body = body
@@ -176,6 +197,9 @@ class SmsService:
             institution_location_id=institution_location_id,
             patient_contact_id=patient_contact_id,
             call_id=call_id,
+            workflow_run_id=workflow_run_id,
+            workflow_id=workflow_id,
+            conversation_thread_id=conversation_thread_id,
             to_number_hash=identity.phone_hash,
             to_number_masked=identity.phone_masked,
             timestamp=now,
@@ -195,7 +219,11 @@ class SmsService:
         await self.session.flush()
 
         try:
-            client = self._get_twilio_client()
+            creds = TenantTwilioCredentialResolver.resolve_sms(institution, location)
+            client = self._get_twilio_client(
+                account_sid=creds.account_sid,
+                auth_token=creds.auth_token,
+            )
 
             # Using asyncio to offload the blocking Twilio client network call
             create_kwargs: dict[str, Any] = {
@@ -203,9 +231,9 @@ class SmsService:
                 "from_": from_number,
                 "to": to_number,
             }
-            if settings.twilio_sms_status_callback_url:
+            if settings.effective_twilio_sms_status_callback_url:
                 create_kwargs["status_callback"] = (
-                    settings.twilio_sms_status_callback_url
+                    settings.effective_twilio_sms_status_callback_url
                 )
 
             message = await asyncio.to_thread(

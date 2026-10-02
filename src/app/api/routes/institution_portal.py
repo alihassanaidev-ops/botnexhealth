@@ -4,9 +4,10 @@ Institution portal routes.
 
 from __future__ import annotations
 
+from datetime import date as date_type
 from datetime import time as dt_time
 import re
-from typing import Annotated, Any
+from typing import Annotated, Any, Literal
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
@@ -24,6 +25,7 @@ from src.app.api.models import AuditLogPaginatedResponse, AuditLogResponse
 from src.app.database import get_db_session
 from src.app.models.user import User, UserRole
 from src.app.models.audit_log import AuditLog
+from src.app.models.institution_location import InstitutionLocation
 from src.app.models.insurance_plan import InsurancePlan
 from src.app.models.location_break import LocationBreak
 from src.app.models.location_operating_hours import LocationOperatingHours
@@ -32,6 +34,7 @@ from src.app.services.invite_cooldown import apply_invite_cooldown, ensure_invit
 from src.app.services.user_invite_service import UserInviteService
 from src.app.services.audit import log_audit, log_audit_background
 from src.app.models.audit_log import AuditAction, AuditActor, AuditOutcome
+from src.app.services.audit_decorator import audit
 
 router = APIRouter(prefix="/institution", tags=["Institution Portal"])
 
@@ -275,8 +278,8 @@ async def get_my_institution_config(
         role=current_user.role,
         institution_id=current_user.institution_id,
         location_id=current_user.location_id,
-        pms_type=institution.pms_type,
-        has_pms=institution.has_pms,
+        pms_type=getattr(institution, "pms_type", "nexhealth") or "nexhealth",
+        has_pms=getattr(institution, "has_pms", True),
     )
 
 
@@ -357,6 +360,16 @@ async def get_location_operating_hours(
     "/locations/{loc_slug}/operating-hours",
     response_model=list[OperatingHoursResponse],
     dependencies=[Depends(require_location_scope())],
+)
+@audit(
+    AuditAction.LOCATION_UPDATE,
+    # Item 39: operating hours and breaks decide when a patient may be
+    # contacted at all — they are the source quiet hours is derived from — so
+    # changing them is the same class of act as changing a campaign.
+    resource=lambda *args, **kwargs: (
+        f"location:{kwargs.get('loc_slug') or 'unknown'}:operating_hours"
+    ),
+    actor=AuditActor.ADMIN,
 )
 async def set_location_operating_hours(
     loc_slug: str,
@@ -465,6 +478,16 @@ async def get_location_breaks(
     status_code=status.HTTP_201_CREATED,
     dependencies=[Depends(require_location_scope())],
 )
+@audit(
+    AuditAction.LOCATION_UPDATE,
+    # Item 39: operating hours and breaks decide when a patient may be
+    # contacted at all — they are the source quiet hours is derived from — so
+    # changing them is the same class of act as changing a campaign.
+    resource=lambda *args, **kwargs: (
+        f"location:{kwargs.get('loc_slug') or 'unknown'}:break_create"
+    ),
+    actor=AuditActor.ADMIN,
+)
 async def create_location_break(
     loc_slug: str,
     data: BreakCreateRequest,
@@ -500,6 +523,16 @@ async def create_location_break(
     "/locations/{loc_slug}/breaks/{break_id}",
     status_code=status.HTTP_204_NO_CONTENT,
     dependencies=[Depends(require_location_scope())],
+)
+@audit(
+    AuditAction.LOCATION_UPDATE,
+    # Item 39: operating hours and breaks decide when a patient may be
+    # contacted at all — they are the source quiet hours is derived from — so
+    # changing them is the same class of act as changing a campaign.
+    resource=lambda *args, **kwargs: (
+        f"location:{kwargs.get('loc_slug') or 'unknown'}:break_delete"
+    ),
+    actor=AuditActor.ADMIN,
 )
 async def delete_location_break(
     loc_slug: str,
@@ -569,8 +602,22 @@ async def update_location_timezone(
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND, detail="Location not found"
             )
+        previous_timezone = location.timezone
         location.timezone = timezone_value
         await session.flush()
+
+        # A published campaign's schedule row caches the zone its cron fires in,
+        # and is only rewritten on publish/pause/resume. Without this the
+        # setting reads as corrected while every already-published campaign
+        # keeps firing on the old zone.
+        if previous_timezone != timezone_value:
+            from src.app.services.automation.schedule_service import (
+                WorkflowScheduleService,
+            )
+
+            await WorkflowScheduleService(session).resync_for_location(
+                str(location.id)
+            )
 
     log_audit_background(
         actor=AuditActor.ADMIN,
@@ -1537,6 +1584,13 @@ class ROIConfigRequest(BaseModel):
     avg_call_duration_minutes: float = Field(
         4.0, ge=0, description="Avg manual call handling time (minutes)"
     )
+    #: How this tenant is billed. "institution" charges once for the group and
+    #: apportions it across locations; "location" charges each clinic its own
+    #: price and ignores monthly_subscription_cost above. Both are real deals,
+    #: so neither is hard-coded.
+    subscription_billing_mode: Literal["institution", "location"] = Field(
+        "institution", description="Whether the subscription is billed per institution or per location"
+    )
 
 
 class ROIConfigResponse(BaseModel):
@@ -1545,11 +1599,16 @@ class ROIConfigResponse(BaseModel):
     monthly_subscription_cost: float
     staff_hourly_rate: float
     avg_call_duration_minutes: float
+    subscription_billing_mode: str = "institution"
 
 
 class ROICalculationResponse(BaseModel):
-    # Inputs used
-    config: ROIConfigResponse
+    # Inputs used. None when the figures were summed from locations that each
+    # have their own — there is no single set of inputs to name.
+    config: ROIConfigResponse | None
+    #: The window these figures cover.
+    period_start: date_type | None = None
+    period_end: date_type | None = None
     # Raw metrics
     total_calls_month: int
     appointments_booked_month: int
@@ -1559,11 +1618,16 @@ class ROICalculationResponse(BaseModel):
     revenue_from_new_patients: float
     total_revenue_generated: float
     staff_time_saved_hours: float
-    staff_cost_saved: float
+    #: None when no hourly rate is configured — unknown, not zero.
+    staff_cost_saved: float | None
     total_value: float
     monthly_cost: float
     net_value: float
-    roi_percentage: float
+    #: None when there is no cost to measure a return against.
+    roi_percentage: float | None
+    #: Where these figures came from, so a summed total is never mistaken for
+    #: one the institution itself was configured with.
+    revenue_basis: str = "Institution-wide figures"
 
 
 @router.get("/roi/config", response_model=ROIConfigResponse | None)
@@ -1619,57 +1683,78 @@ async def update_roi_config(
 @router.get("/roi/calculate", response_model=ROICalculationResponse)
 async def calculate_roi(
     current_user: Annotated[User, Depends(get_current_institution_admin)],
+    start_date: date_type | None = Query(
+        None, description="Inclusive window start (YYYY-MM-DD). Defaults to the 1st."
+    ),
+    end_date: date_type | None = Query(
+        None, description="Inclusive window end (YYYY-MM-DD). Defaults to today."
+    ),
 ):
     if not current_user.institution_id:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST, detail="No institution assignment"
         )
 
-    from datetime import datetime, timezone as tz
     from src.app.models.call import Call, CallStatus
+
+    period_start, period_end = _roi_window(start_date, end_date)
 
     async with get_db_session() as session:
         svc = InstitutionService(session)
         institution = await svc.get_by_id(current_user.institution_id)
-        if not institution or not institution.roi_config:
+        if not institution:
             raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="ROI configuration not set. Please configure ROI settings first.",
+                status_code=status.HTTP_404_NOT_FOUND, detail="Institution not found"
+            )
+        if not institution.roi_config:
+            # No tenant-wide figures, but its clinics may each have their own.
+            # A group's revenue *is* the sum of its locations', so sum them
+            # rather than refusing: a two-clinic group that priced both of them
+            # has answered the question, just not in one place.
+            return await _aggregated_institution_roi(
+                session,
+                institution=institution,
+                institution_id=str(current_user.institution_id),
+                period_start=period_start,
+                period_end=period_end,
             )
 
         config = ROIConfigResponse(**institution.roi_config)
         institution_id = current_user.institution_id
-        today = datetime.now(tz.utc).date()
-        month_start = today.replace(day=1)
 
-        total_calls_month = (
-            await session.execute(
-                select(func.count(Call.id)).where(
-                    Call.institution_id == institution_id,
-                    Call.call_date >= month_start,
-                )
+        def _count(*extra):
+            return select(func.count(Call.id)).where(
+                Call.institution_id == institution_id,
+                Call.call_date >= period_start,
+                Call.call_date <= period_end,
+                *extra,
             )
-        ).scalar_one()
 
+        total_calls_month = (await session.execute(_count())).scalar_one()
         appointments_booked_month = (
             await session.execute(
-                select(func.count(Call.id)).where(
-                    Call.institution_id == institution_id,
-                    Call.call_status == CallStatus.APPOINTMENT_BOOKED.value,
-                    Call.call_date >= month_start,
-                )
+                _count(Call.call_status == CallStatus.APPOINTMENT_BOOKED.value)
             )
+        ).scalar_one()
+        new_patients_month = (
+            await session.execute(_count(Call.is_new_patient.is_(True)))
         ).scalar_one()
 
-        new_patients_month = (
-            await session.execute(
-                select(func.count(Call.id)).where(
-                    Call.institution_id == institution_id,
-                    Call.is_new_patient.is_(True),
-                    Call.call_date >= month_start,
+        billing_mode = _billing_mode(institution)
+        location_subscription_costs: list[float] = []
+        if billing_mode == "location":
+            rows = await session.execute(
+                select(InstitutionLocation).where(
+                    InstitutionLocation.institution_id == institution_id
                 )
             )
-        ).scalar_one()
+            location_subscription_costs = [
+                cost
+                for cost in (
+                    _location_subscription_cost(row) for row in rows.scalars().all()
+                )
+                if cost is not None
+            ]
 
     # Calculate ROI
     revenue_from_bookings = appointments_booked_month * config.avg_appointment_value
@@ -1682,14 +1767,24 @@ async def calculate_roi(
     staff_cost_saved = round(staff_time_saved_hours * config.staff_hourly_rate, 2)
 
     total_value = round(total_revenue_generated + staff_cost_saved, 2)
-    monthly_cost = config.monthly_subscription_cost
+    # Under per-location billing the group's monthly cost is what its clinics
+    # are charged, not the institution field — which is the other model's price
+    # and is left in place so switching back does not lose it. Reading it here
+    # would make this page disagree with the sum of the location pages.
+    monthly_cost = (
+        round(sum(location_subscription_costs), 2)
+        if billing_mode == "location"
+        else config.monthly_subscription_cost
+    )
     net_value = round(total_value - monthly_cost, 2)
     roi_percentage = (
-        round((net_value / monthly_cost) * 100, 2) if monthly_cost > 0 else 0.0
+        round((net_value / monthly_cost) * 100, 2) if monthly_cost > 0 else None
     )
 
     return ROICalculationResponse(
         config=config,
+        period_start=period_start,
+        period_end=period_end,
         total_calls_month=total_calls_month,
         appointments_booked_month=appointments_booked_month,
         new_patients_month=new_patients_month,
@@ -1700,6 +1795,576 @@ async def calculate_roi(
         staff_cost_saved=staff_cost_saved,
         total_value=total_value,
         monthly_cost=monthly_cost,
+        net_value=net_value,
+        roi_percentage=roi_percentage,
+    )
+
+
+async def _aggregated_institution_roi(
+    session,
+    *,
+    institution: Any,
+    institution_id: str,
+    period_start: Any,
+    period_end: Any,
+) -> "ROICalculationResponse":
+    """Institution totals summed from the locations that carry their own figures.
+
+    Each location is valued with its own numbers rather than an average of
+    them, because that is the only way a group whose clinics bill differently
+    gets a total that matches the sum of its location pages.
+
+    Counts are restricted to the contributing locations. Reporting the group's
+    whole call volume beside revenue earned by a subset would put a booking
+    rate and a revenue figure side by side that were measured over different
+    sets of clinics.
+    """
+    from src.app.models.call import Call, CallStatus
+
+    rows = await session.execute(
+        select(InstitutionLocation).where(
+            InstitutionLocation.institution_id == institution_id
+        )
+    )
+    locations = list(rows.scalars().all())
+
+    contributing: list[Any] = []
+    totals = {
+        "calls": 0,
+        "booked": 0,
+        "new_patients": 0,
+        "revenue_bookings": 0.0,
+        "revenue_new_patients": 0.0,
+        "staff_hours": 0.0,
+        "staff_cost": 0.0,
+    }
+    #: None until some location supplies a rate; stays None when none do, so an
+    #: unmeasured saving is not reported as a saving of nothing.
+    staff_cost: float | None = None
+
+    for location in locations:
+        resolved = _resolved_location_roi(location, institution)
+        if resolved is None:
+            continue
+        values, _ = resolved
+        contributing.append(location)
+
+        def _count(*extra):
+            return select(func.count(Call.id)).where(
+                Call.institution_id == institution_id,
+                Call.location_id == str(location.id),
+                Call.call_date >= period_start,
+                Call.call_date <= period_end,
+                *extra,
+            )
+
+        calls = (await session.execute(_count())).scalar_one()
+        booked = (
+            await session.execute(
+                _count(Call.call_status == CallStatus.APPOINTMENT_BOOKED.value)
+            )
+        ).scalar_one()
+        new_patients = (
+            await session.execute(_count(Call.is_new_patient.is_(True)))
+        ).scalar_one()
+
+        hours = (calls * (values["avg_call_duration_minutes"] or 0.0)) / 60
+        totals["calls"] += calls
+        totals["booked"] += booked
+        totals["new_patients"] += new_patients
+        totals["revenue_bookings"] += booked * values["avg_appointment_value"]
+        totals["revenue_new_patients"] += new_patients * values["avg_new_patient_value"]
+        totals["staff_hours"] += hours
+        rate = values["staff_hourly_rate"]
+        if rate is not None:
+            staff_cost = (staff_cost or 0.0) + hours * rate
+
+    if not contributing:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=(
+                "ROI configuration not set for this institution or any of its "
+                "locations. Please configure ROI settings first."
+            ),
+        )
+
+    total_revenue = totals["revenue_bookings"] + totals["revenue_new_patients"]
+    staff_cost = None if staff_cost is None else round(staff_cost, 2)
+    total_value = round(total_revenue + (staff_cost or 0.0), 2)
+
+    # With no institution-level config there is no institution-level price, so
+    # a cost only exists where the clinics are billed individually.
+    monthly_cost = round(
+        sum(
+            cost
+            for cost in (_location_subscription_cost(loc) for loc in contributing)
+            if cost is not None
+        ),
+        2,
+    )
+    net_value = round(total_value - monthly_cost, 2)
+
+    names = ", ".join(sorted(str(loc.name) for loc in contributing))
+    return ROICalculationResponse(
+        config=None,
+        period_start=period_start,
+        period_end=period_end,
+        total_calls_month=totals["calls"],
+        appointments_booked_month=totals["booked"],
+        new_patients_month=totals["new_patients"],
+        revenue_from_bookings=round(totals["revenue_bookings"], 2),
+        revenue_from_new_patients=round(totals["revenue_new_patients"], 2),
+        total_revenue_generated=round(total_revenue, 2),
+        staff_time_saved_hours=round(totals["staff_hours"], 2),
+        staff_cost_saved=staff_cost,
+        total_value=total_value,
+        monthly_cost=monthly_cost,
+        net_value=net_value,
+        roi_percentage=(
+            round((net_value / monthly_cost) * 100, 2) if monthly_cost > 0 else None
+        ),
+        revenue_basis=(
+            f"Summed from {len(contributing)} location"
+            f"{'' if len(contributing) == 1 else 's'} with their own figures: {names}"
+        ),
+    )
+
+
+# ── Per-location ROI ─────────────────────────────────────────────────────────
+#
+# The institution-level inputs above assume one set of economics per tenant. A
+# group whose downtown and suburban practices bill differently had to pick one
+# average appointment value for both, so a per-location number was worth more
+# than the average of the two.
+#
+# Subscription cost is charged both ways depending on the deal, so the shape has
+# to carry both rather than pick one. `subscription_billing_mode` on the
+# institution decides which, and it is stated rather than inferred from whether
+# a location happens to have a price on it: a tenant halfway through being moved
+# from one billing model to the other would otherwise produce a silent mix of
+# apportioned and direct costs that reconciles against no invoice.
+
+
+class LocationROIConfigRequest(BaseModel):
+    """Per-location value inputs, including a per-location subscription price."""
+
+    avg_appointment_value: float = Field(
+        ..., ge=0, description="Average appointment revenue at this location ($)"
+    )
+    avg_new_patient_value: float = Field(
+        ..., ge=0, description="Average new patient first-visit revenue here ($)"
+    )
+    #: Optional. Clinics that do not track a front desk rate leave it blank,
+    #: and the staff-time saving is then reported as unknown rather than as a
+    #: saving of zero — "not measured" and "saved nothing" are different claims.
+    staff_hourly_rate: float | None = Field(
+        None, ge=0, description="Front desk staff hourly rate at this location ($)"
+    )
+    avg_call_duration_minutes: float = Field(
+        4.0, ge=0, description="Avg manual call handling time (minutes)"
+    )
+    #: What this location is billed per month. Only consulted when the
+    #: institution bills per location; ignored (but kept) otherwise, so
+    #: switching billing mode does not destroy the other mode's numbers.
+    monthly_subscription_cost: float | None = Field(
+        None, ge=0, description="Monthly subscription for this location ($)"
+    )
+
+
+class LocationROIConfigResponse(BaseModel):
+    location_id: str
+    location_slug: str
+    avg_appointment_value: float
+    avg_new_patient_value: float
+    staff_hourly_rate: float | None
+    avg_call_duration_minutes: float
+    #: None when this location has no price of its own. Meaningful only under
+    #: per-location billing; under per-institution billing it stays None and the
+    #: institution's cost is apportioned instead.
+    monthly_subscription_cost: float | None
+    #: "institution" or "location" — how this tenant is billed, so a reader can
+    #: tell an apportioned cost from a directly billed one.
+    subscription_billing_mode: str
+    #: "location" when these numbers were set here, "institution" when the
+    #: location has none of its own and the tenant-wide ones are standing in.
+    #: Reported rather than smoothed over: a clinic reading a group average as
+    #: its own performance is the failure this field exists to prevent.
+    source: str
+
+
+class LocationROICalculationResponse(BaseModel):
+    config: LocationROIConfigResponse
+    #: The window these figures cover. Explicit because the caller can pick it,
+    #: and a revenue number without its period is unreadable.
+    period_start: date_type
+    period_end: date_type
+    total_calls_month: int
+    appointments_booked_month: int
+    new_patients_month: int
+    revenue_from_bookings: float
+    revenue_from_new_patients: float
+    total_revenue_generated: float
+    staff_time_saved_hours: float
+    #: None when no hourly rate is configured — unknown, not zero.
+    staff_cost_saved: float | None
+    total_value: float
+    #: This location's monthly subscription — its own price under per-location
+    #: billing, the institution's apportioned share under per-institution.
+    monthly_cost_allocated: float
+    #: How that figure was reached, so it can be checked against an invoice.
+    cost_allocation_basis: str
+    net_value: float
+    #: None when there is no cost to measure a return against. Reporting 0.0
+    #: there would read as a 0% return rather than an unanswerable question.
+    roi_percentage: float | None
+
+
+#: Inputs a location inherits from its institution when it has none of its own.
+#: Subscription cost is absent on purpose — see _location_subscription_cost.
+_LOCATION_ROI_FIELDS = (
+    "avg_appointment_value",
+    "avg_new_patient_value",
+    "staff_hourly_rate",
+    "avg_call_duration_minutes",
+)
+
+
+def _roi_window(start_date: Any, end_date: Any) -> tuple[Any, Any]:
+    """Resolve the reporting window, defaulting to calendar month-to-date.
+
+    The dashboard drives this from the same picker as its call cards, so a
+    revenue figure can never describe a different period from the counts it
+    sits beside — which is precisely the confusion the fixed-month KPI row on
+    that page caused before it was removed.
+    """
+    from datetime import date as _date
+    from datetime import datetime as _datetime
+    from datetime import timezone as _tz
+
+    today = _datetime.now(_tz.utc).date()
+    end = end_date or today
+    if end > today:  # no data in the future
+        end = today
+    start = start_date or end.replace(day=1)
+    if start > end:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="start_date must be on or before end_date",
+        )
+    assert isinstance(start, _date) and isinstance(end, _date)
+    return start, end
+
+
+def _billing_mode(institution: Any) -> str:
+    """Whether this tenant is billed per institution or per location."""
+    raw = institution.roi_config if isinstance(institution.roi_config, dict) else {}
+    mode = raw.get("subscription_billing_mode")
+    return mode if mode in ("institution", "location") else "institution"
+
+
+def _location_subscription_cost(location: Any) -> float | None:
+    """This location's own monthly price, or None if it has not been set.
+
+    Never inherited from the institution. The institution's figure is the price
+    of the whole group; charging it to a single clinic as though it were that
+    clinic's own would overstate cost by the number of locations.
+    """
+    raw = location.roi_config if isinstance(location.roi_config, dict) else {}
+    value = raw.get("monthly_subscription_cost")
+    return None if value is None else float(value)
+
+
+def _resolved_location_roi(
+    location: Any, institution: Any
+) -> tuple[dict[str, float | None], str] | None:
+    """This location's inputs and where they came from, or None if unset.
+
+    Falls through to the institution only as a whole: mixing a location's
+    appointment value with the institution's hourly rate would produce a figure
+    that is neither, and no caller could tell which parts were which.
+    """
+    if isinstance(location.roi_config, dict) and location.roi_config:
+        raw, source = location.roi_config, "location"
+    elif isinstance(institution.roi_config, dict) and institution.roi_config:
+        raw, source = institution.roi_config, "institution"
+    else:
+        return None
+    values: dict[str, float | None] = {
+        key: float(raw.get(key) or 0.0) for key in _LOCATION_ROI_FIELDS
+    }
+    # Distinguish "no rate configured" from "a rate of zero": the first makes
+    # the staff saving unknown, the second makes it genuinely nil.
+    rate = raw.get("staff_hourly_rate")
+    values["staff_hourly_rate"] = None if rate is None else float(rate)
+    return values, source
+
+
+async def _location_for_roi(session, loc_slug: str, current_user: User):
+    svc = InstitutionService(session)
+    location = await svc.get_location_by_slug(loc_slug, current_user.institution_id)
+    if not location:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Location not found"
+        )
+    institution = await svc.get_by_id(current_user.institution_id)
+    if not institution:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Institution not found"
+        )
+    return location, institution
+
+
+def _require_institution(current_user: User) -> str:
+    if not current_user.institution_id:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail="No institution assignment"
+        )
+    return str(current_user.institution_id)
+
+
+@router.get(
+    "/locations/{loc_slug}/roi/config",
+    response_model=LocationROIConfigResponse | None,
+    dependencies=[Depends(require_location_scope())],
+)
+async def get_location_roi_config(
+    loc_slug: str,
+    current_user: Annotated[User, Depends(get_current_institution_or_location_admin)],
+):
+    _require_institution(current_user)
+    async with get_db_session() as session:
+        location, institution = await _location_for_roi(
+            session, loc_slug, current_user
+        )
+        resolved = _resolved_location_roi(location, institution)
+        if resolved is None:
+            return None
+        values, source = resolved
+        return LocationROIConfigResponse(
+            location_id=str(location.id),
+            location_slug=location.slug,
+            source=source,
+            monthly_subscription_cost=_location_subscription_cost(location),
+            subscription_billing_mode=_billing_mode(institution),
+            **values,
+        )
+
+
+@router.put(
+    "/locations/{loc_slug}/roi/config",
+    response_model=LocationROIConfigResponse,
+    dependencies=[Depends(require_location_scope())],
+)
+@audit(
+    AuditAction.LOCATION_UPDATE,
+    resource=lambda *args, **kwargs: (
+        f"location:{kwargs.get('loc_slug') or 'unknown'}:roi_config"
+    ),
+    actor=AuditActor.ADMIN,
+)
+async def update_location_roi_config(
+    loc_slug: str,
+    data: LocationROIConfigRequest,
+    current_user: Annotated[User, Depends(get_current_institution_or_location_admin)],
+):
+    _require_institution(current_user)
+    config_dict = data.model_dump()
+    async with get_db_session() as session:
+        location, institution = await _location_for_roi(
+            session, loc_slug, current_user
+        )
+        location.roi_config = config_dict
+        location_id = str(location.id)
+        slug = location.slug
+        mode = _billing_mode(institution)
+
+    return LocationROIConfigResponse(
+        location_id=location_id,
+        location_slug=slug,
+        source="location",
+        subscription_billing_mode=mode,
+        **config_dict,
+    )
+
+
+@router.delete(
+    "/locations/{loc_slug}/roi/config",
+    status_code=status.HTTP_204_NO_CONTENT,
+    dependencies=[Depends(require_location_scope())],
+)
+@audit(
+    AuditAction.LOCATION_UPDATE,
+    resource=lambda *args, **kwargs: (
+        f"location:{kwargs.get('loc_slug') or 'unknown'}:roi_config"
+    ),
+    actor=AuditActor.ADMIN,
+)
+async def clear_location_roi_config(
+    loc_slug: str,
+    current_user: Annotated[User, Depends(get_current_institution_or_location_admin)],
+):
+    """Drop this location's own numbers and go back to the institution's."""
+    _require_institution(current_user)
+    async with get_db_session() as session:
+        location, _ = await _location_for_roi(session, loc_slug, current_user)
+        location.roi_config = None
+    return None
+
+
+@router.get(
+    "/locations/{loc_slug}/roi/calculate",
+    response_model=LocationROICalculationResponse,
+    dependencies=[Depends(require_location_scope())],
+)
+async def calculate_location_roi(
+    loc_slug: str,
+    current_user: Annotated[User, Depends(get_current_institution_or_location_admin)],
+    start_date: date_type | None = Query(
+        None, description="Inclusive window start (YYYY-MM-DD). Defaults to the 1st."
+    ),
+    end_date: date_type | None = Query(
+        None, description="Inclusive window end (YYYY-MM-DD). Defaults to today."
+    ),
+):
+    from src.app.models.call import Call, CallStatus
+
+    institution_id = _require_institution(current_user)
+    period_start, period_end = _roi_window(start_date, end_date)
+
+    async with get_db_session() as session:
+        location, institution = await _location_for_roi(
+            session, loc_slug, current_user
+        )
+        resolved = _resolved_location_roi(location, institution)
+        if resolved is None:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=(
+                    "ROI configuration not set for this location or its "
+                    "institution. Please configure ROI settings first."
+                ),
+            )
+        values, source = resolved
+        location_id = str(location.id)
+
+        def _count(*extra):
+            return select(func.count(Call.id)).where(
+                Call.institution_id == institution_id,
+                Call.location_id == location_id,
+                Call.call_date >= period_start,
+                Call.call_date <= period_end,
+                *extra,
+            )
+
+        total_calls_month = (await session.execute(_count())).scalar_one()
+        appointments_booked_month = (
+            await session.execute(
+                _count(Call.call_status == CallStatus.APPOINTMENT_BOOKED.value)
+            )
+        ).scalar_one()
+        new_patients_month = (
+            await session.execute(_count(Call.is_new_patient.is_(True)))
+        ).scalar_one()
+
+        billing_mode = _billing_mode(institution)
+        own_cost = _location_subscription_cost(location)
+
+        if billing_mode == "location":
+            institution_calls_month = None
+        else:
+            # Apportion the institution subscription by this location's share of
+            # the month's calls. Counting calls with no location at all in the
+            # denominator would shrink every location's share and make the group
+            # look more profitable than it is, so they are excluded from both
+            # sides.
+            institution_calls_month = (
+                await session.execute(
+                    select(func.count(Call.id)).where(
+                        Call.institution_id == institution_id,
+                        Call.location_id.is_not(None),
+                        Call.call_date >= period_start,
+                        Call.call_date <= period_end,
+                    )
+                )
+            ).scalar_one()
+
+        institution_cost = float(
+            (institution.roi_config or {}).get("monthly_subscription_cost") or 0.0
+        )
+
+    if billing_mode == "location":
+        # Billed directly, so there is nothing to apportion. An unset price is
+        # said out loud rather than treated as free: a clinic reading a net
+        # value that silently omitted its own subscription would be reading a
+        # number no invoice agrees with.
+        monthly_cost_allocated = round(own_cost or 0.0, 2)
+        cost_allocation_basis = (
+            f"Billed per location: {monthly_cost_allocated:.2f} charged directly "
+            "to this clinic"
+            if own_cost is not None
+            else (
+                "Billed per location, but this location has no monthly price "
+                "set, so no subscription cost is included"
+            )
+        )
+    elif institution_calls_month:
+        share = total_calls_month / institution_calls_month
+        monthly_cost_allocated = round(institution_cost * share, 2)
+        cost_allocation_basis = (
+            f"Billed per institution: {total_calls_month} of "
+            f"{institution_calls_month} located calls in this period "
+            f"({share:.1%} of the institution subscription)"
+        )
+    else:
+        monthly_cost_allocated = 0.0
+        cost_allocation_basis = (
+            "Billed per institution, but there were no located calls in this "
+            "period, so no subscription cost is apportioned"
+        )
+
+    revenue_from_bookings = appointments_booked_month * values["avg_appointment_value"]
+    revenue_from_new_patients = new_patients_month * values["avg_new_patient_value"]
+    total_revenue_generated = revenue_from_bookings + revenue_from_new_patients
+
+    staff_time_saved_hours = round(
+        (total_calls_month * (values["avg_call_duration_minutes"] or 0.0)) / 60, 2
+    )
+    # No rate configured means the saving is unknown, not nil, so it is left out
+    # of the total rather than added as zero. Reporting it as zero would let a
+    # clinic conclude the AI saved its front desk nothing.
+    rate = values["staff_hourly_rate"]
+    staff_cost_saved = None if rate is None else round(staff_time_saved_hours * rate, 2)
+
+    total_value = round(total_revenue_generated + (staff_cost_saved or 0.0), 2)
+    net_value = round(total_value - monthly_cost_allocated, 2)
+    roi_percentage = (
+        round((net_value / monthly_cost_allocated) * 100, 2)
+        if monthly_cost_allocated > 0
+        else None
+    )
+
+    return LocationROICalculationResponse(
+        config=LocationROIConfigResponse(
+            location_id=location_id,
+            location_slug=loc_slug,
+            source=source,
+            monthly_subscription_cost=own_cost,
+            subscription_billing_mode=billing_mode,
+            **values,
+        ),
+        period_start=period_start,
+        period_end=period_end,
+        total_calls_month=total_calls_month,
+        appointments_booked_month=appointments_booked_month,
+        new_patients_month=new_patients_month,
+        revenue_from_bookings=round(revenue_from_bookings, 2),
+        revenue_from_new_patients=round(revenue_from_new_patients, 2),
+        total_revenue_generated=round(total_revenue_generated, 2),
+        staff_time_saved_hours=staff_time_saved_hours,
+        staff_cost_saved=staff_cost_saved,
+        total_value=total_value,
+        monthly_cost_allocated=monthly_cost_allocated,
+        cost_allocation_basis=cost_allocation_basis,
         net_value=net_value,
         roi_percentage=roi_percentage,
     )

@@ -1,0 +1,432 @@
+import { describe, it, expect, beforeAll, vi } from "vitest"
+import {
+    isPublishable,
+    reachableCycleNodes,
+    unreachableNodes,
+    validateDefinition,
+} from "@/lib/workflow/validation"
+import { listMergeFields } from "@/lib/workflow-api"
+import { loadMergeFields, _resetMergeFieldsCache } from "@/lib/workflow/merge-fields"
+import type { WorkflowDefinition } from "@/types/workflow"
+
+// Merge-field checks compare against the fetched catalog and stay silent
+// without one, so these tests load the fields they assert on.
+vi.mock("@/lib/workflow-api", () => ({ listMergeFields: vi.fn() }))
+
+function catalogField(name: string, triggerTypes: string[], channels: string[]) {
+    return {
+        name,
+        token: `{{${name}}}`,
+        label: name,
+        description: "",
+        sample: "sample",
+        group: "general",
+        availability: "derived" as const,
+        requires: [],
+        phi_level: "none" as const,
+        channels,
+        trigger_types: triggerTypes,
+    }
+}
+
+const ALL_TRIGGERS = [
+    "event",
+    "manual",
+    "form_submitted",
+    "internal_status",
+    "schedule",
+    "inbound_message",
+]
+
+beforeAll(async () => {
+    _resetMergeFieldsCache()
+    ;(listMergeFields as ReturnType<typeof vi.fn>).mockResolvedValue([
+        catalogField("patient_first_name", ALL_TRIGGERS, ["sms", "email", "voice"]),
+        catalogField("appointment_date", ["event", "internal_status"], ["sms", "email", "voice"]),
+        catalogField("location_address", ALL_TRIGGERS, ["email", "voice"]),
+    ])
+    await loadMergeFields()
+})
+
+function base(): WorkflowDefinition {
+    return {
+        schema_version: "1.0",
+        trigger: {
+            type: "event",
+            event_keys: ["appointment.reminder_due"],
+            reminder_offset_hours: -24,
+        },
+        entry_node_id: "sms-1",
+        nodes: [
+            {
+                type: "send_sms",
+                id: "sms-1",
+                body_template: "Hi {{patient_first_name}}, reply STOP to opt out.",
+                next_node_id: "exit-1",
+                max_attempts: 1,
+            },
+            { type: "exit", id: "exit-1", outcome: "sent" },
+        ],
+    }
+}
+
+describe("workflow validation", () => {
+    // Was "accepts a Chair Flow state as the only appointment-state matcher".
+    // The `appointment_state_changed` trigger and its "at least one matcher"
+    // rule are gone; the equivalent today is that naming the canonical event a
+    // post-op campaign starts from is by itself enough to validate.
+    it("accepts a single canonical event as the whole post-op subscription", () => {
+        const def = base()
+        def.trigger = {
+            type: "event",
+            event_keys: ["appointment.completed"],
+            max_followup_delay_hours: 72,
+            campaign_goal: "post_op_followup",
+        }
+
+        const issues = validateDefinition(def)
+
+        expect(issues.filter((issue) => issue.severity === "error")).toHaveLength(0)
+    })
+
+    it("flags an event trigger with no events, which could never start", () => {
+        const def = base()
+        def.trigger = { type: "event", event_keys: [] }
+
+        const issues = validateDefinition(def)
+
+        expect(issues.some((issue) => issue.message.includes("Pick at least one event"))).toBe(true)
+    })
+
+    it("rejects a post-op deadline outside the backend's 168-hour limit", () => {
+        const def = base()
+        def.trigger = {
+            type: "event",
+            event_keys: ["appointment.completed"],
+            max_followup_delay_hours: 169,
+        }
+
+        const issues = validateDefinition(def)
+
+        expect(issues.some((issue) => issue.message.includes("0 to 168 hours"))).toBe(true)
+    })
+
+    it("requires a reminder interval for the reminder event, and only for it", () => {
+        const def = base()
+        def.trigger = { type: "event", event_keys: ["appointment.reminder_due"] }
+        expect(
+            validateDefinition(def).some((i) =>
+                i.message.includes("Reminders need an interval"),
+            ),
+        ).toBe(true)
+
+        def.trigger = {
+            type: "event",
+            event_keys: ["appointment.completed"],
+            reminder_offset_hours: -24,
+        }
+        expect(
+            validateDefinition(def).some((i) =>
+                i.message.includes("only applies to the reminder event"),
+            ),
+        ).toBe(true)
+    })
+
+    it("a well-formed workflow has no errors", () => {
+        const issues = validateDefinition(base())
+        expect(issues.filter((i) => i.severity === "error")).toHaveLength(0)
+        expect(isPublishable(issues)).toBe(true)
+    })
+
+    it("requires at least one exit", () => {
+        const def = base()
+        def.nodes = [def.nodes[0]] // drop the exit
+        def.nodes[0] = { ...def.nodes[0], next_node_id: "sms-1" } as typeof def.nodes[0]
+        const issues = validateDefinition(def)
+        expect(issues.some((i) => i.message.includes("Exit"))).toBe(true)
+        expect(isPublishable(issues)).toBe(false)
+    })
+
+    it("flags a dangling next pointer", () => {
+        const def = base()
+        ;(def.nodes[0] as { next_node_id: string }).next_node_id = "nope"
+        const issues = validateDefinition(def)
+        expect(issues.some((i) => i.node_id === "sms-1" && i.message.includes("missing"))).toBe(true)
+    })
+
+    it("validates book appointment scheduling fields and three branches", () => {
+        const def: WorkflowDefinition = {
+            schema_version: "1.0",
+            trigger: { type: "manual" },
+            entry_node_id: "book-1",
+            nodes: [
+                {
+                    type: "book_appointment",
+                    id: "book-1",
+                    appointment_type_id: "",
+                    provider_id: "",
+                    start_time: "",
+                    booked_next_node_id: "booked",
+                    could_not_book_next_node_id: "",
+                    pending_next_node_id: "pending",
+                },
+                { type: "exit", id: "booked", outcome: "booked" },
+                { type: "exit", id: "pending", outcome: "pending" },
+            ],
+        }
+
+        const issues = validateDefinition(def)
+
+        expect(issues.some((i) => i.node_id === "book-1" && i.message.includes("appointment type"))).toBe(true)
+        expect(issues.some((i) => i.node_id === "book-1" && i.message.includes("provider"))).toBe(true)
+        expect(issues.some((i) => i.node_id === "book-1" && i.message.includes("start time"))).toBe(true)
+        expect(issues.some((i) => i.node_id === "book-1" && i.message.includes("Could not book"))).toBe(true)
+    })
+
+    it("flags an empty SMS body", () => {
+        const def = base()
+        ;(def.nodes[0] as { body_template: string }).body_template = "   "
+        const issues = validateDefinition(def)
+        expect(issues.some((i) => i.node_id === "sms-1" && i.message.includes("body is empty"))).toBe(true)
+    })
+
+    it("requires a Retell SMS profile", () => {
+        const def: WorkflowDefinition = {
+            schema_version: "1.0",
+            trigger: { type: "inbound_message", channels: ["sms"] },
+            entry_node_id: "chat-1",
+            nodes: [
+                {
+                    type: "retell_sms_conversation",
+                    id: "chat-1",
+                    chat_profile_id: "",
+                    next_node_id: "exit-1",
+                },
+                { type: "exit", id: "exit-1", outcome: "done" },
+            ],
+        }
+        const issues = validateDefinition(def)
+        expect(issues.some((issue) => issue.message.includes("no chat profile"))).toBe(true)
+    })
+
+    it("validates drip batch size and interval", () => {
+        const def: WorkflowDefinition = {
+            schema_version: "1.0",
+            trigger: { type: "manual" },
+            entry_node_id: "drip-1",
+            nodes: [
+                { type: "drip", id: "drip-1", batch_size: 0, interval_seconds: 0, next_node_id: "exit-1" },
+                { type: "exit", id: "exit-1", outcome: "released" },
+            ],
+        }
+        const issues = validateDefinition(def)
+        expect(issues.some((i) => i.node_id === "drip-1" && i.message.includes("batch size"))).toBe(true)
+        expect(issues.some((i) => i.node_id === "drip-1" && i.message.includes("interval"))).toBe(true)
+    })
+
+    it("validates the response window for an SMS reply wait mode", () => {
+        const def: WorkflowDefinition = {
+            schema_version: "1.0",
+            trigger: { type: "manual" },
+            entry_node_id: "wait-1",
+            nodes: [
+                {
+                    type: "wait",
+                    id: "wait-1",
+                    wait_for: {
+                        type: "sms_reply",
+                        response_window_seconds: 30,
+                        response_mappings: [],
+                    },
+                    next_node_id: "exit-1",
+                },
+                { type: "exit", id: "exit-1", outcome: "timed_out" },
+            ],
+        }
+
+        const issues = validateDefinition(def)
+
+        expect(issues.some((i) => i.node_id === "wait-1" && i.message.includes("response window"))).toBe(true)
+    })
+
+    it("flags out-of-range max_attempts", () => {
+        const def = base()
+        ;(def.nodes[0] as { max_attempts: number }).max_attempts = 9
+        const issues = validateDefinition(def)
+        expect(issues.some((i) => i.message.includes("Max attempts"))).toBe(true)
+    })
+
+    it("flags a voice phone country override without a valid country", () => {
+        const def: WorkflowDefinition = {
+            schema_version: "1.0",
+            trigger: { type: "manual" },
+            entry_node_id: "voice-1",
+            nodes: [
+                {
+                    type: "send_voice",
+                    id: "voice-1",
+                    retell_agent_id: "",
+                    voice_profile_id: "profile-1",
+                    next_node_id: "exit-1",
+                    phone_country_code_enabled: true,
+                    phone_country_region: "",
+                },
+                { type: "exit", id: "exit-1", outcome: "done" },
+            ],
+        }
+        const issues = validateDefinition(def)
+        expect(issues.some((i) => i.message.includes("Phone country override"))).toBe(true)
+    })
+
+    it("flags duplicate ids", () => {
+        const def = base()
+        def.nodes.push({ type: "exit", id: "sms-1", outcome: null })
+        const issues = validateDefinition(def)
+        expect(issues.some((i) => i.message.includes("Duplicate"))).toBe(true)
+    })
+
+    it("warns on unknown merge fields", () => {
+        const def = base()
+        ;(def.nodes[0] as { body_template: string }).body_template = "Hi {{unknown_field}}"
+        const issues = validateDefinition(def)
+        expect(
+            issues.some((i) => i.severity === "warning" && i.message.includes("Unknown merge field")),
+        ).toBe(true)
+    })
+
+    it("warns when a merge field is unavailable for the trigger", () => {
+        const def = base()
+        def.trigger = { type: "manual" }
+        ;(def.nodes[0] as { body_template: string }).body_template = "Hi {{appointment_date}}"
+        const issues = validateDefinition(def)
+        expect(
+            issues.some((i) => i.severity === "warning" && i.message.includes("Unavailable merge field")),
+        ).toBe(true)
+    })
+
+    it("warns when a merge field is unavailable for the message channel", () => {
+        const def = base()
+        ;(def.nodes[0] as { body_template: string }).body_template = "Hi {{location_address}}"
+        const issues = validateDefinition(def)
+        expect(
+            issues.some((i) => i.severity === "warning" && i.message.includes("Unavailable merge field")),
+        ).toBe(true)
+    })
+
+    it("warns on unreachable nodes", () => {
+        const def = base()
+        def.nodes.push({ type: "exit", id: "orphan", outcome: null })
+        expect(unreachableNodes(def)).toContain("orphan")
+        const issues = validateDefinition(def)
+        expect(issues.some((i) => i.node_id === "orphan" && i.severity === "warning")).toBe(true)
+    })
+
+    it("blocks reachable execution loops", () => {
+        const def = base()
+        ;(def.nodes[0] as { next_node_id: string }).next_node_id = "sms-1"
+
+        expect(reachableCycleNodes(def)).toEqual(["sms-1"])
+        const issues = validateDefinition(def)
+        expect(issues).toContainEqual(expect.objectContaining({
+            node_id: "sms-1",
+            severity: "error",
+            code: "graph_cycle",
+        }))
+        expect(isPublishable(issues)).toBe(false)
+    })
+
+    it("flags a recall interval below 1", () => {
+        const def = base()
+        def.trigger = {
+            type: "schedule",
+            cron: "0 9 * * *",
+            timezone_mode: "location",
+            source: { kind: "pms_recall", recall_interval_months: 0 },
+        }
+        const issues = validateDefinition(def)
+        expect(issues.some((i) => i.message.includes("Recall interval"))).toBe(true)
+    })
+
+    it("flags an invalid recall re-enrollment cooldown", () => {
+        const def = base()
+        def.trigger = {
+            type: "schedule",
+            cron: "0 9 * * *",
+            timezone_mode: "location",
+            source: {
+                kind: "pms_recall",
+                recall_interval_months: 6,
+                reenrollment_cooldown_days: 0,
+            },
+        }
+
+        const issues = validateDefinition(def)
+
+        expect(issues.some((i) => i.message.includes("Recall cooldown"))).toBe(true)
+    })
+
+    it("flags a fixed-timezone schedule with no timezone", () => {
+        const def = base()
+        def.trigger = {
+            type: "schedule",
+            cron: "0 9 * * *",
+            timezone_mode: "fixed",
+            fixed_timezone: null,
+            source: { kind: "audience_segment" },
+        }
+
+        const issues = validateDefinition(def)
+
+        expect(issues.some((i) => i.message.includes("fixed schedule needs a timezone"))).toBe(true)
+    })
+
+    it("flags internal status triggers without statuses", () => {
+        const def = base()
+        def.trigger = {
+            type: "internal_status",
+            field: "patient_workflow_status",
+            to_statuses: [],
+            from_statuses: [],
+        }
+        const issues = validateDefinition(def)
+        expect(issues.some((i) => i.message.includes("Internal status trigger"))).toBe(true)
+    })
+
+    it("flags a patient reply trigger with no channel", () => {
+        const def = base()
+        def.trigger = { type: "inbound_message", channels: [] }
+        const issues = validateDefinition(def)
+        expect(issues.some((i) => i.message.includes("at least one channel"))).toBe(true)
+    })
+
+    it("flags condition branches that are not connected", () => {
+        const def: WorkflowDefinition = {
+            schema_version: "1.0",
+            trigger: { type: "manual" },
+            entry_node_id: "cond-1",
+            nodes: [
+                {
+                    type: "condition",
+                    id: "cond-1",
+                    logic: "AND",
+                    rules: [{ field: "confirmed", op: "eq", value: true }],
+                    true_next_node_id: "exit-1",
+                    false_next_node_id: "",
+                },
+                { type: "exit", id: "exit-1", outcome: "ok" },
+            ],
+        }
+        const issues = validateDefinition(def)
+        expect(issues.some((i) => i.node_id === "cond-1" && i.message.includes("No branch"))).toBe(true)
+    })
+
+    it("sorts errors before warnings", () => {
+        const def = base()
+        ;(def.nodes[0] as { body_template: string }).body_template = "Hi {{unknown_field}}"
+        ;(def.nodes[0] as { next_node_id: string }).next_node_id = "nope"
+        const issues = validateDefinition(def)
+        const firstWarning = issues.findIndex((i) => i.severity === "warning")
+        const lastError = issues.map((i) => i.severity).lastIndexOf("error")
+        expect(lastError).toBeLessThan(firstWarning)
+    })
+})

@@ -18,6 +18,7 @@ import type {
 } from "@/types";
 
 export interface CallsFilters {
+    locationId?: string;
     limit?: number;
     offset?: number;
     /** Single primary-status shorthand */
@@ -43,6 +44,7 @@ export async function listCalls(filters: CallsFilters = {}): Promise<CallsListRe
     if (filters.search) params.set("search", filters.search);
     if (filters.date_from) params.set("date_from", filters.date_from);
     if (filters.date_to) params.set("date_to", filters.date_to);
+    if (filters.locationId) params.set("location_id", filters.locationId);
 
     const q = params.toString() ? `?${params.toString()}` : "";
     const { data } = await api.get<CallsListResponse>(`/institution/calls${q}`);

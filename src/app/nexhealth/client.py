@@ -7,6 +7,7 @@ from typing import Any
 from src.app.nexhealth.auth import AuthConfig, AuthService
 from src.app.nexhealth.exceptions import NexHealthError
 from src.app.nexhealth.http_client import NexHealthHTTPClient
+from src.app.nexhealth.api_contract import nexhealth_api_contract_from_config
 from src.app.nexhealth.rate_limit import NexHealthRateLimiter
 from src.app.nexhealth.token_manager import TokenManager
 
@@ -44,8 +45,7 @@ class NexHealthClient:
             )
             self._http_client = NexHealthHTTPClient(
                 base_url=self._config.base_url,
-                accept_header=self._config.accept_header,
-                api_version=self._config.api_version,
+                api_contract=nexhealth_api_contract_from_config(self._config),
                 max_keepalive_connections=getattr(
                     self._config, "nexhealth_max_keepalive_connections", 10
                 ),

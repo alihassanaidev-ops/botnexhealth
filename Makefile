@@ -1,15 +1,24 @@
+SHELL := /bin/bash
+COMPOSE := docker compose -f docker-compose.dev.yml
+
 # =============================================================================
 # BotNexHealth - Development Commands
 # =============================================================================
 
-.PHONY: help dev test lint clean build run cdk-synth-staging cdk-deploy-staging cdk-run-migrations-staging cdk-publish-frontend-staging health
+.PHONY: help setup test-rls dev up up-deps up-app down logs api-logs worker-logs web-logs db-logs redis-logs migrate test lint clean build run cdk-synth-staging cdk-deploy-staging cdk-run-migrations-staging cdk-publish-frontend-staging publish-frontend-ref health
 
 help:
 	@echo "BotNexHealth Development Commands"
 	@echo "================================="
 	@echo ""
 	@echo "Development:"
-	@echo "  make dev       - Start development server with hot reload"
+	@echo "  make setup     - Copy .env from .env.example if missing"
+	@echo "  make dev       - Start local Docker stack, run migrations, tail logs"
+	@echo "  make up        - Start local Docker stack without tailing logs"
+	@echo "  make down      - Stop local Docker stack"
+	@echo "  make logs      - Tail all Docker logs"
+	@echo "  make worker-logs - Tail Celery worker logs"
+	@echo "  make migrate   - Run Alembic migrations inside the API container"
 	@echo "  make test      - Run tests"
 	@echo "  make lint      - Run linter (ruff)"
 	@echo "  make clean     - Remove cache and build files"
@@ -29,8 +38,49 @@ help:
 # Development
 # =============================================================================
 
-dev:
-	source .venv/bin/activate && uvicorn src.app.main:app --host 0.0.0.0 --port 8000 --reload
+setup:
+	@if [ ! -f .env ]; then cp .env.example .env; echo "Created .env from .env.example"; fi
+
+migrate: setup up-deps
+	$(COMPOSE) run --rm api alembic upgrade head
+
+dev: migrate up-app logs
+
+up: migrate up-app
+
+up-deps:
+	$(COMPOSE) up --build -d postgres redis
+
+up-app:
+	$(COMPOSE) up --build -d api worker web
+
+down:
+	$(COMPOSE) down
+
+logs:
+	$(COMPOSE) logs -f
+
+api-logs:
+	$(COMPOSE) logs -f api
+
+web-logs:
+	$(COMPOSE) logs -f web
+
+worker-logs:
+	$(COMPOSE) logs -f worker
+
+db-logs:
+	$(COMPOSE) logs -f postgres
+
+redis-logs:
+	$(COMPOSE) logs -f redis
+
+test-rls:
+	@echo "Real Postgres + the full alembic chain + a non-superuser role."
+	@echo "This is what a freshly built production database does. ~15s."
+	TESTCONTAINERS_RYUK_DISABLED=true .venv/bin/python -m pytest \
+		tests/integration/test_rls_postgres.py \
+		tests/integration/test_rls_coverage_sweep.py -q
 
 test:
 	source .venv/bin/activate && pytest -v
@@ -63,6 +113,13 @@ cdk-run-migrations-staging:
 
 cdk-publish-frontend-staging:
 	AWS_PROFILE=$${AWS_PROFILE:-deployer} CDK_STACK_NAME=$${CDK_STACK_NAME:-nex-health-staging} bash scripts/publish_frontend_from_cdk.sh
+
+# Put a different frontend build live without touching the API. REF is any git
+# ref — used to roll the UI back to a tagged baseline in about two minutes.
+#   make publish-frontend-ref REF=ui-baseline-2026-09-05
+publish-frontend-ref:
+	@test -n "$(REF)" || (echo "usage: make publish-frontend-ref REF=<git-ref>" && exit 64)
+	bash scripts/publish_frontend_ref.sh "$(REF)"
 
 # =============================================================================
 # Maintenance

@@ -2,25 +2,51 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from typing import Any, Annotated, Literal
 
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
+from twilio.base.exceptions import TwilioException
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status, Query
 from pydantic import BaseModel, Field
 
-from src.app.database import get_db_session
+from src.app.database import get_db_session, integrity_error_constraint
 from src.app.api.deps import get_current_admin
 from src.app.config import settings
 from src.app.models.audit_log import AuditAction, AuditActor, AuditOutcome
+from src.app.models.gotracker_webhook_subscription import (
+    GoTrackerWebhookSubscription,
+    GoTrackerWebhookSubscriptionStatus,
+)
+from src.app.models.nexhealth_webhook_subscription import NexHealthWebhookSubscription
 from src.app.models.institution import DEFAULT_JURISDICTION, Jurisdiction
+from src.app.models.institution_location import InstitutionLocation
+from src.app.models.outbound_voice import OutboundVoiceProfile
 from src.app.models.user import User, UserRole
+from src.app.services.automation.gotracker_subscription_service import (
+    GoTrackerSubscriptionReconnectError,
+    GoTrackerSubscriptionLifecycleService,
+    _location_callback_url,
+)
+from src.app.services.automation.nexhealth_subscription_service import (
+    DEFAULT_WEBHOOK_EVENTS,
+    NexHealthSubscriptionLifecycleService,
+    nexhealth_live_callback_url,
+)
 from src.app.services.audit import log_audit
 from src.app.services.audit_decorator import audit
 from src.app.services.institution_service import InstitutionService
 from src.app.services.sms_privacy import safe_error_summary
+from src.app.services.twilio_webhook_configuration import (
+    TwilioPhoneNumberNotFoundError,
+    TwilioPhoneNumberSmsUnsupportedError,
+    TwilioSmsApplicationConflictError,
+    TwilioWebhookConfigurationResult,
+    configure_inbound_sms_webhook,
+)
 from src.app.services.user_invite_service import UserInviteService
 from src.app.api.pagination import PaginationQuery, page_count, paginate
 from src.app.api.models import (
@@ -29,7 +55,13 @@ from src.app.api.models import (
     InstitutionResponse,
 )
 from src.app.api.helpers import handle_nexhealth_request
-from src.app.dependencies import get_nexhealth_client_dependency
+from src.app.dependencies import (
+    NexHealthCredentialError,
+    NexHealthCredentialContext,
+    get_nexhealth_client_dependency,
+    get_nexhealth_client_for_credential,
+    resolve_nexhealth_credential,
+)
 from src.app.nexhealth.client import NexHealthClient
 
 logger = logging.getLogger(__name__)
@@ -37,12 +69,206 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/admin/institutions", tags=["Admin - Institutions"])
 
 
+class NexHealthWebhookLocationMapping(BaseModel):
+    location_id: str
+    location_name: str
+    nexhealth_location_id: str
+
+
+class NexHealthWebhookGroupStatus(BaseModel):
+    subdomain: str
+    status: str
+    callback_url: str | None = None
+    provider_endpoint_id: str | None = None
+    provider_subscription_count: int = 0
+    required_events: list[str]
+    missing_events: list[str] = Field(default_factory=list)
+    signing_secret_configured: bool
+    last_event_at: str | None = None
+    last_health_check_at: str | None = None
+    locations: list[NexHealthWebhookLocationMapping]
+    error_metadata: dict[str, Any] | None = None
+
+
+class NexHealthWebhookStatusResponse(BaseModel):
+    callback_url: str | None
+    callback_ready: bool
+    groups: list[NexHealthWebhookGroupStatus]
+
+
+class NexHealthWebhookVerifyResponse(NexHealthWebhookStatusResponse):
+    verified: list[dict[str, Any]]
+
+
+def _nexhealth_live_callback_url(*, required: bool = False) -> str | None:
+    callback_url = nexhealth_live_callback_url(
+        public_api_url=settings.public_api_url,
+        explicit_callback_url=settings.nexhealth_webhook_callback_url,
+    )
+    if callback_url:
+        return callback_url
+    if required:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="PUBLIC_API_URL or NEXHEALTH_WEBHOOK_CALLBACK_URL must be configured",
+        )
+    return None
+
+
+async def _nexhealth_webhook_status(
+    session: Any, institution: Any
+) -> NexHealthWebhookStatusResponse:
+    locations = list(
+        (
+            await session.execute(
+                select(InstitutionLocation).where(
+                    InstitutionLocation.institution_id == str(institution.id),
+                    InstitutionLocation.nexhealth_subdomain.is_not(None),
+                    InstitutionLocation.nexhealth_location_id.is_not(None),
+                )
+            )
+        )
+        .scalars()
+        .all()
+    )
+    rows = list(
+        (
+            await session.execute(
+                select(NexHealthWebhookSubscription).where(
+                    NexHealthWebhookSubscription.institution_id == str(institution.id)
+                )
+            )
+        )
+        .scalars()
+        .all()
+    )
+    rows_by_location = {str(row.location_id): row for row in rows}
+    groups: dict[str, list[Any]] = {}
+    for location in locations:
+        groups.setdefault(str(location.nexhealth_subdomain), []).append(location)
+
+    response_groups: list[NexHealthWebhookGroupStatus] = []
+    for subdomain, group_locations in sorted(groups.items()):
+        group_rows = [
+            rows_by_location[str(location.id)]
+            for location in group_locations
+            if str(location.id) in rows_by_location
+        ]
+        controller = next(
+            (row for row in group_rows if row.provider_subscription_id),
+            group_rows[0] if group_rows else None,
+        )
+        error_metadata = controller.error_metadata if controller else None
+        missing_events = (
+            list(error_metadata.get("missing_events") or [])
+            if isinstance(error_metadata, dict)
+            else []
+        )
+        response_groups.append(
+            NexHealthWebhookGroupStatus(
+                subdomain=subdomain,
+                status=controller.status if controller else "not_configured",
+                callback_url=controller.callback_url if controller else None,
+                provider_endpoint_id=(
+                    controller.provider_subscription_id if controller else None
+                ),
+                provider_subscription_count=(
+                    len(controller.provider_subscription_ids or []) if controller else 0
+                ),
+                required_events=list(DEFAULT_WEBHOOK_EVENTS),
+                missing_events=missing_events,
+                signing_secret_configured=bool(
+                    controller and controller.secret_key_encrypted
+                ),
+                last_event_at=(
+                    max(
+                        (row.last_event_at for row in group_rows if row.last_event_at),
+                        default=None,
+                    ).isoformat()
+                    if any(row.last_event_at for row in group_rows)
+                    else None
+                ),
+                last_health_check_at=(
+                    max(
+                        (
+                            row.last_health_check_at
+                            for row in group_rows
+                            if row.last_health_check_at
+                        ),
+                        default=None,
+                    ).isoformat()
+                    if any(row.last_health_check_at for row in group_rows)
+                    else None
+                ),
+                locations=[
+                    NexHealthWebhookLocationMapping(
+                        location_id=str(location.id),
+                        location_name=location.name,
+                        nexhealth_location_id=str(location.nexhealth_location_id),
+                    )
+                    for location in group_locations
+                ],
+                error_metadata=error_metadata,
+            )
+        )
+    callback_url = _nexhealth_live_callback_url()
+    return NexHealthWebhookStatusResponse(
+        callback_url=callback_url,
+        callback_ready=bool(callback_url),
+        groups=response_groups,
+    )
+
+
+class RetellPhoneNumberResponse(BaseModel):
+    phone_number: str
+    phone_number_pretty: str | None = None
+    nickname: str | None = None
+    phone_number_type: str | None = None
+    inbound_agents: list[Any] | None = None
+    outbound_agents: list[Any] | None = None
+
+
+class RetellAgentResponse(BaseModel):
+    agent_id: str
+    agent_name: str | None = None
+    channel: str | None = None
+    version: int | None = None
+    is_published: bool | None = None
+
+
+def _retell_agent_responses(
+    raw_items: list[Any], *, default_channel: str | None = None
+) -> list[RetellAgentResponse]:
+    results: list[RetellAgentResponse] = []
+    seen_agent_ids: set[str] = set()
+    for item in raw_items:
+        if not isinstance(item, dict):
+            continue
+        agent_id = item.get("agent_id") or item.get("id")
+        if not agent_id:
+            continue
+        agent_id = str(agent_id)
+        if agent_id in seen_agent_ids:
+            continue
+        seen_agent_ids.add(agent_id)
+        results.append(
+            RetellAgentResponse(
+                agent_id=agent_id,
+                agent_name=item.get("agent_name") or item.get("name"),
+                channel=item.get("channel") or default_channel,
+                version=item.get("version"),
+                is_published=item.get("is_published"),
+            )
+        )
+    return results
+
+
 # =============================================================================
 # Retell Agents API
 # =============================================================================
 
 
-@router.get("/retell/agents")
+@router.get("/retell/agents", response_model=list[RetellAgentResponse])
 @audit(
     AuditAction.READ_LOCATIONS,
     resource=lambda *args, **kwargs: "retell:agents",
@@ -50,14 +276,77 @@ router = APIRouter(prefix="/admin/institutions", tags=["Admin - Institutions"])
 )
 async def list_retell_agents(
     _: User = Depends(get_current_admin),
-) -> list[dict[str, Any]]:
+) -> list[RetellAgentResponse]:
     """
-    List all Retell AI agents available for the configured Retell account.
+    List Retell voice agents available for the configured Retell account.
 
-    Used by Admins to select a Retell Agent when creating/configuring a Location.
-    Uses the RETELL_API_SECRET from environment variables to authenticate.
+    Used by Super Admins to select the outbound agent for a named voice
+    profile. The selected ID is stored on outbound_voice_profiles.
     """
-    from src.app.config import settings
+    import httpx
+
+    if not settings.retell_api_secret:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Retell API secret not configured",
+        )
+
+    raw_items: list[Any] = []
+    pagination_key: str | None = None
+    has_more = True
+
+    try:
+        async with httpx.AsyncClient() as client:
+            while has_more:
+                params = {"limit": "1000"}
+                if pagination_key:
+                    params["pagination_key"] = pagination_key
+                response = await client.post(
+                    "https://api.retellai.com/v2/list-agents",
+                    params=params,
+                    headers={"Authorization": f"Bearer {settings.retell_api_secret}"},
+                    json={
+                        "filter_criteria": {
+                            "channel": {
+                                "type": "string",
+                                "op": "eq",
+                                "value": "voice",
+                            }
+                        }
+                    },
+                    timeout=10.0,
+                )
+                response.raise_for_status()
+
+                raw = response.json()
+                if isinstance(raw, dict):
+                    items = raw.get("items")
+                    raw_items.extend(items if isinstance(items, list) else [])
+                    pagination_key = raw.get("pagination_key")
+                    has_more = bool(raw.get("has_more")) and bool(pagination_key)
+                else:
+                    raw_items.extend(raw if isinstance(raw, list) else [])
+                    has_more = False
+    except httpx.HTTPError as e:
+        logger.error("Failed to fetch Retell agents: %s", safe_error_summary(e))
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail="Failed to communicate with Retell API",
+        )
+
+    return _retell_agent_responses(raw_items, default_channel="voice")
+
+
+@router.get("/retell/chat-agents", response_model=list[RetellAgentResponse])
+@audit(
+    AuditAction.READ_LOCATIONS,
+    resource=lambda *args, **kwargs: "retell:chat-agents",
+    actor=AuditActor.ADMIN,
+)
+async def list_retell_chat_agents(
+    _: User = Depends(get_current_admin),
+) -> list[RetellAgentResponse]:
+    """List the latest version of each Retell Chat Agent for SMS profiles."""
     import httpx
 
     if not settings.retell_api_secret:
@@ -69,14 +358,71 @@ async def list_retell_agents(
     try:
         async with httpx.AsyncClient() as client:
             response = await client.get(
-                "https://api.retellai.com/list-agents",
+                "https://api.retellai.com/list-chat-agents",
+                params={"is_latest": "true", "limit": "1000"},
                 headers={"Authorization": f"Bearer {settings.retell_api_secret}"},
                 timeout=10.0,
             )
             response.raise_for_status()
-            return response.json()
-    except httpx.HTTPError as e:
-        logger.error(f"Failed to fetch Retell agents: {e}")
+            raw = response.json()
+    except httpx.HTTPError as exc:
+        logger.error("Failed to fetch Retell chat agents: %s", safe_error_summary(exc))
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail="Failed to communicate with Retell API",
+        )
+
+    if isinstance(raw, list):
+        items = raw
+    elif isinstance(raw, dict) and isinstance(raw.get("items"), list):
+        items = raw["items"]
+    else:
+        items = []
+    return _retell_agent_responses(items, default_channel="chat")
+
+
+@router.get("/retell/chat-agents/{agent_id}")
+@audit(
+    AuditAction.READ_LOCATIONS,
+    resource=lambda *args, **kwargs: f"retell:chat-agent:{kwargs.get('agent_id')}",
+    actor=AuditActor.ADMIN,
+)
+async def verify_retell_chat_agent(
+    agent_id: str,
+    _: User = Depends(get_current_admin),
+) -> dict[str, Any]:
+    """Verify that an ID resolves through Retell's Chat Agent API."""
+    import httpx
+
+    if not settings.retell_api_secret:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Retell API secret not configured",
+        )
+
+    try:
+        async with httpx.AsyncClient() as client:
+            response = await client.get(
+                f"https://api.retellai.com/get-chat-agent/{agent_id}",
+                headers={"Authorization": f"Bearer {settings.retell_api_secret}"},
+                timeout=10.0,
+            )
+            if response.status_code == 404:
+                raise HTTPException(
+                    status_code=status.HTTP_404_NOT_FOUND,
+                    detail="Chat Agent not found",
+                )
+            response.raise_for_status()
+            body = response.json()
+            return body if isinstance(body, dict) else {}
+    except HTTPException:
+        raise
+    except httpx.HTTPError as exc:
+        logger.error(
+            "Failed to fetch Retell chat agent %s: %s",
+            agent_id,
+            safe_error_summary(exc),
+        )
         raise HTTPException(
             status_code=status.HTTP_502_BAD_GATEWAY,
             detail="Failed to communicate with Retell API",
@@ -130,6 +476,79 @@ async def verify_retell_agent(
         )
 
 
+@router.get("/retell/phone-numbers", response_model=list[RetellPhoneNumberResponse])
+@audit(
+    AuditAction.READ_LOCATIONS,
+    resource=lambda *args, **kwargs: "retell:phone-numbers",
+    actor=AuditActor.ADMIN,
+)
+async def list_retell_phone_numbers(
+    _: User = Depends(get_current_admin),
+) -> list[RetellPhoneNumberResponse]:
+    """
+    List Retell phone numbers available on the configured Retell account.
+
+    Used by Super Admins to select the outbound from-number for a named voice
+    profile. The selected number is stored on outbound_voice_profiles.
+    """
+    import httpx
+
+    if not settings.retell_api_secret:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Retell API secret not configured",
+        )
+
+    try:
+        async with httpx.AsyncClient() as client:
+            response = await client.get(
+                "https://api.retellai.com/v2/list-phone-numbers",
+                headers={"Authorization": f"Bearer {settings.retell_api_secret}"},
+                timeout=10.0,
+            )
+            response.raise_for_status()
+    except httpx.HTTPError as e:
+        logger.error("Failed to fetch Retell phone numbers: %s", safe_error_summary(e))
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail="Failed to communicate with Retell API",
+        )
+
+    raw = response.json()
+    if isinstance(raw, dict):
+        data = raw.get("data")
+        items = (
+            raw.get("phone_numbers")
+            or raw.get("items")
+            or raw.get("numbers")
+            or (data.get("phone_numbers") if isinstance(data, dict) else None)
+            or (data.get("items") if isinstance(data, dict) else None)
+            or (data.get("numbers") if isinstance(data, dict) else None)
+            or (data if isinstance(data, list) else [])
+        )
+    else:
+        items = raw
+
+    results: list[RetellPhoneNumberResponse] = []
+    for item in items if isinstance(items, list) else []:
+        if not isinstance(item, dict):
+            continue
+        phone_number = item.get("phone_number") or item.get("number")
+        if not phone_number:
+            continue
+        results.append(
+            RetellPhoneNumberResponse(
+                phone_number=str(phone_number),
+                phone_number_pretty=item.get("phone_number_pretty"),
+                nickname=item.get("nickname"),
+                phone_number_type=item.get("phone_number_type"),
+                inbound_agents=item.get("inbound_agents"),
+                outbound_agents=item.get("outbound_agents"),
+            )
+        )
+    return results
+
+
 # =============================================================================
 # Request/Response Models
 # =============================================================================
@@ -144,15 +563,18 @@ class InstitutionCreate(BaseModel):
     # Initial Institution User (Mandatory)
     email: str = Field(..., description="Email for the initial institution user invite")
 
-    # PMS integration mode: "nexhealth" (synced PMS) or "none"
-    # (call-intelligence-only — no booking/sync/providers).
-    pms_type: Literal["nexhealth", "none"] = Field(
+    # PMS integration mode: "nexhealth" and "gotracker" use adapter-backed
+    # scheduling. "none" is call-intelligence-only — no booking/sync/providers.
+    pms_type: Literal["nexhealth", "gotracker", "none"] = Field(
         default="nexhealth",
-        description="PMS integration: 'nexhealth' or 'none' (call-intelligence-only)",
+        description="PMS integration: 'nexhealth', 'gotracker', or 'none'",
     )
 
     # NexHealth
     nexhealth_api_key: str | None = None
+    # Which NexHealth account this institution authenticates as. Explicit:
+    # "platform" | "institution". Omitted means unchanged (or platform on create).
+    nexhealth_credential_mode: str | None = None
     location_limit: int = Field(
         1,
         ge=1,
@@ -179,10 +601,31 @@ class InstitutionUpdate(BaseModel):
 
     # NexHealth
     nexhealth_api_key: str | None = None
+    # Which NexHealth account this institution authenticates as. Explicit:
+    # "platform" | "institution". Omitted means unchanged (or platform on create).
+    nexhealth_credential_mode: str | None = None
     location_limit: int | None = Field(None, ge=1, le=500)
 
     # Regulatory jurisdiction
     jurisdiction: Jurisdiction | None = None
+
+
+class NexHealthCredentialVerifyRequest(BaseModel):
+    """Verify a platform or clinic-owned NexHealth credential."""
+
+    nexhealth_api_key: str | None = None
+    subdomain: str | None = None
+    location_id: str | None = None
+
+
+class NexHealthCredentialVerifyResponse(BaseModel):
+    ok: bool
+    credential_mode: Literal["platform", "institution", "provided"]
+    api_key_hash: str | None = None
+    subdomain: str | None = None
+    location_id: str | None = None
+    location_found: bool = False
+    message: str
 
 
 # =============================================================================
@@ -211,6 +654,241 @@ async def list_nexhealth_locations(
         params["subdomain"] = subdomain
 
     return await handle_nexhealth_request(client, "GET", "/locations", params=params)
+
+
+@router.get("/{slug}/nexhealth/locations", response_model=InstitutionBasicListResponse)
+async def list_institution_nexhealth_locations(
+    slug: str,
+    _: User = Depends(get_current_admin),
+    subdomain: str | None = None,
+) -> dict[str, Any]:
+    """List NexHealth locations using this institution's selected credential."""
+    async with get_db_session() as session:
+        institution = await InstitutionService(session).get_by_slug(
+            slug, include_inactive=True
+        )
+        if not institution:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Institution '{slug}' not found",
+            )
+
+        credential = resolve_nexhealth_credential(institution)
+        client = await get_nexhealth_client_for_credential(credential)
+        params = {}
+        if subdomain:
+            params["subdomain"] = subdomain
+        return await handle_nexhealth_request(
+            client, "GET", "/locations", params=params
+        )
+
+
+def _nexhealth_location_response_contains_id(
+    payload: dict[str, Any],
+    location_id: str | None,
+) -> bool:
+    """Return true when a /locations response contains the configured location."""
+    if not location_id:
+        return False
+
+    expected = str(location_id)
+
+    def walk(value: Any) -> bool:
+        if isinstance(value, dict):
+            if str(value.get("id", "")) == expected and (
+                "locations" not in value or "subdomain" not in value
+            ):
+                return True
+            locations = value.get("locations")
+            if isinstance(locations, list) and any(walk(item) for item in locations):
+                return True
+            return any(walk(v) for k, v in value.items() if k != "locations")
+        if isinstance(value, list):
+            return any(walk(item) for item in value)
+        return False
+
+    return walk(payload.get("data", payload))
+
+
+@router.post(
+    "/{slug}/nexhealth/verify", response_model=NexHealthCredentialVerifyResponse
+)
+async def verify_institution_nexhealth_credentials(
+    slug: str,
+    data: NexHealthCredentialVerifyRequest,
+    _: User = Depends(get_current_admin),
+) -> NexHealthCredentialVerifyResponse:
+    """Verify that a NexHealth key can access the configured subdomain/location."""
+    from src.app.nexhealth.rate_limit import NexHealthRateLimiter
+
+    async with get_db_session() as session:
+        institution = await InstitutionService(session).get_by_slug(
+            slug, include_inactive=True
+        )
+        if not institution:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Institution '{slug}' not found",
+            )
+
+        if data.nexhealth_api_key:
+            api_key_hash = NexHealthRateLimiter.hash_api_key(data.nexhealth_api_key)
+            credential = NexHealthCredentialContext(
+                mode="provided",
+                api_key=data.nexhealth_api_key,
+                api_key_hash=api_key_hash,
+                institution_id=str(institution.id),
+            )
+        else:
+            credential = resolve_nexhealth_credential(institution)
+
+        try:
+            client = await get_nexhealth_client_for_credential(credential)
+            params: dict[str, Any] = {}
+            if data.subdomain:
+                params["subdomain"] = data.subdomain
+            payload = await handle_nexhealth_request(
+                client,
+                "GET",
+                "/locations",
+                params=params,
+            )
+        except Exception as exc:  # noqa: BLE001
+            return NexHealthCredentialVerifyResponse(
+                ok=False,
+                credential_mode=credential.mode,  # type: ignore[arg-type]
+                api_key_hash=credential.api_key_hash,
+                subdomain=data.subdomain,
+                location_id=data.location_id,
+                message=f"NexHealth verification failed: {type(exc).__name__}",
+            )
+
+        location_found = _nexhealth_location_response_contains_id(
+            payload, data.location_id
+        )
+        ok = data.location_id is None or location_found
+        message = (
+            "NexHealth credential verified"
+            if ok
+            else "Credential authenticated, but location_id was not found"
+        )
+        return NexHealthCredentialVerifyResponse(
+            ok=ok,
+            credential_mode=credential.mode,  # type: ignore[arg-type]
+            api_key_hash=credential.api_key_hash,
+            subdomain=data.subdomain,
+            location_id=data.location_id,
+            location_found=location_found,
+            message=message,
+        )
+
+
+async def _nexhealth_institution_or_404(session: Any, slug: str) -> Any:
+    institution = await InstitutionService(session).get_by_slug(
+        slug, include_inactive=True
+    )
+    if not institution:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Institution '{slug}' not found",
+        )
+    if institution.pms_type != "nexhealth":
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="NexHealth webhooks are only available for NexHealth institutions",
+        )
+    return institution
+
+
+@router.get(
+    "/{slug}/nexhealth/webhook",
+    response_model=NexHealthWebhookStatusResponse,
+)
+@audit(
+    AuditAction.READ_LOCATIONS,
+    resource=lambda request, slug, _: f"institution:{slug}/nexhealth-webhook",
+    actor=AuditActor.ADMIN,
+)
+async def get_institution_nexhealth_webhook(
+    request: Request,
+    slug: str,
+    _: User = Depends(get_current_admin),
+) -> NexHealthWebhookStatusResponse:
+    """Show provider endpoint state and location routing for one institution."""
+    async with get_db_session() as session:
+        institution = await _nexhealth_institution_or_404(session, slug)
+        return await _nexhealth_webhook_status(session, institution)
+
+
+@router.post(
+    "/{slug}/nexhealth/webhook/connect",
+    response_model=NexHealthWebhookStatusResponse,
+)
+@audit(
+    AuditAction.INSTITUTION_UPDATE,
+    resource=lambda request, slug, _: f"institution:{slug}/nexhealth-webhook:connect",
+    actor=AuditActor.ADMIN,
+)
+async def connect_institution_nexhealth_webhook(
+    request: Request,
+    slug: str,
+    _: User = Depends(get_current_admin),
+) -> NexHealthWebhookStatusResponse:
+    """Create or repair the subdomain-scoped NexHealth webhook connection."""
+    callback_url = _nexhealth_live_callback_url(required=True)
+    assert callback_url is not None
+    async with get_db_session() as session:
+        institution = await _nexhealth_institution_or_404(session, slug)
+        try:
+            rows = await NexHealthSubscriptionLifecycleService(
+                session
+            ).ensure_for_institution(
+                institution=institution,
+                callback_url=callback_url,
+            )
+        except NexHealthCredentialError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail=str(exc),
+            ) from exc
+        if not rows:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail=(
+                    "Configure at least one location with a NexHealth subdomain "
+                    "and location ID before connecting webhooks"
+                ),
+            )
+        await session.flush()
+        return await _nexhealth_webhook_status(session, institution)
+
+
+@router.post(
+    "/{slug}/nexhealth/webhook/verify",
+    response_model=NexHealthWebhookVerifyResponse,
+)
+@audit(
+    AuditAction.INSTITUTION_UPDATE,
+    resource=lambda request, slug, _: f"institution:{slug}/nexhealth-webhook:verify",
+    actor=AuditActor.ADMIN,
+)
+async def verify_institution_nexhealth_webhook(
+    request: Request,
+    slug: str,
+    _: User = Depends(get_current_admin),
+) -> NexHealthWebhookVerifyResponse:
+    """Compare the configured callback and required events with NexHealth."""
+    async with get_db_session() as session:
+        institution = await _nexhealth_institution_or_404(session, slug)
+        verified = await NexHealthSubscriptionLifecycleService(
+            session
+        ).verify_for_institution(
+            institution=institution,
+            expected_callback_url=_nexhealth_live_callback_url(required=True),
+        )
+        await session.flush()
+        current = await _nexhealth_webhook_status(session, institution)
+        return NexHealthWebhookVerifyResponse(**current.model_dump(), verified=verified)
 
 
 @router.get("/audit-logs", response_model=AuditLogPaginatedResponse)
@@ -291,15 +969,25 @@ async def list_institutions(
             )
             retell_institution_ids = set(retell_result.scalars().all())
 
+            gotracker_result = await session.execute(
+                select(InstitutionLocation.institution_id)
+                .where(InstitutionLocation.institution_id.in_(institution_ids))
+                .where(InstitutionLocation.gotracker_product_key_encrypted.is_not(None))
+                .distinct()
+            )
+            gotracker_institution_ids = set(gotracker_result.scalars().all())
+
         else:
             users_by_institution = {}
             retell_institution_ids = set()
+            gotracker_institution_ids = set()
 
         return [
             InstitutionResponse.from_institution(
                 t,
                 user=users_by_institution.get(t.id),
                 has_retell_secret=(t.id in retell_institution_ids),
+                has_gotracker_key=(t.id in gotracker_institution_ids),
             )
             for t in institutions
         ]
@@ -417,8 +1105,19 @@ async def get_institution(
         )
         has_retell = retell_result.scalar_one_or_none() is not None
 
+        gotracker_result = await session.execute(
+            select(InstitutionLocation.institution_id)
+            .where(InstitutionLocation.institution_id == institution.id)
+            .where(InstitutionLocation.gotracker_product_key_encrypted.is_not(None))
+            .limit(1)
+        )
+        has_gotracker_key = gotracker_result.scalar_one_or_none() is not None
+
         return InstitutionResponse.from_institution(
-            institution, user=institution_user, has_retell_secret=has_retell
+            institution,
+            user=institution_user,
+            has_retell_secret=has_retell,
+            has_gotracker_key=has_gotracker_key,
         )
 
 
@@ -462,8 +1161,18 @@ async def update_institution(
         )
         has_retell = retell_result.scalar_one_or_none() is not None
 
+        gotracker_result = await session.execute(
+            select(InstitutionLocation.institution_id)
+            .where(InstitutionLocation.institution_id == institution.id)
+            .where(InstitutionLocation.gotracker_product_key_encrypted.is_not(None))
+            .limit(1)
+        )
+        has_gotracker_key = gotracker_result.scalar_one_or_none() is not None
+
         return InstitutionResponse.from_institution(
-            institution, has_retell_secret=has_retell
+            institution,
+            has_retell_secret=has_retell,
+            has_gotracker_key=has_gotracker_key,
         )
 
 
@@ -651,6 +1360,10 @@ class LocationCreate(BaseModel):
 
     nexhealth_subdomain: str | None = None
     nexhealth_location_id: str | None = None
+    gotracker_base_url: str | None = None
+    gotracker_product_key: str | None = None
+    gotracker_webhook_subscription_id: str | None = None
+    gotracker_webhook_secret: str | None = None
     retell_agent_id: str | None = None
     twilio_from_number: str | None = None
 
@@ -669,6 +1382,10 @@ class LocationUpdate(BaseModel):
 
     nexhealth_subdomain: str | None = None
     nexhealth_location_id: str | None = None
+    gotracker_base_url: str | None = None
+    gotracker_product_key: str | None = None
+    gotracker_webhook_subscription_id: str | None = None
+    gotracker_webhook_secret: str | None = None
     retell_agent_id: str | None = None
     twilio_from_number: str | None = None
 
@@ -699,6 +1416,11 @@ class LocationResponse(BaseModel):
 
     nexhealth_subdomain: str | None
     nexhealth_location_id: str | None
+    gotracker_base_url: str | None
+    has_gotracker_product_key: bool
+    gotracker_webhook_subscription_id: str | None = None
+    gotracker_webhook_status: str | None = None
+    has_gotracker_webhook_secret: bool = False
     retell_agent_id: str | None
     twilio_from_number: str | None
 
@@ -713,7 +1435,12 @@ class LocationResponse(BaseModel):
     model_config = {"from_attributes": True}
 
     @classmethod
-    def from_location(cls, loc: Any, user: Any = None) -> "LocationResponse":
+    def from_location(
+        cls,
+        loc: Any,
+        user: Any = None,
+        gotracker_subscription: Any = None,
+    ) -> "LocationResponse":
         user_resp = None
         if user:
             user_resp = LocationUserResponse(
@@ -730,6 +1457,19 @@ class LocationResponse(BaseModel):
             is_active=loc.is_active,
             nexhealth_subdomain=loc.nexhealth_subdomain,
             nexhealth_location_id=loc.nexhealth_location_id,
+            gotracker_base_url=loc.gotracker_base_url,
+            has_gotracker_product_key=loc.gotracker_product_key_encrypted is not None,
+            gotracker_webhook_subscription_id=(
+                gotracker_subscription.provider_subscription_id
+                if gotracker_subscription
+                else None
+            ),
+            gotracker_webhook_status=(
+                gotracker_subscription.status if gotracker_subscription else None
+            ),
+            has_gotracker_webhook_secret=(
+                loc.gotracker_webhook_secret_encrypted is not None
+            ),
             retell_agent_id=loc.retell_agent_id,
             twilio_from_number=loc.twilio_from_number,
             address=loc.address,
@@ -741,9 +1481,317 @@ class LocationResponse(BaseModel):
         )
 
 
+class AdminOutboundVoiceProfileCreate(BaseModel):
+    retell_agent_id: str | None = Field(None, max_length=255)
+    retell_from_number: str | None = Field(None, max_length=32)
+    retell_llm_id: str | None = Field(None, max_length=255)
+    display_name: str | None = Field(None, max_length=120)
+    purpose: str | None = Field(None, max_length=80)
+    is_active: bool = True
+    config: dict[str, Any] | None = None
+
+
+class AdminOutboundVoiceProfileUpdate(BaseModel):
+    retell_agent_id: str | None = Field(None, max_length=255)
+    retell_from_number: str | None = Field(None, max_length=32)
+    retell_llm_id: str | None = Field(None, max_length=255)
+    display_name: str | None = Field(None, max_length=120)
+    purpose: str | None = Field(None, max_length=80)
+    is_active: bool | None = None
+    config: dict[str, Any] | None = None
+
+
+class AdminOutboundVoiceProfileResponse(BaseModel):
+    id: str
+    institution_id: str
+    location_id: str
+    retell_agent_id: str | None
+    retell_from_number: str | None
+    retell_llm_id: str | None
+    display_name: str | None
+    purpose: str | None
+    is_active: bool
+    config: dict[str, Any] | None
+    created_at: Any
+    updated_at: Any
+
+    @classmethod
+    def from_profile(cls, profile: Any) -> "AdminOutboundVoiceProfileResponse":
+        return cls(
+            id=str(profile.id),
+            institution_id=str(profile.institution_id),
+            location_id=str(profile.location_id),
+            retell_agent_id=profile.retell_agent_id,
+            retell_from_number=profile.retell_from_number,
+            retell_llm_id=profile.retell_llm_id,
+            display_name=profile.display_name,
+            purpose=profile.purpose,
+            is_active=profile.is_active,
+            config=profile.config,
+            created_at=profile.created_at,
+            updated_at=profile.updated_at,
+        )
+
+
+def _normalize_voice_purpose(value: str | None) -> str | None:
+    if value is None:
+        return None
+    normalized = value.strip().lower().replace(" ", "_").replace("-", "_")
+    return normalized or None
+
+
+async def _get_gotracker_subscription(
+    session: Any, location_id: str
+) -> GoTrackerWebhookSubscription | None:
+    result = await session.execute(
+        select(GoTrackerWebhookSubscription).where(
+            GoTrackerWebhookSubscription.location_id == location_id
+        )
+    )
+    return result.scalar_one_or_none()
+
+
+async def _upsert_gotracker_webhook_config(
+    session: Any,
+    *,
+    institution_id: str,
+    location: Any,
+    provider_subscription_id: str | None = None,
+    webhook_secret: str | None = None,
+) -> GoTrackerWebhookSubscription | None:
+    normalized_subscription_id = (
+        provider_subscription_id.strip() if provider_subscription_id else None
+    )
+    normalized_secret = webhook_secret.strip() if webhook_secret else None
+    if not normalized_subscription_id and not normalized_secret:
+        return await _get_gotracker_subscription(session, str(location.id))
+
+    if normalized_secret:
+        location.gotracker_webhook_secret = normalized_secret
+
+    row = await _get_gotracker_subscription(session, str(location.id))
+    if row is None:
+        row = GoTrackerWebhookSubscription(
+            institution_id=institution_id,
+            location_id=str(location.id),
+            event_types=[
+                "appointment.created",
+                "appointment.updated",
+                "appointment.cancelled",
+                "patient.created",
+                "patient.updated",
+            ],
+            status=GoTrackerWebhookSubscriptionStatus.PENDING.value,
+        )
+        session.add(row)
+
+    if normalized_subscription_id:
+        row.provider_subscription_id = normalized_subscription_id
+        row.status = GoTrackerWebhookSubscriptionStatus.ACTIVE.value
+        row.error_metadata = None
+    return row
+
+
+async def _ensure_gotracker_webhook_after_location_save(
+    session: Any,
+    *,
+    institution: Any,
+    location: Any,
+    provider_subscription_id: str | None = None,
+    webhook_secret: str | None = None,
+) -> GoTrackerWebhookSubscription | None:
+    """Persist manual webhook config, then immediately reconcile GoTracker webhooks.
+
+    The hourly Celery lifecycle task remains the backstop, but location create/update
+    should give admins the production flow: paste the GoTracker API key, save, and
+    see webhook status immediately.
+    """
+    row = await _upsert_gotracker_webhook_config(
+        session,
+        institution_id=str(institution.id),
+        location=location,
+        provider_subscription_id=provider_subscription_id,
+        webhook_secret=webhook_secret,
+    )
+    if getattr(institution, "pms_type", None) != "gotracker":
+        return row
+    if not getattr(location, "gotracker_product_key_encrypted", None):
+        return row
+
+    callback_url = (
+        _location_callback_url(
+            settings.gotracker_webhook_callback_base_url,
+            str(location.id),
+        )
+        if settings.gotracker_webhook_callback_base_url
+        else None
+    )
+    svc = GoTrackerSubscriptionLifecycleService(session)
+    row, _ = await svc.ensure_location_subscription(
+        institution=institution,
+        location=location,
+        callback_url=callback_url,
+    )
+    return row
+
+
+async def _configure_location_twilio_webhook(
+    institution: Any,
+    phone_number: str,
+) -> TwilioWebhookConfigurationResult:
+    """Connect an explicitly assigned location number to inbound SMS routing."""
+    webhook_url = settings.twilio_inbound_sms_webhook_url
+    if not webhook_url:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=(
+                "PUBLIC_API_URL is not configured for this deployment. "
+                "Set it before assigning a Twilio SMS number."
+            ),
+        )
+
+    account_sid = institution.twilio_account_sid
+    auth_token = institution.twilio_auth_token
+    if not account_sid or not auth_token:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Configure this institution's Twilio credentials first",
+        )
+
+    try:
+        return await asyncio.to_thread(
+            configure_inbound_sms_webhook,
+            account_sid=account_sid,
+            auth_token=auth_token,
+            phone_number=phone_number,
+            webhook_url=webhook_url,
+        )
+    except (
+        TwilioPhoneNumberNotFoundError,
+        TwilioPhoneNumberSmsUnsupportedError,
+    ) as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=str(exc),
+        ) from exc
+    except TwilioSmsApplicationConflictError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=str(exc),
+        ) from exc
+    except TwilioException as exc:
+        logger.error(
+            "Failed to configure Twilio inbound SMS webhook: %s",
+            safe_error_summary(exc),
+        )
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail="Twilio could not configure the selected number's SMS webhook",
+        ) from exc
+
+
 # =============================================================================
 # Location Routes
 # =============================================================================
+
+
+_LOCATION_SLUG_CONSTRAINT = "uq_institution_locations_inst_slug"
+_LOCATION_NEXHEALTH_CONSTRAINT = "uq_institution_locations_nexhealth_mapping"
+
+
+def _describe_location_holder(holder: InstitutionLocation) -> str:
+    """Describe the location holding a mapping, including whether it is live."""
+    state = "active" if holder.is_active else "deleted"
+    return f"'{holder.slug}' ({state})"
+
+
+async def _assert_nexhealth_mapping_available(
+    institution_service: InstitutionService,
+    *,
+    subdomain: str | None,
+    nexhealth_location_id: str | None,
+    exclude_location_id: str | None = None,
+) -> None:
+    """Reject a practice-software mapping another location already holds.
+
+    The database enforces this with a unique index, but a constraint failure
+    cannot say which location is holding the site or offer a way forward, so
+    check it here where both are known.
+    """
+    if not subdomain or not nexhealth_location_id:
+        return
+
+    holder = await institution_service.find_location_by_nexhealth_mapping(
+        subdomain,
+        nexhealth_location_id,
+        exclude_location_id=exclude_location_id,
+    )
+    if holder is None:
+        return
+
+    # A deleted holder is the recoverable case and the one that reads as a
+    # phantom conflict, so say what to do about it.
+    if holder.is_active:
+        hint = ""
+    else:
+        hint = (
+            " Reactivate that location instead, or delete it permanently to "
+            "free the mapping."
+        )
+
+    raise HTTPException(
+        status_code=status.HTTP_409_CONFLICT,
+        detail=(
+            f"NexHealth location {nexhealth_location_id} on subdomain "
+            f"'{subdomain}' is already connected to location "
+            f"{_describe_location_holder(holder)}.{hint}"
+        ),
+    )
+
+
+def _location_integrity_conflict(
+    exc: IntegrityError,
+    *,
+    slug: str,
+    subdomain: str | None,
+    nexhealth_location_id: str | None,
+) -> HTTPException:
+    """Translate a location IntegrityError into an accurate 409.
+
+    Only the constraint name distinguishes these, so report it rather than
+    assuming the slug lost: this table also carries a unique NexHealth
+    mapping index and a trigger guarding cross-tenant subdomain reuse, and
+    naming the wrong field sends the reader off renaming a slug that was
+    never the problem.
+    """
+    constraint = integrity_error_constraint(exc)
+    logger.warning(
+        "Location save rejected by the database: constraint=%s slug=%s",
+        constraint or "unknown",
+        slug,
+    )
+
+    if constraint == _LOCATION_NEXHEALTH_CONSTRAINT:
+        detail = (
+            f"NexHealth location {nexhealth_location_id} on subdomain "
+            f"'{subdomain}' is already connected to another location."
+        )
+    elif constraint == _LOCATION_SLUG_CONSTRAINT:
+        detail = f"Location with slug '{slug}' already exists in this institution"
+    elif subdomain and "subdomain" in str(exc.orig or exc).lower():
+        # The subdomain guard trigger raises unique_violation without naming
+        # a constraint, so its own message is the only identifying signal.
+        detail = (
+            f"NexHealth subdomain '{subdomain}' is already bound to a "
+            "different institution."
+        )
+    else:
+        detail = (
+            "This location conflicts with an existing one. Check its slug and "
+            "NexHealth subdomain/location ID."
+        )
+
+    return HTTPException(status_code=status.HTTP_409_CONFLICT, detail=detail)
 
 
 @router.post(
@@ -773,25 +1821,58 @@ async def create_location(
                 detail=f"Institution '{slug}' not found",
             )
 
-        existing = await institution_service.find_any_location_by_slug(data.slug)
+        # Scoped to this institution to match uq_institution_locations_inst_slug.
+        # A global check would reject a slug the database accepts, so one group
+        # taking "downtown" would stop every other group from using it.
+        existing = await institution_service.get_location_by_slug(
+            data.slug, institution.id
+        )
         if existing:
             raise HTTPException(
                 status_code=status.HTTP_409_CONFLICT,
                 detail=f"Location with slug '{data.slug}' already exists",
             )
 
-        location_data = data.model_dump()
+        await _assert_nexhealth_mapping_available(
+            institution_service,
+            subdomain=data.nexhealth_subdomain,
+            nexhealth_location_id=data.nexhealth_location_id,
+        )
+
+        location_data = data.model_dump(
+            exclude={"gotracker_webhook_subscription_id", "gotracker_webhook_secret"}
+        )
+        twilio_from_number = (location_data.get("twilio_from_number") or "").strip()
+        if twilio_from_number:
+            await _configure_location_twilio_webhook(
+                institution,
+                twilio_from_number,
+            )
+            location_data["twilio_from_number"] = twilio_from_number
         try:
             location = await institution_service.create_location(
                 institution.id, **location_data
             )
-        except IntegrityError:
-            raise HTTPException(
-                status_code=status.HTTP_409_CONFLICT,
-                detail=f"Location with slug '{data.slug}' already exists (race condition)",
-            )
+        except IntegrityError as exc:
+            raise _location_integrity_conflict(
+                exc,
+                slug=data.slug,
+                subdomain=data.nexhealth_subdomain,
+                nexhealth_location_id=data.nexhealth_location_id,
+            ) from exc
 
-        return LocationResponse.from_location(location)
+        gotracker_subscription = await _ensure_gotracker_webhook_after_location_save(
+            session,
+            institution=institution,
+            location=location,
+            provider_subscription_id=data.gotracker_webhook_subscription_id,
+            webhook_secret=data.gotracker_webhook_secret,
+        )
+        await session.flush()
+
+        return LocationResponse.from_location(
+            location, gotracker_subscription=gotracker_subscription
+        )
 
 
 @router.get("/{slug}/locations", response_model=list[LocationResponse])
@@ -829,9 +1910,22 @@ async def list_locations(
             for u in user_result.scalars().all():
                 if u.location_id and u.location_id not in users_by_location:
                     users_by_location[u.location_id] = u
+        subscriptions_by_location: dict[str, GoTrackerWebhookSubscription] = {}
+        if location_ids:
+            subscription_result = await session.execute(
+                select(GoTrackerWebhookSubscription).where(
+                    GoTrackerWebhookSubscription.location_id.in_(location_ids)
+                )
+            )
+            for sub in subscription_result.scalars().all():
+                subscriptions_by_location[str(sub.location_id)] = sub
 
         return [
-            LocationResponse.from_location(loc, user=users_by_location.get(loc.id))
+            LocationResponse.from_location(
+                loc,
+                user=users_by_location.get(loc.id),
+                gotracker_subscription=subscriptions_by_location.get(str(loc.id)),
+            )
             for loc in locations
         ]
 
@@ -862,7 +1956,144 @@ async def get_location(
                 detail=f"Location '{loc_slug}' not found",
             )
 
-        return LocationResponse.from_location(location)
+        gotracker_subscription = await _get_gotracker_subscription(
+            session, str(location.id)
+        )
+        return LocationResponse.from_location(
+            location, gotracker_subscription=gotracker_subscription
+        )
+
+
+async def _get_admin_location_or_404(session: Any, slug: str, loc_slug: str) -> Any:
+    institution_service = InstitutionService(session)
+    institution = await institution_service.get_by_slug(slug, include_inactive=True)
+    if not institution:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Institution '{slug}' not found",
+        )
+    location = await institution_service.get_location_by_slug(loc_slug, institution.id)
+    if not location:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Location '{loc_slug}' not found",
+        )
+    return location
+
+
+@router.get(
+    "/{slug}/locations/{loc_slug}/outbound-voice-profiles",
+    response_model=list[AdminOutboundVoiceProfileResponse],
+)
+async def list_admin_outbound_voice_profiles(
+    slug: str,
+    loc_slug: str,
+    _: User = Depends(get_current_admin),
+) -> list[AdminOutboundVoiceProfileResponse]:
+    async with get_db_session() as session:
+        location = await _get_admin_location_or_404(session, slug, loc_slug)
+        result = await session.execute(
+            select(OutboundVoiceProfile)
+            .where(OutboundVoiceProfile.location_id == str(location.id))
+            .order_by(
+                OutboundVoiceProfile.display_name.asc().nulls_last(),
+                OutboundVoiceProfile.created_at.desc(),
+            )
+        )
+        return [
+            AdminOutboundVoiceProfileResponse.from_profile(p)
+            for p in result.scalars().all()
+        ]
+
+
+@router.post(
+    "/{slug}/locations/{loc_slug}/outbound-voice-profiles",
+    response_model=AdminOutboundVoiceProfileResponse,
+    status_code=status.HTTP_201_CREATED,
+)
+async def create_admin_outbound_voice_profile(
+    slug: str,
+    loc_slug: str,
+    data: AdminOutboundVoiceProfileCreate,
+    current_admin: User = Depends(get_current_admin),
+) -> AdminOutboundVoiceProfileResponse:
+    async with get_db_session() as session:
+        location = await _get_admin_location_or_404(session, slug, loc_slug)
+        profile = OutboundVoiceProfile(
+            institution_id=str(location.institution_id),
+            location_id=str(location.id),
+            retell_agent_id=data.retell_agent_id,
+            retell_from_number=data.retell_from_number,
+            retell_llm_id=data.retell_llm_id,
+            display_name=data.display_name,
+            purpose=_normalize_voice_purpose(data.purpose),
+            is_active=data.is_active,
+            config=data.config,
+            created_by_user_id=str(current_admin.id),
+        )
+        session.add(profile)
+        try:
+            await session.flush()
+        except IntegrityError:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="An active outbound voice profile with this purpose already exists for this location",
+            )
+        await session.refresh(profile)
+        return AdminOutboundVoiceProfileResponse.from_profile(profile)
+
+
+@router.patch(
+    "/{slug}/locations/{loc_slug}/outbound-voice-profiles/{profile_id}",
+    response_model=AdminOutboundVoiceProfileResponse,
+)
+async def update_admin_outbound_voice_profile(
+    slug: str,
+    loc_slug: str,
+    profile_id: str,
+    data: AdminOutboundVoiceProfileUpdate,
+    _: User = Depends(get_current_admin),
+) -> AdminOutboundVoiceProfileResponse:
+    async with get_db_session() as session:
+        location = await _get_admin_location_or_404(session, slug, loc_slug)
+        profile = await session.get(OutboundVoiceProfile, profile_id)
+        if profile is None or str(profile.location_id) != str(location.id):
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND, detail="Voice profile not found"
+            )
+        for field, value in data.model_dump(exclude_unset=True).items():
+            if field == "purpose":
+                value = _normalize_voice_purpose(value)
+            setattr(profile, field, value)
+        try:
+            await session.flush()
+        except IntegrityError:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="An active outbound voice profile with this purpose already exists for this location",
+            )
+        await session.refresh(profile)
+        return AdminOutboundVoiceProfileResponse.from_profile(profile)
+
+
+@router.delete(
+    "/{slug}/locations/{loc_slug}/outbound-voice-profiles/{profile_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+)
+async def delete_admin_outbound_voice_profile(
+    slug: str,
+    loc_slug: str,
+    profile_id: str,
+    _: User = Depends(get_current_admin),
+) -> None:
+    async with get_db_session() as session:
+        location = await _get_admin_location_or_404(session, slug, loc_slug)
+        profile = await session.get(OutboundVoiceProfile, profile_id)
+        if profile is None or str(profile.location_id) != str(location.id):
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND, detail="Voice profile not found"
+            )
+        await session.delete(profile)
 
 
 @router.patch("/{slug}/locations/{loc_slug}", response_model=LocationResponse)
@@ -900,9 +2131,225 @@ async def update_location(
                 detail=f"Location '{loc_slug}' not found",
             )
 
-        updates = data.model_dump(exclude_unset=True)
-        location = await institution_service.update_location(location, **updates)
-        return LocationResponse.from_location(location)
+        updates = data.model_dump(
+            exclude_unset=True,
+            exclude={"gotracker_webhook_subscription_id", "gotracker_webhook_secret"},
+        )
+        if "twilio_from_number" in updates:
+            twilio_from_number = (updates["twilio_from_number"] or "").strip()
+            updates["twilio_from_number"] = twilio_from_number or None
+            if twilio_from_number:
+                await _configure_location_twilio_webhook(
+                    institution,
+                    twilio_from_number,
+                )
+
+        # Editing either half of the mapping can collide with another
+        # location, so check the pair this update would leave behind.
+        if "nexhealth_subdomain" in updates or "nexhealth_location_id" in updates:
+            await _assert_nexhealth_mapping_available(
+                institution_service,
+                subdomain=updates.get(
+                    "nexhealth_subdomain", location.nexhealth_subdomain
+                ),
+                nexhealth_location_id=updates.get(
+                    "nexhealth_location_id", location.nexhealth_location_id
+                ),
+                exclude_location_id=str(location.id),
+            )
+
+        previous_timezone = location.timezone
+        try:
+            location = await institution_service.update_location(location, **updates)
+        except IntegrityError as exc:
+            raise _location_integrity_conflict(
+                exc,
+                slug=updates.get("slug", location.slug),
+                subdomain=updates.get(
+                    "nexhealth_subdomain", location.nexhealth_subdomain
+                ),
+                nexhealth_location_id=updates.get(
+                    "nexhealth_location_id", location.nexhealth_location_id
+                ),
+            ) from exc
+
+        # A published campaign's schedule row caches the zone its cron fires in
+        # and is only rewritten on publish/pause/resume, so correcting a
+        # location here would otherwise leave every already-published campaign
+        # on the old zone while this page reads as fixed.
+        if "timezone" in updates and previous_timezone != location.timezone:
+            from src.app.services.automation.schedule_service import (
+                WorkflowScheduleService,
+            )
+
+            await WorkflowScheduleService(session).resync_for_location(
+                str(location.id)
+            )
+
+        gotracker_subscription = await _ensure_gotracker_webhook_after_location_save(
+            session,
+            institution=institution,
+            location=location,
+            provider_subscription_id=data.gotracker_webhook_subscription_id,
+            webhook_secret=data.gotracker_webhook_secret,
+        )
+        await session.flush()
+        return LocationResponse.from_location(
+            location, gotracker_subscription=gotracker_subscription
+        )
+
+
+class TwilioWebhookConnectResponse(BaseModel):
+    status: Literal["configured"]
+    phone_number: str
+    changed: bool
+
+
+class GoTrackerWebhookReconnectResponse(BaseModel):
+    status: Literal["configured"]
+    subscription_id: str
+    action: Literal["created", "rotated"]
+
+
+@router.post(
+    "/{slug}/locations/{loc_slug}/gotracker/webhook/reconnect",
+    response_model=GoTrackerWebhookReconnectResponse,
+)
+@audit(
+    AuditAction.LOCATION_UPDATE,
+    resource=lambda request, slug, loc_slug, _: (
+        f"institution:{slug}/location:{loc_slug}/gotracker-webhook"
+    ),
+    actor=AuditActor.ADMIN,
+)
+async def reconnect_location_gotracker_webhook(
+    request: Request,
+    slug: str,
+    loc_slug: str,
+    _: User = Depends(get_current_admin),
+) -> GoTrackerWebhookReconnectResponse:
+    """Rotate the stored subscription secret, or create the subscription if absent."""
+    async with get_db_session() as session:
+        institution_service = InstitutionService(session)
+        institution = await institution_service.get_by_slug(
+            slug,
+            include_inactive=True,
+        )
+        if not institution:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Institution '{slug}' not found",
+            )
+        if institution.pms_type != "gotracker":
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="This institution is not configured for GoTracker",
+            )
+
+        location = await institution_service.get_location_by_slug(
+            loc_slug,
+            institution.id,
+        )
+        if not location:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Location '{loc_slug}' not found",
+            )
+        if not location.gotracker_product_key_encrypted:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="Configure this location's GoTracker API key first",
+            )
+        if not settings.gotracker_webhook_callback_base_url:
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail="GOTRACKER_WEBHOOK_CALLBACK_BASE_URL is not configured",
+            )
+
+        callback_url = _location_callback_url(
+            settings.gotracker_webhook_callback_base_url,
+            str(location.id),
+        )
+        try:
+            reconnect = await GoTrackerSubscriptionLifecycleService(
+                session
+            ).reconnect_location_subscription(
+                institution=institution,
+                location=location,
+                callback_url=callback_url,
+            )
+        except GoTrackerSubscriptionReconnectError as exc:
+            logger.error(
+                "Failed to reconnect GoTracker webhook: %s",
+                safe_error_summary(exc),
+            )
+            raise HTTPException(
+                status_code=status.HTTP_502_BAD_GATEWAY,
+                detail="GoTracker Synchronizer could not reconnect the webhook",
+            ) from exc
+
+        return GoTrackerWebhookReconnectResponse(
+            status="configured",
+            subscription_id=str(reconnect.subscription.provider_subscription_id),
+            action=reconnect.action,
+        )
+
+
+@router.post(
+    "/{slug}/locations/{loc_slug}/twilio/webhook",
+    response_model=TwilioWebhookConnectResponse,
+)
+@audit(
+    AuditAction.LOCATION_UPDATE,
+    resource=lambda request, slug, loc_slug, _: (
+        f"institution:{slug}/location:{loc_slug}/twilio-webhook"
+    ),
+    actor=AuditActor.ADMIN,
+)
+async def reconnect_location_twilio_webhook(
+    request: Request,
+    slug: str,
+    loc_slug: str,
+    _: User = Depends(get_current_admin),
+) -> TwilioWebhookConnectResponse:
+    """Reconnect an already assigned number after a deployment URL change."""
+    async with get_db_session() as session:
+        institution_service = InstitutionService(session)
+        institution = await institution_service.get_by_slug(
+            slug,
+            include_inactive=True,
+        )
+        if not institution:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Institution '{slug}' not found",
+            )
+
+        location = await institution_service.get_location_by_slug(
+            loc_slug,
+            institution.id,
+        )
+        if not location:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Location '{loc_slug}' not found",
+            )
+        phone_number = (location.twilio_from_number or "").strip()
+        if not phone_number:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="Assign a Twilio SMS number to this location first",
+            )
+
+        result = await _configure_location_twilio_webhook(
+            institution,
+            phone_number,
+        )
+        return TwilioWebhookConnectResponse(
+            status="configured",
+            phone_number=phone_number,
+            changed=result.changed,
+        )
 
 
 @router.delete("/{slug}/locations/{loc_slug}", status_code=status.HTTP_204_NO_CONTENT)
@@ -1343,6 +2790,16 @@ async def get_operating_hours(
     "/{slug}/locations/{loc_slug}/operating-hours",
     response_model=list[OperatingHoursResponse],
 )
+@audit(
+    AuditAction.LOCATION_UPDATE,
+    # Item 39: operating hours and breaks decide when a patient may be
+    # contacted at all — they are the source quiet hours is derived from — so
+    # changing them is the same class of act as changing a campaign.
+    resource=lambda *args, **kwargs: (
+        f"location:{kwargs.get('loc_slug') or 'unknown'}:operating_hours"
+    ),
+    actor=AuditActor.ADMIN,
+)
 async def set_operating_hours(
     slug: str,
     loc_slug: str,
@@ -1458,6 +2915,16 @@ async def get_breaks(
     response_model=BreakResponse,
     status_code=status.HTTP_201_CREATED,
 )
+@audit(
+    AuditAction.LOCATION_UPDATE,
+    # Item 39: operating hours and breaks decide when a patient may be
+    # contacted at all — they are the source quiet hours is derived from — so
+    # changing them is the same class of act as changing a campaign.
+    resource=lambda *args, **kwargs: (
+        f"location:{kwargs.get('loc_slug') or 'unknown'}:break_create"
+    ),
+    actor=AuditActor.ADMIN,
+)
 async def create_break(
     slug: str,
     loc_slug: str,
@@ -1503,6 +2970,16 @@ async def create_break(
     "/{slug}/locations/{loc_slug}/breaks/{break_id}",
     status_code=status.HTTP_204_NO_CONTENT,
 )
+@audit(
+    AuditAction.LOCATION_UPDATE,
+    # Item 39: operating hours and breaks decide when a patient may be
+    # contacted at all — they are the source quiet hours is derived from — so
+    # changing them is the same class of act as changing a campaign.
+    resource=lambda *args, **kwargs: (
+        f"location:{kwargs.get('loc_slug') or 'unknown'}:break_delete"
+    ),
+    actor=AuditActor.ADMIN,
+)
 async def delete_break(
     slug: str,
     loc_slug: str,
@@ -1544,3 +3021,239 @@ async def delete_break(
             )
 
         await session.delete(brk)
+
+
+# =============================================================================
+# Per-institution Provisioning (Plan 10)
+# =============================================================================
+
+
+class ProvisioningStatusResponse(BaseModel):
+    twilio_configured: bool
+    twilio_account_sid_masked: str | None
+    email_from_address: str | None
+    email_from_name: str | None
+
+
+class ProvisioningUpdateRequest(BaseModel):
+    twilio_account_sid: str | None = Field(
+        default=None, description="Twilio sub-account SID"
+    )
+    twilio_auth_token: str | None = Field(
+        default=None, description="Twilio sub-account auth token"
+    )
+    email_from_address: str | None = Field(
+        default=None, description="From-address for outbound email"
+    )
+    email_from_name: str | None = Field(
+        default=None, description="Display name for outbound email"
+    )
+
+
+class InstitutionTwilioPhoneNumberResponse(BaseModel):
+    sid: str
+    phone_number: str
+    friendly_name: str
+    capabilities: dict[str, bool]
+    status: str | None = None
+
+
+def _mask_sid(sid: str | None) -> str | None:
+    """Return first-4 + **** + last-4 of a Twilio SID for safe display."""
+    if not sid or len(sid) < 9:
+        return sid
+    return f"{sid[:4]}****{sid[-4:]}"
+
+
+def _fetch_institution_twilio_phone_numbers(
+    account_sid: str,
+    auth_token: str,
+) -> list[InstitutionTwilioPhoneNumberResponse]:
+    """List numbers using only the institution's Twilio account credentials."""
+    from twilio.rest import Client
+
+    client = Client(account_sid, auth_token)
+    return [
+        InstitutionTwilioPhoneNumberResponse(
+            sid=number.sid,
+            phone_number=number.phone_number,
+            friendly_name=number.friendly_name or number.phone_number,
+            capabilities={
+                "voice": bool(number.capabilities.get("voice", False)),
+                "sms": bool(number.capabilities.get("sms", False)),
+                "mms": bool(number.capabilities.get("mms", False)),
+            },
+            status="active",
+        )
+        for number in client.incoming_phone_numbers.list()
+    ]
+
+
+@router.get("/{slug}/provisioning", response_model=ProvisioningStatusResponse)
+async def get_provisioning(
+    slug: str,
+    _: User = Depends(get_current_admin),
+):
+    """Return the provisioning status for an institution. Auth tokens are never returned."""
+    async with get_db_session() as session:
+        institution_service = InstitutionService(session)
+        institution = await institution_service.get_by_slug(slug, include_inactive=True)
+        if not institution:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Institution '{slug}' not found",
+            )
+
+        return ProvisioningStatusResponse(
+            twilio_configured=bool(
+                institution.twilio_account_sid and institution.twilio_auth_token
+            ),
+            twilio_account_sid_masked=_mask_sid(institution.twilio_account_sid),
+            email_from_address=institution.email_from_address,
+            email_from_name=institution.email_from_name,
+        )
+
+
+@router.patch("/{slug}/provisioning", response_model=ProvisioningStatusResponse)
+async def update_provisioning(
+    slug: str,
+    body: ProvisioningUpdateRequest,
+    current_user: User = Depends(get_current_admin),
+):
+    """Set or update per-institution Twilio sub-account and email from-address."""
+    async with get_db_session() as session:
+        institution_service = InstitutionService(session)
+        institution = await institution_service.get_by_slug(slug, include_inactive=True)
+        if not institution:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Institution '{slug}' not found",
+            )
+
+        if body.twilio_account_sid is not None:
+            institution.twilio_account_sid = body.twilio_account_sid or None
+        if body.twilio_auth_token is not None:
+            institution.twilio_auth_token = body.twilio_auth_token or None
+        if body.email_from_address is not None:
+            institution.email_from_address = body.email_from_address or None
+        if body.email_from_name is not None:
+            institution.email_from_name = body.email_from_name or None
+
+        await session.flush()
+
+        # Audit the credential/config change (PR-1). Never log the token or raw SID —
+        # only which fields changed + the masked SID.
+        changed = [
+            f
+            for f in (
+                "twilio_account_sid",
+                "twilio_auth_token",
+                "email_from_address",
+                "email_from_name",
+            )
+            if getattr(body, f) is not None
+        ]
+        await log_audit(
+            actor=AuditActor.ADMIN,
+            user_id=str(current_user.id),
+            action=AuditAction.INSTITUTION_UPDATE,
+            target_resource=f"institution:{institution.id}:provisioning",
+            outcome=AuditOutcome.SUCCESS,
+            metadata={
+                "actor_role": current_user.role,
+                "institution_id": str(institution.id),
+                "fields_changed": changed,
+                "twilio_configured": bool(
+                    institution.twilio_account_sid and institution.twilio_auth_token
+                ),
+                "twilio_account_sid_masked": _mask_sid(institution.twilio_account_sid),
+            },
+        )
+
+        return ProvisioningStatusResponse(
+            twilio_configured=bool(
+                institution.twilio_account_sid and institution.twilio_auth_token
+            ),
+            twilio_account_sid_masked=_mask_sid(institution.twilio_account_sid),
+            email_from_address=institution.email_from_address,
+            email_from_name=institution.email_from_name,
+        )
+
+
+@router.get(
+    "/{slug}/twilio/phone-numbers",
+    response_model=list[InstitutionTwilioPhoneNumberResponse],
+)
+async def list_institution_twilio_phone_numbers(
+    slug: str,
+    _: User = Depends(get_current_admin),
+) -> list[InstitutionTwilioPhoneNumberResponse]:
+    """List numbers owned by the Twilio account configured for an institution."""
+    async with get_db_session() as session:
+        institution_service = InstitutionService(session)
+        institution = await institution_service.get_by_slug(slug, include_inactive=True)
+        if not institution:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Institution '{slug}' not found",
+            )
+
+        account_sid = institution.twilio_account_sid
+        auth_token = institution.twilio_auth_token
+        if not account_sid or not auth_token:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="Configure this institution's Twilio credentials first",
+            )
+
+        try:
+            return await asyncio.to_thread(
+                _fetch_institution_twilio_phone_numbers,
+                account_sid,
+                auth_token,
+            )
+        except Exception as exc:
+            logger.warning(
+                "Failed to list Twilio numbers for institution %s: %s",
+                institution.id,
+                safe_error_summary(exc),
+            )
+            raise HTTPException(
+                status_code=status.HTTP_502_BAD_GATEWAY,
+                detail="Failed to retrieve phone numbers from this institution's Twilio account",
+            ) from exc
+
+
+@router.delete("/{slug}/provisioning/twilio", status_code=status.HTTP_204_NO_CONTENT)
+async def clear_twilio_provisioning(
+    slug: str,
+    current_user: User = Depends(get_current_admin),
+):
+    """Clear per-institution Twilio sub-account credentials (reverts to platform credentials)."""
+    async with get_db_session() as session:
+        institution_service = InstitutionService(session)
+        institution = await institution_service.get_by_slug(slug, include_inactive=True)
+        if not institution:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Institution '{slug}' not found",
+            )
+
+        institution.twilio_account_sid = None
+        institution.twilio_auth_token = None
+        await session.flush()
+
+        # Audit the credential clear (PR-1).
+        await log_audit(
+            actor=AuditActor.ADMIN,
+            user_id=str(current_user.id),
+            action=AuditAction.INSTITUTION_UPDATE,
+            target_resource=f"institution:{institution.id}:provisioning",
+            outcome=AuditOutcome.SUCCESS,
+            metadata={
+                "actor_role": current_user.role,
+                "institution_id": str(institution.id),
+                "fields_changed": ["twilio_account_sid", "twilio_auth_token"],
+                "action_detail": "cleared_twilio_credentials",
+            },
+        )

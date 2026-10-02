@@ -1,0 +1,960 @@
+"""Unit tests for Plan 03 — Outbound Voice (VoiceNodeExecutor)."""
+
+from __future__ import annotations
+
+import asyncio
+from contextlib import contextmanager
+from unittest.mock import AsyncMock, MagicMock, patch
+
+import pytest
+
+from src.app.services.automation.definition_schema import SendVoiceNode
+from src.app.services.automation.retell_outbound_client import (
+    RetellAmbiguousError,
+    RetellCallResult,
+    RetellPermanentError,
+    RetellTransientError,
+)
+from src.app.services.automation.voice_node_executor import VoiceCooldownDeferred, VoiceParked
+
+
+# ---------------------------------------------------------------------------
+# Fixtures / helpers
+# ---------------------------------------------------------------------------
+
+
+def _make_run(contact_id="c-1", location_id="l-1", institution_id="inst-1"):
+    run = MagicMock()
+    run.id = "run-1"
+    run.workflow_id = "wf-1"
+    run.institution_id = institution_id
+    run.contact_id = contact_id
+    run.location_id = location_id
+    return run
+
+
+def _make_node(
+    agent_id="agent_abc",
+    next_id="node-2",
+    max_attempts=1,
+    wait_for_outcome=False,
+    voice_profile_id=None,
+    phone_country_code_enabled=False,
+    phone_country_region=None,
+    patient_voice_cooldown_hours=24,
+    patient_voice_cooldown_behavior="skip",
+    patient_voice_cooldown_deadline_field=None,
+):
+    return SendVoiceNode(
+        id="node-1",
+        retell_agent_id=agent_id,
+        voice_profile_id=voice_profile_id,
+        next_node_id=next_id,
+        max_attempts=max_attempts,
+        wait_for_outcome=wait_for_outcome,
+        patient_voice_cooldown_hours=patient_voice_cooldown_hours,
+        patient_voice_cooldown_behavior=patient_voice_cooldown_behavior,
+        patient_voice_cooldown_deadline_field=patient_voice_cooldown_deadline_field,
+        phone_country_code_enabled=phone_country_code_enabled,
+        phone_country_region=phone_country_region,
+    )
+
+
+def _make_contact(phone="+14165551234", first="Jane"):
+    c = MagicMock()
+    c.phone = phone
+    c.first_name = first
+    c.last_name = "Doe"
+    return c
+
+
+def _make_location(retell_from_number="+15005550000", name="Bright Smiles Dental"):
+    loc = MagicMock()
+    loc.retell_from_number = retell_from_number
+    loc.name = name
+    return loc
+
+
+def _make_executor(
+    contact=None, location=None, already_placed=False, attempt_number=1, profile=None,
+    claim_id=None, recent_attempt=None, limits=None, institution=None,
+):
+    from src.app.services.automation.voice_node_executor import VoiceNodeExecutor
+
+    session = AsyncMock()
+    runtime = AsyncMock()
+
+    async def _get(model, pk):
+        from src.app.models.contact import Contact
+        from src.app.models.institution import Institution
+        from src.app.models.institution_location import InstitutionLocation
+        if model is Contact:
+            return contact
+        if model is InstitutionLocation:
+            return location
+        if model is Institution:
+            return institution
+        return None
+
+    session.get = AsyncMock(side_effect=_get)
+    async def _execute(stmt):
+        text = str(stmt)
+        result = MagicMock()
+        if "JOIN automation_workflow_runs" in text:
+            result.scalar = MagicMock(return_value=recent_attempt)
+            return result
+        if "workflow_voice_attempts" in text:
+            result.scalar = MagicMock(return_value=claim_id)
+            return result
+        result.scalar_one_or_none = MagicMock(return_value=profile)
+        return result
+
+    session.execute = AsyncMock(side_effect=_execute)
+    session.add = MagicMock()  # sync in SQLAlchemy — keep it non-awaitable
+    session.commit = AsyncMock()
+    runtime.already_sent = AsyncMock(return_value=already_placed)
+    step = MagicMock()
+    step.id = "step-1"
+    step.attempt_number = attempt_number
+    runtime.begin_step = AsyncMock(return_value=step)
+    runtime.fail_step = AsyncMock()
+    runtime.fail_run = AsyncMock()
+    runtime.complete_step = AsyncMock()
+    runtime.mark_step_awaiting_outcome = AsyncMock()
+
+    return VoiceNodeExecutor(session, runtime, limits=limits), runtime, step
+
+
+@contextmanager
+def _patch_client(*, result=None, side_effect=None, api_key="re_secret"):
+    """Patch settings + the mockable RetellOutboundClient. Yields the create_phone_call mock."""
+    call_mock = AsyncMock(return_value=result, side_effect=side_effect)
+    client_instance = MagicMock()
+    client_instance.create_phone_call = call_mock
+    with (
+        patch("src.app.services.automation.voice_node_executor.settings") as mock_settings,
+        patch(
+            "src.app.services.automation.voice_node_executor.RetellOutboundClient",
+            MagicMock(return_value=client_instance),
+        ),
+    ):
+        mock_settings.retell_api_secret = api_key
+        yield call_mock
+
+
+def _fail_reason(runtime) -> str:
+    return runtime.fail_run.call_args.kwargs.get("reason", "")
+
+
+def _result_metadata(call) -> dict:
+    return call.call_args.kwargs.get("result_metadata") or {}
+
+
+# ---------------------------------------------------------------------------
+# Precondition failure paths (return before the vendor call)
+# ---------------------------------------------------------------------------
+
+
+def test_executor_fails_when_no_contact_id():
+    executor, runtime, _ = _make_executor()
+    asyncio.run(executor.execute(_make_run(contact_id=None), _make_node(), {}))
+    runtime.fail_run.assert_called_once()
+    assert "no contact_id" in _fail_reason(runtime)
+
+
+def test_executor_fails_when_contact_not_found():
+    executor, runtime, _ = _make_executor(contact=None)
+    asyncio.run(executor.execute(_make_run(), _make_node(), {}))
+    runtime.fail_run.assert_called_once()
+    assert "not found" in _fail_reason(runtime)
+
+
+def test_executor_fails_when_no_phone():
+    executor, runtime, _ = _make_executor(contact=_make_contact(phone=None))
+    asyncio.run(executor.execute(_make_run(), _make_node(), {}))
+    runtime.fail_run.assert_called_once()
+    assert "no phone" in _fail_reason(runtime)
+
+
+def test_executor_fails_when_phone_invalid():
+    executor, runtime, _ = _make_executor(contact=_make_contact(phone="not-a-phone"))
+    with _patch_client(result=RetellCallResult(call_id="x")) as call_mock:
+        asyncio.run(executor.execute(_make_run(), _make_node(), {}))
+    runtime.fail_run.assert_called_once()
+    assert "phone number is invalid" in _fail_reason(runtime)
+    call_mock.assert_not_called()
+
+
+def test_executor_fails_when_no_retell_from_number():
+    executor, runtime, _ = _make_executor(
+        contact=_make_contact(), location=_make_location(retell_from_number=None)
+    )
+    asyncio.run(executor.execute(_make_run(), _make_node(), {}))
+    runtime.fail_run.assert_called_once()
+    assert "retell_from_number" in _fail_reason(runtime)
+
+
+def test_executor_fails_when_retell_from_number_invalid():
+    executor, runtime, _ = _make_executor(
+        contact=_make_contact(), location=_make_location(retell_from_number="bad-from")
+    )
+    with _patch_client(result=RetellCallResult(call_id="x")) as call_mock:
+        asyncio.run(executor.execute(_make_run(), _make_node(), {}))
+    runtime.fail_run.assert_called_once()
+    assert "retell_from_number is invalid" in _fail_reason(runtime)
+    call_mock.assert_not_called()
+
+
+def test_executor_fails_when_retell_not_configured():
+    executor, runtime, _ = _make_executor(contact=_make_contact(), location=_make_location())
+    with _patch_client(result=RetellCallResult(call_id="x"), api_key=None):
+        asyncio.run(executor.execute(_make_run(), _make_node(), {}))
+    runtime.fail_run.assert_called_once()
+    assert "Retell not configured" in _fail_reason(runtime)
+
+
+# ---------------------------------------------------------------------------
+# Success (fire-and-forget)
+# ---------------------------------------------------------------------------
+
+
+def test_executor_places_call_and_stores_call_id():
+    executor, runtime, _ = _make_executor(contact=_make_contact(), location=_make_location())
+    with _patch_client(result=RetellCallResult(call_id="call_xyz")) as call_mock:
+        result = asyncio.run(executor.execute(_make_run(), _make_node(agent_id="agent_xyz"), {}))
+
+    assert result == "node-2"
+    kw = call_mock.call_args.kwargs
+    assert kw["from_number"] == "+15005550000"
+    assert kw["to_number"] == "+14165551234"
+    assert kw["override_agent_id"] == "agent_xyz"
+    dv = kw["dynamic_variables"]
+    assert dv["first_name"] == "Jane"
+    assert dv["patient_first_name"] == "Jane"
+    assert dv["user_number"] == "+14165551234"
+    assert dv["clinic_name"] == "Bright Smiles Dental"
+    assert "automated call" in dv["compliance_disclosure"].lower()
+    assert "stop" in dv["compliance_disclosure"].lower()
+    md = kw["metadata"]
+    assert md["workflow_run_id"] == "run-1"
+    assert md["workflow_id"] == "wf-1"  # attribution for /by-campaign (Plan 11)
+    assert md["source"] == "outbound_campaign"
+    assert md["ai_automated_call"] is True
+    # call_id captured onto the attempt for webhook correlation.
+    runtime.complete_step.assert_called_once()
+    ckw = runtime.complete_step.call_args.kwargs
+    assert ckw.get("result_code") == "call_placed"
+    result_metadata = ckw.get("result_metadata")
+    assert result_metadata["retell_call_id"] == "call_xyz"
+    assert result_metadata["retell_agent_configured"] is True
+    assert result_metadata["retell_agent_source"] == "node"
+    assert result_metadata["retell_from_number_source"] == "location"
+    assert result_metadata["retell_from_number_masked"] == "+*******0000"
+    assert result_metadata["to_number_masked"] == "+*******1234"
+    runtime.fail_run.assert_not_called()
+
+
+def test_executor_skips_cross_run_call_inside_patient_cooldown():
+    from datetime import datetime, timezone
+
+    recent_attempt = MagicMock()
+    recent_attempt.id = "attempt-recent"
+    recent_attempt.created_at = datetime(2026, 8, 11, 15, 0, tzinfo=timezone.utc)
+    executor, runtime, _ = _make_executor(
+        contact=_make_contact(),
+        location=_make_location(),
+        recent_attempt=recent_attempt,
+    )
+    with _patch_client(result=RetellCallResult(call_id="call_xyz")) as call_mock:
+        result = asyncio.run(
+            executor.execute(
+                _make_run(),
+                _make_node(patient_voice_cooldown_hours=24),
+                {},
+            )
+        )
+
+    assert result == "node-2"
+    call_mock.assert_not_called()
+    runtime.complete_step.assert_called_once()
+    assert runtime.complete_step.call_args.kwargs["result_code"] == "voice_cooldown_skipped"
+    runtime.fail_run.assert_not_called()
+
+
+def test_executor_defers_post_op_call_until_voice_cooldown_ends() -> None:
+    from datetime import datetime, timezone
+
+    recent_attempt = MagicMock()
+    recent_attempt.id = "attempt-recent"
+    recent_attempt.created_at = datetime(2026, 8, 11, 15, 0, tzinfo=timezone.utc)
+    executor, runtime, step = _make_executor(
+        contact=_make_contact(), location=_make_location(), recent_attempt=recent_attempt
+    )
+    with _patch_client(result=RetellCallResult(call_id="call_xyz")) as call_mock:
+        result = asyncio.run(
+            executor.execute(
+                _make_run(),
+                _make_node(
+                    patient_voice_cooldown_hours=24,
+                    patient_voice_cooldown_behavior="defer",
+                    patient_voice_cooldown_deadline_field="post_op_expires_at",
+                ),
+                {"post_op_expires_at": "2026-08-14T15:00:00Z"},
+            )
+        )
+
+    assert result == VoiceCooldownDeferred(
+        step=step, due_at=datetime(2026, 8, 12, 15, 0, tzinfo=timezone.utc)
+    )
+    call_mock.assert_not_called()
+    runtime.complete_step.assert_not_called()
+
+
+def test_executor_allows_cooldown_disabled():
+    recent_attempt = MagicMock()
+    recent_attempt.id = "attempt-recent"
+    executor, runtime, _ = _make_executor(
+        contact=_make_contact(),
+        location=_make_location(),
+        recent_attempt=recent_attempt,
+    )
+    with _patch_client(result=RetellCallResult(call_id="call_xyz")) as call_mock:
+        asyncio.run(
+            executor.execute(
+                _make_run(),
+                _make_node(patient_voice_cooldown_hours=0),
+                {},
+            )
+        )
+
+    call_mock.assert_called_once()
+    runtime.fail_run.assert_not_called()
+
+
+def test_executor_populates_patient_first_name_from_first_name_fallback():
+    executor, runtime, _ = _make_executor(
+        contact=_make_contact(first=None),
+        location=_make_location(),
+    )
+    with _patch_client(result=RetellCallResult(call_id="call_xyz")) as call_mock:
+        asyncio.run(
+            executor.execute(
+                _make_run(),
+                _make_node(agent_id="agent_xyz"),
+                {"first_name": "Alex"},
+            )
+        )
+
+    dv = call_mock.call_args.kwargs["dynamic_variables"]
+    assert dv["patient_first_name"] == "Alex"
+    assert dv["first_name"] == "Alex"
+    runtime.fail_run.assert_not_called()
+
+
+def test_executor_normalizes_display_formatted_numbers_before_retell():
+    executor, runtime, _ = _make_executor(
+        contact=_make_contact(phone="(236) 314-0843"),
+        location=_make_location(retell_from_number="(548) 708-8349"),
+    )
+    with _patch_client(result=RetellCallResult(call_id="call_xyz")) as call_mock:
+        asyncio.run(
+            executor.execute(
+                _make_run(),
+                _make_node(
+                    agent_id="agent_xyz",
+                    phone_country_code_enabled=True,
+                    phone_country_region="CA",
+                ),
+                {},
+            )
+        )
+
+    kw = call_mock.call_args.kwargs
+    assert kw["from_number"] == "+15487088349"
+    assert kw["to_number"] == "+12363140843"
+    assert kw["dynamic_variables"]["user_number"] == "+12363140843"
+    result_metadata = _result_metadata(runtime.complete_step)
+    assert result_metadata["retell_from_number_masked"] == "+*******8349"
+    assert result_metadata["to_number_masked"] == "+*******0843"
+    assert result_metadata["retell_from_number_normalized"] is True
+    assert result_metadata["to_number_normalized"] is True
+    runtime.fail_run.assert_not_called()
+
+
+def test_executor_normalizes_nexhealth_nanp_patient_number_when_phone_country_override_disabled():
+    executor, runtime, _ = _make_executor(
+        contact=_make_contact(phone="2363140843"),
+        location=_make_location(retell_from_number="+15487088349"),
+    )
+    with _patch_client(result=RetellCallResult(call_id="call_xyz")) as call_mock:
+        asyncio.run(executor.execute(_make_run(), _make_node(agent_id="agent_xyz"), {}))
+
+    kw = call_mock.call_args.kwargs
+    assert kw["to_number"] == "+12363140843"
+    assert kw["dynamic_variables"]["user_number"] == "+12363140843"
+    result_metadata = _result_metadata(runtime.complete_step)
+    assert result_metadata["phone_country_code_enabled"] is False
+    assert result_metadata["phone_country_region"] is None
+    assert result_metadata["to_number_masked"] == "+*******0843"
+    assert result_metadata["to_number_normalized"] is True
+    runtime.fail_run.assert_not_called()
+
+
+def test_executor_rejects_non_nanp_local_patient_number_when_phone_country_override_disabled():
+    executor, runtime, _ = _make_executor(
+        contact=_make_contact(phone="07123456789"),
+        location=_make_location(retell_from_number="+15487088349"),
+    )
+    with _patch_client(result=RetellCallResult(call_id="call_xyz")) as call_mock:
+        asyncio.run(executor.execute(_make_run(), _make_node(agent_id="agent_xyz"), {}))
+
+    call_mock.assert_not_called()
+    runtime.fail_step.assert_called()
+    result_metadata = runtime.fail_step.call_args.kwargs["result_metadata"]
+    assert result_metadata["phone_country_code_enabled"] is False
+    assert result_metadata["phone_country_region"] is None
+    assert result_metadata["to_number_normalized"] is False
+    assert "invalid" in _fail_reason(runtime)
+
+
+def test_executor_uses_voice_node_phone_country_override_for_local_patient_number():
+    executor, runtime, _ = _make_executor(
+        contact=_make_contact(phone="07123456789"),
+        location=_make_location(retell_from_number="+15487088349"),
+    )
+    node = _make_node(
+        agent_id="agent_xyz",
+        phone_country_code_enabled=True,
+        phone_country_region="GB",
+    )
+    with _patch_client(result=RetellCallResult(call_id="call_xyz")) as call_mock:
+        asyncio.run(executor.execute(_make_run(), node, {}))
+
+    kw = call_mock.call_args.kwargs
+    assert kw["to_number"] == "+447123456789"
+    assert kw["dynamic_variables"]["user_number"] == "+447123456789"
+    result_metadata = _result_metadata(runtime.complete_step)
+    assert result_metadata["phone_country_code_enabled"] is True
+    assert result_metadata["phone_country_region"] == "GB"
+    assert result_metadata["to_number_normalized"] is True
+    runtime.fail_run.assert_not_called()
+
+
+def _make_profile(agent_id="agent_profile", from_number="+14163140843", display_name="Surgery profile"):
+    p = MagicMock()
+    p.retell_agent_id = agent_id
+    p.retell_from_number = from_number
+    p.display_name = display_name
+    return p
+
+
+def test_executor_profile_overrides_agent_and_from_number():
+    """An active outbound-voice profile (V-4) overrides the node agent + location number."""
+    executor, runtime, _ = _make_executor(
+        contact=_make_contact(),
+        location=_make_location(),
+        profile=_make_profile(agent_id="agent_profile", from_number="+14163140843"),
+    )
+    with _patch_client(result=RetellCallResult(call_id="c1")) as call_mock:
+        asyncio.run(executor.execute(_make_run(), _make_node(agent_id="agent_node"), {}))
+    kw = call_mock.call_args.kwargs
+    assert kw["from_number"] == "+14163140843"      # profile wins over location
+    assert kw["override_agent_id"] == "agent_profile"  # profile wins over node
+
+
+def test_executor_selected_profile_supplies_agent_when_node_agent_blank():
+    executor, runtime, _ = _make_executor(
+        contact=_make_contact(),
+        location=_make_location(),
+        profile=_make_profile(agent_id="agent_surgery", from_number="+14163140843"),
+    )
+    with _patch_client(result=RetellCallResult(call_id="c1")) as call_mock:
+        asyncio.run(
+            executor.execute(
+                _make_run(),
+                _make_node(agent_id="", voice_profile_id="prof-surgery"),
+                {},
+            )
+        )
+    kw = call_mock.call_args.kwargs
+    assert kw["from_number"] == "+14163140843"
+    assert kw["override_agent_id"] == "agent_surgery"
+
+
+def test_executor_fails_when_selected_profile_missing():
+    executor, runtime, _ = _make_executor(
+        contact=_make_contact(),
+        location=_make_location(),
+        profile=None,
+    )
+    asyncio.run(
+        executor.execute(
+            _make_run(),
+            _make_node(agent_id="", voice_profile_id="missing-profile"),
+            {},
+        )
+    )
+    runtime.fail_step.assert_called()
+    assert "profile" in _fail_reason(runtime)
+
+
+def test_executor_fails_when_no_profile_or_agent():
+    executor, runtime, _ = _make_executor(contact=_make_contact(), location=_make_location())
+    asyncio.run(executor.execute(_make_run(), _make_node(agent_id=""), {}))
+    runtime.fail_step.assert_called()
+    assert "no Retell agent" in _fail_reason(runtime)
+
+
+def test_executor_falls_back_when_profile_fields_blank():
+    """A profile with empty agent/number falls back to node/location defaults."""
+    executor, runtime, _ = _make_executor(
+        contact=_make_contact(),
+        location=_make_location(retell_from_number="+15005550000"),
+        profile=_make_profile(agent_id=None, from_number=None),
+    )
+    with _patch_client(result=RetellCallResult(call_id="c1")) as call_mock:
+        asyncio.run(executor.execute(_make_run(), _make_node(agent_id="agent_node"), {}))
+    kw = call_mock.call_args.kwargs
+    assert kw["from_number"] == "+15005550000"
+    assert kw["override_agent_id"] == "agent_node"
+
+
+def test_executor_records_voice_attempt_on_success():
+    """A placed fire-and-forget call inserts a WorkflowVoiceAttempt row (status=placed)."""
+    from src.app.models.outbound_voice import VoiceAttemptStatus, WorkflowVoiceAttempt
+
+    executor, runtime, _ = _make_executor(contact=_make_contact(), location=_make_location())
+    with _patch_client(result=RetellCallResult(call_id="call_rec")):
+        asyncio.run(executor.execute(_make_run(), _make_node(), {}))
+    added = [c.args[0] for c in executor.session.add.call_args_list]
+    attempts = [o for o in added if isinstance(o, WorkflowVoiceAttempt)]
+    assert len(attempts) == 1
+    attempt = attempts[0]
+    assert attempt.retell_call_id == "call_rec"
+    assert attempt.status == VoiceAttemptStatus.PLACED.value
+    assert attempt.to_number_masked and attempt.to_number_masked.endswith("1234")
+
+
+def test_executor_records_awaiting_attempt_when_wait_for_outcome():
+    from src.app.models.outbound_voice import VoiceAttemptStatus, WorkflowVoiceAttempt
+
+    executor, runtime, _ = _make_executor(contact=_make_contact(), location=_make_location())
+    with _patch_client(result=RetellCallResult(call_id="call_wait")):
+        asyncio.run(executor.execute(_make_run(), _make_node(wait_for_outcome=True), {}))
+    added = [c.args[0] for c in executor.session.add.call_args_list]
+    attempts = [o for o in added if isinstance(o, WorkflowVoiceAttempt)]
+    assert len(attempts) == 1
+    assert attempts[0].status == VoiceAttemptStatus.AWAITING_OUTCOME.value
+
+
+def test_executor_idempotent_when_already_placed():
+    executor, runtime, _ = _make_executor(
+        contact=_make_contact(), location=_make_location(), already_placed=True
+    )
+    with _patch_client(result=RetellCallResult(call_id="x")) as call_mock:
+        result = asyncio.run(executor.execute(_make_run(), _make_node(), {}))
+    assert result == "node-2"
+    call_mock.assert_not_called()
+    runtime.begin_step.assert_not_called()
+    runtime.complete_step.assert_not_called()
+    runtime.fail_run.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# Wait-for-outcome park
+# ---------------------------------------------------------------------------
+
+
+def test_executor_parks_when_wait_for_outcome():
+    executor, runtime, step = _make_executor(contact=_make_contact(), location=_make_location())
+    with _patch_client(result=RetellCallResult(call_id="call_park")):
+        result = asyncio.run(
+            executor.execute(_make_run(), _make_node(wait_for_outcome=True), {})
+        )
+    assert isinstance(result, VoiceParked)
+    assert result.step is step
+    # Marked awaiting (NOT completed) with the placed-call marker + call_id.
+    runtime.mark_step_awaiting_outcome.assert_called_once()
+    mkw = runtime.mark_step_awaiting_outcome.call_args.kwargs
+    assert mkw.get("result_code") == "call_placed_awaiting_outcome"
+    result_metadata = mkw.get("result_metadata")
+    assert result_metadata["retell_call_id"] == "call_park"
+    assert result_metadata["retell_from_number_masked"] == "+*******0000"
+    assert result_metadata["to_number_masked"] == "+*******1234"
+    runtime.complete_step.assert_not_called()
+    runtime.fail_run.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# P9 — crash-safe committed claim
+# ---------------------------------------------------------------------------
+
+
+def test_executor_commits_claim_before_placing_call():
+    """A committed INITIATING claim is written (and the session committed) BEFORE the
+    Retell POST, so a crash between POST and task-commit leaves a durable claim."""
+    from src.app.models.outbound_voice import VoiceAttemptStatus, WorkflowVoiceAttempt
+
+    executor, runtime, _ = _make_executor(contact=_make_contact(), location=_make_location())
+    with _patch_client(result=RetellCallResult(call_id="c1")):
+        asyncio.run(executor.execute(_make_run(), _make_node(), {}))
+    # A voice-attempt row was added and the session committed (the pre-POST claim).
+    added = [c.args[0] for c in executor.session.add.call_args_list]
+    assert any(isinstance(o, WorkflowVoiceAttempt) for o in added)
+    executor.session.commit.assert_called()  # claim committed before the POST
+    # Final state is placed (claim → placed after success).
+    attempt = next(o for o in added if isinstance(o, WorkflowVoiceAttempt))
+    assert attempt.status == VoiceAttemptStatus.PLACED.value
+
+
+def test_executor_skips_when_committed_claim_exists():
+    """Crash-tail redelivery: a committed non-FAILED claim → skip the dial entirely
+    (at-most-once), without beginning a new step or placing a call."""
+    executor, runtime, _ = _make_executor(
+        contact=_make_contact(), location=_make_location(), claim_id="existing-attempt",
+    )
+    with _patch_client(result=RetellCallResult(call_id="x")) as call_mock:
+        result = asyncio.run(executor.execute(_make_run(), _make_node(), {}))
+    assert result == "node-2"
+    call_mock.assert_not_called()      # no re-dial
+    runtime.begin_step.assert_not_called()
+    runtime.complete_step.assert_not_called()
+    runtime.fail_run.assert_not_called()
+
+
+def test_executor_transient_error_marks_claim_failed_for_retry():
+    """A transient error marks the claim FAILED so the V-6 retry can re-dial (a FAILED
+    claim is excluded from the skip check)."""
+    from src.app.models.outbound_voice import VoiceAttemptStatus, WorkflowVoiceAttempt
+
+    executor, runtime, _ = _make_executor(
+        contact=_make_contact(), location=_make_location(), attempt_number=1
+    )
+    with _patch_client(side_effect=RetellTransientError("retell_5xx: 503")):
+        with pytest.raises(RetellTransientError):
+            asyncio.run(executor.execute(_make_run(), _make_node(max_attempts=3), {}))
+    added = [c.args[0] for c in executor.session.add.call_args_list]
+    attempt = next(o for o in added if isinstance(o, WorkflowVoiceAttempt))
+    assert attempt.status == VoiceAttemptStatus.FAILED.value
+
+
+def test_executor_permanent_error_marks_claim_failed():
+    from src.app.models.outbound_voice import VoiceAttemptStatus, WorkflowVoiceAttempt
+
+    executor, runtime, _ = _make_executor(contact=_make_contact(), location=_make_location())
+    with _patch_client(side_effect=RetellPermanentError("retell_4xx: 422")):
+        asyncio.run(executor.execute(_make_run(), _make_node(), {}))
+    added = [c.args[0] for c in executor.session.add.call_args_list]
+    attempt = next(o for o in added if isinstance(o, WorkflowVoiceAttempt))
+    assert attempt.status == VoiceAttemptStatus.FAILED.value
+
+
+def test_executor_ambiguous_timeout_fails_without_retry_and_keeps_claim_blocking():
+    """XC-1b: a timeout/network error must NOT retry (the call may have been placed).
+    Fail the run, do NOT re-raise, and leave the claim INITIATING (still blocking a
+    redelivery re-dial) with an error_message — NOT marked FAILED."""
+    from src.app.models.outbound_voice import VoiceAttemptStatus, WorkflowVoiceAttempt
+
+    executor, runtime, _ = _make_executor(contact=_make_contact(), location=_make_location())
+    with _patch_client(side_effect=RetellAmbiguousError("retell_network_error: TimeoutException")):
+        result = asyncio.run(executor.execute(_make_run(), _make_node(max_attempts=3), {}))
+    assert result == "node-2"          # returns (no re-raise → no Celery retry)
+    runtime.fail_run.assert_called_once()
+    assert "at-most-once" in _fail_reason(runtime)
+    added = [c.args[0] for c in executor.session.add.call_args_list]
+    attempt = next(o for o in added if isinstance(o, WorkflowVoiceAttempt))
+    # Claim stays blocking (INITIATING, not FAILED) so a redelivery can't re-dial.
+    assert attempt.status == VoiceAttemptStatus.INITIATING.value
+    assert attempt.error_message and "network_error" in attempt.error_message
+
+
+# ---------------------------------------------------------------------------
+# Error classification (transient retry vs permanent fail)
+# ---------------------------------------------------------------------------
+
+
+def test_executor_permanent_error_fails_run():
+    executor, runtime, _ = _make_executor(contact=_make_contact(), location=_make_location())
+    with _patch_client(side_effect=RetellPermanentError("retell_4xx: 422")):
+        result = asyncio.run(executor.execute(_make_run(), _make_node(), {}))
+    assert result == "node-2"
+    runtime.fail_step.assert_called_once()
+    runtime.fail_run.assert_called_once()
+    result_metadata = _result_metadata(runtime.fail_step)
+    assert result_metadata["retell_from_number_masked"] == "+*******0000"
+    assert result_metadata["to_number_masked"] == "+*******1234"
+    assert result_metadata["retell_agent_configured"] is True
+    assert "send_voice error" in _fail_reason(runtime)
+
+
+def test_executor_transient_error_reraises_for_retry():
+    """A transient Retell error re-raises (so the Celery task retries) while attempts remain."""
+    executor, runtime, _ = _make_executor(
+        contact=_make_contact(), location=_make_location(), attempt_number=1
+    )
+    with _patch_client(side_effect=RetellTransientError("retell_5xx: 503")):
+        with pytest.raises(RetellTransientError):
+            asyncio.run(executor.execute(_make_run(), _make_node(max_attempts=3), {}))
+    runtime.fail_run.assert_not_called()  # not exhausted → retry, don't fail the run
+
+
+def test_executor_transient_error_fails_run_when_attempts_exhausted():
+    executor, runtime, _ = _make_executor(
+        contact=_make_contact(), location=_make_location(), attempt_number=3
+    )
+    with _patch_client(side_effect=RetellTransientError("retell_5xx: 503")):
+        result = asyncio.run(executor.execute(_make_run(), _make_node(max_attempts=3), {}))
+    assert result == "node-2"
+    runtime.fail_run.assert_called_once()
+    assert "attempts exhausted" in _fail_reason(runtime)
+
+
+# ---------------------------------------------------------------------------
+# Call concurrency ceiling (Item 18)
+# ---------------------------------------------------------------------------
+
+
+class _StubLimits:
+    """Records what the executor did with its call slot."""
+
+    def __init__(self, *, allowed=True, retry_after_seconds=0, in_flight=None):
+        from src.app.services.outbound_limits import ConcurrencySlot, LimitDecision
+
+        self._decision = LimitDecision(
+            allowed,
+            retry_after_seconds=retry_after_seconds,
+            reason=None if allowed else "call_concurrency_limit_3",
+            in_flight=in_flight,
+        )
+        self._slot = ConcurrencySlot("inst-1", "tok-1") if allowed else None
+        self.acquired_with_ceiling = []
+        self.released = []
+        self.rekeyed = []
+
+    async def acquire_call_slot(self, institution_id, *, ceiling=None):
+        self.acquired_with_ceiling.append(ceiling)
+        return self._decision, self._slot
+
+    async def release_call_slot(self, slot) -> None:
+        self.released.append(slot.token)
+
+    async def release_call_slot_by_token(self, institution_id, token) -> None:
+        self.released.append(token)
+
+    async def rekey_call_slot(self, institution_id, old_token, new_token) -> bool:
+        self.rekeyed.append((old_token, new_token))
+        return True
+
+    async def check_send_rate(self, provider, scope_id):
+        from src.app.services.outbound_limits import LimitDecision
+
+        return LimitDecision(True)
+
+
+def test_executor_defers_when_the_clinic_is_at_its_call_ceiling():
+    """Held with a retry time, exactly as quiet-hours work is held."""
+    limits = _StubLimits(allowed=False, retry_after_seconds=90, in_flight=3)
+    executor, runtime, step = _make_executor(
+        contact=_make_contact(), location=_make_location(), limits=limits
+    )
+    with _patch_client(result=RetellCallResult(call_id="call_xyz")) as call_mock:
+        result = asyncio.run(executor.execute(_make_run(), _make_node(), {}))
+
+    assert isinstance(result, VoiceCooldownDeferred)
+    # Never reached the vendor, and the run is deferred rather than failed.
+    call_mock.assert_not_called()
+    runtime.fail_run.assert_not_called()
+
+
+def test_deferring_at_the_ceiling_releases_the_claim_so_a_retry_can_dial():
+    """A held claim would block the re-dial the deferral exists to allow."""
+    limits = _StubLimits(allowed=False, retry_after_seconds=90)
+    executor, _, _ = _make_executor(
+        contact=_make_contact(), location=_make_location(), limits=limits
+    )
+    with patch(
+        "src.app.services.automation.voice_node_executor.mark_attempt_failed",
+        new=AsyncMock(),
+    ) as mark_failed, _patch_client(result=RetellCallResult(call_id="call_xyz")):
+        asyncio.run(executor.execute(_make_run(), _make_node(), {}))
+
+    mark_failed.assert_awaited_once()
+
+
+def test_a_placed_call_relabels_its_slot_to_the_call_id():
+    """The outcome handler knows the call id and nothing else."""
+    limits = _StubLimits()
+    executor, _, _ = _make_executor(
+        contact=_make_contact(), location=_make_location(), limits=limits
+    )
+    with _patch_client(result=RetellCallResult(call_id="call_xyz")):
+        asyncio.run(executor.execute(_make_run(), _make_node(), {}))
+
+    assert limits.rekeyed == [("tok-1", "call_xyz")]
+    assert limits.released == []
+
+
+def test_a_transient_failure_hands_the_slot_straight_back():
+    """The call was definitely not placed, so the slot is genuinely free."""
+    limits = _StubLimits()
+    executor, _, _ = _make_executor(
+        contact=_make_contact(), location=_make_location(), limits=limits
+    )
+    with _patch_client(side_effect=RetellTransientError("retell_5xx: 503")):
+        try:
+            asyncio.run(executor.execute(_make_run(), _make_node(), {}))
+        except RetellTransientError:
+            pass  # re-raised for the Celery retry once attempts remain
+
+    assert limits.released == ["tok-1"]
+
+
+def test_an_ambiguous_failure_keeps_the_slot_until_the_lease_lapses():
+    """The call may be live; handing back its slot would break the ceiling."""
+    limits = _StubLimits()
+    executor, _, _ = _make_executor(
+        contact=_make_contact(), location=_make_location(), limits=limits
+    )
+    with _patch_client(side_effect=RetellAmbiguousError("retell_network_error")):
+        asyncio.run(executor.execute(_make_run(), _make_node(), {}))
+
+    assert limits.released == []
+    assert limits.rekeyed == []
+
+
+def test_a_permanent_failure_hands_the_slot_back():
+    limits = _StubLimits()
+    executor, _, _ = _make_executor(
+        contact=_make_contact(), location=_make_location(), limits=limits
+    )
+    with _patch_client(side_effect=RetellPermanentError("retell_4xx: 400")):
+        asyncio.run(executor.execute(_make_run(), _make_node(), {}))
+
+    assert limits.released == ["tok-1"]
+
+
+def test_a_clinics_own_ceiling_is_used_when_set():
+    limits = _StubLimits()
+    institution = MagicMock()
+    institution.outbound_call_limit = 2
+    executor, _, _ = _make_executor(
+        contact=_make_contact(), location=_make_location(),
+        limits=limits, institution=institution,
+    )
+    with _patch_client(result=RetellCallResult(call_id="call_xyz")):
+        asyncio.run(executor.execute(_make_run(), _make_node(), {}))
+
+    assert limits.acquired_with_ceiling == [2]
+
+
+def test_an_untuned_clinic_falls_back_to_the_platform_default():
+    """NULL means "use the default", not "no limit"."""
+    limits = _StubLimits()
+    institution = MagicMock()
+    institution.outbound_call_limit = None
+    executor, _, _ = _make_executor(
+        contact=_make_contact(), location=_make_location(),
+        limits=limits, institution=institution,
+    )
+    with _patch_client(result=RetellCallResult(call_id="call_xyz")):
+        asyncio.run(executor.execute(_make_run(), _make_node(), {}))
+
+    assert limits.acquired_with_ceiling == [None]
+
+
+# ---------------------------------------------------------------------------
+# Voicemail handling (Item 19)
+# ---------------------------------------------------------------------------
+
+
+def _count_patch(dials: int, counted: int):
+    """Patch the dial counter, which is the only thing these settings read."""
+    return patch(
+        "src.app.services.automation.voice_node_executor.count_dials_for_node",
+        new=AsyncMock(return_value=(dials, counted)),
+    )
+
+
+def test_leave_voicemail_off_tells_the_agent_not_to():
+    executor, _, _ = _make_executor(contact=_make_contact(), location=_make_location())
+    with _patch_client(result=RetellCallResult(call_id="call_xyz")) as call_mock:
+        asyncio.run(executor.execute(_make_run(), _make_node(), {}))
+
+    assert call_mock.call_args.kwargs["dynamic_variables"]["leave_voicemail"] == "false"
+
+
+def test_leave_voicemail_on_tells_the_agent_to():
+    executor, _, _ = _make_executor(contact=_make_contact(), location=_make_location())
+    node = _make_node()
+    node.leave_voicemail = True
+    with _patch_client(result=RetellCallResult(call_id="call_xyz")) as call_mock:
+        asyncio.run(executor.execute(_make_run(), node, {}))
+
+    assert call_mock.call_args.kwargs["dynamic_variables"]["leave_voicemail"] == "true"
+
+
+def test_the_call_is_placed_while_attempts_remain():
+    executor, _, _ = _make_executor(contact=_make_contact(), location=_make_location())
+    node = _make_node()
+    node.voice_attempt_allowance = 3
+    node.max_dials = 5
+    with _count_patch(dials=1, counted=1), _patch_client(
+        result=RetellCallResult(call_id="call_xyz")
+    ) as call_mock:
+        asyncio.run(executor.execute(_make_run(), node, {}))
+
+    call_mock.assert_called_once()
+
+
+def test_the_allowance_stops_further_calls():
+    executor, runtime, _ = _make_executor(
+        contact=_make_contact(), location=_make_location()
+    )
+    node = _make_node()
+    node.voice_attempt_allowance = 2
+    node.max_dials = 5
+    with _count_patch(dials=2, counted=2), _patch_client(
+        result=RetellCallResult(call_id="call_xyz")
+    ) as call_mock:
+        result = asyncio.run(executor.execute(_make_run(), node, {}))
+
+    call_mock.assert_not_called()
+    assert result == "node-2"
+    assert runtime.complete_step.call_args.kwargs["result_code"] == "attempts_exhausted"
+
+
+def test_the_dial_cap_stops_a_number_that_is_always_voicemail():
+    """The guard that makes "voicemail does not consume an attempt" safe.
+
+    Voicemail has consumed no attempts, so the allowance would let this dial
+    for ever. The separate cap is what ends it.
+    """
+    executor, runtime, _ = _make_executor(
+        contact=_make_contact(), location=_make_location()
+    )
+    node = _make_node()
+    node.voicemail_consumes_attempt = False
+    node.voice_attempt_allowance = 3
+    node.max_dials = 5
+    with _count_patch(dials=5, counted=0), _patch_client(
+        result=RetellCallResult(call_id="call_xyz")
+    ) as call_mock:
+        result = asyncio.run(executor.execute(_make_run(), node, {}))
+
+    call_mock.assert_not_called()
+    assert result == "node-2"
+    assert runtime.complete_step.call_args.kwargs["result_code"] == "dial_cap_reached"
+
+
+def test_reaching_the_cap_does_not_fail_the_run():
+    """Running out of attempts is a normal outcome, not an error."""
+    executor, runtime, _ = _make_executor(
+        contact=_make_contact(), location=_make_location()
+    )
+    node = _make_node()
+    with _count_patch(dials=99, counted=99), _patch_client(
+        result=RetellCallResult(call_id="call_xyz")
+    ):
+        asyncio.run(executor.execute(_make_run(), node, {}))
+
+    runtime.fail_run.assert_not_called()

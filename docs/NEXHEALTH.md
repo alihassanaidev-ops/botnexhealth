@@ -1,6 +1,6 @@
 # NexHealth Integration
 
-Last reviewed: June 2026. Code lives in `src/app/nexhealth/` (transport: auth,
+Last reviewed: August 2026. Code lives in `src/app/nexhealth/` (transport: auth,
 HTTP, rate limiting) and `src/app/pms/nexhealth/` (the adapter: domain calls and
 response mapping). If you're debugging a booking or slot problem, start with the
 [Caveats and edge cases](#caveats-and-edge-cases) section — most surprises are
@@ -17,10 +17,31 @@ matrices are checked into
 (one JSON per PMS). Check there first when a clinic on a particular PMS reports
 a feature "not working".
 
+For the step-by-step clinic setup runbook, see
+[NEXHEALTH_CLINIC_ONBOARDING.md](NEXHEALTH_CLINIC_ONBOARDING.md).
+
 ## Account model
 
-One platform-level NexHealth account/API key for all clinics. Per-clinic
-isolation comes entirely from two values on each `InstitutionLocation`:
+NexHealth runs in hybrid credential mode:
+
+- **Platform key** — the default path. Clinics use the platform-level
+  NexHealth developer account/API key from `NEXHEALTH_API_KEY`.
+- **Institution key** — optional. A Super Admin explicitly selects
+  `nexhealth_credential_mode=institution` and stores the clinic/DSO key in
+  `institutions.nexhealth_api_key_encrypted`; all NexHealth traffic for that
+  institution then uses that key.
+
+Credential selection never falls back silently. Institution mode with a
+missing or undecryptable institution key fails closed, and platform mode ignores
+any stale institution key. This prevents a clinic that pays NexHealth directly
+from accidentally consuming the shared platform account or owning webhooks
+under the wrong NexHealth account.
+
+Primary and shadow/cutover webhook provisioning use this same explicit
+credential selection, so endpoints are created in the NexHealth account that
+owns the institution's locations.
+
+Per-clinic routing still comes from two values on each `InstitutionLocation`:
 
 - `nexhealth_subdomain` — NexHealth's own tenant partition
 - `nexhealth_location_id` — the location within that subdomain
@@ -30,8 +51,11 @@ mandatory on every PMS-touching route — for a multi-location institution there
 is no "default" location, because guessing one would silently route bookings
 into the wrong clinic's PMS (`src/app/pms/factory.py:91-99`).
 
-`institutions.nexhealth_api_key_encrypted` exists for a future per-clinic
-credential model but is not currently used by the adapter path.
+The token cache and rate limiter are keyed by a non-secret SHA-256 fingerprint
+of the selected API key, so clinic-owned keys get separate bearer tokens and
+separate rate-limit buckets. Webhook subscription lifecycle rows also record
+the credential mode/hash that created the remote endpoint so credential changes
+can be handled as an explicit migration.
 
 ## Auth and token lifecycle
 
@@ -54,19 +78,28 @@ Token caching (`src/app/nexhealth/token_manager.py`):
 ## Rate limiting
 
 NexHealth's documented limits: 100 req/s global per key, 10 req/s for
-`GET /appointments` and `GET /appointment_slots`, 1000 req/min for
-patient/appointment endpoints, 2000 req/min otherwise.
+`GET /appointments` and slot reads (`GET /appointment_slots` on legacy v2,
+`GET /available_slots` on stable v3), 1000 req/min for patient/appointment
+endpoints, 2000 req/min otherwise.
 
-Since the whole fleet shares one key, limiting must be cluster-wide:
+Since the whole fleet can share a platform key, limiting must be cluster-wide:
 `src/app/nexhealth/rate_limit.py` classifies each request into an endpoint
-class and atomically checks three Redis fixed-window counters (global/s,
-class/s, class/min) in one Lua script. Notes:
+class and atomically checks Redis fixed-window counters (global/s, class/s,
+shared endpoint-family/min) in one Lua script. Patient calls and appointment
+reads share the same 1000/min family bucket. Clinic-owned keys have completely
+separate counter namespaces.
+
+Reconciliation, backfill, and sync-status polling are marked as background
+traffic. They receive an additional shared allowance of only 1 request/second
+and 60 requests/minute per API key, leaving the remainder for live voice-agent
+and operator traffic. Notes:
 
 - Keys use `SHA256(api_key)[:16]`, never the key itself.
 - Fixed windows allow up to 2x burst at window boundaries; the reactive 429
   handler in the HTTP client is the backstop.
 - Waiters add 10–80ms jitter so a blocked burst doesn't stampede the next window.
-- Fail-open on Redis errors, same rationale as the token cache.
+- Interactive calls fail open on Redis errors to preserve live calls;
+  background maintenance fails closed rather than creating an unmetered sweep.
 
 ## HTTP client behavior
 
@@ -87,12 +120,110 @@ Runs on demand (location setup flow / admin action), not on a schedule.
 Upsert-only: rows deleted in NexHealth are not removed locally — staleness is
 visible as `synced_at` age. Acceptable for reference data; don't rely on these
 tables for anything booking-critical (slot search always hits the live API).
+Operatories also carry a local `is_hidden` flag. PMS sync updates the room name
+and active state but preserves that local visibility preference; hidden
+operatories remain visible on the Operatories setup page and are filtered out of
+appointment-type and scheduling selections.
+
+## Location timezone
+
+`InstitutionLocation.timezone` decides when scheduled campaigns fire, which
+sends quiet hours holds, and what "in 3 days at 09:00" means. It defaults to
+`"UTC"`, and a genuinely-UTC clinic is indistinguishable from one nobody
+configured, so the failure is silent: a 2pm call held as if it were the evening.
+
+GoTracker reports the zone on every appointment webhook, so that integration
+learns it for free. **NexHealth's appointment webhook carries no zone** — only
+`start_time`, whose UTC offset describes one instant and can neither name a zone
+nor supply its DST rules. The practice's location record does carry one, so the
+value has to be pulled: `NexHealthSyncStatusService.learn_timezone` calls
+`GET /locations/{id}` and adopts the result via
+`src/app/services/location_timezone.py`.
+
+**The field is `tz`, not `timezone`.** Verified against the live API: a location
+record carries `tz: "America/Los_Angeles"` and has no `timezone` key at all. The
+mapper read `timezone` and so returned None for every location, which is why the
+value looked absent rather than misread and nothing downstream ever complained.
+The subdomain is *not* required by the endpoint — the id alone resolves — but it
+is sent anyway, because a platform-wide API key can see every tenant and an
+unscoped lookup on a stale location id would return another practice's record.
+
+It hangs off the `poll-nexhealth-sync-statuses` beat (15 minutes) because that
+sweep already walks exactly the right rows — NexHealth locations with both a
+subdomain and a location id. One request per location, ever: a location no
+longer on the default is skipped. `View location` is supported by every backing
+PMS NexHealth fronts (see `docs/Supported_API_Per_PMS_Nexhealth/`), so this is
+not a per-PMS gamble.
+
+Two rules are load-bearing. A zone that is not a resolvable IANA name is
+discarded rather than stored, because a bad value reads back as UTC on every
+lookup and blocks the retry. And only a location still on `"UTC"` is written —
+an administrator's choice, made at `/institution-admin/settings`, always wins.
+
+A configured location is still **compared**, once a day, and a disagreement is
+logged as `nexhealth timezone drift location=… configured=… pms_reports=…`. It
+is never corrected automatically: an administrator working around a bad PMS
+record and one who made a typo at onboarding are indistinguishable from here,
+and silently overruling the first would be worse than reporting both. The pace
+comes from `TIMEZONE_CHECK_INTERVAL` and is stamped on
+`institution_locations.timezone_checked_at`, because the sweep this rides runs
+every 15 minutes while background PMS traffic shares only 60 requests/minute per
+key with reconciliation and backfill. The stamp is written even when the answer
+is unusable, so a practice whose record carries no zone costs one request a day
+rather than four an hour, for ever.
+
+**Correcting the zone is not enough on its own.** A `workflow_schedules` row
+caches the timezone its cron is read in so the beat can claim due rows by
+comparing UTC, and that cache is rewritten only on publish/pause/resume. Every
+path that changes a location's timezone therefore calls
+`WorkflowScheduleService.resync_for_location`, or campaigns published while the
+clinic said UTC keep firing on UTC while the setting reads as fixed.
+
+Appointment *times* were never affected: NexHealth's `start_time` carries a real
+offset, so reminders anchored to an appointment have always been correct.
+
+## Live patient directory
+
+The clinic-facing Patients page is a bounded server-to-server read, not a full
+local-roster query and never a browser-to-NexHealth request. The dashboard calls
+`GET /api/v1/pms/patients/page` with an explicit local `location_id`; the backend
+resolves the institution credential, calls NexHealth, audits the read, and
+returns one page. Location-scoped clinic users receive phone/email directly.
+Institution admins receive masked contact fields by default and can reveal one
+patient's fields with a second audited, bounded read of the current page.
+
+For stable v3 the adapter passes `location_strict=true`, `non_patient=false`, an
+explicit inactive filter, and at most 100 records. It follows neither cursor on
+the caller's behalf: `page_info.start_cursor` / `end_cursor` become opaque
+previous/next tokens, so each click makes exactly one NexHealth list request and
+memory is bounded by the requested page. Active patients are the default;
+inactive and all-record views are explicit UI filters.
+
+GoTracker uses the same one-request rule against the Synchronizer's fixed
+200-record pages. Responses or advertised page sizes above that bound are
+rejected rather than forwarded or silently accumulated. A missing or disabled
+Synchronizer pagination contract therefore fails closed instead of turning a
+directory request into an unbounded roster load.
+
+This does not remove the local `Contact` / `PatientWorkingSet` projection. That
+projection remains the durable identity and workflow working set used for call
+history, campaign eligibility, webhook handling, and outage tolerance. A live
+directory row links to Contact history when the corresponding PMS id has already
+been projected; otherwise it remains visible as a current PMS record without
+inventing a second person identity or writing local state during a GET.
 
 ## Slot search and booking
 
-Raw availability comes from `GET /appointment_slots` (response is nested per
-location/provider; the adapter flattens it). We then filter locally
+Raw bookable slots come from a contract-aware path: legacy v2 calls
+`GET /appointment_slots`; stable v3 calls `GET /available_slots`. The request
+parameters we use and the response shape are compatible, so the adapter still
+flattens the nested per-location/provider response into universal slots. We
+then filter locally
 (`src/app/services/slot_filter.py`):
+
+Before Retell returns slot results, blank provider names are enriched from the
+location-scoped ScaleNexus `institution_providers` cache because NexHealth slot
+groups reliably include provider IDs but not provider names.
 
 1. Buffer: drop slots starting before `now + provider.buffer_minutes`.
 2. Operating hours + breaks: per-day windows configured on the location,
@@ -104,14 +235,49 @@ location/provider; the adapter flattens it). We then filter locally
    appointments exist and leaves slots visible.
 
 Booking is `POST /appointments` (body wrapped under `"appt"`), cancel is
-`PATCH /appointments/{id}` with `cancelled: true`. **Reschedule books the new
-slot first, then cancels the old one** — if the new booking fails the patient
-keeps their original appointment; if the cancel fails after a successful
-booking we return success with a warning rather than unwinding the new booking
-(`src/app/pms/nexhealth/adapter.py`).
+`PATCH /appointments/{id}` with `cancelled: true`, and confirmation is
+`PATCH /appointments/{id}` with `confirmed: true`. Before posting a booking,
+the adapter re-queries the contract-aware slot endpoint for the selected day,
+provider, appointment type, and operatory, then only proceeds when the selected
+slot still matches exactly. The match checks start time and provider, checks
+appointment type and operatory when supplied, and pins the end time from the
+returned slot or from appointment-type duration when NexHealth omits `end_time`.
 
-There is no slot-level double-booking guard beyond what NexHealth/the PMS
-enforces; two agents racing for the same slot resolve at NexHealth's side.
+This validation is not a lock. Two agents can still race after validation; if
+the booking POST loses that race, the adapter returns a controlled failure so
+the caller can offer fresh slots instead of silently booking a different time.
+Legacy reschedule still books the new slot first, then cancels the old one — if
+the new booking fails the patient keeps their original appointment; if the
+cancel fails after a successful booking we return success with a warning rather
+than unwinding the new booking (`src/app/pms/nexhealth/adapter.py`).
+
+`reschedule_appointment_v2` uses the same slot validation but, when the
+configured contract is stable v3 and the underlying PMS is known to support
+NexHealth appointment updates, it patches the existing appointment with
+`start_time` and `end_time` instead of creating a second appointment. The direct
+PATCH path is conservatively enabled for Dentrix, Dentrix Enterprise, Eaglesoft,
+and Open Dental. Denticon appears in NexHealth's migration guide but not the
+endpoint reference, so it is not enabled without explicit confirmation. All
+other PMSes fall back to the legacy book-new-then-cancel-old flow.
+
+Appointment list reads always choose cancellation semantics explicitly during
+the v3 migration. Booking-critical reads such as the "has appointments today?"
+slot cutoff check send `cancelled=false` and only consider active appointments.
+Backfill/reconciliation scans fetch active and cancelled/deleted rows as two
+separate filtered reads (`cancelled=false` then `cancelled=true`) so stable v3's
+broader omitted-filter default cannot silently change workflow behavior.
+
+Webhooks are the primary projection path. The repair sweeps are staggered in
+UTC so appointment and patient scans do not start together: appointments run at
+minute 17 every six hours and patients at minute 47. Initial appointment
+backfill remains bounded to 90 future days; recurring reconciliation repairs a
+30-day campaign-relevant window. Patient reconciliation uses an overlapping
+`updated_since` watermark after its initial bounded backfill. Global target
+discovery runs under the trusted Super Admin system context, then each actual
+location sync switches back to an institution-scoped Celery database context.
+Rows marked failed because webhook delivery is stale remain reconciliation
+eligible—the safety net is most important during webhook trouble. Only an
+explicitly disabled subscription is excluded.
 
 ## Caveats and edge cases
 
@@ -132,15 +298,26 @@ take 10 digits (`_normalize_phone_for_nexhealth`,
 **"Availabilities" are working windows, not bookable slots.** The stable
 API's naming is misleading: an "availability" is a provider's recurring or
 one-off *working window*; actual bookable slots are computed by NexHealth
-(windows minus existing appointments) and come from `GET /appointment_slots`.
-Don't reach for `/availabilities` when you mean "what can the patient book".
+(windows minus existing appointments) and come from the contract-aware slot
+path: `/appointment_slots` on legacy v2 and `/available_slots` on stable v3.
+Don't reach for `/availabilities` or `/working_hours` when you mean "what can
+the patient book".
+
+**Setup can bulk-link a date range of dated work windows.** The provider
+scheduling page has a "Link date range" action that reads real NexHealth
+working-window records, filters them to dated rows whose `specific_date` falls
+inside the selected range for the selected provider and modal-selected visible
+operatories, and PATCHes those records with the selected appointment types.
+Hidden operatories are excluded from all-visible selections and rejected if
+submitted explicitly. It deliberately does not patch recurring rows with only
+`days`, because that would affect future weeks too, not just the selected range.
 
 **`/availabilities` returns empty for PMS-synced schedules.** For providers
 whose schedule syncs from the PMS, the endpoint can return 200 with zero rows
 even though the provider has working hours. The same windows *are* embedded in
 `GET /providers?include[]=availabilities`, so `list_availabilities()` merges
-both sources by ID (`adapter.py:580-614`). Without this, the setup UI shows
-providers as having no hours.
+both sources by ID (`src/app/pms/nexhealth/adapter.py`). Without this, the setup
+UI shows providers as having no hours.
 
 **Working-window management must be enabled by NexHealth support.** Writing
 working windows ("availabilities") for a clinic is not self-serve on the
@@ -163,13 +340,21 @@ depending on the path that produced them; we check both
 (`adapter.py:300`). Similarly "already cancelled" errors on cancel are detected
 by case-insensitive substring match and treated as success.
 
-**Inconsistent response nesting.** `GET /patients/{id}` may put the record
-under `data.user`, `data.patient`, or directly in `data` — we try all three
-(`adapter.py:211-215`). Patient phone/DOB may be top-level or under `bio`
-(`mappers.py:89-90`). Appointment-type duration arrives as `minutes` or
-`duration` (`mappers.py:139`). List endpoints nest under a plural key
-(`data.patients`), writes must wrap the body under the singular resource name
-(`{"appointment_type": {...}}`) or you get `Missing parameter` back.
+**Inconsistent response nesting and pagination.** `GET /patients/{id}` may put
+the record under `data.user`, `data.patient`, or directly in `data` — we try all
+three (`adapter.py`). Patient phone/DOB may be top-level or under `bio`
+(`mappers.py`). Appointment-type duration arrives as `minutes` or `duration`.
+List reads go through `src/app/nexhealth/pagination.py`: legacy v2 offset lists
+can nest rows under a plural key such as `data.patients`, while stable v3 cursor
+lists return rows directly under `data` and advance with
+`page_info.end_cursor`. Writes must still wrap the body under the singular
+resource name (`{"appointment_type": {...}}`) or you get `Missing parameter`
+back.
+
+Patient list projection no longer requires `location_ids`. Stable v3 omits that
+field, so location-scoped backfills grant contact visibility from the
+adapter-bound `InstitutionLocation` that produced the patient row. Legacy v2 rows
+that still carry `location_ids` continue to resolve those locations first.
 
 **Availability filtering is silent.** Windows with `active: false` and one-off
 windows whose `specific_date` has passed are dropped during mapping with no
@@ -182,7 +367,7 @@ has-appointments-today check scans at most 10×50 appointments for latency
 reasons; a provider with >500 appointments in one day would be misread — and if
 the payload shape is unexpected (occasionally `data` is not a list) we log and
 assume appointments exist, because the failure mode of guessing wrong is hiding
-bookable slots (`adapter.py:280-306`).
+bookable slots.
 
 **Unconfigured operating hours mean no hour filtering.** If a location hasn't
 configured operating hours, slot filtering applies only the buffer — slots
@@ -193,11 +378,11 @@ onboarding for a reason (`slot_filter.py:202-204`).
 numeric for some PMSs, alphanumeric for others; we coerce to `int` when
 possible and pass strings through otherwise (`adapter.py:509-516`).
 
-**Token/limit infrastructure is fail-open by design.** Both the token cache
-and the rate limiter treat Redis errors as "proceed". The deliberate trade:
-a Redis outage must not take down all PMS traffic; NexHealth's own 429s plus
-the client retry are the real enforcement. If you see elevated 429s and
-re-auth calls together, check Redis before checking NexHealth.
+**Token/limit infrastructure has traffic-aware failure behavior.** The token
+cache and interactive rate limiter treat Redis errors as "proceed" so a Redis
+outage does not take voice agents offline. Background NexHealth maintenance
+fails closed until Redis recovers. If you see elevated 429s and re-auth calls
+together, check Redis before checking NexHealth.
 
 ## Failure handling summary
 
@@ -206,29 +391,203 @@ re-auth calls together, check Redis before checking NexHealth.
 | NexHealth 429 | Sleep per `Retry-After`, retry up to 3x, then `NexHealthRateLimitError` |
 | NexHealth 5xx / timeout | Linear-backoff retries, then error to caller |
 | `{"code": false}` body | `NexHealthAPIError` with their error list (validation, conflicts) |
-| Redis down | Token cache + limiter fail open; expect extra auth calls and some 429s |
+| Redis down | Token cache and interactive calls fail open; background NexHealth maintenance stops |
 | Booking race (slot taken) | Surfaces as a `code:false` validation error from NexHealth; agent offers another slot |
 | Reschedule: new booking fails | Old appointment untouched, error returned |
 | Reschedule: cancel-old fails | Success + warning; old appointment may need manual cleanup |
 
 Tests that pin this behavior: `tests/unit/test_nexhealth_token_manager.py`,
 `test_nexhealth_rate_limiter.py`, `test_nexhealth_phone_normalization.py`,
-`test_nexhealth_adapter_appointments.py`, `test_slot_filter.py`, and
-`tests/integration/test_slot_duration_edge_cases.py`.
+`test_nexhealth_pagination.py`, `test_nexhealth_adapter_appointments.py`,
+`test_slot_filter.py`, and `tests/integration/test_slot_duration_edge_cases.py`.
 
-## Stable vs. new API
+## Post-visit completion (derived, not observed)
 
-We pin NexHealth's stable API via the Accept header
-(`application/vnd.Nexhealth+json;version=2`, `src/app/config.py:69`).
-NexHealth has a newer API generation (currently beta) that addresses two of
-the pain points above directly: the misleading names are fixed (what the
-stable API calls "availabilities" is exposed as working windows), and
-working-window sync is configurable through the API itself instead of
-requiring a NexHealth support request per practice.
+Post-visit campaigns — the shipped `post-op-followup-after-confirmation`
+template — enrol when an appointment reaches a terminal visit state. On GoTracker
+that state arrives for free: Chair Flow reports progress and transitions to
+`Completed` when the patient leaves.
 
-Migrating is a planned future improvement, not active work — the stable API
-is what production runs on. When the evaluation happens, the work is contained
-to the adapter and mappers (`src/app/pms/nexhealth/`); the `PMSAdapter`
-interface and everything above it shouldn't need to change. The caveats list
-above doubles as the regression checklist for that migration: each quirk
-should be re-tested against the new API, and several should simply disappear.
+**NexHealth has no equivalent.** Its webhook vocabulary is
+`appointment_insertion` / `appointment_created` / `appointment_updated` /
+`appointment_cancelled` / `appointment_confirmed`, `patient_created` /
+`patient_updated`, and `sync_status`. There is no checkout, no check-in and no
+completion event, and the adapter exposes no such concept. So completion is
+**derived**.
+
+`sweep_nexhealth_completed_visits` (Celery beat, every 10 minutes) marks a
+NexHealth appointment complete once:
+
+- the institution's `pms_type` is `nexhealth` — GoTracker rows are never touched,
+  they carry real Chair Flow data
+- the appointment is still `scheduled`, i.e. not cancelled
+- `start_time + duration` has passed, where duration comes from the matching
+  `institution_appointment_types.duration_minutes` and falls back to
+  `nexhealth_post_visit_default_duration_minutes` (60) when the type is unknown
+- the visit ended within `nexhealth_post_visit_lookback_hours` (72)
+
+It writes `flow_state = "Completed"` and `flow_changed_at = <computed visit end>`
+onto the working-set row, then fires `trigger_appointment_state_workflows`.
+
+Two details that matter:
+
+- **`flow_changed_at` is the end of the visit, not sweep time.** The post-op
+  template waits a fixed offset from that anchor, so it has to mean the same
+  thing on both PMSs or NexHealth patients would be called late by up to the
+  sweep interval.
+- **The template is not modified.** The trigger matcher skips `status_ids` when
+  empty and `confirmed`/`preconfirmed` when null, so a synthesized
+  `flow_state="Completed"` satisfies the shipped definition as-is. One campaign
+  definition, both PMSs.
+
+Safety properties:
+
+| Concern | Handling |
+|---|---|
+| Re-triggering the same visit | `flow_state` excludes the row next sweep, and `flow_changed_at` is folded into the enrollment idempotency key |
+| Crash mid-sweep | Marks are committed before any trigger fires, so a crash re-marks rather than double-enrolling |
+| First run on a busy clinic | The lookback bounds the reach; enrollment separately refuses work older than the trigger's `max_followup_delay_hours` |
+| Cancelled visits | Excluded by the `status = 'scheduled'` predicate |
+
+Known bound: the SQL pre-filters on `start_time` within the lookback, so an
+unusually long appointment that *started* before the window but *ended* inside it
+is missed. With a 72h window and typical durations this is not reachable in
+practice.
+
+**What this cannot do:** NexHealth exposes no no-show or completion status, so a
+patient who never turned up is indistinguishable from one who was treated. Their
+appointment is not cancelled, so the sweep marks it complete and the follow-up
+campaign calls them. Suppressing that needs a real status signal from NexHealth.
+
+## Live webhook setup and ownership
+
+Live webhook setup is controlled from the Super Admin institution credentials
+screen. Operators do not paste provider endpoint or subscription ids. The
+**Connect** action creates or repairs the provider endpoint, all required event
+subscriptions, and the encrypted endpoint signing secret; **Verify** compares
+the callback, active event set, and local location routing with NexHealth.
+
+NexHealth webhook endpoints belong to the authenticated API account and event
+subscriptions are scoped by NexHealth `subdomain`, not by location. ScaleNexus
+therefore reuses one managed endpoint for each API credential and creates an
+event subscription set for every configured subdomain. Locations under a
+subdomain share that set, and each delivery's provider `location_id` resolves
+the actual local location. The local lifecycle table still has one row per
+location because reconciliation watermarks are location-specific; endpoint
+state is copied across sibling rows as one control group.
+
+The callback defaults to
+`<PUBLIC_API_URL>/api/v1/nexhealth/webhooks/appointments`; an explicit
+`NEXHEALTH_WEBHOOK_CALLBACK_URL` overrides it. The shared live route accepts the
+appointment, patient and sync-status event families. Celery's hourly ensure task
+repairs only connections already created through the Super Admin action; it does
+not opt new institutions into provider webhooks. Once a managed endpoint exists,
+the receiver verifies its signature against the encrypted provider-returned
+secret; the secret is never returned to Super Admin.
+
+Required subscriptions are `appointment_insertion`, `appointment_created`,
+`appointment_updated`, `patient_created`, `patient_updated`,
+`sync_status_read_change`, and `sync_status_write_change`.
+
+## V3 webhook shadow validation
+
+REST cutover and webhook cutover stay separate. Existing live subscriptions
+continue to deliver v2-shaped payloads until they are replaced, while v3
+validation traffic is sent to shadow-only endpoints:
+
+- `POST /api/v1/nexhealth/webhooks/shadow/appointments`
+- `POST /api/v1/nexhealth/webhooks/shadow/patients`
+- `POST /api/v1/nexhealth/webhooks/shadow/sync-status`
+
+These routes verify the NexHealth signature, capture the delivery, and return
+2xx after capture even when JSON parsing fails. They do not write to the live
+`nexhealth_webhook_events` ledger, enqueue workflows, update appointment or
+patient projections, or affect live subscription health.
+
+Shadow captures live in `nexhealth_webhook_shadow_events`. Raw payloads are
+encrypted and kept under the same short NexHealth webhook raw-payload retention
+window only after the delivery resolves to one institution. Unresolved or
+ambiguous shadow deliveries keep parse/resolution status and a keyed payload hash
+but do not retain raw payloads or extracted PMS resource identity. Redacted
+payloads, API contract, event/resource metadata, provider delivery/subscription
+ids when present, parse status, extracted business event identity, and
+institution/location resolution results are stored for institution-scoped
+validation. Shadow lifecycle rows live in
+`nexhealth_webhook_shadow_subscriptions` and store the returned NexHealth
+endpoint `secret_key` encrypted so each shadow endpoint can verify against its
+own signing secret.
+
+To create shadow lifecycle rows and optional provider subscriptions, set
+`NEXHEALTH_SHADOW_WEBHOOK_CALLBACK_BASE_URL` to the public API origin and run the
+manual Celery task
+`src.app.tasks.automation_workflow.ensure_nexhealth_shadow_webhook_subscriptions`.
+The task is intentionally not scheduled in Celery beat.
+
+After shadow validation passes, v3 subscriptions can be pointed at the existing
+live handlers (`/appointments`, `/patients`, and `/sync-status`). The live
+`nexhealth_webhook_events` ledger deduplicates overlap by business event identity,
+not provider delivery id or subscription id, because the same PMS change can be
+delivered once by an old v2 subscription and once by a new v3 subscription.
+The key shape is:
+
+`Resource:pms_resource_id:event_family:change_marker`
+
+Appointment changes use the NexHealth appointment id and markers such as
+`start_time`, `updated_at`, or `cancelled:true`. Patient changes use the patient
+id and `updated_at`/`last_sync_time`/`event_time`. Sync-status changes use the
+subdomain plus resolved local locations and the read/write status timestamp. A
+v3 patient payload with no `location_ids` can still update the institution-level
+patient/contact projection when the subdomain resolves; location visibility is
+only granted when explicit location ids are present or the subdomain maps to one
+unambiguous local location.
+
+## V3 cutover reporting
+
+The migration runbook uses
+`src.app.scripts.nexhealth_v3_cutover_report` as the repeatable baseline and
+monitoring check. It is an ad-hoc read-only script, not a scheduled job. Save a
+pre-cutover snapshot after appointment and patient backfills, then compare
+post-cutover snapshots against it:
+
+```bash
+.venv/bin/python -m src.app.scripts.nexhealth_v3_cutover_report \
+  --save-snapshot /tmp/nexhealth-v3-pre-rest.json
+
+.venv/bin/python -m src.app.scripts.nexhealth_v3_cutover_report \
+  --baseline /tmp/nexhealth-v3-pre-rest.json \
+  --save-snapshot /tmp/nexhealth-v3-post-rest.json \
+  --fail-on-rollback-signal
+```
+
+Run the report with `DATABASE_ADMIN_URL` set. It intentionally refuses to
+bootstrap from the app `DATABASE_URL` because it reads cross-tenant operational
+state.
+
+The report reads the existing subscription lifecycle rows, appointment and
+patient working sets, live webhook ledger, shadow webhook tables, sync-status
+rows, and Retell audit failures for appointment writes, patient lookup, and slot
+search. Its `assessment.rollback_recommended` flag is driven by count drops or
+failure increases relative to the saved baseline. Its `assessment.cleanup_ready`
+flag stays false until a baseline is supplied, the app is on `stable_v3`, the
+stable window has elapsed, v2-pinned webhook overlap removal is confirmed, and
+shadow/live failure signals are clean.
+
+## API contract selection
+
+NexHealth API versioning is selected by `NEXHEALTH_API_VERSION`, normalized at
+startup into one internal contract target:
+
+- `v2`, `v2.2.2`, and `legacy_v2` select the legacy v2.2.2 contract.
+- `v3`, `v3.0.0`, `v20240412`, and `stable_v3` select the stable v3 contract.
+
+Unknown values fail startup. Request headers are derived from that normalized
+target, not hand-composed independently. Legacy v2 sends
+`Nex-Api-Version: v2` with the legacy versioned `Accept` header. Stable v3 sends
+`Nex-Api-Version: v3.0.0` with a non-versioned JSON `Accept` header.
+
+The NexHealth adapter also derives renamed scheduling paths from the same
+contract target: legacy v2 uses `/appointment_slots` and `/availabilities`;
+stable v3 uses `/available_slots` and `/working_hours`, including the v3
+`working_hour` body wrapper for working-window writes. This version-aware
+routing is temporary migration scaffolding and should be removed after one
+stable production release cycle on v3.

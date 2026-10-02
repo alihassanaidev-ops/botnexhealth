@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 from pathlib import Path
 from uuid import UUID
 
@@ -9,8 +10,18 @@ import pytest_asyncio
 from sqlalchemy import text
 from sqlalchemy.engine import make_url
 from sqlalchemy.exc import DBAPIError
-from sqlalchemy.ext.asyncio import create_async_engine
+from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from sqlalchemy.pool import NullPool
+
+from src.app.services.institution_service import InstitutionService
+from src.app.services.automation.campaign_conversation_service import (
+    CampaignConversationService,
+)
+from src.app.services.automation.sms_opt_out_workflow_service import (
+    SmsOptOutWorkflowService,
+)
+from src.app.models.sms_consent import ConsentSource
+from src.app.services.sms_compliance import SmsComplianceService
 
 pytestmark = pytest.mark.rls
 
@@ -33,6 +44,12 @@ CALL_A2 = "10000000-0000-0000-0000-000000000002"
 CALL_B1 = "10000000-0000-0000-0000-000000000003"
 SMS_A1 = "20000000-0000-0000-0000-000000000001"
 SMS_A2 = "20000000-0000-0000-0000-000000000002"
+VOICE_PROFILE_A1 = "21000000-0000-0000-0000-000000000001"
+VOICE_PROFILE_B1 = "21000000-0000-0000-0000-000000000002"
+NH_TYPE_A1 = "22000000-0000-0000-0000-000000000001"
+NH_TYPE_A2 = "22000000-0000-0000-0000-000000000002"
+NH_WEBHOOK_CONTACT = "23000000-0000-0000-0000-000000000001"
+NH_WEBHOOK_ACCESS = "23000000-0000-0000-0000-000000000002"
 
 
 @pytest.fixture(scope="module")
@@ -195,14 +212,15 @@ async def _seed(conn) -> None:
             """
             INSERT INTO institution_locations
               (id, institution_id, name, slug, is_active, retell_agent_id,
-               twilio_from_number, timezone)
+               twilio_from_number, timezone, nexhealth_subdomain,
+               nexhealth_location_id)
             VALUES
               (:loc_a1, :inst_a, 'Clinic A One', 'a-one', true, 'agent-a1',
-               '+15550000001', 'UTC'),
+               '+15550000001', 'UTC', 'clinic-a-nh', '340582'),
               (:loc_a2, :inst_a, 'Clinic A Two', 'a-two', true, 'agent-a2',
-               '+15550000002', 'UTC'),
+               '+15550000002', 'UTC', 'clinic-a-nh', '348511'),
               (:loc_b1, :inst_b, 'Clinic B One', 'b-one', true, 'agent-b1',
-               '+15550000003', 'UTC')
+               '+15550000003', 'UTC', 'clinic-b-nh', '340582')
             """
         ),
         {
@@ -211,6 +229,28 @@ async def _seed(conn) -> None:
             "loc_b1": LOC_B1,
             "inst_a": INST_A,
             "inst_b": INST_B,
+        },
+    )
+    await conn.execute(
+        text(
+            """
+            INSERT INTO outbound_voice_profiles
+              (id, institution_id, location_id, retell_agent_id, display_name,
+               purpose, is_active)
+            VALUES
+              (:profile_a1, :inst_a, :loc_a1, 'agent-profile-a1',
+               'Clinic A outbound', 'pre_appointment', true),
+              (:profile_b1, :inst_b, :loc_b1, 'agent-profile-b1',
+               'Clinic B outbound', 'pre_appointment', true)
+            """
+        ),
+        {
+            "profile_a1": VOICE_PROFILE_A1,
+            "profile_b1": VOICE_PROFILE_B1,
+            "inst_a": INST_A,
+            "inst_b": INST_B,
+            "loc_a1": LOC_A1,
+            "loc_b1": LOC_B1,
         },
     )
     await conn.execute(
@@ -243,11 +283,12 @@ async def _seed(conn) -> None:
     await conn.execute(
         text(
             """
-            INSERT INTO contacts (id, institution_id, full_name, is_new_patient)
+            INSERT INTO contacts
+              (id, institution_id, full_name, is_new_patient, nexhealth_patient_id)
             VALUES
-              (:contact_a1, :inst_a, 'Patient A1', false),
-              (:contact_a2, :inst_a, 'Patient A2', false),
-              (:contact_b1, :inst_b, 'Patient B1', false)
+              (:contact_a1, :inst_a, 'Patient A1', false, 'nh-patient-a1'),
+              (:contact_a2, :inst_a, 'Patient A2', false, 'nh-patient-a2'),
+              (:contact_b1, :inst_b, 'Patient B1', false, 'nh-patient-b1')
             """
         ),
         {
@@ -256,6 +297,27 @@ async def _seed(conn) -> None:
             "contact_b1": CONTACT_B1,
             "inst_a": INST_A,
             "inst_b": INST_B,
+        },
+    )
+    await conn.execute(
+        text(
+            """
+            INSERT INTO institution_appointment_types
+              (id, institution_id, location_id, source, source_id, name,
+               duration_minutes, is_active)
+            VALUES
+              (:type_a1, :inst_a, :loc_a1, 'nexhealth', '1253096',
+               'Surgery', 30, true),
+              (:type_a2, :inst_a, :loc_a2, 'nexhealth', '1197997',
+               'Checkup / Cleaning', 60, true)
+            """
+        ),
+        {
+            "type_a1": NH_TYPE_A1,
+            "type_a2": NH_TYPE_A2,
+            "inst_a": INST_A,
+            "loc_a1": LOC_A1,
+            "loc_a2": LOC_A2,
         },
     )
     for contact_id, location_id in ((CONTACT_A1, LOC_A1), (CONTACT_A2, LOC_A2)):
@@ -425,6 +487,67 @@ async def test_rls_system_contexts_are_narrow(rls_engine) -> None:
     async with rls_engine.begin() as conn:
         await _set_context(conn, context_type="retell", external_id="different-call")
         assert await conn.scalar(text("SELECT count(*) FROM retell_webhook_events")) == 0
+
+
+@pytest.mark.asyncio
+# NOTE: raw INSERTs here must supply every NOT NULL column, including ones the
+# migration declares a DEFAULT for. The consolidated baseline builds the schema
+# with ``Base.metadata.create_all`` (20260510_consolidated_baseline.py:915), so
+# on a fresh database the columns come from the *models* — and a model using a
+# Python-side ``default=`` produces a column with no server default. Later
+# migrations' ``CREATE TABLE IF NOT EXISTS`` are then no-ops. The ORM fills
+# these in; raw SQL does not.
+async def test_enquiry_intake_lookup_sees_only_the_exact_token_hash(rls_engine) -> None:
+    source_id = "41000000-0000-0000-0000-000000000001"
+    token_hash = "a" * 64
+
+    async with rls_engine.begin() as conn:
+        await _set_context(conn, role="SUPER_ADMIN", user_id=USER_SUPER)
+        await conn.execute(
+            text(
+                """
+                INSERT INTO enquiry_intake_sources
+                  (id, institution_id, location_id, label, token_hash,
+                   source_name, is_active, created_at)
+                VALUES
+                  (:id, :institution_id, :location_id, 'Public form',
+                   :token_hash, 'external_form', true, now())
+                """
+            ),
+            {
+                "id": source_id,
+                "institution_id": INST_A,
+                "location_id": LOC_A1,
+                "token_hash": token_hash,
+            },
+        )
+
+    async with rls_engine.begin() as conn:
+        await _set_context(
+            conn,
+            context_type="enquiry_intake_lookup",
+            external_id=token_hash,
+        )
+        assert await conn.scalar(text("SELECT count(*) FROM enquiry_intake_sources")) == 1
+        # Lookup is SELECT-only. It cannot mutate even the row it can resolve.
+        await conn.execute(
+            text("UPDATE enquiry_intake_sources SET label = 'Changed by lookup'")
+        )
+
+    async with rls_engine.begin() as conn:
+        await _set_context(
+            conn,
+            context_type="enquiry_intake_lookup",
+            external_id="b" * 64,
+        )
+        assert await conn.scalar(text("SELECT count(*) FROM enquiry_intake_sources")) == 0
+
+    async with rls_engine.begin() as conn:
+        await _set_context(conn, role="SUPER_ADMIN", user_id=USER_SUPER)
+        assert await conn.scalar(
+            text("SELECT label FROM enquiry_intake_sources WHERE id = :id"),
+            {"id": source_id},
+        ) == "Public form"
 
 
 @pytest.mark.asyncio
@@ -696,6 +819,621 @@ async def test_rls_institution_locations_branches(rls_engine) -> None:
         )
         assert (
             await conn.scalar(text("SELECT count(*) FROM institution_locations"))
+        ) == 1
+
+
+@pytest.mark.asyncio
+async def test_location_admin_campaign_rls_is_exact_location_only(rls_engine) -> None:
+    """Location admins cannot see or mutate global/other-clinic campaigns."""
+    workflow_ids = {
+        "own": "90000000-0000-0000-0000-000000000001",
+        "other": "90000000-0000-0000-0000-000000000002",
+        "global": "90000000-0000-0000-0000-000000000003",
+    }
+    async with rls_engine.begin() as conn:
+        await _set_context(conn, role="SUPER_ADMIN", user_id=USER_SUPER)
+        await conn.execute(
+            text(
+                """
+                INSERT INTO automation_workflows
+                  (id, institution_id, location_id, name, status, is_template)
+                VALUES
+                  (:own, :inst, :loc_a1, 'Own clinic', 'draft', false),
+                  (:other, :inst, :loc_a2, 'Other clinic', 'draft', false),
+                  (:global, :inst, NULL, 'Institution wide', 'draft', false)
+                """
+            ),
+            {
+                **workflow_ids,
+                "inst": INST_A,
+                "loc_a1": LOC_A1,
+                "loc_a2": LOC_A2,
+            },
+        )
+
+    async with rls_engine.begin() as conn:
+        await _set_context(
+            conn,
+            user_id=USER_STAFF_A1,
+            role="LOCATION_ADMIN",
+            institution_id=INST_A,
+            location_id=LOC_A1,
+        )
+        visible = (
+            await conn.execute(
+                text(
+                    "SELECT id::text FROM automation_workflows "
+                    "WHERE id IN (:own, :other, :global)"
+                ),
+                workflow_ids,
+            )
+        ).scalars().all()
+        assert visible == [workflow_ids["own"]]
+
+        updated = (
+            await conn.execute(
+                text(
+                    "UPDATE automation_workflows SET name = 'Scoped update' "
+                    "WHERE id IN (:own, :other, :global) RETURNING id::text"
+                ),
+                workflow_ids,
+            )
+        ).scalars().all()
+        assert updated == [workflow_ids["own"]]
+
+
+@pytest.mark.asyncio
+async def test_nexhealth_lookup_resolves_provider_mapping_without_tenant_context(
+    rls_engine,
+) -> None:
+    """NexHealth webhook lookup starts before the local tenant UUID is known.
+
+    The external mapping key should expose only the matching tenant/location
+    rows, plus tenant-local data needed to finish webhook projection.
+    """
+    async with rls_engine.begin() as conn:
+        await _set_context(
+            conn,
+            context_type="nexhealth_lookup",
+            external_id="mapping:clinic-a-nh:340582",
+        )
+        assert await conn.scalar(text("SELECT count(*) FROM institutions")) == 1
+        assert await conn.scalar(
+            text(
+                """
+                SELECT count(*)
+                FROM institution_locations il
+                JOIN institutions i ON i.id = il.institution_id
+                WHERE i.pms_type = 'nexhealth'
+                  AND il.nexhealth_subdomain = 'clinic-a-nh'
+                  AND il.nexhealth_location_id = '340582'
+                """
+            )
+        ) == 1
+        assert await conn.scalar(
+            text(
+                """
+                SELECT count(*)
+                FROM contacts
+                WHERE institution_id = :inst_a
+                  AND nexhealth_patient_id = 'nh-patient-a1'
+                """
+            ),
+            {"inst_a": INST_A},
+        ) == 1
+        assert await conn.scalar(
+            text(
+                """
+                SELECT name
+                FROM institution_appointment_types
+                WHERE institution_id = :inst_a
+                  AND location_id = :loc_a1
+                  AND source = 'nexhealth'
+                  AND source_id = '1253096'
+                """
+            ),
+            {"inst_a": INST_A, "loc_a1": LOC_A1},
+        ) == "Surgery"
+
+    async with rls_engine.begin() as conn:
+        await _set_context(
+            conn,
+            context_type="nexhealth_lookup",
+            external_id="subdomain:clinic-a-nh",
+        )
+        assert (
+            await conn.scalar(text("SELECT count(*) FROM institution_locations"))
+        ) == 2
+        assert await conn.scalar(text("SELECT count(*) FROM institutions")) == 1
+
+    async with rls_engine.begin() as conn:
+        await _set_context(
+            conn,
+            context_type="nexhealth_lookup",
+            external_id="location:348511",
+        )
+        assert (
+            await conn.scalar(text("SELECT count(*) FROM institution_locations"))
+        ) == 1
+
+    async with rls_engine.begin() as conn:
+        await _set_context(
+            conn,
+            context_type="nexhealth_lookup",
+            external_id="location:340582",
+        )
+        assert (
+            await conn.scalar(text("SELECT count(*) FROM institution_locations"))
+        ) == 0
+        assert await conn.scalar(text("SELECT count(*) FROM institutions")) == 0
+
+
+@pytest.mark.asyncio
+async def test_nexhealth_webhook_context_can_write_projected_contact_access(
+    rls_engine,
+) -> None:
+    async with rls_engine.begin() as conn:
+        await _set_context(
+            conn,
+            context_type="nexhealth_webhooks",
+            institution_id=INST_A,
+            location_id=LOC_A1,
+            external_id="appointment:1681062130",
+        )
+        await conn.execute(
+            text(
+                """
+                INSERT INTO contacts
+                  (id, institution_id, full_name, is_new_patient,
+                   nexhealth_patient_id)
+                VALUES
+                  (:contact_id, :inst_a, 'Webhook Patient', false,
+                   'nh-webhook-patient')
+                """
+            ),
+            {"contact_id": NH_WEBHOOK_CONTACT, "inst_a": INST_A},
+        )
+        await conn.execute(
+            text(
+                """
+                INSERT INTO contact_location_accesses
+                  (id, institution_id, contact_id, location_id)
+                VALUES (:access_id, :inst_a, :contact_id, :loc_a1)
+                """
+            ),
+            {
+                "access_id": NH_WEBHOOK_ACCESS,
+                "contact_id": NH_WEBHOOK_CONTACT,
+                "inst_a": INST_A,
+                "loc_a1": LOC_A1,
+            },
+        )
+        assert await conn.scalar(text("SELECT count(*) FROM contacts")) == 3
+        assert (
+            await conn.scalar(text("SELECT count(*) FROM contact_location_accesses"))
+        ) == 3
+
+    async with rls_engine.begin() as conn:
+        await _set_context(
+            conn,
+            context_type="nexhealth_webhooks",
+            institution_id=INST_B,
+            location_id=LOC_B1,
+            external_id="appointment:1681062130",
+        )
+        assert await conn.scalar(text("SELECT count(*) FROM contacts")) == 1
+        assert (
+            await conn.scalar(text("SELECT count(*) FROM contact_location_accesses"))
+        ) == 0
+
+
+@pytest.mark.asyncio
+async def test_retell_lookup_resolves_outbound_voice_profile_agent(rls_engine) -> None:
+    """Outbound campaign agents must resolve through the same fail-closed
+    Retell lookup used by scheduling function calls.
+
+    The outbound agent intentionally exists only on ``outbound_voice_profiles``;
+    the location keeps its separate inbound/location-wide agent mapping.
+    """
+    session_factory = async_sessionmaker(rls_engine, expire_on_commit=False)
+
+    async with session_factory.begin() as session:
+        await _set_context(
+            session,
+            context_type="retell_lookup",
+            external_id="agent-profile-a1",
+        )
+
+        resolved = await InstitutionService(session).get_location_by_retell_agent_id(
+            "agent-profile-a1"
+        )
+
+        assert resolved is not None
+        location, institution = resolved
+        assert location.id == LOC_A1
+        assert institution.id == INST_A
+
+        assert await session.scalar(text("SELECT count(*) FROM outbound_voice_profiles")) == 1
+        assert await session.scalar(text("SELECT count(*) FROM institution_locations")) == 1
+        assert await session.scalar(text("SELECT count(*) FROM institutions")) == 1
+
+
+@pytest.mark.asyncio
+async def test_outbound_voice_attempt_visibility_for_webhook_and_poller_contexts(
+    rls_engine,
+) -> None:
+    """Outbound correlation is tenant-scoped; the repair poller is a privileged
+    cross-tenant reader. An unscoped Celery session must remain unable to read
+    voice attempts."""
+    workflow_id = "91000000-0000-0000-0000-000000000001"
+    version_id = "91000000-0000-0000-0000-000000000002"
+    run_id = "91000000-0000-0000-0000-000000000003"
+    attempt_id = "91000000-0000-0000-0000-000000000004"
+    retell_call_id = "call-outbound-rls-proof"
+
+    async with rls_engine.begin() as conn:
+        await _set_context(conn, role="SUPER_ADMIN", user_id=USER_SUPER)
+        await conn.execute(
+            text(
+                """
+                INSERT INTO automation_workflows
+                  (id, institution_id, location_id, name, status, is_template)
+                VALUES (
+                  :workflow_id, :inst_a, :loc_a1, 'RLS voice proof', 'active', false
+                )
+                """
+            ),
+            {"workflow_id": workflow_id, "inst_a": INST_A, "loc_a1": LOC_A1},
+        )
+        await conn.execute(
+            text(
+                """
+                INSERT INTO automation_workflow_versions
+                  (id, institution_id, location_id, workflow_id, version_number, definition)
+                VALUES (:version_id, :inst_a, :loc_a1, :workflow_id, 1, '{}'::jsonb)
+                """
+            ),
+            {
+                "version_id": version_id,
+                "workflow_id": workflow_id,
+                "inst_a": INST_A,
+                "loc_a1": LOC_A1,
+            },
+        )
+        await conn.execute(
+            text(
+                """
+                UPDATE automation_workflows
+                SET current_version_id = :version_id
+                WHERE id = :workflow_id
+                """
+            ),
+            {"version_id": version_id, "workflow_id": workflow_id},
+        )
+        await conn.execute(
+            text(
+                """
+                INSERT INTO automation_workflow_runs
+                  (id, institution_id, location_id, workflow_id, workflow_version_id, status)
+                VALUES (:run_id, :inst_a, :loc_a1, :workflow_id, :version_id, 'waiting')
+                """
+            ),
+            {
+                "run_id": run_id,
+                "workflow_id": workflow_id,
+                "version_id": version_id,
+                "inst_a": INST_A,
+                "loc_a1": LOC_A1,
+            },
+        )
+        await conn.execute(
+            text(
+                """
+                INSERT INTO workflow_voice_attempts
+                  (id, institution_id, location_id, workflow_run_id, step_id,
+                   retell_call_id, status)
+                VALUES (:attempt_id, :inst_a, :loc_a1, :run_id, 'voice-step',
+                        :retell_call_id, 'awaiting_outcome')
+                """
+            ),
+            {
+                "run_id": run_id,
+                "attempt_id": attempt_id,
+                "inst_a": INST_A,
+                "loc_a1": LOC_A1,
+                "retell_call_id": retell_call_id,
+            },
+        )
+
+    # Real-time webhook worker: exact tenant + exact call can see the attempt.
+    async with rls_engine.begin() as conn:
+        await _set_context(
+            conn,
+            context_type="celery",
+            institution_id=INST_A,
+            external_id=retell_call_id,
+        )
+        assert await conn.scalar(
+            text(
+                "SELECT count(*) FROM workflow_voice_attempts "
+                "WHERE retell_call_id = :call_id"
+            ),
+            {"call_id": retell_call_id},
+        ) == 1
+
+    # Tenant isolation remains closed when the institution boundary is absent.
+    async with rls_engine.begin() as conn:
+        await _set_context(
+            conn,
+            context_type="celery",
+            external_id="retell_voice_outcome_poll",
+        )
+        assert await conn.scalar(
+            text("SELECT count(*) FROM workflow_voice_attempts")
+        ) == 0
+
+    # The scheduled repair scan intentionally uses the existing super-admin context.
+    async with rls_engine.begin() as conn:
+        await _set_context(conn, role="SUPER_ADMIN", user_id=USER_SUPER)
+        assert await conn.scalar(
+            text(
+                "SELECT count(*) FROM workflow_voice_attempts "
+                "WHERE retell_call_id = :call_id"
+            ),
+            {"call_id": retell_call_id},
+        ) == 1
+
+
+@pytest.mark.asyncio
+async def test_twilio_context_atomically_suppresses_and_cancels_sms_workflow_run(
+    rls_engine,
+) -> None:
+    """Twilio STOP can suppress and terminate its tenant/location-scoped SMS run."""
+    workflow_id = "92000000-0000-0000-0000-000000000001"
+    version_id = "92000000-0000-0000-0000-000000000002"
+    run_id = "92000000-0000-0000-0000-000000000003"
+    thread_id = "92000000-0000-0000-0000-000000000004"
+    timer_id = "92000000-0000-0000-0000-000000000005"
+    definition = {
+        "trigger": {"type": "manual"},
+        "entry_node_id": "sms-1",
+        "nodes": [
+            {
+                "type": "send_sms",
+                "id": "sms-1",
+                "body_template": "Reply YES or NO",
+                "next_node_id": "wait-1",
+            },
+            {
+                "type": "wait",
+                "id": "wait-1",
+                "next_node_id": "exit-1",
+                "wait_for": {
+                    "type": "sms_reply",
+                    "response_window_seconds": 3600,
+                    "response_mappings": [
+                        {
+                            "tokens": ["YES"],
+                            "context_updates": {"sms_reply": "yes"},
+                        }
+                    ],
+                },
+            },
+            {"type": "exit", "id": "exit-1"},
+        ],
+    }
+
+    async with rls_engine.begin() as conn:
+        await _set_context(conn, role="SUPER_ADMIN", user_id=USER_SUPER)
+        await conn.execute(
+            text(
+                """
+                INSERT INTO automation_workflows
+                  (id, institution_id, location_id, name, status, is_template)
+                VALUES (:workflow_id, :inst_a, :loc_a1, 'SMS RLS proof', 'active', false)
+                """
+            ),
+            {"workflow_id": workflow_id, "inst_a": INST_A, "loc_a1": LOC_A1},
+        )
+        await conn.execute(
+            text(
+                """
+                INSERT INTO automation_workflow_versions
+                  (id, institution_id, location_id, workflow_id, version_number, definition)
+                VALUES (
+                  :version_id, :inst_a, :loc_a1, :workflow_id, 1,
+                  CAST(:definition AS jsonb)
+                )
+                """
+            ),
+            {
+                "version_id": version_id,
+                "workflow_id": workflow_id,
+                "inst_a": INST_A,
+                "loc_a1": LOC_A1,
+                "definition": json.dumps(definition),
+            },
+        )
+        await conn.execute(
+            text(
+                """
+                UPDATE automation_workflows
+                SET current_version_id = :version_id
+                WHERE id = :workflow_id
+                """
+            ),
+            {"version_id": version_id, "workflow_id": workflow_id},
+        )
+        await conn.execute(
+            text(
+                """
+                INSERT INTO automation_workflow_runs
+                  (id, institution_id, location_id, workflow_id,
+                   workflow_version_id, contact_id, status, current_step_id)
+                VALUES (
+                  :run_id, :inst_a, :loc_a1, :workflow_id,
+                  :version_id, :contact_a1, 'waiting', 'wait-1'
+                )
+                """
+            ),
+            {
+                "run_id": run_id,
+                "workflow_id": workflow_id,
+                "version_id": version_id,
+                "contact_a1": CONTACT_A1,
+                "inst_a": INST_A,
+                "loc_a1": LOC_A1,
+            },
+        )
+        await conn.execute(
+            text(
+                """
+                INSERT INTO automation_workflow_timers
+                  (id, institution_id, location_id, workflow_run_id, due_at, status)
+                VALUES (
+                  :timer_id, :inst_a, :loc_a1, :run_id,
+                  now() + interval '1 hour', 'claimed'
+                )
+                """
+            ),
+            {
+                "timer_id": timer_id,
+                "run_id": run_id,
+                "inst_a": INST_A,
+                "loc_a1": LOC_A1,
+            },
+        )
+        await conn.execute(
+            text(
+                """
+                INSERT INTO campaign_conversation_threads
+                  (id, institution_id, location_id, contact_id, workflow_id,
+                   workflow_run_id, channel, status)
+                VALUES (
+                  :thread_id, :inst_a, :loc_a1, :contact_a1, :workflow_id,
+                  :run_id, 'sms', 'open'
+                )
+                """
+            ),
+            {
+                "thread_id": thread_id,
+                "run_id": run_id,
+                "workflow_id": workflow_id,
+                "contact_a1": CONTACT_A1,
+                "inst_a": INST_A,
+                "loc_a1": LOC_A1,
+            },
+        )
+
+    session_factory = async_sessionmaker(rls_engine, expire_on_commit=False)
+    async with session_factory.begin() as session:
+        await _set_context(
+            session,
+            context_type="twilio",
+            institution_id=INST_A,
+            location_id=LOC_A1,
+        )
+        resolved = await CampaignConversationService(session).resolve_sms_thread(
+            institution_id=INST_A,
+            location_id=LOC_A1,
+            contact_ids=[CONTACT_A1],
+        )
+
+        assert resolved is not None
+        assert resolved.id == thread_id
+        assert resolved.workflow_run_id == run_id
+
+        await SmsComplianceService(session).suppress(
+            institution_id=INST_A,
+            location_id=LOC_A1,
+            contact_id=CONTACT_A1,
+            phone="+14165550100",
+            source=ConsentSource.TWILIO_KEYWORD,
+            keyword="STOP",
+            reason="integration test",
+        )
+        cancelled = await SmsOptOutWorkflowService(session).cancel_active_sms_runs(
+            institution_id=INST_A,
+            location_id=LOC_A1,
+            phone="+14165550100",
+            correlated_run_id=run_id,
+        )
+        assert cancelled == 1
+
+    async with rls_engine.begin() as conn:
+        await _set_context(conn, role="SUPER_ADMIN", user_id=USER_SUPER)
+        run_row = (
+            await conn.execute(
+                text(
+                    "SELECT status, blocked_reason FROM automation_workflow_runs "
+                    "WHERE id = :run_id"
+                ),
+                {"run_id": run_id},
+            )
+        ).one()
+        timer_row = (
+            await conn.execute(
+                text(
+                    "SELECT status, cancelled_at FROM automation_workflow_timers "
+                    "WHERE id = :timer_id"
+                ),
+                {"timer_id": timer_id},
+            )
+        ).one()
+        thread_row = (
+            await conn.execute(
+                text(
+                    "SELECT status, completion_reason FROM campaign_conversation_threads "
+                    "WHERE id = :thread_id"
+                ),
+                {"thread_id": thread_id},
+            )
+        ).one()
+        suppression_count = await conn.scalar(
+            text(
+                "SELECT count(*) FROM sms_suppressions "
+                "WHERE institution_id = :inst_a AND location_id = :loc_a1 "
+                "AND is_active = true"
+            ),
+            {"inst_a": INST_A, "loc_a1": LOC_A1},
+        )
+
+        assert tuple(run_row) == ("cancelled", "sms_opt_out")
+        assert timer_row.status == "cancelled"
+        assert timer_row.cancelled_at is not None
+        assert tuple(thread_row) == ("completed", "sms_opt_out")
+        assert suppression_count == 1
+
+
+@pytest.mark.asyncio
+async def test_inbound_sms_reply_is_an_allowed_notification_type(rls_engine) -> None:
+    """The database constraint accepts the notification emitted by the webhook."""
+    notification_id = "93000000-0000-0000-0000-000000000001"
+
+    async with rls_engine.begin() as conn:
+        await _set_context(conn, role="SUPER_ADMIN", user_id=USER_SUPER)
+        await conn.execute(
+            text(
+                """
+                INSERT INTO notifications
+                  (id, institution_id, user_id, type, title_encrypted,
+                   message_encrypted, is_read)
+                VALUES (
+                  :notification_id, :inst_a, :staff_a1, 'inbound_sms_reply',
+                  'cipher', 'cipher', false
+                )
+                """
+            ),
+            {
+                "notification_id": notification_id,
+                "inst_a": INST_A,
+                "staff_a1": USER_STAFF_A1,
+            },
+        )
+
+        assert await conn.scalar(
+            text("SELECT count(*) FROM notifications WHERE id = :notification_id"),
+            {"notification_id": notification_id},
         ) == 1
 
 

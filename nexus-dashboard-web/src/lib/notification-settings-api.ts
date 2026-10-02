@@ -99,3 +99,27 @@ export async function updateNotificationPreferences(
         "/institution/notification-preferences",
     )
 }
+
+/**
+ * The practice-wide switch for automatic staff alerts.
+ *
+ * Separate from the per-user preferences above: those decide who receives an
+ * alert, this decides whether one is sent at all. Patient-facing mail is never
+ * affected by it.
+ */
+export async function getInstitutionNotificationEmailsEnabled(): Promise<boolean> {
+    const { data } = await api.get<{ institution_emails_enabled?: boolean }>(
+        "/institution/notification-preferences",
+    )
+    return data?.institution_emails_enabled ?? true
+}
+
+export async function setInstitutionNotificationEmailsEnabled(
+    isEnabled: boolean,
+): Promise<boolean> {
+    const { data } = await api.put<{ institution_emails_enabled?: boolean }>(
+        "/institution/notification-preferences/institution",
+        { is_enabled: isEnabled },
+    )
+    return data?.institution_emails_enabled ?? isEnabled
+}

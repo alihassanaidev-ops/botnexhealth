@@ -25,7 +25,7 @@ const institutionSchema = z.object({
     name: z.string().min(2, { message: "Name must be at least 2 characters." }),
     slug: z.string().min(2, { message: "Slug is required." }).regex(/^[a-z0-9-]+$/, { message: "Slug must be lowercase alphanumeric with hyphens." }),
     email: z.string().email({ message: "Invalid email address." }),
-    pms_type: z.enum(["nexhealth", "none"]),
+    pms_type: z.enum(["nexhealth", "gotracker", "none"]),
 })
 
 interface InstitutionFormProps {
@@ -111,6 +111,7 @@ export function TenantForm({ onSuccess }: InstitutionFormProps) {
                                 </FormControl>
                                 <SelectContent>
                                     <SelectItem value="nexhealth">NexHealth (syncs providers, appointment types, booking)</SelectItem>
+                                    <SelectItem value="gotracker">GoTracker (via ScaleNexus Synchronizer)</SelectItem>
                                     <SelectItem value="none">None — call intelligence only (no booking/sync)</SelectItem>
                                 </SelectContent>
                             </Select>

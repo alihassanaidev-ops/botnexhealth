@@ -17,11 +17,18 @@ from src.app.pms.models import (
     SetupStep,
     SlotSearchResult,
     UniversalAppointmentType,
+    UniversalClinicalNote,
+    UniversalDocumentType,
     UniversalLocation,
     UniversalOperatory,
     UniversalPatient,
+    UniversalPatientDocument,
+    UniversalPatientPage,
+    UniversalPatientRecall,
     UniversalProvider,
+    UniversalRecallType,
     UniversalSlot,
+    UniversalTreatmentPlan,
 )
 
 
@@ -33,30 +40,78 @@ class PMSAdapter(ABC):
     # --- Patients ---
 
     @abstractmethod
-    async def search_patients(self, query: str, **kwargs: Any) -> list[UniversalPatient]:
-        ...
+    async def search_patients(
+        self, query: str, **kwargs: Any
+    ) -> list[UniversalPatient]: ...
+
+    async def browse_patients(
+        self,
+        *,
+        cursor: str | None = None,
+        page_size: int = 25,
+        name: str | None = None,
+        status: str = "active",
+    ) -> UniversalPatientPage:
+        """Return one provider page without accumulating the full roster."""
+        raise NotImplementedError("This PMS does not support patient browsing")
 
     @abstractmethod
-    async def create_patient(self, req: PatientCreateRequest) -> dict[str, Any]:
-        ...
+    async def create_patient(self, req: PatientCreateRequest) -> dict[str, Any]: ...
+
+    async def list_clinical_notes(
+        self, patient_id: str, *, max_items: int = 500
+    ) -> list[UniversalClinicalNote]:
+        """Optional: bounded clinical-note metadata for one patient."""
+        raise NotImplementedError("This PMS does not support clinical-note reads")
+
+    async def list_document_types(
+        self, *, active: bool | None = None, max_items: int = 500
+    ) -> list[UniversalDocumentType]:
+        """Optional: document type catalog for this location."""
+        raise NotImplementedError("This PMS does not support document-type reads")
+
+    async def list_patient_documents(
+        self, patient_id: str, *, max_items: int = 500
+    ) -> list[UniversalPatientDocument]:
+        """Optional: bounded document metadata for one patient."""
+        raise NotImplementedError("This PMS does not support patient-document reads")
+
+    async def list_patient_recalls(
+        self, *, patient_id: str | None = None, max_items: int = 500
+    ) -> list[UniversalPatientRecall] | list[dict[str, Any]]:
+        """Optional: recall records, optionally scoped to one patient."""
+        raise NotImplementedError("This PMS does not support patient-recall reads")
+
+    async def list_recall_types(
+        self, *, max_items: int = 500
+    ) -> list[UniversalRecallType]:
+        """Optional: recall type catalog for this location."""
+        raise NotImplementedError("This PMS does not support recall-type reads")
+
+    async def list_treatment_plans(
+        self,
+        patient_id: str,
+        *,
+        status: str | None = None,
+        max_items: int = 500,
+    ) -> list[UniversalTreatmentPlan]:
+        """Optional: bounded treatment-plan metadata for one patient."""
+        raise NotImplementedError("This PMS does not support treatment-plan reads")
 
     # --- Appointment Types ---
 
     @abstractmethod
-    async def list_appointment_types(self) -> list[UniversalAppointmentType]:
-        ...
+    async def list_appointment_types(self) -> list[UniversalAppointmentType]: ...
 
     # --- Providers ---
 
     @abstractmethod
-    async def list_providers(self) -> list[UniversalProvider]:
-        ...
+    async def list_providers(self) -> list[UniversalProvider]: ...
 
     # --- Operatories ---
 
     @abstractmethod
-    async def list_operatories(self) -> list[UniversalOperatory]:
-        ...
+    async def list_operatories(self) -> list[UniversalOperatory]: ...
 
     # --- Slots ---
 
@@ -68,8 +123,8 @@ class PMSAdapter(ABC):
         provider_id: str | list[str] | None = None,
         appointment_type_id: str | None = None,
         operatory_ids: list[str] | None = None,
-    ) -> list[UniversalSlot]:
-        ...
+        tz_offset: str | None = None,
+    ) -> list[UniversalSlot]: ...
 
     async def find_available_slots(
         self,
@@ -78,6 +133,7 @@ class PMSAdapter(ABC):
         provider_id: str | list[str] | None = None,
         appointment_type_id: str | None = None,
         operatory_ids: list[str] | None = None,
+        tz_offset: str | None = None,
     ) -> SlotSearchResult:
         """Slots plus a "next available date" hint.
 
@@ -91,24 +147,32 @@ class PMSAdapter(ABC):
             provider_id=provider_id,
             appointment_type_id=appointment_type_id,
             operatory_ids=operatory_ids,
+            tz_offset=tz_offset,
         )
         return SlotSearchResult(slots=slots)
 
     # --- Booking ---
 
     @abstractmethod
-    async def book_appointment(self, req: BookingRequest) -> BookingResult:
-        ...
+    async def book_appointment(self, req: BookingRequest) -> BookingResult: ...
 
     @abstractmethod
-    async def cancel_appointment(self, appointment_id: str) -> BookingResult:
-        ...
+    async def cancel_appointment(self, appointment_id: str) -> BookingResult: ...
 
     @abstractmethod
     async def reschedule_appointment(
         self, old_appointment_id: str, new_booking: BookingRequest
+    ) -> BookingResult: ...
+
+    async def reschedule_appointment_v2(
+        self, old_appointment_id: str, new_booking: BookingRequest
     ) -> BookingResult:
-        ...
+        """Reschedule using the adapter's newest supported write path.
+
+        Default keeps compatibility for PMSes that have not opted into a
+        distinct v2 implementation.
+        """
+        return await self.reschedule_appointment(old_appointment_id, new_booking)
 
     # --- Appointment Queries ---
 
@@ -125,18 +189,15 @@ class PMSAdapter(ABC):
     # --- Locations ---
 
     @abstractmethod
-    async def list_locations(self) -> list[UniversalLocation]:
-        ...
+    async def list_locations(self) -> list[UniversalLocation]: ...
 
     @abstractmethod
-    async def get_location(self, location_id: str) -> UniversalLocation | None:
-        ...
+    async def get_location(self, location_id: str) -> UniversalLocation | None: ...
 
     # --- Setup ---
 
     @abstractmethod
-    async def get_setup_steps(self) -> list[SetupStep]:
-        ...
+    async def get_setup_steps(self) -> list[SetupStep]: ...
 
     # --- Cleanup ---
 
@@ -149,14 +210,19 @@ class SupportsAppointmentTypeCreation(ABC):
     """Optional: PMS supports creating appointment types (e.g. NexHealth)."""
 
     @abstractmethod
-    async def list_pms_descriptors(self) -> list[dict]:
-        ...
+    async def list_pms_descriptors(self) -> list[dict]: ...
 
     @abstractmethod
     async def create_appointment_type(
-        self, name: str, duration_minutes: int, descriptor_ids: list[str]
-    ) -> UniversalAppointmentType:
-        ...
+        self,
+        name: str,
+        duration_minutes: int,
+        descriptor_ids: list[str],
+        *,
+        provider_ids: list[str] | None = None,
+        operatory_ids: list[str] | None = None,
+        bookable_online: bool | None = None,
+    ) -> UniversalAppointmentType: ...
 
     @abstractmethod
     async def update_appointment_type(
@@ -165,8 +231,13 @@ class SupportsAppointmentTypeCreation(ABC):
         name: str | None = None,
         duration_minutes: int | None = None,
         descriptor_ids: list[str] | None = None,
-    ) -> UniversalAppointmentType:
-        ...
+        provider_ids: list[str] | None = None,
+        operatory_ids: list[str] | None = None,
+        bookable_online: bool | None = None,
+    ) -> UniversalAppointmentType: ...
+
+    @abstractmethod
+    async def delete_appointment_type(self, appointment_type_id: str) -> None: ...
 
 
 class SupportsAvailabilityLinking(ABC):
@@ -181,8 +252,7 @@ class SupportsAvailabilityLinking(ABC):
         days: list[str],
         start_time: str,
         end_time: str,
-    ) -> dict[str, Any]:
-        ...
+    ) -> dict[str, Any]: ...
 
     @abstractmethod
     async def update_availability(
@@ -194,9 +264,41 @@ class SupportsAvailabilityLinking(ABC):
         end_time: str | None = None,
         operatory_id: str | None = None,
         active: bool | None = None,
-    ) -> dict:
-        ...
+    ) -> dict: ...
 
     @abstractmethod
-    async def list_availabilities(self, **kwargs: Any) -> list[dict]:
-        ...
+    async def list_availabilities(self, **kwargs: Any) -> list[dict]: ...
+
+
+class SupportsWorkingWindowOverrides(ABC):
+    """Optional: PMS exposes synced work windows with per-window type overrides.
+
+    Unlike ``SupportsAvailabilityLinking``, this does not imply that Nexus may
+    create a new work window.  GoTracker owns the underlying window in Tracker
+    and permits only an appointment-type override on its stable cloud ID.
+    """
+
+    @abstractmethod
+    async def list_availabilities(self, **kwargs: Any) -> list[dict]: ...
+
+    @abstractmethod
+    async def update_availability(
+        self,
+        availability_id: str,
+        appointment_type_ids: list[str] | None = None,
+        days: list[str] | None = None,
+        start_time: str | None = None,
+        end_time: str | None = None,
+        operatory_id: str | None = None,
+        active: bool | None = None,
+    ) -> dict: ...
+
+    @abstractmethod
+    async def clear_availability_override(self, availability_id: str) -> dict: ...
+
+
+class SupportsAppointmentConfirmation(ABC):
+    """Optional: PMS supports marking an appointment confirmed."""
+
+    @abstractmethod
+    async def confirm_appointment(self, appointment_id: str) -> BookingResult: ...

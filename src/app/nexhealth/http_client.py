@@ -9,6 +9,10 @@ from typing import Any
 import httpx
 
 from src.app.nexhealth.exceptions import NexHealthAPIError, NexHealthRateLimitError
+from src.app.nexhealth.api_contract import (
+    NexHealthAPIContract,
+    normalize_nexhealth_api_contract,
+)
 from src.app.nexhealth.rate_limit import NexHealthRateLimiter
 
 logger = logging.getLogger(__name__)
@@ -20,8 +24,9 @@ class NexHealthHTTPClient:
     def __init__(
         self,
         base_url: str,
-        accept_header: str,
-        api_version: str,
+        accept_header: str | None = None,
+        api_version: str | None = None,
+        api_contract: NexHealthAPIContract | str | None = None,
         timeout: float = 30.0,
         max_retries: int = 3,
         retry_delay: float = 1.0,
@@ -31,8 +36,9 @@ class NexHealthHTTPClient:
         api_key_id: str | None = None,
     ) -> None:
         self._base_url = base_url
-        self._accept_header = accept_header
-        self._api_version = api_version
+        self._api_contract = normalize_nexhealth_api_contract(
+            api_contract or api_version or "v2"
+        )
         self._timeout = timeout
         self._max_retries = max_retries
         self._retry_delay = retry_delay
@@ -54,11 +60,9 @@ class NexHealthHTTPClient:
         Note: For all API requests EXCEPT /authenticates, use the bearer token
         with "Bearer " prefix in the Authorization header.
         """
-        return {
-            "Accept": self._accept_header,
-            "Authorization": f"Bearer {token}",  # Bearer token with "Bearer " prefix
-            "Nex-Api-Version": self._api_version,
-        }
+        return self._api_contract.request_headers(
+            authorization=f"Bearer {token}",  # Bearer token with "Bearer " prefix
+        )
 
     async def __aenter__(self) -> "NexHealthHTTPClient":
         self._client = httpx.AsyncClient(

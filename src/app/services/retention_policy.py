@@ -24,6 +24,9 @@ from src.app.models.contact import Contact
 from src.app.models.institution import Institution
 from src.app.models.custom_field import CustomFieldValue, EntityType
 from src.app.models.dead_letter_event import DeadLetterEvent
+from src.app.models.gotracker_webhook_event import GoTrackerWebhookEvent
+from src.app.models.nexhealth_webhook_event import NexHealthWebhookEvent
+from src.app.models.nexhealth_webhook_shadow import NexHealthWebhookShadowEvent
 from src.app.models.notification import Notification
 from src.app.models.sms_history_log import SmsHistoryLog
 from src.app.services.sms_privacy import hash_for_logging, safe_error_summary
@@ -53,6 +56,9 @@ class RetentionSummary:
     sms_rows_deleted: int = 0
     notifications_deleted: int = 0
     dead_letter_raw_payloads_purged: int = 0
+    nexhealth_webhook_raw_payloads_purged: int = 0
+    nexhealth_shadow_webhook_raw_payloads_purged: int = 0
+    gotracker_webhook_raw_payloads_purged: int = 0
     call_phi_purged: int = 0
     call_custom_fields_deleted: int = 0
     contacts_anonymized: int = 0
@@ -65,6 +71,11 @@ class RetentionSummary:
             "sms_rows_deleted": self.sms_rows_deleted,
             "notifications_deleted": self.notifications_deleted,
             "dead_letter_raw_payloads_purged": self.dead_letter_raw_payloads_purged,
+            "nexhealth_webhook_raw_payloads_purged": self.nexhealth_webhook_raw_payloads_purged,
+            "nexhealth_shadow_webhook_raw_payloads_purged": (
+                self.nexhealth_shadow_webhook_raw_payloads_purged
+            ),
+            "gotracker_webhook_raw_payloads_purged": self.gotracker_webhook_raw_payloads_purged,
             "call_phi_purged": self.call_phi_purged,
             "call_custom_fields_deleted": self.call_custom_fields_deleted,
             "contacts_anonymized": self.contacts_anonymized,
@@ -207,6 +218,29 @@ def default_dead_letter_raw_retain_until(
     return retention_deadline(created_at, config.retention_dead_letter_raw_days)
 
 
+def default_nexhealth_webhook_raw_retain_until(created_at: datetime) -> datetime:
+    """Short debug window for raw NexHealth webhook envelopes."""
+    return retention_deadline(created_at, 14)
+
+
+def default_gotracker_webhook_raw_retain_until(created_at: datetime) -> datetime:
+    """Short debug window for raw GoTracker webhook envelopes."""
+    return retention_deadline(created_at, 14)
+
+
+def default_form_submission_raw_retain_until(
+    created_at: datetime,
+    *,
+    config: Settings = settings,
+) -> datetime:
+    """How long a form submission's raw provider payload is kept.
+
+    It is the only way to diagnose a question that mapped to the wrong place,
+    and it holds whatever the person typed — so it is encrypted and it expires.
+    """
+    return retention_deadline(created_at, config.form_submission_raw_retention_days)
+
+
 def s3_bucket_key_from_recording_url(
     recording_url: str | None,
     *,
@@ -267,6 +301,51 @@ def build_expired_dead_letter_raw_update(now: datetime):
             DeadLetterEvent.raw_payload_retain_until <= now,
         )
         .values(raw_payload_encrypted=None, raw_payload_purged_at=now)
+    )
+
+
+def build_expired_nexhealth_webhook_raw_update(now: datetime):
+    return (
+        update(NexHealthWebhookEvent)
+        .where(
+            NexHealthWebhookEvent.raw_payload_encrypted.is_not(None),
+            NexHealthWebhookEvent.raw_payload_purged_at.is_(None),
+            NexHealthWebhookEvent.raw_payload_retain_until <= now,
+        )
+        .values(
+            raw_payload_encrypted=None,
+            raw_payload_purged_at=now,
+        )
+    )
+
+
+def build_expired_nexhealth_shadow_webhook_raw_update(now: datetime):
+    return (
+        update(NexHealthWebhookShadowEvent)
+        .where(
+            NexHealthWebhookShadowEvent.raw_payload_encrypted.is_not(None),
+            NexHealthWebhookShadowEvent.raw_payload_purged_at.is_(None),
+            NexHealthWebhookShadowEvent.raw_payload_retain_until <= now,
+        )
+        .values(
+            raw_payload_encrypted=None,
+            raw_payload_purged_at=now,
+        )
+    )
+
+
+def build_expired_gotracker_webhook_raw_update(now: datetime):
+    return (
+        update(GoTrackerWebhookEvent)
+        .where(
+            GoTrackerWebhookEvent.raw_payload_encrypted.is_not(None),
+            GoTrackerWebhookEvent.raw_payload_purged_at.is_(None),
+            GoTrackerWebhookEvent.raw_payload_retain_until <= now,
+        )
+        .values(
+            raw_payload_encrypted=None,
+            raw_payload_purged_at=now,
+        )
     )
 
 
@@ -423,6 +502,15 @@ class RetentionPolicyService:
             ),
             dead_letter_raw_payloads_purged=await self._execute_count(
                 build_expired_dead_letter_raw_update(effective_now)
+            ),
+            nexhealth_webhook_raw_payloads_purged=await self._execute_count(
+                build_expired_nexhealth_webhook_raw_update(effective_now)
+            ),
+            nexhealth_shadow_webhook_raw_payloads_purged=await self._execute_count(
+                build_expired_nexhealth_shadow_webhook_raw_update(effective_now)
+            ),
+            gotracker_webhook_raw_payloads_purged=await self._execute_count(
+                build_expired_gotracker_webhook_raw_update(effective_now)
             ),
             call_phi_purged=await self._execute_count(
                 build_expired_call_phi_update(effective_now)

@@ -18,6 +18,7 @@ from src.app.retell import handlers
 
 def _ctx(search_result: SlotSearchResult):
     adapter = MagicMock()
+    adapter.source = "gotracker"
     adapter.find_available_slots = AsyncMock(return_value=search_result)
     return SimpleNamespace(
         institution=SimpleNamespace(id="11111111-1111-1111-1111-111111111111"),
@@ -74,6 +75,251 @@ async def test_no_hint_when_no_availability_within_window(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_gotracker_allows_slot_search_without_appointment_type(monkeypatch):
+    ctx = _ctx(SlotSearchResult(slots=[], next_available_date=None))
+
+    async def _fake_resolve():
+        return ctx
+
+    monkeypatch.setattr(handlers, "_resolve_context", _fake_resolve)
+
+    result = await _find_slots(
+        {
+            "start_date": "2026-08-14",
+            "days": 7,
+            "provider_id": "3",
+        }
+    )
+
+    assert "error" not in result
+    ctx.adapter.find_available_slots.assert_awaited_once()
+    assert (
+        ctx.adapter.find_available_slots.await_args.kwargs["appointment_type_id"]
+        is None
+    )
+
+
+@pytest.mark.asyncio
+async def test_non_gotracker_still_requires_appointment_type(monkeypatch):
+    ctx = _ctx(SlotSearchResult(slots=[], next_available_date=None))
+    ctx.adapter.source = "nexhealth"
+
+    async def _fake_resolve():
+        return ctx
+
+    monkeypatch.setattr(handlers, "_resolve_context", _fake_resolve)
+
+    result = await _find_slots({"start_date": "2026-08-14", "provider_id": "3"})
+
+    assert result == {"error": "appointment_type_id is required."}
+    ctx.adapter.find_available_slots.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_no_group_for_provider_gets_clear_empty_range_message(monkeypatch):
+    ctx = _ctx(SlotSearchResult(slots=[], next_available_date=None))
+
+    async def _fake_resolve():
+        return ctx
+
+    monkeypatch.setattr(handlers, "_resolve_context", _fake_resolve)
+
+    result = await _find_slots(
+        {
+            "start_date": "2026-07-20",
+            "appointment_type_id": "gt-50",
+            "provider_id": "gt-9",
+        }
+    )
+
+    assert result["slots_count"] == 0
+    assert result["next_available_date"] is None
+    assert "this provider" in result["message"]
+    assert "requested date range" in result["message"]
+
+
+@pytest.mark.asyncio
+async def test_gotracker_slots_let_synchronizer_resolve_timezone(monkeypatch):
+    adapter = MagicMock()
+    adapter.source = "gotracker"
+    adapter.find_available_slots = AsyncMock(
+        return_value=SlotSearchResult(slots=[], next_available_date=None)
+    )
+    ctx = SimpleNamespace(
+        institution=SimpleNamespace(id="11111111-1111-1111-1111-111111111111"),
+        location=SimpleNamespace(
+            id="22222222-2222-2222-2222-222222222222",
+            timezone="America/New_York",
+        ),
+        adapter=adapter,
+    )
+
+    class _FakeSession:
+        async def execute(self, *_a, **_k):
+            return SimpleNamespace(
+                scalars=lambda: SimpleNamespace(all=lambda: []),
+                one_or_none=lambda: None,
+            )
+
+    class _FakeSessionCtx:
+        async def __aenter__(self):
+            return _FakeSession()
+
+        async def __aexit__(self, *_exc):
+            return None
+
+    async def _fake_resolve():
+        return ctx
+
+    monkeypatch.setattr(handlers, "_resolve_context", _fake_resolve)
+    monkeypatch.setattr(
+        handlers, "get_system_db_session", lambda *a, **k: _FakeSessionCtx()
+    )
+
+    await _find_slots(
+        {
+            "start_date": "2026-08-13",
+            "appointment_type_id": "gt-50",
+            "provider_id": "gt-9",
+        }
+    )
+
+    adapter.find_available_slots.assert_awaited_once()
+    assert "tz_offset" not in adapter.find_available_slots.await_args.kwargs
+
+
+@pytest.mark.asyncio
+async def test_retell_slots_default_to_no_future_buffer(monkeypatch):
+    slot = UniversalSlot(
+        start="2026-09-03T09:00:00-04:00",
+        end="2026-09-03T09:30:00-04:00",
+        provider_id="gt-3",
+    )
+    ctx = _ctx(SlotSearchResult(slots=[slot], next_available_date=None))
+    ctx.location = SimpleNamespace(
+        id="22222222-2222-2222-2222-222222222222",
+        timezone="America/Toronto",
+    )
+
+    class _FakeSession:
+        async def execute(self, *_args, **_kwargs):
+            return SimpleNamespace(
+                scalars=lambda: SimpleNamespace(all=lambda: []),
+                one_or_none=lambda: None,
+            )
+
+    class _FakeSessionContext:
+        async def __aenter__(self):
+            return _FakeSession()
+
+        async def __aexit__(self, *_exc):
+            return None
+
+    captured = {}
+
+    def _capture_filter(**kwargs):
+        captured.update(kwargs)
+        return kwargs["slots"]
+
+    async def _fake_resolve():
+        return ctx
+
+    monkeypatch.setattr(handlers, "_resolve_context", _fake_resolve)
+    monkeypatch.setattr(
+        handlers, "get_system_db_session", lambda *a, **k: _FakeSessionContext()
+    )
+    monkeypatch.setattr(handlers, "_missing_provider_source_ids", lambda *_args: set())
+    monkeypatch.setattr(handlers, "filter_slots", _capture_filter)
+
+    result = await _find_slots({"start_date": "2026-09-03"})
+
+    assert result["slots_count"] == 1
+    assert captured["buffer_minutes"] == 0
+
+
+@pytest.mark.asyncio
+async def test_nexhealth_slots_get_provider_name_from_scalenexus_cache(monkeypatch):
+    slot = UniversalSlot(
+        start="2026-07-20T09:00:00-04:00",
+        end="2026-07-20T09:30:00-04:00",
+        provider_id="nh-123",
+        provider_name="",
+    )
+    adapter = MagicMock()
+    adapter.source = "nexhealth"
+    adapter.find_available_slots = AsyncMock(
+        return_value=SlotSearchResult(slots=[slot], next_available_date=None)
+    )
+    ctx = SimpleNamespace(
+        institution=SimpleNamespace(id="11111111-1111-1111-1111-111111111111"),
+        location=SimpleNamespace(
+            id="22222222-2222-2222-2222-222222222222",
+            timezone="America/New_York",
+        ),
+        adapter=adapter,
+    )
+
+    class _QueryResult:
+        def __init__(self, items):
+            self._items = items
+
+        def scalars(self):
+            return self
+
+        def all(self):
+            return list(self._items)
+
+        def one_or_none(self):
+            return self._items[0] if self._items else None
+
+    class _FakeSession:
+        def __init__(self):
+            self._results = [
+                _QueryResult(
+                    [
+                        SimpleNamespace(
+                            source_id="nh-123",
+                            name="Dr. Ada Lovelace",
+                            first_name=None,
+                            last_name=None,
+                        )
+                    ]
+                ),
+                _QueryResult([]),
+                _QueryResult([]),
+            ]
+
+        async def execute(self, *_a, **_k):
+            return self._results.pop(0)
+
+    class _FakeSessionCtx:
+        async def __aenter__(self):
+            return _FakeSession()
+
+        async def __aexit__(self, *_exc):
+            return None
+
+    async def _fake_resolve():
+        return ctx
+
+    monkeypatch.setattr(handlers, "_resolve_context", _fake_resolve)
+    monkeypatch.setattr(
+        handlers, "get_system_db_session", lambda *a, **k: _FakeSessionCtx()
+    )
+
+    result = await _find_slots(
+        {
+            "start_date": "2026-07-20",
+            "appointment_type_id": "nh-50",
+            "buffer_minutes": 0,
+        }
+    )
+
+    assert result["slots_count"] == 1
+    assert result["slots"][0]["provider_name"] == "Dr. Ada Lovelace"
+
+
+@pytest.mark.asyncio
 async def test_hint_suppressed_when_slots_exist(monkeypatch):
     slot = UniversalSlot(
         start="2026-07-20T09:00:00-04:00",
@@ -96,7 +342,11 @@ async def test_hint_suppressed_when_slots_exist(monkeypatch):
     monkeypatch.setattr(handlers, "_resolve_context", _fake_resolve)
 
     result = await _find_slots(
-        {"start_date": "2026-07-20", "appointment_type_id": "nh-50"}
+        {
+            "start_date": "2026-07-20",
+            "appointment_type_id": "nh-50",
+            "buffer_minutes": 0,
+        }
     )
 
     assert result["slots_count"] == 1

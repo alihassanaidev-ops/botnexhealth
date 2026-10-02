@@ -73,6 +73,7 @@ fi
 
 SCRIPTS=(
     "src.app.scripts.recompute_dashboard_rollup"
+    "src.app.scripts.recompute_campaign_analytics"
     "src.app.scripts.cleanup_idempotency"
     "src.app.scripts.ensure_audit_partitions"
 )

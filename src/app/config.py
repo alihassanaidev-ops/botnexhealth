@@ -4,11 +4,17 @@ import ipaddress
 import logging
 import os
 from pathlib import Path
+from typing import Literal
 from urllib.parse import parse_qsl, quote_plus, urlencode, urlparse, urlunparse
 
 import structlog
 from pydantic import model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+from src.app.nexhealth.api_contract import (
+    NexHealthAPIContract,
+    normalize_nexhealth_api_contract,
+)
 
 
 def read_secret_file(file_path: str | None) -> str | None:
@@ -61,16 +67,14 @@ class Settings(BaseSettings):
     # App settings
     app_env: str = "local"
     log_level: str = "info"
+    # Public backend origin for provider webhooks. This is deployment metadata,
+    # not a credential. It may include a deployment path prefix, but no query.
+    public_api_url: str | None = None
 
     # NexHealth API settings
     nexhealth_api_key: str = ""
     nexhealth_base_url: str = "https://nexhealth.info"
     nexhealth_api_version: str = "v2"
-    # Work windows are read under their own contract so this one route can move
-    # to v3 ahead of the rest. v3 is what exposes `label` (NOTE / Lunch / real
-    # working hour) and honours ignore_past_dates server-side; v2 exposes
-    # neither. Set to "v2" to roll the route back without a redeploy.
-    nexhealth_working_hours_api_version: str = "v3.0.0"
     nexhealth_accept: str = "application/vnd.Nexhealth+json;version=2"
     nexhealth_max_connections: int = 20
     nexhealth_max_keepalive_connections: int = 10
@@ -78,9 +82,77 @@ class Settings(BaseSettings):
     # Optional NexHealth settings
     nexhealth_subdomain: str | None = None
     nexhealth_location_id: str | None = None
+    nexhealth_webhook_secret: str = (
+        ""  # HMAC-SHA256 secret for inbound webhook signatures
+    )
+    nexhealth_webhook_callback_url: str | None = None
+    nexhealth_shadow_webhook_callback_base_url: str | None = None
+    gotracker_base_url: str = "https://synchronizer.scalenexus.ai"
+    gotracker_webhook_secret: str = (
+        ""  # HMAC-SHA256 secret for inbound GoTracker webhooks
+    )
+    gotracker_webhook_callback_base_url: str | None = None
+
+    # Test Suite — a keyed, non-production surface for calling agent functions
+    # directly. Unset means the router is never mounted, so the default posture
+    # is "does not exist" rather than "exists but is locked".
+    test_suite_api_key: str | None = None
+    test_suite_api_key_file: str | None = None
+    #: Allow the six functions that write into a live practice. Off by default:
+    #: a debugging tool must not be one typo away from booking a real patient.
+    test_suite_allow_writes: bool = False
 
     # Retell AI settings
     retell_api_secret: str | None = None
+    # V-2 spoken opt-out: the key in a call's post-call `custom_analysis_data` that
+    # signals the patient asked to stop being contacted. UNSET by default (do-not-guess):
+    # detection stays off until the real Retell analysis field name is confirmed and
+    # configured. When set, a truthy value at this key writes a location-scoped DNC.
+    retell_optout_analysis_key: str | None = None
+
+    # OpenAI workflow AI actions
+    openai_api_key: str | None = None
+    openai_api_key_file: str | None = None
+    openai_base_url: str = "https://api.openai.com/v1"
+    workflow_llm_default_model: str = "gpt-5.6-luna"
+    workflow_llm_timeout_seconds: float = 20.0
+    workflow_llm_allow_keyword_fallback: bool = False
+    # Total attempts per AI action, including the first. Only transient failures
+    # are retried — a bad prompt or a schema mismatch fails the same way three
+    # times and just burns the run's latency budget.
+    workflow_llm_max_attempts: int = 3
+    workflow_llm_retry_base_delay_seconds: float = 0.5
+
+    # NexHealth post-visit completion sweep. NexHealth has no checkout event, so
+    # a visit is treated as finished once start_time + the appointment type's
+    # duration has passed. The lookback bounds how far back the sweep will reach,
+    # which stops a first run on a busy clinic from firing a huge backlog of
+    # triggers; it matches the shipped post-op template's max_followup_delay_hours.
+    nexhealth_post_visit_lookback_hours: int = 72
+    nexhealth_post_visit_default_duration_minutes: int = 60
+
+    # ── Lead-form providers (Meta Lead Ads / Typeform) ───────────────────
+    # Platform-level OAuth apps, one per provider, shared by every clinic. A
+    # clinic authorises *its* account through them; the per-clinic token lands
+    # in form_provider_connections, never here.
+    #
+    # Unset means the provider is simply not offered: the settings screen says
+    # so rather than presenting a Connect button that fails at the redirect.
+    meta_app_id: str | None = None
+    meta_app_secret: str | None = None
+    meta_app_secret_file: str | None = None
+    meta_graph_version: str = "v21.0"
+    # Echoed back to Meta on the webhook subscription handshake. Meta will not
+    # deliver leads until that GET succeeds, so this is required to receive any.
+    meta_webhook_verify_token: str | None = None
+    typeform_client_id: str | None = None
+    typeform_client_secret: str | None = None
+    typeform_client_secret_file: str | None = None
+    typeform_api_base_url: str = "https://api.typeform.com"
+    # How long a form submission's raw provider payload is kept. It is the only
+    # way to diagnose a mis-mapped question, and it holds whatever the person
+    # typed — so it is encrypted and it expires.
+    form_submission_raw_retention_days: int = 30
 
     # Resend (transactional email)
     resend_api_key: str | None = None
@@ -88,6 +160,69 @@ class Settings(BaseSettings):
     resend_reply_to: str | None = None
     # Comma-separated fallback recipients for call alerts (optional)
     resend_alert_recipients: str | None = None
+    # Shared secret for verifying Resend (bounce/complaint) webhooks. Unset in
+    # local/test; required in production (the webhook route fails closed when unset).
+    resend_webhook_secret: str | None = None
+    # Public base URL used to build one-click links in outbound emails (unsubscribe).
+    public_base_url: str = "https://app.scalenexus.ai"
+
+    # ── Patient-facing email provider ────────────────────────────────────
+    # Auth emails and staff call alerts always go through Resend. This selects
+    # the provider for patient-facing campaign email only, which is the traffic
+    # that carries health information and therefore has to sit under an
+    # agreement covering it (see docs/compliance/04-gap-register.md G-013/G-017).
+    #
+    # "resend" keeps today's behaviour. "ses" routes patient mail through
+    # Amazon SES in ``ses_region`` — same AWS account and region as the rest of
+    # the platform, so the content stays inside our own infrastructure.
+    patient_email_provider: Literal["resend", "ses"] = "resend"
+
+    ses_region: str = "ca-central-1"
+    # Parent domain that per-clinic sending subdomains are created under, e.g.
+    # "mail.scalenexus.ai" → "brightsmile.mail.scalenexus.ai". Its parent
+    # Route 53 zone must be controlled by this account so DKIM can be published
+    # without the clinic touching DNS.
+    ses_sending_domain: str | None = None
+    ses_sending_hosted_zone_id: str | None = None
+    # Global rollout gate. Domains can be provisioned and verified while this
+    # remains false, but no clinic can be activated for SES sending until event
+    # capture, suppression and operational monitoring are ready.
+    ses_clinic_sending_enabled: bool = False
+    # Prefix for the per-clinic configuration set that carries event
+    # destinations (bounce/complaint) and reputation options.
+    ses_configuration_set_prefix: str = "scalenexus"
+    # ── Inbound email (patient replies) ──────────────────────────────────
+    # One shared receiving domain for the whole platform, not one per clinic:
+    # SES caps receipt rules at 200 per rule set with no increase path, so a
+    # rule-per-clinic design would wall at ~200 clinics. The clinic a reply
+    # belongs to is carried in the signed Reply-To instead.
+    ses_inbound_domain: str | None = None
+    #: Bucket the receipt rule writes the full MIME into.
+    ses_inbound_bucket: str | None = None
+    ses_inbound_prefix: str = "inbound/"
+    #: SQS queue subscribed to the receipt rule's SNS topic. A queue rather than
+    #: a public HTTPS endpoint: no signature-verification surface to get wrong,
+    #: and mail survives a deploy or an outage instead of being retried at us.
+    ses_inbound_queue_url: str | None = None
+    #: Messages larger than this are recorded with their metadata but the body is
+    #: left in object storage rather than pulled into the database.
+    inbound_email_max_body_bytes: int = 256_000
+    #: Per-sender cap over an hour, so a loop or a flood on the catch-all cannot
+    #: fill the inbox.
+    inbound_email_sender_hourly_limit: int = 60
+
+    # Outbound volume limits (Item 18)
+    #: Default ceiling on simultaneous outbound calls for one clinic. A clinic
+    #: may override it via ``Institution.outbound_call_limit``.
+    outbound_call_concurrency_limit: int = 20
+    #: How long a call slot is held before it lapses on its own. Sized past the
+    #: 30-minute voice parking timeout so a live call is never evicted from its
+    #: own slot, while a release lost to a crash still heals within the hour.
+    outbound_call_lease_seconds: int = 2400
+    #: Per-minute send ceilings per provider, per location. 0 disables a limit.
+    #: 60/minute is Twilio's default long-code throughput expressed per window.
+    twilio_send_rate_per_minute: int = 60
+    email_send_rate_per_minute: int = 300
 
     # Celery
     celery_broker_url: str | None = None
@@ -107,10 +242,9 @@ class Settings(BaseSettings):
     retention_dead_letter_raw_days: int = 30
     retention_idempotency_days: int = 7
 
-
     # Twilio (SMS / phone numbers)
-    twillio_sid: str | None = None          # Account SID (env: TWILLIO_SID)
-    twillio_api_secret: str | None = None   # Auth Token (env: TWILLIO_API_SECRET)
+    twillio_sid: str | None = None  # Account SID (env: TWILLIO_SID)
+    twillio_api_secret: str | None = None  # Auth Token (env: TWILLIO_API_SECRET)
     twilio_sms_status_callback_url: str | None = None
 
     # Database (PostgreSQL)
@@ -188,6 +322,9 @@ class Settings(BaseSettings):
     # Docker secret file paths (set via *_FILE env vars)
     nexhealth_api_key_file: str | None = None
     retell_api_secret_file: str | None = None
+    # (test_suite_api_key_file declared with the other Test Suite settings)
+    # Lead-form provider app secrets
+    # (meta_app_secret_file / typeform_client_secret_file declared above)
     # Auth / JWT (REQUIRED — no defaults, must be set in .env or secrets manager)
     jwt_secret: str
     jwt_algorithm: str = "HS256"
@@ -195,7 +332,9 @@ class Settings(BaseSettings):
     jwt_audience: str = "nexhealth-dashboard"
     jwt_secret_file: str | None = None
 
-    model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
+    model_config = SettingsConfigDict(
+        env_file=".env", env_file_encoding="utf-8", extra="ignore"
+    )
 
     @model_validator(mode="after")
     def load_secrets_from_files(self) -> "Settings":
@@ -205,13 +344,63 @@ class Settings(BaseSettings):
             object.__setattr__(self, "nexhealth_api_key", secret)
 
         # Retell API Secret
+        if secret := read_secret_file(self.test_suite_api_key_file):
+            self.test_suite_api_key = secret
         if secret := read_secret_file(self.retell_api_secret_file):
             object.__setattr__(self, "retell_api_secret", secret)
 
+        # OpenAI API key
+        if secret := read_secret_file(self.openai_api_key_file):
+            object.__setattr__(self, "openai_api_key", secret)
+
+        # Lead-form provider app secrets
+        if secret := read_secret_file(self.meta_app_secret_file):
+            object.__setattr__(self, "meta_app_secret", secret)
+        if secret := read_secret_file(self.typeform_client_secret_file):
+            object.__setattr__(self, "typeform_client_secret", secret)
 
         # JWT Secret
         if secret := read_secret_file(self.jwt_secret_file):
             object.__setattr__(self, "jwt_secret", secret)
+
+        nexhealth_api_contract = normalize_nexhealth_api_contract(
+            self.nexhealth_api_version
+        )
+        object.__setattr__(
+            self,
+            "nexhealth_api_version",
+            nexhealth_api_contract.api_version_header,
+        )
+        object.__setattr__(
+            self,
+            "nexhealth_accept",
+            nexhealth_api_contract.accept_header,
+        )
+
+        for field_name in (
+            "public_api_url",
+            "twilio_sms_status_callback_url",
+        ):
+            value = getattr(self, field_name)
+            if not value:
+                continue
+            normalized = value.strip().rstrip("/")
+            parsed = urlparse(normalized)
+            if (
+                parsed.scheme not in {"http", "https"}
+                or not parsed.netloc
+                or parsed.username
+                or parsed.password
+                or parsed.query
+                or parsed.fragment
+            ):
+                raise ValueError(
+                    f"{field_name.upper()} must be an absolute HTTP(S) URL "
+                    "without credentials, query parameters, or a fragment"
+                )
+            if self.is_production and parsed.scheme != "https":
+                raise ValueError(f"{field_name.upper()} must use https in production")
+            object.__setattr__(self, field_name, normalized)
 
         # Block wildcard CORS in production
         if self.is_production and self.cors_allowed_origins.strip() == "*":
@@ -242,9 +431,7 @@ class Settings(BaseSettings):
             )
 
         if self.cookie_samesite.lower() not in {"strict", "lax", "none"}:
-            raise ValueError(
-                "COOKIE_SAMESITE must be 'strict', 'lax', or 'none'."
-            )
+            raise ValueError("COOKIE_SAMESITE must be 'strict', 'lax', or 'none'.")
         if self.is_production and not self.cookie_secure:
             raise ValueError("COOKIE_SECURE must be true in production.")
         if self.cookie_samesite.lower() == "none" and not self.cookie_secure:
@@ -268,6 +455,34 @@ class Settings(BaseSettings):
                     raise ValueError(
                         "WEBAUTHN_ALLOWED_ORIGINS must contain HTTPS origins in production"
                     )
+
+        # NEXHEALTH_WEBHOOK_SECRET verifies the HMAC-SHA256 signature on inbound
+        # NexHealth appointment webhooks. When empty, signature verification is
+        # skipped (fails open) — acceptable for local/test where the endpoint is
+        # firewalled, but in production an unauthenticated POST could trigger
+        # cross-tenant workflow enrollment. Fail closed: require it in prod.
+        if self.is_production and not self.nexhealth_webhook_secret:
+            raise ValueError(
+                "NEXHEALTH_WEBHOOK_SECRET must be set in production. "
+                "Without it, inbound appointment webhooks are unauthenticated."
+            )
+        if (
+            self.is_production
+            and self.nexhealth_webhook_callback_url
+            and urlparse(self.nexhealth_webhook_callback_url).scheme != "https"
+        ):
+            raise ValueError(
+                "NEXHEALTH_WEBHOOK_CALLBACK_URL must use https in production"
+            )
+        if (
+            self.is_production
+            and self.nexhealth_shadow_webhook_callback_base_url
+            and urlparse(self.nexhealth_shadow_webhook_callback_base_url).scheme
+            != "https"
+        ):
+            raise ValueError(
+                "NEXHEALTH_SHADOW_WEBHOOK_CALLBACK_BASE_URL must use https in production"
+            )
 
         for cidr in self._split_csv(self.trusted_proxy_cidrs):
             ipaddress.ip_network(cidr, strict=False)
@@ -311,13 +526,18 @@ class Settings(BaseSettings):
 
     @property
     def accept_header(self) -> str:
-        """Alias for nexhealth_accept (implements AuthConfig protocol)."""
-        return self.nexhealth_accept
+        """Derived NexHealth Accept header (implements AuthConfig protocol)."""
+        return self.nexhealth_api_contract.accept_header
 
     @property
     def api_version(self) -> str:
-        """Alias for nexhealth_api_version (implements AuthConfig protocol)."""
-        return self.nexhealth_api_version
+        """Derived NexHealth API version header (implements AuthConfig protocol)."""
+        return self.nexhealth_api_contract.api_version_header
+
+    @property
+    def nexhealth_api_contract(self) -> NexHealthAPIContract:
+        """Normalized NexHealth API contract target."""
+        return normalize_nexhealth_api_contract(self.nexhealth_api_version)
 
     @property
     def normalized_redis_url(self) -> str | None:
@@ -328,6 +548,22 @@ class Settings(BaseSettings):
     def normalized_celery_broker_url(self) -> str | None:
         """Broker URL with TLS requirements normalized for managed Redis."""
         return normalize_redis_url(self.celery_broker_url)
+
+    @property
+    def twilio_inbound_sms_webhook_url(self) -> str | None:
+        """Return the Twilio inbound SMS webhook for this deployment."""
+        if not self.public_api_url:
+            return None
+        return f"{self.public_api_url}/api/v1/twilio/webhooks/inbound-sms"
+
+    @property
+    def effective_twilio_sms_status_callback_url(self) -> str | None:
+        """Return the explicit or deployment-derived SMS delivery callback."""
+        if self.twilio_sms_status_callback_url:
+            return self.twilio_sms_status_callback_url
+        if not self.public_api_url:
+            return None
+        return f"{self.public_api_url}/api/v1/twilio/webhooks/sms-status"
 
     @property
     def effective_redis_url(self) -> str | None:
@@ -361,6 +597,17 @@ class Settings(BaseSettings):
         return self.app_env.lower() in {"production", "prod"}
 
     @property
+    def test_suite_enabled(self) -> bool:
+        """Whether the Test Suite router should be mounted at all.
+
+        Two independent conditions, both required. Production is excluded by
+        environment regardless of configuration, so setting the key in prod by
+        accident still mounts nothing — the gate is not one boolean somebody can
+        flip.
+        """
+        return bool(self.test_suite_api_key) and not self.is_production
+
+    @property
     def allow_super_admin_totp(self) -> bool:
         return self.enable_super_admin_totp
 
@@ -390,7 +637,6 @@ class Settings(BaseSettings):
         )
 
 
-
 def setup_logging(log_level: str = "info", app_env: str = "local") -> None:
     """Configure application logging."""
     level = getattr(logging, log_level.upper(), logging.INFO)
@@ -400,9 +646,7 @@ def setup_logging(log_level: str = "info", app_env: str = "local") -> None:
         if is_dev
         else structlog.processors.JSONRenderer()
     )
-    exception_processors = (
-        [] if is_dev else [structlog.processors.format_exc_info]
-    )
+    exception_processors = [] if is_dev else [structlog.processors.format_exc_info]
     shared_processors = [
         structlog.contextvars.merge_contextvars,
         structlog.stdlib.add_logger_name,

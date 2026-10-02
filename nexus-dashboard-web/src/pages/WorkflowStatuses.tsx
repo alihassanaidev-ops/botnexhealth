@@ -115,6 +115,7 @@ export default function WorkflowStatuses() {
 
             {/* Header */}
             <PageHeader
+                art="workflow"
                 icon={Tag}
                 title="Call Statuses"
                 description="Workflow states your team assigns to calls (e.g. Pending, Completed). Distinct from the AI tags applied automatically."

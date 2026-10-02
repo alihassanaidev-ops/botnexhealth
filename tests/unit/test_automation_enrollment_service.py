@@ -1,0 +1,321 @@
+"""Unit tests for AutomationWorkflowEnrollmentService."""
+
+from __future__ import annotations
+
+import asyncio
+from types import SimpleNamespace
+from unittest.mock import AsyncMock, MagicMock, patch
+
+import pytest
+
+from src.app.models.automation_workflow import (
+    AutomationRunStatus,
+    AutomationWorkflowRun,
+)
+from src.app.services.automation.enrollment_service import (
+    AutomationWorkflowEnrollmentService,
+)
+from src.app.services.automation.retell_sms_conversation_service import (
+    RetellSmsConversationService,
+)
+
+
+class _NestedCM:
+    """Minimal async context manager standing in for session.begin_nested()."""
+
+    async def __aenter__(self):
+        return None
+
+    async def __aexit__(self, *exc):
+        return False
+
+
+def _make_session(*, existing_run=None) -> AsyncMock:
+    session = AsyncMock()
+    session.add = MagicMock()
+    session.flush = AsyncMock()
+    session.begin_nested = MagicMock(return_value=_NestedCM())
+    mock_result = MagicMock()
+    mock_result.scalar_one_or_none.return_value = existing_run
+    session.execute = AsyncMock(return_value=mock_result)
+    return session
+
+
+def _make_run(status: str = AutomationRunStatus.PENDING.value) -> AutomationWorkflowRun:
+    return AutomationWorkflowRun(
+        institution_id="inst-1",
+        workflow_id="wf-1",
+        workflow_version_id="ver-1",
+        status=status,
+    )
+
+
+def test_enroll_creates_new_run_when_no_idempotency_key() -> None:
+    session = _make_session()
+    svc = AutomationWorkflowEnrollmentService(session)
+    run, created = asyncio.run(
+        svc.enroll(
+            institution_id="inst-1",
+            workflow_id="wf-1",
+            workflow_version_id="ver-1",
+        )
+    )
+    assert created is True
+    assert run.status == AutomationRunStatus.PENDING.value
+    assert session.add.call_count == 2  # run + enrolled event
+
+
+def test_enroll_returns_existing_run_on_idempotency_match() -> None:
+    existing = _make_run()
+    session = _make_session(existing_run=existing)
+    svc = AutomationWorkflowEnrollmentService(session)
+    run, created = asyncio.run(
+        svc.enroll(
+            institution_id="inst-1",
+            workflow_id="wf-1",
+            workflow_version_id="ver-1",
+            idempotency_key="appt-123",
+        )
+    )
+    assert created is False
+    assert run is existing
+    session.add.assert_not_called()
+
+
+def test_enroll_creates_new_run_when_no_match_for_idempotency_key() -> None:
+    session = _make_session(existing_run=None)
+    svc = AutomationWorkflowEnrollmentService(session)
+    run, created = asyncio.run(
+        svc.enroll(
+            institution_id="inst-1",
+            workflow_id="wf-1",
+            workflow_version_id="ver-1",
+            idempotency_key="appt-xyz",
+        )
+    )
+    assert created is True
+    assert run.idempotency_key == "appt-xyz"
+
+
+def test_enroll_dedupes_conflicting_active_run() -> None:
+    """A contact already in a non-terminal run of the workflow is not re-enrolled."""
+    active = _make_run(AutomationRunStatus.WAITING.value)
+    session = _make_session(existing_run=active)
+    svc = AutomationWorkflowEnrollmentService(session)
+    run, created = asyncio.run(
+        svc.enroll(
+            institution_id="inst-1",
+            workflow_id="wf-1",
+            workflow_version_id="ver-1",
+            contact_id="contact-1",
+        )
+    )
+    assert created is False
+    assert run is active
+    session.add.assert_not_called()
+
+
+def test_enroll_allows_second_active_appointment_run_for_same_contact() -> None:
+    """Appointment workflows are appointment-scoped, so another appointment for
+    the same patient must not be blocked by an old waiting appointment run."""
+    session = _make_session(existing_run=None)
+    svc = AutomationWorkflowEnrollmentService(session)
+    run, created = asyncio.run(
+        svc.enroll(
+            institution_id="inst-1",
+            workflow_id="wf-1",
+            workflow_version_id="ver-1",
+            contact_id="contact-1",
+            trigger_type="appointment_offset",
+            trigger_ref_type="appointment",
+            trigger_ref_id="appt-2",
+            idempotency_key="appt:ver-1:appt-2:2026-08-14T15:00:00+00:00",
+        )
+    )
+    assert created is True
+    assert run.contact_id == "contact-1"
+    assert run.trigger_ref_id == "appt-2"
+
+
+def test_enroll_idempotency_race_returns_winner() -> None:
+    """Concurrent insert loses the unique-index race → recover the winner's run
+    instead of surfacing IntegrityError."""
+    from sqlalchemy.exc import IntegrityError
+
+    winner = _make_run()
+    session = AsyncMock()
+    session.add = MagicMock()
+    session.begin_nested = MagicMock(return_value=_NestedCM())
+    first = MagicMock()
+    first.scalar_one_or_none.return_value = None  # pre-insert lookup: none
+    second = MagicMock()
+    second.scalar_one_or_none.return_value = winner  # post-conflict lookup: winner
+    session.execute = AsyncMock(side_effect=[first, second])
+    session.flush = AsyncMock(
+        side_effect=IntegrityError("INSERT", {}, Exception("dup"))
+    )
+
+    svc = AutomationWorkflowEnrollmentService(session)
+    run, created = asyncio.run(
+        svc.enroll(
+            institution_id="inst-1",
+            workflow_id="wf-1",
+            workflow_version_id="ver-1",
+            idempotency_key="appt-race",
+        )
+    )
+    assert created is False
+    assert run is winner
+
+
+def test_cancel_run_transitions_to_cancelled() -> None:
+    session = _make_session()
+    svc = AutomationWorkflowEnrollmentService(session)
+    run = _make_run(AutomationRunStatus.RUNNING.value)
+    result = asyncio.run(svc.cancel_run(run, reason="test-cancel"))
+    assert result.status == AutomationRunStatus.CANCELLED.value
+    assert result.blocked_reason == "test-cancel"
+    assert result.cancelled_at is not None
+
+
+def test_cancel_run_terminalizes_active_retell_sms_session() -> None:
+    session = _make_session()
+    active_retell_session = SimpleNamespace(
+        status="awaiting_user",
+        terminal_outcome=None,
+        failure_code=None,
+        ended_at=None,
+    )
+    retell_result = MagicMock()
+    retell_result.scalars.return_value.all.return_value = [active_retell_session]
+    session.execute.return_value = retell_result
+    conversation = AsyncMock()
+    run = _make_run(AutomationRunStatus.WAITING.value)
+
+    with patch(
+        "src.app.services.automation.campaign_conversation_service."
+        "CampaignConversationService",
+        return_value=conversation,
+    ):
+        asyncio.run(
+            AutomationWorkflowEnrollmentService(session).cancel_run(
+                run,
+                reason="manual_cancel",
+            )
+        )
+
+    assert active_retell_session.status == "cancelled"
+    assert active_retell_session.terminal_outcome == "workflow_cancelled"
+    assert active_retell_session.ended_at is not None
+
+
+def test_retell_delivery_lock_refreshes_cancelled_state() -> None:
+    cancelled_run = SimpleNamespace(status=AutomationRunStatus.CANCELLED.value)
+    cancelled_retell_session = SimpleNamespace(status="cancelled")
+    run_result = MagicMock()
+    run_result.scalar_one_or_none.return_value = cancelled_run
+    retell_result = MagicMock()
+    retell_result.scalar_one_or_none.return_value = cancelled_retell_session
+    session = AsyncMock()
+    session.execute = AsyncMock(side_effect=[run_result, retell_result])
+
+    run, retell_session = asyncio.run(
+        RetellSmsConversationService(session).lock_delivery_state(
+            workflow_run_id="run-1",
+            session_id="session-1",
+        )
+    )
+
+    assert run is cancelled_run
+    assert retell_session is cancelled_retell_session
+    assert run.status == AutomationRunStatus.CANCELLED.value
+    assert retell_session.status == "cancelled"
+    assert session.execute.await_count == 2
+
+
+def test_sms_opt_out_cancellation_force_closes_sms_thread_with_opt_out_reason() -> None:
+    session = _make_session()
+    conversation = AsyncMock()
+    run = _make_run(AutomationRunStatus.WAITING.value)
+
+    with patch(
+        "src.app.services.automation.campaign_conversation_service."
+        "CampaignConversationService",
+        return_value=conversation,
+    ):
+        asyncio.run(
+            AutomationWorkflowEnrollmentService(session).cancel_run(
+                run,
+                reason="sms_opt_out",
+                sms_completion_reason="sms_opt_out",
+                preserve_unresolved_sms_handoffs=False,
+                require_sms_thread_close=True,
+            )
+        )
+
+    conversation.close_terminal_threads_for_run.assert_awaited_once_with(
+        run,
+        completion_reason="sms_opt_out",
+        preserve_unresolved_handoffs=False,
+    )
+
+
+def test_sms_opt_out_cancellation_propagates_thread_close_failure() -> None:
+    session = _make_session()
+    conversation = AsyncMock()
+    conversation.close_terminal_threads_for_run.side_effect = RuntimeError(
+        "close failed"
+    )
+    run = _make_run(AutomationRunStatus.WAITING.value)
+
+    with patch(
+        "src.app.services.automation.campaign_conversation_service."
+        "CampaignConversationService",
+        return_value=conversation,
+    ):
+        with pytest.raises(RuntimeError, match="close failed"):
+            asyncio.run(
+                AutomationWorkflowEnrollmentService(session).cancel_run(
+                    run,
+                    reason="sms_opt_out",
+                    sms_completion_reason="sms_opt_out",
+                    preserve_unresolved_sms_handoffs=False,
+                    require_sms_thread_close=True,
+                )
+            )
+
+
+def test_cancel_run_is_noop_for_completed() -> None:
+    session = _make_session()
+    svc = AutomationWorkflowEnrollmentService(session)
+    run = _make_run(AutomationRunStatus.COMPLETED.value)
+    result = asyncio.run(svc.cancel_run(run))
+    assert result.status == AutomationRunStatus.COMPLETED.value
+    session.flush.assert_not_awaited()
+
+
+def test_cancel_run_is_noop_for_already_cancelled() -> None:
+    session = _make_session()
+    svc = AutomationWorkflowEnrollmentService(session)
+    run = _make_run(AutomationRunStatus.CANCELLED.value)
+    result = asyncio.run(svc.cancel_run(run))
+    assert result.status == AutomationRunStatus.CANCELLED.value
+    session.flush.assert_not_awaited()
+
+
+def test_enroll_stores_trigger_fields() -> None:
+    session = _make_session(existing_run=None)
+    svc = AutomationWorkflowEnrollmentService(session)
+    run, _ = asyncio.run(
+        svc.enroll(
+            institution_id="inst-1",
+            workflow_id="wf-1",
+            workflow_version_id="ver-1",
+            trigger_type="appointment_offset",
+            trigger_ref_type="appointment",
+            trigger_ref_id="appt-99",
+        )
+    )
+    assert run.trigger_type == "appointment_offset"
+    assert run.trigger_ref_type == "appointment"
+    assert run.trigger_ref_id == "appt-99"

@@ -22,6 +22,7 @@ import {
 } from "@/components/ui/select";
 import { FormSkeleton } from "@/components/ui/skeletons";
 import type { Location, OperatingHoursResponse, OperatingHoursEntry, BreakResponse, BreakCreateRequest } from "@/types";
+import { withOpenWindow } from "@/lib/operating-hours"
 
 interface LocationHoursDialogProps {
     institutionSlug: string;
@@ -126,7 +127,10 @@ export function LocationHoursDialog({ institutionSlug, location, onClose }: Loca
     };
 
     const handleUpdateHour = (dayValue: number, field: keyof OperatingHoursEntry, value: boolean | string | null) => {
-        setHours(prev => prev.map(h => h.day_of_week === dayValue ? { ...h, [field]: value } : h));
+        setHours(prev => prev.map(h => {
+            if (h.day_of_week !== dayValue) return h;
+            return withOpenWindow({ ...h, [field]: value });
+        }));
     };
 
     const handleAddBreak = async () => {

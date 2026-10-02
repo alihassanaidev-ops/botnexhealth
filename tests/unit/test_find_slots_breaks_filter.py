@@ -113,9 +113,11 @@ async def test_lunch_break_hides_slot_from_agent(monkeypatch):
         start_time=time(12, 0),
         end_time=time(13, 0),
     )
-    # No provider_id in args → provider query skipped; execute order is
-    # operating_hours, then breaks. Hours must be configured for breaks to apply.
-    session = _FakeSession([_QueryResult(_all_days_open()), _QueryResult([lunch])])
+    # No provider_id in args skips provider settings, but slots still load
+    # provider-name enrichment before operating_hours and breaks.
+    session = _FakeSession(
+        [_QueryResult([]), _QueryResult(_all_days_open()), _QueryResult([lunch])]
+    )
     monkeypatch.setattr(
         handlers, "get_system_db_session", lambda *a, **k: _FakeSessionCtx(session)
     )
@@ -151,7 +153,7 @@ async def test_no_breaks_keeps_all_slots(monkeypatch):
     )
     ctx = _ctx([s1, s2])
     # Empty operating_hours + empty breaks → nothing filtered.
-    session = _FakeSession([_QueryResult([]), _QueryResult([])])
+    session = _FakeSession([_QueryResult([]), _QueryResult([]), _QueryResult([])])
     monkeypatch.setattr(
         handlers, "get_system_db_session", lambda *a, **k: _FakeSessionCtx(session)
     )

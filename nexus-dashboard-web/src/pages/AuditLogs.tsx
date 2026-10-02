@@ -78,6 +78,7 @@ export default function AuditLogs() {
         <div className="relative space-y-6 bg-background">
             <div className="fixed inset-0 overflow-hidden pointer-events-none"><div className="absolute -top-32 -right-32 w-[420px] h-[420px] bg-transparent dark:bg-violet-700/20 rounded-full blur-[100px]" /></div>
             <PageHeader
+                art="audit"
                 icon={ShieldCheck}
                 title="Audit Logs"
                 description="View compliance and system activity for your allowed scope."

@@ -10,64 +10,114 @@ import {
     SidebarRail,
 } from "@/components/ui/sidebar"
 import { LocationSelector } from "@/components/location-selector"
-import {
-    Home,
-    Users,
-    Building2,
-    CalendarCheck,
-    UserCog,
-    Armchair,
-    LayoutDashboard,
-    Phone,
-    PhoneForwarded,
-    Shield,
-    ShieldCheck,
-    MessageSquare,
-    Mail,
-    MailCheck,
-    Settings,
-    ClipboardList,
-    Layers,
-    Tag,
-} from "lucide-react"
+import { isClassicUi } from "@/lib/ui-mode"
+// @ui-variant classic
+import { NAV_GLYPH } from "@/components/nav-glyphs"
+import type { LucideIcon } from "lucide-react"
+import { type PageArtName } from "@/assets/icons"
+import { Art } from "@/components/Art"
 import { Link, useLocation } from "react-router-dom"
 import { useAuth } from "@/context/AuthContext"
 import { useInstitution } from "@/context/InstitutionContext"
 
-type NavItemDef = { title: string; url: string; icon: React.ElementType; exact?: boolean }
+type NavItemDef = { title: string; url: string; exact?: boolean }
+
+// @ui-variant refresh
+// Illustrated artwork for the nav, keyed by route rather than by nav title:
+// the same route appears in several role-specific nav lists and must always
+// carry the same icon. Every route is intentionally required here so a new
+// sidebar item cannot silently fall back to an inconsistent glyph.
+const NAV_ART: Record<string, PageArtName> = {
+    "/admin": "dashboard",
+    "/admin/audit-logs": "audit",
+    "/admin/twilio": "telephony",
+    "/admin/users": "users",
+    "/callbacks": "callbackQueue",
+    "/calls": "calls",
+    "/contacts": "contacts",
+    "/dashboard": "dashboard",
+    "/group": "groups",
+    "/groups": "groups",
+    "/inbox": "inbox",
+    "/institution-admin": "admin",
+    "/institution-admin/appointment-sync": "appointmentSync",
+    "/institution-admin/call-statuses": "workflow",
+    "/institution-admin/campaigns": "campaigns",
+    "/institution-admin/do-not-contact": "patients",
+    "/institution-admin/email-inbox": "inbox",
+    "/institution-admin/email-sending-address": "sendingAddress",
+    "/institution-admin/email-templates": "emailTemplates",
+    "/institution-admin/lead-forms": "leadForms",
+    "/institution-admin/quiet-hours-exceptions": "scheduling",
+    "/institution-admin/settings": "settings",
+    "/institution-admin/sms-templates": "messaging",
+    "/institution-admin/users": "users",
+    "/institutions": "admin",
+    "/location-admin": "admin",
+    "/location-admin/settings": "settings",
+    "/notification-preferences": "emailPreferences",
+    "/patients": "patients",
+    "/setup": "settings",
+    "/setup/appointment-types": "appointmentTypes",
+    "/setup/audit-logs": "audit",
+    "/setup/insurance-plans": "insurancePlans",
+    "/setup/operatories": "operatories",
+    "/setup/providers": "providers",
+    "/setup/reasons": "appointmentTypes",
+    "/sms-preferences": "messaging",
+    "/undeliverables": "workflow",
+}
+
 
 // Admin-only nav items
 const adminNav: NavItemDef[] = [
     {
         title: "Admin Dashboard",
         url: "/admin",
-        icon: LayoutDashboard,
         exact: true,
     },
     {
         title: "Institutions",
         url: "/institutions",
-        icon: Users,
     },
     {
         title: "Groups",
         url: "/groups",
-        icon: Layers,
     },
     {
         title: "Users",
         url: "/admin/users",
-        icon: UserCog,
+    },
+    {
+        // Platform-wide patient conversations. The page filters by practice
+        // and location; the API is what actually enforces the span.
+        title: "Inbox",
+        url: "/inbox",
+    },
+    {
+        // Both email admin surfaces ask which practice first.
+        title: "Campaign Emails",
+        url: "/institution-admin/email-templates",
+    },
+    {
+        title: "Sending Addresses",
+        url: "/institution-admin/email-sending-address",
+    },
+    {
+        title: "Email Settings",
+        url: "/institution-admin/email-inbox",
     },
     {
         title: "Phone Numbers",
         url: "/admin/twilio",
-        icon: MessageSquare,
     },
     {
         title: "Audit Logs",
         url: "/admin/audit-logs",
-        icon: ShieldCheck,
+    },
+    {
+        title: "Automation issues",
+        url: "/undeliverables",
     },
 ]
 
@@ -75,33 +125,47 @@ const institutionAdminNav: NavItemDef[] = [
     {
         title: "Institution Admin",
         url: "/institution-admin",
-        icon: Building2,
         exact: true,
     },
     {
         title: "User Management",
         url: "/institution-admin/users",
-        icon: Users,
     },
     {
         title: "Dashboard",
         url: "/dashboard",
-        icon: Home,
     },
     {
         title: "Calls",
         url: "/calls",
-        icon: Phone,
     },
     {
         title: "Callback Queue",
         url: "/callbacks",
-        icon: PhoneForwarded,
     },
     {
         title: "Call Statuses",
         url: "/institution-admin/call-statuses",
-        icon: Tag,
+    },
+    {
+        title: "Campaigns",
+        url: "/institution-admin/campaigns",
+    },
+    {
+        title: "Appointment Sync",
+        url: "/institution-admin/appointment-sync",
+    },
+    {
+        title: "DNC Patients",
+        url: "/institution-admin/do-not-contact",
+    },
+    {
+        title: "Quiet Hours",
+        url: "/institution-admin/quiet-hours-exceptions",
+    },
+    {
+        title: "Automation issues",
+        url: "/undeliverables",
     },
 ]
 
@@ -109,28 +173,39 @@ const locationAdminNav: NavItemDef[] = [
     {
         title: "Management",
         url: "/location-admin",
-        icon: Building2,
         exact: true,
     },
     {
         title: "Dashboard",
         url: "/dashboard",
-        icon: Home,
     },
     {
         title: "Calls",
         url: "/calls",
-        icon: Phone,
     },
     {
         title: "Callback Queue",
         url: "/callbacks",
-        icon: PhoneForwarded,
     },
     {
         title: "Call Statuses",
         url: "/institution-admin/call-statuses",
-        icon: Tag,
+    },
+    {
+        title: "Campaigns",
+        url: "/institution-admin/campaigns",
+    },
+    {
+        title: "Quiet Hours",
+        url: "/institution-admin/quiet-hours-exceptions",
+    },
+    {
+        title: "Automation issues",
+        url: "/undeliverables",
+    },
+    {
+        title: "Settings",
+        url: "/location-admin/settings",
     },
 ]
 
@@ -138,17 +213,14 @@ const staffNav: NavItemDef[] = [
     {
         title: "Dashboard",
         url: "/dashboard",
-        icon: Home,
     },
     {
         title: "Calls",
         url: "/calls",
-        icon: Phone,
     },
     {
         title: "Callback Queue",
         url: "/callbacks",
-        icon: PhoneForwarded,
     },
 ]
 
@@ -157,8 +229,13 @@ const groupNav: NavItemDef[] = [
     {
         title: "Group Dashboard",
         url: "/group",
-        icon: Layers,
         exact: true,
+    },
+    {
+        // Activity figures only — the API refuses this role conversation
+        // content, so the page renders volumes and response times.
+        title: "Conversations",
+        url: "/inbox",
     },
 ]
 
@@ -167,41 +244,45 @@ const navSetup: NavItemDef[] = [
     {
         title: "Setup Overview",
         url: "/setup",
-        icon: ClipboardList,
         exact: true,
     },
     {
         title: "Appointment Types",
         url: "/setup/appointment-types",
-        icon: CalendarCheck,
+    },
+    {
+        title: "Reasons",
+        url: "/setup/reasons",
     },
     {
         title: "Providers & Scheduling",
         url: "/setup/providers",
-        icon: UserCog,
     },
     {
         title: "Operatories",
         url: "/setup/operatories",
-        icon: Armchair,
     },
     {
         title: "Insurance Plans",
         url: "/setup/insurance-plans",
-        icon: Shield,
-    },
-    {
-        title: "Audit Logs",
-        url: "/setup/audit-logs",
-        icon: ShieldCheck,
     },
 ]
 
 function NavItem({ item, isActive }: { item: NavItemDef; isActive: boolean }) {
+    const art = NAV_ART[item.url]
+    const classic = isClassicUi()
+    // @ui-variant classic. Indexing a Record yields the value type rather
+    // than `| undefined`, so a route with no glyph type-checks and then
+    // renders nothing; the JSX below falls back to artwork instead.
+    const Glyph: LucideIcon | undefined = NAV_GLYPH[item.url]
+
     return (
         <SidebarMenuItem>
             <SidebarMenuButton
                 asChild
+                // Also drives data-active on the rendered element, which is what
+                // the nav artwork keys off to stay in colour on the current page.
+                isActive={isActive}
                 tooltip={item.title}
                 className={`
                     relative transition-all duration-150 rounded-md
@@ -212,7 +293,14 @@ function NavItem({ item, isActive }: { item: NavItemDef; isActive: boolean }) {
                 `}
             >
                 <Link to={item.url} aria-current={isActive ? "page" : undefined}>
-                    <item.icon className={`transition-colors ${isActive ? "text-sidebar-primary" : ""}`} />
+                    {classic && Glyph ? (
+                        <Glyph className={`transition-colors ${isActive ? "text-sidebar-primary" : ""}`} />
+                    ) : (
+                        <Art
+                            name={art}
+                            className="nav-art size-9 shrink-0 group-data-[collapsible=icon]:size-7"
+                        />
+                    )}
                     <span>{item.title}</span>
                 </Link>
             </SidebarMenuButton>
@@ -222,7 +310,7 @@ function NavItem({ item, isActive }: { item: NavItemDef; isActive: boolean }) {
 
 export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
     const { user } = useAuth();
-    const { hasPms } = useInstitution();
+    const { hasPms, pmsType } = useInstitution();
     const location = useLocation();
 
     const isAdmin = user?.role === "SUPER_ADMIN";
@@ -240,12 +328,17 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
                 : user?.role === "LOCATION_ADMIN"
                     ? locationAdminNav
                     : staffNav;
-    const mainNav = isNoPmsLocationAdmin
-        ? roleMainNav.filter((item) => item.url !== "/institution-admin/appointment-sync")
-        : roleMainNav;
+    // Appointment Sync is a support screen — it traces why a PMS appointment
+    // changed and when we last heard from the practice software. That is an
+    // institution-level question, so it stays on the institution rail and is no
+    // longer offered per-location, where it mostly showed an empty table.
+    const mainNav = roleMainNav;
+    const pmsSetupNav = pmsType === "gotracker"
+        ? navSetup
+        : navSetup.filter((item) => item.url !== "/setup/reasons")
     const setupNav = user?.role === "STAFF"
-        ? navSetup.filter((item) => item.url !== "/setup" && item.url !== "/setup/audit-logs")
-        : navSetup;
+        ? pmsSetupNav.filter((item) => item.url !== "/setup")
+        : pmsSetupNav;
 
     return (
         <Sidebar
@@ -255,7 +348,7 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
         >
             <SidebarContent className="pt-2">
                 {user?.role === "INSTITUTION_ADMIN" && (
-                    <SidebarGroup className="pt-2">
+                    <SidebarGroup className="pt-2 group-data-[collapsible=icon]:hidden">
                         <SidebarGroupLabel className="text-[10px] font-semibold uppercase tracking-widest text-sidebar-foreground/40 px-2 mb-1">
                             Active Location
                         </SidebarGroupLabel>
@@ -281,11 +374,15 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
                                     }
                                 />
                             ))}
-                            {/* No-PMS tenants are call-intelligence-only: surface the
-                                patient directory in place of Practice Setup. */}
-                            {isInstitution && !hasPms && (
+                            {isInstitution && (
                                 <NavItem
-                                    item={{ title: "Patients", url: "/patients", icon: Users }}
+                                    item={{ title: "Contacts", url: "/contacts" }}
+                                    isActive={location.pathname === "/contacts" || location.pathname.startsWith("/contacts/") || location.pathname === "/enquiries"}
+                                />
+                            )}
+                            {isInstitution && hasPms && (
+                                <NavItem
+                                    item={{ title: "Patients", url: "/patients" }}
                                     isActive={location.pathname === "/patients" || location.pathname.startsWith("/patients/")}
                                 />
                             )}
@@ -326,28 +423,68 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
                                         item={{
                                             title: "Email Templates",
                                             url: "/institution-admin/email-templates",
-                                            icon: Mail,
                                         }}
-                                        isActive={location.pathname === "/institution-admin/email-templates" || location.pathname.startsWith("/institution-admin/email-templates")}
+                                        isActive={location.pathname.startsWith("/institution-admin/email-templates")}
                                     />
                                 )}
-                                {/* Patient SMS acknowledgements only exist for
-                                    no-PMS clinics — nothing is booked to confirm. */}
+                                {user?.role === "INSTITUTION_ADMIN" && (
+                                    <NavItem
+                                        item={{
+                                            title: "Email Settings",
+                                            url: "/institution-admin/email-inbox",
+                                        }}
+                                        isActive={location.pathname.startsWith("/institution-admin/email-inbox")}
+                                    />
+                                )}
+                                {user?.role === "INSTITUTION_ADMIN" && (
+                                    <NavItem
+                                        item={{
+                                            title: "Lead Capture",
+                                            url: "/institution-admin/lead-forms",
+                                        }}
+                                        isActive={location.pathname.startsWith(
+                                            "/institution-admin/lead-forms",
+                                        )}
+                                    />
+                                )}
                                 {user?.role === "INSTITUTION_ADMIN" && !hasPms && (
                                     <NavItem
                                         item={{
                                             title: "SMS Templates",
                                             url: "/institution-admin/sms-templates",
-                                            icon: MessageSquare,
                                         }}
                                         isActive={location.pathname === "/institution-admin/sms-templates"}
+                                    />
+                                )}
+                                {!isNoPmsLocationAdmin && (
+                                    <NavItem
+                                        item={{
+                                            title: "Inbox",
+                                            url: "/inbox",
+                                        }}
+                                        isActive={location.pathname.startsWith("/inbox")}
+                                    />
+                                )}
+                                {/* Institution-only. A sending address is a verified
+                                    domain identity for the whole tenant, and every
+                                    endpoint behind this page requires an institution or
+                                    super admin — so a location admin who followed this
+                                    link hit the route guard and was bounced to
+                                    /location-admin, which reads as the link opening the
+                                    wrong page. */}
+                                {user?.role === "INSTITUTION_ADMIN" && (
+                                    <NavItem
+                                        item={{
+                                            title: "Sending Address",
+                                            url: "/institution-admin/email-sending-address",
+                                        }}
+                                        isActive={location.pathname.startsWith("/institution-admin/email-sending-address")}
                                     />
                                 )}
                                 <NavItem
                                     item={{
                                         title: "Email Preferences",
                                         url: "/notification-preferences",
-                                        icon: MailCheck,
                                     }}
                                     isActive={location.pathname === "/notification-preferences"}
                                 />
@@ -356,7 +493,6 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
                                         item={{
                                             title: "SMS Preferences",
                                             url: "/sms-preferences",
-                                            icon: MessageSquare,
                                         }}
                                         isActive={location.pathname === "/sms-preferences"}
                                     />
@@ -366,9 +502,17 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
                                         item={{
                                             title: "Settings",
                                             url: "/institution-admin/settings",
-                                            icon: Settings,
                                         }}
                                         isActive={location.pathname === "/institution-admin/settings" || location.pathname.startsWith("/institution-admin/settings")}
+                                    />
+                                )}
+                                {user?.role !== "STAFF" && (
+                                    <NavItem
+                                        item={{
+                                            title: "Audit Logs",
+                                            url: "/setup/audit-logs",
+                                        }}
+                                        isActive={location.pathname === "/setup/audit-logs"}
                                     />
                                 )}
                             </SidebarMenu>

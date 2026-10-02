@@ -36,14 +36,18 @@ export interface InstitutionDetail {
     slug: string;
     is_active: boolean;
 
-    // "nexhealth" | "none" (call-intelligence-only). Absent on older payloads.
+    // "nexhealth" | "gotracker" | "none". Absent on older payloads.
     pms_type?: string;
 
     // DSO/group umbrella this institution belongs to (null if standalone).
     group_id?: string | null;
 
     has_nexhealth_key: boolean;
+    /** Which NexHealth account this institution authenticates as.
+     *  An explicit setting — do not infer it from has_nexhealth_key. */
+    nexhealth_credential_mode?: "platform" | "institution";
     has_system_nexhealth_key: boolean;
+    has_gotracker_key: boolean;
     has_retell_secret: boolean;
 
     user: InstitutionUser | null;
@@ -66,6 +70,11 @@ export interface Location {
 
     nexhealth_subdomain: string | null;
     nexhealth_location_id: string | null;
+    gotracker_base_url: string | null;
+    has_gotracker_product_key: boolean;
+    gotracker_webhook_subscription_id: string | null;
+    gotracker_webhook_status: string | null;
+    has_gotracker_webhook_secret: boolean;
     retell_agent_id: string | null;
     twilio_from_number: string | null;
     has_retell_secret: boolean;
@@ -77,6 +86,36 @@ export interface Location {
     timezone: string | null;
 
     user: LocationUser | null;
+}
+
+export interface OutboundVoiceProfile {
+    id: string;
+    institution_id: string;
+    location_id: string;
+    retell_agent_id: string | null;
+    retell_from_number: string | null;
+    retell_llm_id: string | null;
+    display_name: string | null;
+    purpose: string | null;
+    is_active: boolean;
+    config: Record<string, unknown> | null;
+    created_at: string;
+    updated_at: string;
+}
+
+export interface RetellSmsChatProfile {
+    id: string;
+    institution_id: string;
+    location_id: string;
+    retell_agent_id: string | null;
+    agent_version: number | null;
+    display_name: string;
+    purpose: string | null;
+    allowed_tools: string[];
+    is_active: boolean;
+    config: Record<string, unknown> | null;
+    created_at: string;
+    updated_at: string;
 }
 
 export interface SyncResult {
@@ -137,7 +176,10 @@ export interface SetupOverview {
     pms_source: string | null;
     can_create_appointment_types: boolean;
     can_link_availability: boolean;
+    can_create_work_windows: boolean;
+    can_clear_working_window_override: boolean;
     counts: Record<string, number>;
+    has_pms?: boolean;
 }
 
 export interface CachedProvider {
@@ -165,6 +207,11 @@ export interface CachedAppointmentType {
     source_metadata: {
         nh_appt_type_id?: number;
         descriptor_ids?: string[];
+        reason_ids?: string[];
+        gotracker_appointment_type_id?: number | string;
+        provider_ids?: string[];
+        operatory_ids?: string[];
+        bookable_online?: boolean;
     } | null;
     is_active: boolean;
     synced_at: string | null;
@@ -175,6 +222,7 @@ export interface CachedOperatory {
     source_id: string;
     name: string;
     is_active: boolean;
+    is_hidden: boolean;
     synced_at: string | null;
 }
 
@@ -198,16 +246,22 @@ export interface CachedAvailability {
     operatory_name: string | null;
     begin_time: string | null;
     end_time: string | null;
+    start_at?: string | null;
+    end_at?: string | null;
     days: string[] | null;
     specific_date: string | null;
     appointment_type_ids: string[] | null;
     appointment_type_names: string[] | null;
     active: boolean;
     synced: boolean;
+    /** GoTracker derived closed periods are shown read-only beside open windows. */
+    status: "open" | "closed" | string;
     /** v3 only: "NOTE" / "Lunch" / null. Null on v2, which cannot distinguish them. */
     label_name: string | null;
-    /** False for schedule annotations (NOTE) and breaks (Lunch) — not bookable time. */
+    /** False for PMS notes and breaks — they describe the schedule, not bookable time. */
     is_bookable_window: boolean;
+    /** GoTracker only: true when this window has a cloud type override. */
+    types_overridden: boolean;
     source_metadata: Record<string, unknown> | null;
     synced_at: string | null;
 }
@@ -272,6 +326,32 @@ export interface WorkflowStatus {
     display_order: number;
     is_active: boolean;
     created_at: string;
+}
+
+export type DncChannel = "sms" | "voice" | "email" | "all";
+export type DncRecordType = "sms_suppression" | "consent_record" | "do_not_contact";
+
+/** One independently releasable channel opt-out shown on the DNC patients page. */
+export interface DncChannelRecord {
+    id: string;
+    channel: DncChannel;
+    record_type: DncRecordType;
+    scope: string;
+    source: string;
+    reason: string | null;
+    location_id: string | null;
+    created_at: string;
+}
+
+/** Active opt-outs grouped by patient (or by masked identity when unmatched). */
+export interface DncPatientRecord {
+    id: string;
+    contact_id: string | null;
+    patient_name: string | null;
+    phone_masked: string | null;
+    email_masked: string | null;
+    channels: DncChannelRecord[];
+    latest_opt_out_at: string;
 }
 
 /** The status reference embedded on a call (id/name/color only). */
@@ -444,6 +524,30 @@ export interface TwilioPhoneNumber {
     status: string | null;
 }
 
+export interface InstitutionProvisioningStatus {
+    twilio_configured: boolean;
+    twilio_account_sid_masked: string | null;
+    email_from_address: string | null;
+    email_from_name: string | null;
+}
+
+export interface RetellPhoneNumber {
+    phone_number: string;
+    phone_number_pretty: string | null;
+    nickname: string | null;
+    phone_number_type: string | null;
+    inbound_agents: unknown[] | null;
+    outbound_agents: unknown[] | null;
+}
+
+export interface RetellAgent {
+    agent_id: string;
+    agent_name: string | null;
+    channel: string | null;
+    version: number | null;
+    is_published: boolean | null;
+}
+
 export interface SendSmsRequest {
     from_number: string;
     to_number: string;
@@ -547,6 +651,8 @@ export interface CallbackQueueItem {
     booked_appointment_type_name?: string | null;
     phone_masked: string | null;
     phone_reveal_available: boolean;
+    /** True when phone_masked already holds the full number — render it plainly. */
+    phone_revealed?: boolean;
 }
 
 /** Metrics scoped to a caller-selected date range (present when start/end passed). */
@@ -598,6 +704,377 @@ export interface CallbackListItem {
     workflow_status?: WorkflowStatusRef | null;
     phone_masked: string | null;
     phone_reveal_available: boolean;
+    /** True when phone_masked already holds the full number — render it plainly. */
+    phone_revealed?: boolean;
+}
+
+export interface AutomationWorkflow {
+    id: string;
+    name: string;
+    status: "active" | "paused" | "archived" | "draft";
+    trigger_type: string | null;
+    definition: Record<string, unknown> | null;
+    current_version_id: string | null;
+    created_at: string;
+    updated_at: string;
+    /**
+     * Target location this workflow runs against, or null for
+     * institution-level workflows. Drives the builder's channel-readiness
+     * check (only location-scoped workflows have channels to verify).
+     */
+    location_id?: string | null;
+}
+
+export interface AutomationWorkflowRun {
+    id: string;
+    workflow_id: string;
+    status: string;
+    current_step_id: string | null;
+    outcome: string | null;
+    started_at: string | null;
+    completed_at: string | null;
+    created_at: string;
+}
+
+export interface CampaignRunListItem {
+    id: string;
+    workflow_id: string;
+    workflow_version_id: string;
+    status: string;
+    current_step_id: string | null;
+    current_step_type: string | null;
+    outcome: string | null;
+    blocked_reason: string | null;
+    contact_id: string | null;
+    contact_name: string | null;
+    next_due_at: string | null;
+    latest_event_at: string | null;
+    started_at: string | null;
+    completed_at: string | null;
+    created_at: string;
+}
+
+export interface CampaignRunList {
+    items: CampaignRunListItem[];
+    limit: number;
+    next_cursor: string | null;
+}
+
+export interface CampaignOverview {
+    workflow_id: string;
+    workflow_name: string;
+    workflow_status: string;
+    trigger_type: string | null;
+    location_id: string | null;
+    latest_version: {
+        id: string;
+        version_number: number;
+        published_at: string;
+        is_current: boolean;
+        content_classification: string | null;
+    } | null;
+    readiness: {
+        overall_status: string;
+        blockers_count: number;
+        warnings_count: number;
+        unknown_count: number;
+        estimate_basis: string;
+        generated_at: string;
+    };
+    channels: string[];
+    run_counts: Record<string, number>;
+    outcome_counts: Record<string, number>;
+    response_counts: Record<string, number>;
+    open_handoff_count: number;
+    channel_attempts: Record<string, {
+        event_count: number;
+        segments: number;
+        dials: number;
+        emails: number;
+        minutes: number;
+        cost: number;
+    }>;
+    recent_outcomes: Array<{
+        run_id: string;
+        status: string;
+        outcome: string | null;
+        completed_at: string | null;
+        created_at: string;
+    }>;
+    generated_at: string;
+}
+
+export interface CampaignOutcomeStat {
+    key: string;
+    label: string;
+    group: string;
+    count: number;
+    rate: number | null;
+    description: string;
+}
+
+/** One arm of one Split node, over the requested window. */
+export interface SplitBranchAnalytics {
+    label: string;
+    /** Weight in the workflow's current version; null if the arm was renamed or removed. */
+    weight: number | null;
+    enrollments: number;
+    summary: Record<string, number>;
+    outcomes: CampaignOutcomeStat[];
+    total_cost: number;
+    cost_per_booking: number | null;
+    /** Rate of the campaign's primary success outcome — what the arms are compared on. */
+    primary_rate: number | null;
+    /** Relative change against the best other arm; null until there is enough volume. */
+    lift: number | null;
+    is_leader: boolean;
+}
+
+export interface SplitNodeAnalytics {
+    node_id: string;
+    subject: string | null;
+    primary_outcome_key: string;
+    primary_outcome_label: string;
+    branches: SplitBranchAnalytics[];
+    /** False while any arm is under `min_arm_enrollments` — do not read a winner yet. */
+    has_enough_volume: boolean;
+}
+
+export interface CampaignSplitAnalytics {
+    workflow_id: string;
+    workflow_name: string;
+    category: string;
+    start_date: string;
+    end_date: string;
+    min_arm_enrollments: number;
+    splits: SplitNodeAnalytics[];
+    generated_at: string;
+    rollup_fresh_at: string | null;
+}
+
+export interface CampaignAnalytics {
+    workflow_id: string;
+    workflow_name: string;
+    category: string;
+    start_date: string;
+    end_date: string;
+    summary: Record<string, number>;
+    channels: Array<{
+        channel: string;
+        attempted: number;
+        delivered: number;
+        failed: number;
+        responded: number;
+    }>;
+    outcomes: Array<{
+        key: string;
+        label: string;
+        group: string;
+        count: number;
+        rate: number | null;
+        description: string;
+    }>;
+    trend: Array<{
+        date: string;
+        enrollments: number;
+        sends: number;
+        responses: number;
+        confirmed: number;
+        booked: number;
+        handoffs: number;
+        total_cost: number;
+    }>;
+    cost: {
+        currency: string;
+        total_cost: number;
+        cost_per_booking: number | null;
+        cost_per_confirmation: number | null;
+    };
+    generated_at: string;
+    rollup_fresh_at: string | null;
+}
+
+export interface CampaignRunFilters {
+    status?: string;
+    outcome?: string;
+    current_node?: string;
+    next_due_from?: string;
+    next_due_to?: string;
+    channel?: "sms" | "email" | "voice";
+    failure_reason?: string;
+    contact_search?: string;
+    cursor?: string;
+    limit?: number;
+}
+
+export interface RunTimelineItem {
+    id: string;
+    kind: string;
+    occurred_at: string;
+    title: string;
+    status: string | null;
+    step_id: string | null;
+    channel: string | null;
+    summary: string | null;
+    metadata: Record<string, unknown>;
+    input: Record<string, unknown>;
+    output: Record<string, unknown>;
+    node: Record<string, unknown>;
+    duration_ms: number | null;
+    error_message: string | null;
+}
+
+export interface RunTimeline {
+    run: CampaignRunListItem;
+    contact: {
+        id: string | null;
+        display_name: string | null;
+        phone_masked: string | null;
+    };
+    workflow_version: {
+        id: string;
+        version_number: number;
+        definition: Record<string, unknown>;
+        published_at: string;
+    };
+    items: RunTimelineItem[];
+}
+
+export interface CampaignOperationItem {
+    id: string;
+    run_id: string;
+    kind: string;
+    severity: string;
+    title: string;
+    status: string | null;
+    step_id: string | null;
+    occurred_at: string | null;
+    cancel_eligible: boolean;
+    replay_eligible: boolean;
+    reason: string | null;
+}
+
+export interface CampaignOperations {
+    stuck_waiting_runs: CampaignOperationItem[];
+    failed_sends: CampaignOperationItem[];
+    suppressed_skipped_runs: CampaignOperationItem[];
+    open_handoffs: CampaignOperationItem[];
+    generated_at: string;
+}
+
+export interface CampaignAudienceFilters {
+    has_no_future_appointment?: boolean;
+    recall_due_before?: string | null;
+    last_visit_before?: string | null;
+    appointment_type_id_in?: string[];
+    provider_id_in?: string[];
+    location_id_in?: string[];
+    preferred_language_in?: string[];
+    contact_channel_available?: Array<"sms" | "email" | "voice">;
+}
+
+export interface CampaignAudienceExclusions {
+    no_consent?: boolean;
+    do_not_contact?: boolean;
+    suppressed?: boolean;
+    contacted_within_days?: number | null;
+    max_contacts_per_rolling_7_days?: number | null;
+    already_enrolled_active?: boolean;
+    already_booked?: boolean;
+    missing_required_merge_context?: boolean;
+}
+
+export interface CampaignAudienceDefinition {
+    workflow_id: string;
+    location_id: string | null;
+    segment: CampaignAudienceFilters;
+    exclusions: CampaignAudienceExclusions;
+    persisted: boolean;
+    updated_at: string | null;
+}
+
+export interface CampaignAudienceSample {
+    contact_id: string;
+    display_name: string | null;
+    phone_masked: string | null;
+    email_masked: string | null;
+    status: "included" | "excluded";
+    reasons: string[];
+}
+
+export interface CampaignAudiencePreview {
+    preview_id: string;
+    workflow_id: string;
+    workflow_version_id: string | null;
+    location_id: string | null;
+    segment: CampaignAudienceFilters;
+    exclusions: CampaignAudienceExclusions;
+    total_candidates: number;
+    included_count: number;
+    excluded_count: number;
+    counts_by_reason: Record<string, number>;
+    samples: CampaignAudienceSample[];
+    warnings: string[];
+    estimate_basis: string;
+    generated_at: string;
+    expires_at: string;
+}
+
+export interface CampaignAudienceEnrollResult {
+    workflow_id: string;
+    workflow_version_id: string;
+    preview_id: string;
+    enqueued: number;
+    skipped: number;
+    counts_by_reason: Record<string, number>;
+}
+
+export interface ChannelUsage {
+    channel: string;
+    event_count: number;
+    total_segments: number;
+    total_dials: number;
+    total_emails: number;
+    total_minutes: number;
+    total_cost: number;
+}
+
+export interface UsageSummary {
+    start_date: string;
+    end_date: string;
+    currency: string;
+    total_cost: number;
+    channels: ChannelUsage[];
+}
+
+export interface CampaignUsage {
+    workflow_id: string;
+    event_count: number;
+    total_cost: number;
+    total_segments: number;
+    total_minutes: number;
+    total_emails: number;
+}
+
+export interface CampaignUsageReport {
+    start_date: string;
+    end_date: string;
+    campaigns: CampaignUsage[];
+}
+
+export interface OutboundHaltStatus {
+    halted: boolean;
+    halt_id?: string | null;
+    reason?: string | null;
+    halted_at?: string | null;
+    halted_by_user_id?: string | null;
+    halted_runs?: number | null;
+}
+
+export interface WorkflowHaltResult {
+    workflow_id: string;
+    halted_runs: number;
+    status: string;
 }
 
 export interface CallbacksListResponse {

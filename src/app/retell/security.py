@@ -9,6 +9,7 @@ from fastapi import HTTPException, Request
 from retell.lib.webhook_auth import verify as retell_verify
 
 from src.app.security import keyed_hash
+from src.app.services.sms_privacy import safe_error_summary
 
 logger = logging.getLogger(__name__)
 
@@ -93,7 +94,13 @@ class RetellSignatureVerifier:
             logger.warning("Retell signature verification failed (all strategies tried)")
             return False
         except Exception as e:
-            logger.error(f"Error during Retell signature verification: {e}")
+            # Item 39: verification runs over the raw webhook body, which holds
+            # the transcript and the patient's details. The exception can quote
+            # a fragment of it, so it is summarised rather than interpolated.
+            logger.error(
+                "Error during Retell signature verification: %s",
+                safe_error_summary(e),
+            )
             return False
 
 
@@ -129,7 +136,10 @@ def get_signature_dependency(api_key_getter: Callable[[], str | None]):
                 # Re-serializing with json.dumps can alter usage of spaces/separators
                 body_str = body_bytes.decode("utf-8")
         except Exception as e:
-            logger.error(f"Failed to process request body for verification: {e}")
+            logger.error(
+                "Failed to process request body for verification: %s",
+                safe_error_summary(e),
+            )
             raise HTTPException(status_code=400, detail="Invalid request body")
 
         api_key = api_key_getter()

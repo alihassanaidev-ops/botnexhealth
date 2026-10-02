@@ -25,6 +25,10 @@ MANIFEST
 .env
 .env.*
 !.env.example
+# Dev-server profile for pointing the local UI at the deployed staging
+# backend. Holds a public URL and nothing else — no credentials — and the
+# workflow is useless if every developer has to rediscover it.
+!nexus-dashboard-web/.env.staging
 .nexusdental.env
 .venv
 infra/.venv/
@@ -96,3 +100,28 @@ temp_script.py
 # CDK
 infra/cdk.out/
 cdk.out/
+
+# Graphify knowledge graph (generated; large graph.json). Rebuild with `graphify .`
+graphify-out/
+git 
+.claude
+/docs/
+# Architecture decisions are source-controlled even though other ad-hoc docs are not.
+!/docs/
+/docs/*
+!/docs/adr/
+/docs/adr/*
+!/docs/adr/0002-retell-chat-generation-with-platform-sms-transport.md
+# Operating documentation that must ship with the code. `/docs/*` above ignores
+# new files by default, and gitignore does not apply to already-tracked ones, so
+# a doc added here is silently dropped by `git add` unless it is listed.
+!/docs/TEST_SUITE.md
+/Internal/
+
+# Playwright MCP session artifacts (console logs, page snapshots)
+.playwright-mcp/
+
+# Source rasters the icon SVGs were drawn from. Build inputs, not runtime
+# assets — nothing imports them and the SVGs they produce are a fiftieth the
+# size, so committing them would put megabytes of binaries in the history.
+nexus-dashboard-web/src/assets/icons/generated/

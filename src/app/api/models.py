@@ -388,19 +388,6 @@ class InsuranceCoverage(BaseModel):
     model_config = {"extra": "allow"}
 
 
-class PatientAlert(BaseModel):
-    """Patient Alert model."""
-
-    id: int
-    patient_id: int | None = None
-    note: str | None = None
-    disabled_at: datetime | None = None
-    created_at: datetime | None = None
-    updated_at: datetime | None = None
-
-    model_config = {"extra": "allow"}
-
-
 class PatientAddress(BaseModel):
     """Patient Address model."""
 
@@ -440,7 +427,6 @@ class Patient(BaseModel):
     upcoming_appts: list[dict[str, Any]] = Field(default_factory=list)
     procedures: list[dict[str, Any]] = Field(default_factory=list)
     insurance_coverages: list[InsuranceCoverage] = Field(default_factory=list)
-    # patient_alerts: list[PatientAlert] = Field(default_factory=list)
     address: PatientAddress | None = None
     provider: Provider | None = None
     # Use generic list for children/guarantor to avoid complex recursive typing issues in this snippet
@@ -532,6 +518,16 @@ class CancelAppointmentRequest(BaseModel):
     appt: CancelAppointmentBody
 
 
+class ConfirmAppointmentBody(BaseModel):
+    """Body for confirming an appointment."""
+    confirmed: bool = True
+
+
+class ConfirmAppointmentRequest(BaseModel):
+    """Request model for confirming an appointment."""
+    appt: ConfirmAppointmentBody
+
+
 # =============================================================================
 # Appointment Type Create/Update Models
 # =============================================================================
@@ -596,7 +592,7 @@ class InstitutionResponse(BaseModel):
     location_limit: int = 1
     jurisdiction: str
 
-    # PMS integration mode: "nexhealth" or "none" (call-intelligence-only).
+    # PMS integration mode: "nexhealth", "gotracker", or "none".
     pms_type: str = "nexhealth"
 
     # Optional DSO/group umbrella this institution belongs to.
@@ -604,8 +600,14 @@ class InstitutionResponse(BaseModel):
 
     # Credential presence indicators
     has_nexhealth_key: bool
+    # Which NexHealth account this institution authenticates as: an explicit
+    # setting, so the UI can show the choice rather than inferring it from
+    # has_nexhealth_key.
+    nexhealth_credential_mode: str = "platform"
 
     has_system_nexhealth_key: bool
+
+    has_gotracker_key: bool = False
 
     has_retell_secret: bool
 
@@ -616,7 +618,13 @@ class InstitutionResponse(BaseModel):
         from_attributes = True
 
     @classmethod
-    def from_institution(cls, institution: Any, user: Any = None, has_retell_secret: bool = False) -> "InstitutionResponse":
+    def from_institution(
+        cls,
+        institution: Any,
+        user: Any = None,
+        has_retell_secret: bool = False,
+        has_gotracker_key: bool = False,
+    ) -> "InstitutionResponse":
         """Convert Institution model to response (no secrets exposed)."""
         from src.app.config import settings
         from src.app.models.institution import DEFAULT_JURISDICTION
@@ -642,6 +650,10 @@ class InstitutionResponse(BaseModel):
             group_id=getattr(institution, "group_id", None),
             has_nexhealth_key=institution.nexhealth_api_key_encrypted is not None,
             has_system_nexhealth_key=bool(settings.nexhealth_api_key),
+            nexhealth_credential_mode=getattr(
+                institution, "nexhealth_credential_mode", "platform"
+            ),
+            has_gotracker_key=has_gotracker_key,
             has_retell_secret=has_retell_secret,
             user=user_resp
         )
