@@ -3,9 +3,9 @@
  *
  * The page must not restate the permission model — it reads capabilities from
  * `/inbox/scopes` and renders what the API says the caller may do. These tests
- * hold that line: a read-only role gets no write actions, a platform admin gets
- * the practice/location cascade, and an institution admin's sidebar location
- * choice actually narrows the request.
+ * hold that line: a read-only role gets no write actions, and an institution
+ * admin's sidebar location choice actually narrows the request. (Super admins
+ * cannot open the inbox at all; see InboxAccess.test.tsx.)
  */
 
 import { describe, it, expect, beforeEach, vi } from "vitest"
@@ -106,19 +106,6 @@ function renderInbox() {
     )
 }
 
-const SUPER_SCOPES = {
-    role: "SUPER_ADMIN",
-    institutions: [
-        { id: "inst-1", name: "Bright Smiles", locations: [{ id: "loc-a", name: "Downtown Clinic" }] },
-        { id: "inst-2", name: "Northside Dental", locations: [{ id: "loc-c", name: "Main Street" }] },
-    ],
-    can_filter_institution: true,
-    can_filter_location: true,
-    can_read_content: true,
-    can_write: true,
-    can_assign: true,
-}
-
 const STAFF_SCOPES = {
     role: "STAFF",
     institutions: [
@@ -152,28 +139,6 @@ const INSTITUTION_SCOPES = {
 
 beforeEach(() => {
     localStorage.clear()
-})
-
-describe("Inbox — super admin", () => {
-    it("offers a practice filter and narrows the request to the chosen one", async () => {
-        const calls = setupApiMocks({ user: makeUser("SUPER_ADMIN"), scopes: SUPER_SCOPES })
-        renderInbox()
-
-        const practice = await screen.findByLabelText("Practice")
-        await userEvent.click(practice)
-        await userEvent.click(await screen.findByText("Northside Dental"))
-
-        await waitFor(() =>
-            expect(calls[calls.length - 1]?.institution_id).toBe("inst-2"),
-        )
-    })
-
-    it("shows which practice a conversation belongs to", async () => {
-        setupApiMocks({ user: makeUser("SUPER_ADMIN"), scopes: SUPER_SCOPES })
-        renderInbox()
-
-        expect(await screen.findByText(/Bright Smiles — Downtown Clinic/)).toBeTruthy()
-    })
 })
 
 describe("Inbox — institution admin", () => {

@@ -12,7 +12,7 @@ import {
     FormLabel,
     FormMessage,
 } from "@/components/ui/form"
-import { Input } from "@/components/ui/input"
+import { PasswordInput } from "@/components/ui/password-input"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { toast } from "sonner"
 import { Link, useSearchParams } from "react-router-dom"
@@ -162,7 +162,7 @@ export default function SetPassword() {
                                     <FormItem>
                                         <FormLabel>New Password</FormLabel>
                                         <FormControl>
-                                            <Input type="password" {...field} />
+                                            <PasswordInput {...field} />
                                         </FormControl>
                                         <FormMessage />
                                     </FormItem>
@@ -175,7 +175,7 @@ export default function SetPassword() {
                                     <FormItem>
                                         <FormLabel>Confirm Password</FormLabel>
                                         <FormControl>
-                                            <Input type="password" {...field} />
+                                            <PasswordInput {...field} />
                                         </FormControl>
                                         <FormMessage />
                                     </FormItem>

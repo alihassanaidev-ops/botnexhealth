@@ -13,6 +13,7 @@ import {
     FormMessage,
 } from "@/components/ui/form";
 import { Input } from "@/components/ui/input";
+import { PasswordInput } from "@/components/ui/password-input";
 import {
     Card,
 } from "@/components/ui/card";
@@ -387,8 +388,7 @@ function TwilioCredentialsCard({ institutionSlug }: { institutionSlug: string })
                                     <FormItem>
                                         <FormLabel>Auth Token</FormLabel>
                                         <FormControl>
-                                            <Input
-                                                type="password"
+                                            <PasswordInput
                                                 autoComplete="new-password"
                                                 placeholder="Enter auth token"
                                                 {...field}
@@ -670,8 +670,7 @@ export function TenantCredentialsForm({ institution, onUpdated }: InstitutionCre
                                     <FormItem>
                                         <FormLabel>Clinic API Key</FormLabel>
                                         <FormControl>
-                                            <Input
-                                                type="password"
+                                            <PasswordInput
                                                 placeholder={institution.has_nexhealth_key ? "••••••••" : "Enter API key"}
                                                 onChange={(event) => {
                                                     field.onChange(event);

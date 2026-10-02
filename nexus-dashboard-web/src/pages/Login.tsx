@@ -22,6 +22,7 @@ import {
     FormMessage,
 } from "@/components/ui/form"
 import { Input } from "@/components/ui/input"
+import { PasswordInput } from "@/components/ui/password-input"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Separator } from "@/components/ui/separator"
 import {
@@ -436,7 +437,7 @@ export default function Login() {
                                             <FormItem>
                                                 <FormLabel>Password</FormLabel>
                                                 <FormControl>
-                                                    <Input type="password" autoComplete="current-password" {...field} />
+                                                    <PasswordInput autoComplete="current-password" {...field} />
                                                 </FormControl>
                                                 <FormMessage />
                                             </FormItem>

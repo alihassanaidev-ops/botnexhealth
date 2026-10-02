@@ -47,7 +47,7 @@ STAFF = _scope(UserRole.STAFF.value, location_id="loc-1")
 @pytest.mark.parametrize(
     "scope,content,write,location_bound",
     [
-        (SUPER, True, True, False),
+        (SUPER, False, False, False),
         (GROUP, False, False, False),
         (INST, True, True, False),
         (LOC_ADMIN, True, True, True),
@@ -80,9 +80,19 @@ def test_staff_are_read_only():
     assert STAFF.may_resolve is False
 
 
-def test_the_three_admin_roles_hold_write():
-    for scope in (SUPER, INST, LOC_ADMIN):
+def test_the_two_clinic_admin_roles_hold_write():
+    for scope in (INST, LOC_ADMIN):
         assert scope.may_write is True
+
+
+def test_super_admin_holds_no_conversation_access():
+    """The platform super admin operates the platform, not a clinic: it sees
+    activity figures only, and can neither read nor change a conversation."""
+    assert SUPER.may_read_content is False
+    assert SUPER.may_write is False
+    assert SUPER.may_assign is False
+    assert SUPER.may_resolve is False
+    assert SUPER.may_reply is False
 
 
 # ---------------------------------------------------------------------------
@@ -112,6 +122,39 @@ def test_group_admin_cannot_assign():
 def test_group_admin_cannot_resolve():
     with pytest.raises(InboxAccessError):
         asyncio.run(_service().resolve(GROUP, "t-1"))
+
+
+# The platform super admin is refused the same way: no conversation content and
+# no changes, at the service boundary rather than only in the UI.
+
+
+def test_super_admin_cannot_list_conversations():
+    with pytest.raises(InboxAccessError):
+        asyncio.run(_service().list_threads(SUPER))
+
+
+def test_super_admin_cannot_read_a_conversation():
+    with pytest.raises(InboxAccessError):
+        asyncio.run(_service().get_messages(SUPER, "t-1"))
+
+
+def test_super_admin_cannot_assign():
+    with pytest.raises(InboxAccessError):
+        asyncio.run(_service().assign(SUPER, "t-1", "u-2"))
+
+
+def test_super_admin_cannot_resolve():
+    with pytest.raises(InboxAccessError):
+        asyncio.run(_service().resolve(SUPER, "t-1"))
+
+
+def test_super_admin_cannot_reply():
+    with pytest.raises(InboxAccessError):
+        asyncio.run(
+            _service().reply_email(
+                SUPER, "t-1", subject="Re: hi", body="hello", idempotency_key="k-1"
+            )
+        )
 
 
 def test_staff_cannot_assign_through_the_service():

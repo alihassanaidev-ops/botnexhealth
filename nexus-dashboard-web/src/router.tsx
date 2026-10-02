@@ -4,6 +4,7 @@ import { createBrowserRouter, Navigate } from "react-router-dom";
 import DashboardWrapper from "./components/DashboardWrapper";
 import RoleRedirect from "./components/RoleRedirect";
 import RoleGuard from "./components/RoleGuard";
+import { INBOX_ROLES } from "./lib/inbox-access";
 import PmsGuard from "./components/PmsGuard";
 import NoPmsGuard from "./components/NoPmsGuard";
 import NoPmsLocationAdminGuard from "./components/NoPmsLocationAdminGuard";
@@ -264,12 +265,12 @@ export const router = createBrowserRouter([
                         ),
                     },
                     {
-                        // Every signed-in role reaches the inbox; the API narrows
-                        // what each one may see, and refuses conversation content
-                        // to group admins entirely.
+                        // Every clinic role reaches the inbox; the API narrows what
+                        // each one may see, and refuses conversation content to
+                        // group admins. Super admins are kept out entirely.
                         path: "inbox",
                         element: (
-                            <RoleGuard allowed={["SUPER_ADMIN", "GROUP_ADMIN", "INSTITUTION_ADMIN", "LOCATION_ADMIN", "STAFF"]}>
+                            <RoleGuard allowed={INBOX_ROLES}>
                                 <NoPmsLocationAdminGuard><S><Inbox /></S></NoPmsLocationAdminGuard>
                             </RoleGuard>
                         ),

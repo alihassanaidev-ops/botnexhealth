@@ -142,7 +142,7 @@ async function fillCredentialsAndSubmit(email = "alice@clinic.test", password = 
     const user = userEvent.setup()
     await waitFor(() => expect(screen.getByLabelText(/email/i)).toBeInTheDocument())
     await user.type(screen.getByLabelText(/email/i), email)
-    await user.type(screen.getByLabelText(/password/i), password)
+    await user.type(screen.getByLabelText(/password/i, { selector: "input" }), password)
     await user.click(screen.getByRole("button", { name: /^sign in$/i }))
     return user
 }
