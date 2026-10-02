@@ -26,6 +26,7 @@ import {
     TooltipTrigger,
 } from "@/components/ui/tooltip";
 import { Input } from "@/components/ui/input";
+import { PasswordInput } from "@/components/ui/password-input";
 import { Badge } from "@/components/ui/badge";
 import { toast } from "sonner";
 import api from "@/lib/api";
@@ -506,8 +507,7 @@ export function LocationForm({ institutionSlug, location, hasPms = true, pmsType
                                         <FieldHint text="API key from the GoTracker Synchronizer admin panel. It must include the scopes needed for read, book, and webhooks. Stored encrypted and never shown again." />
                                     </FormLabel>
                                     <FormControl>
-                                        <Input
-                                            type="password"
+                                        <PasswordInput
                                             placeholder={location?.has_gotracker_product_key ? "Configured — enter a new key to replace" : "Paste GoTracker API key"}
                                             autoComplete="off"
                                             {...field}
@@ -560,8 +560,7 @@ export function LocationForm({ institutionSlug, location, hasPms = true, pmsType
                                                 <FieldHint text="Paste the secret returned by the Synchronizer for this location's webhook subscription. Stored encrypted and never shown again." />
                                             </FormLabel>
                                             <FormControl>
-                                                <Input
-                                                    type="password"
+                                                <PasswordInput
                                                     placeholder={location?.has_gotracker_webhook_secret ? "Configured — enter a new secret to replace" : "Paste webhook secret"}
                                                     autoComplete="off"
                                                     {...field}

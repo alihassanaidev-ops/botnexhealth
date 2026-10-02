@@ -89,12 +89,6 @@ const adminNav: NavItemDef[] = [
         url: "/admin/users",
     },
     {
-        // Platform-wide patient conversations. The page filters by practice
-        // and location; the API is what actually enforces the span.
-        title: "Inbox",
-        url: "/inbox",
-    },
-    {
         // Both email admin surfaces ask which practice first.
         title: "Campaign Emails",
         url: "/institution-admin/email-templates",

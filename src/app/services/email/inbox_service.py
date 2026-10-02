@@ -79,8 +79,14 @@ class InboxScope:
 
     @property
     def may_read_content(self) -> bool:
-        """Group oversight gets activity figures, never message content."""
-        return not self.is_group_oversight
+        """Group oversight and the platform super admin get activity figures,
+        never message content.
+
+        A super admin operates the platform, not a clinic: patient conversations
+        belong to the practice's own staff, so the platform role is kept out of
+        them the same way group oversight is.
+        """
+        return not (self.is_group_oversight or self.is_platform_wide)
 
     @property
     def may_write(self) -> bool:
@@ -88,12 +94,12 @@ class InboxScope:
 
         Staff are read-only by design: they work the queue and escalate, but
         assigning and closing a patient conversation are supervisory acts. The
-        three admin roles each hold write on their own span — a location admin
-        over their location, an institution admin over every location in their
-        institution, a super admin over every institution.
+        two clinic admin roles each hold write on their own span — a location
+        admin over their location, an institution admin over every location in
+        their institution. The super admin holds none: it cannot read a
+        conversation, so it must not change or answer one either.
         """
         return self.role in (
-            UserRole.SUPER_ADMIN.value,
             UserRole.INSTITUTION_ADMIN.value,
             UserRole.LOCATION_ADMIN.value,
         )

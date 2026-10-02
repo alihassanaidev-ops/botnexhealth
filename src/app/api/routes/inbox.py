@@ -4,10 +4,10 @@ One set of endpoints for five roles, with the narrowing done in
 ``InboxService`` rather than in each handler — so a new endpoint cannot forget a
 scope check.
 
-The group-admin split is the notable one. That role is deliberately kept off
-routes carrying patient information, so it does not get the conversation
-endpoints at all; it gets ``/activity``, which returns volumes and response
-times and nothing that identifies a patient.
+The group-admin and super-admin split is the notable one. Both roles are
+deliberately kept off routes carrying patient information, so they do not get
+the conversation endpoints at all; they get ``/activity``, which returns volumes
+and response times and nothing that identifies a patient.
 """
 
 from __future__ import annotations

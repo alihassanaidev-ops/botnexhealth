@@ -252,6 +252,64 @@ async def test_preview_matches_only_dated_windows_inside_the_range(monkeypatch):
     assert result.batch_pause_seconds == route.BULK_LINK_BATCH_PAUSE_SECONDS
 
 
+def _labelled_range_availabilities():
+    base = {
+        "provider_id": 2,
+        "operatory_id": 4,
+        "specific_date": "2026-08-21",
+        "days": ["Friday"],
+        "active": True,
+    }
+    return [
+        {**base, "id": 201, "begin_time": "09:00", "end_time": "13:00", "label_name": None},
+        {**base, "id": 202, "begin_time": "13:00", "end_time": "14:00", "label_name": "Lunch"},
+        {**base, "id": 203, "begin_time": "08:00", "end_time": "09:00", "label_name": "NOTE"},
+        {**base, "id": 204, "begin_time": "14:00", "end_time": "17:30", "status": "closed"},
+    ]
+
+
+@pytest.mark.asyncio
+async def test_preview_leaves_out_notes_breaks_and_closed_periods_by_default(monkeypatch):
+    # A range-link must not attach appointment types to a lunch break, a PMS
+    # note or a closed period: those are not bookable time.
+    adapter = _FakeAvailabilityAdapter()
+    adapter.availabilities = _labelled_range_availabilities()
+    _monkeypatch_route_context(monkeypatch, adapter)
+
+    result = await route.preview_bulk_link_range_availabilities(
+        req=route.BulkLinkRangePreviewRequest(
+            provider_id="nh-2",
+            start_date="2026-08-21",
+            end_date="2026-08-21",
+        ),
+        current_user=_admin(),
+        location_id=None,
+    )
+
+    assert [w.source_id for w in result.windows] == ["nh-201"]
+    assert result.matched_count == 1
+
+
+@pytest.mark.asyncio
+async def test_preview_includes_notes_breaks_and_closed_periods_when_asked(monkeypatch):
+    adapter = _FakeAvailabilityAdapter()
+    adapter.availabilities = _labelled_range_availabilities()
+    _monkeypatch_route_context(monkeypatch, adapter)
+
+    result = await route.preview_bulk_link_range_availabilities(
+        req=route.BulkLinkRangePreviewRequest(
+            provider_id="nh-2",
+            start_date="2026-08-21",
+            end_date="2026-08-21",
+            include_non_bookable=True,
+        ),
+        current_user=_admin(),
+        location_id=None,
+    )
+
+    assert sorted(w.source_id for w in result.windows) == ["nh-201", "nh-202", "nh-203", "nh-204"]
+
+
 @pytest.mark.asyncio
 async def test_preview_without_operatory_filter_matches_every_operatory(monkeypatch):
     adapter = _FakeAvailabilityAdapter()

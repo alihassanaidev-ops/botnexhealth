@@ -208,6 +208,8 @@ export async function previewBulkLinkRange(
         start_date: string;
         end_date: string;
         operatory_ids?: string[] | null;
+        /** Also link notes, breaks and closed periods. Off by default. */
+        include_non_bookable?: boolean;
     },
     locationId?: string
 ): Promise<BulkLinkRangePreview> {

@@ -34,7 +34,7 @@ vi.mock("@/lib/token-manager", () => ({
 }))
 
 vi.mock("sonner", () => ({
-    toast: { error: vi.fn(), success: vi.fn() },
+    toast: { error: vi.fn(), success: vi.fn(), warning: vi.fn() },
     Toaster: () => null,
 }))
 
@@ -332,6 +332,7 @@ describe("Inactive windows", () => {
 
 describe("Notes and breaks (v3 labels)", () => {
     it("shows derived closed periods without any linking controls", async () => {
+        const user = userEvent.setup()
         mountWith([
             makeAvailability({
                 id: "closed:2026-09-01:3:3:00:00:00:09:00:00",
@@ -348,12 +349,16 @@ describe("Notes and breaks (v3 labels)", () => {
         ])
 
         await waitFor(() => expect(screen.getByText(/Work Windows for/)).toBeInTheDocument())
-        expect(screen.getByText("Closed — read-only")).toBeInTheDocument()
+        // Closed periods are hidden until the operator asks for them.
+        expect(screen.queryByText("Closed — read-only")).not.toBeInTheDocument()
+        await user.click(screen.getByRole("checkbox", { name: /show closed periods, notes & breaks/i }))
+
+        expect(await screen.findByText("Closed — read-only")).toBeInTheDocument()
         expect(screen.queryByRole("button", { name: /edit linking/i })).not.toBeInTheDocument()
         expect(screen.queryByText(/Appointment Types:/i)).not.toBeInTheDocument()
     })
 
-    it("shows non-bookable rows with their label, and can hide them", async () => {
+    it("hides non-bookable rows by default, and shows them with their label on request", async () => {
         // NexHealth returns Lunch blocks and synced OpenDental notes in the same
         // collection as real working hours. For one clinic that was 659 of 2,045
         // rows, which buries the schedule the operator is actually linking.
@@ -371,15 +376,18 @@ describe("Notes and breaks (v3 labels)", () => {
         ])
 
         await waitFor(() => expect(screen.getByText(/Work Windows for/)).toBeInTheDocument())
-        // Shown by default, each carrying its label — the label is the whole point.
-        await waitFor(() => expect(rowCount()).toBe(3))
-        expect(screen.getByText("Lunch")).toBeInTheDocument()
-        expect(screen.getByText("NOTE")).toBeInTheDocument()
+        // Hidden by default, so the list is bookable time only and nobody links
+        // a lunch break by mistake.
+        await waitFor(() => expect(rowCount()).toBe(1))
+        expect(screen.queryByText("Lunch")).not.toBeInTheDocument()
+        expect(screen.queryByText("NOTE")).not.toBeInTheDocument()
 
         await user.click(screen.getByRole("checkbox", { name: /show closed periods, notes & breaks/i }))
 
-        await waitFor(() => expect(rowCount()).toBe(1))
-        expect(screen.queryByText("Lunch")).not.toBeInTheDocument()
+        // Ticked, each comes back carrying its label.
+        await waitFor(() => expect(rowCount()).toBe(3))
+        expect(screen.getByText("Lunch")).toBeInTheDocument()
+        expect(screen.getByText("NOTE")).toBeInTheDocument()
     })
 
     it("does not count notes or breaks as unlinked appointment types", async () => {
@@ -504,5 +512,59 @@ describe("Filter placement", () => {
         expect(
             within(card as HTMLElement).getByRole("button", { name: /filter by date range/i })
         ).toBeInTheDocument()
+    })
+})
+
+
+describe("Link date range", () => {
+    async function openDialogAndApply(tickInclude: boolean) {
+        const user = userEvent.setup()
+        const apiPost = api.post as ReturnType<typeof vi.fn>
+        apiPost.mockReset()
+        apiPost.mockResolvedValue({
+            data: {
+                start_date: todayISO(), end_date: todayISO(), day_count: 1,
+                matched_count: 0, windows: [], batch_size: 10, batch_pause_seconds: 30,
+            },
+        })
+        mountWith(datedWindows(2))
+
+        await waitFor(() => expect(rowCount()).toBe(2))
+        await user.click(screen.getByRole("button", { name: /link date range/i }))
+        const dialog = await screen.findByRole("dialog")
+
+        const include = within(dialog).getByRole("checkbox", { name: /include closed periods, notes & breaks/i })
+        // Off every time the dialog opens, so breaks are never linked by default.
+        expect(include).toHaveAttribute("data-state", "unchecked")
+        if (tickInclude) await user.click(include)
+
+        await user.click(within(dialog).getByRole("checkbox", { name: /cleaning/i }))
+        await user.click(within(dialog).getByRole("button", { name: /^apply$/i }))
+
+        await waitFor(() => expect(apiPost).toHaveBeenCalled())
+        const [url, payload] = apiPost.mock.calls[0]
+        expect(url).toContain("/availabilities/bulk-link-range/preview")
+        return payload as Record<string, unknown>
+    }
+
+    it("asks the server to skip notes, breaks and closed periods by default", async () => {
+        const payload = await openDialogAndApply(false)
+        expect(payload.include_non_bookable).toBe(false)
+    })
+
+    it("includes them only when the operator ticks the option", async () => {
+        const payload = await openDialogAndApply(true)
+        expect(payload.include_non_bookable).toBe(true)
+    })
+})
+
+
+describe("Calendar view", () => {
+    it("is hidden for now: no calendar/list switch, the list is the only view", async () => {
+        mountWith(datedWindows(2))
+
+        await waitFor(() => expect(rowCount()).toBe(2))
+        expect(screen.queryByRole("button", { name: /^calendar$/i })).not.toBeInTheDocument()
+        expect(screen.queryByRole("button", { name: /^list$/i })).not.toBeInTheDocument()
     })
 })
