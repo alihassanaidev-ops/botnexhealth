@@ -5,6 +5,7 @@
   "region": "ca-central-1",
   "appEnv": "production",
   "allowSuperAdminTotp": true,
+  "nexhealthApiVersion": "v3.0.0",
   "logLevel": "info",
   "refreshTokenTtlMinutes": 480,
   "alarmEmail": "zulkhaifahmed@gmail.com",
@@ -99,6 +100,7 @@
     "RESEND_API_KEY": "arn:aws:secretsmanager:ca-central-1:287553036543:secret:nex-health/production/resend-api-key-CjnARr",
     "RESEND_FROM_EMAIL": "arn:aws:secretsmanager:ca-central-1:287553036543:secret:nex-health/production/resend-from-email-XdFb4R",
     "TWILLIO_SID": "arn:aws:secretsmanager:ca-central-1:287553036543:secret:nex-health/production/twillio-sid-PZPtmO",
-    "TWILLIO_API_SECRET": "arn:aws:secretsmanager:ca-central-1:287553036543:secret:nex-health/production/twillio-api-secret-SkHpEh"
+    "TWILLIO_API_SECRET": "arn:aws:secretsmanager:ca-central-1:287553036543:secret:nex-health/production/twillio-api-secret-SkHpEh",
+    "NEXHEALTH_WEBHOOK_SECRET": "arn:aws:secretsmanager:ca-central-1:287553036543:secret:nex-health/production/nexhealth-webhook-secret-CcdDVV"
   }
 }

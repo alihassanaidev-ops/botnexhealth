@@ -130,6 +130,10 @@ class EnvironmentConfig:
     # Off unless a deployment's config sets `allowSuperAdminTotp: true`, so
     # production stays passkey-only by default.
     allow_super_admin_totp: bool = False
+    # NexHealth API contract for this environment ("v2" / "v3.0.0"). Must live
+    # in CDK config: a value set by hand on a task definition is dropped by the
+    # next `cdk deploy`, silently reverting the environment to v2.
+    nexhealth_api_version: str | None = None
     # Per-IP edge rate limit (requests / 5-minute window). Layered on top of
     # slowapi (per-process) so a flood at the edge gets blocked before it
     # touches the application. AWS default minimum is 100; raise as traffic
@@ -158,6 +162,7 @@ def load_config(path: str | Path) -> EnvironmentConfig:
 
     return EnvironmentConfig(
         app_name=raw["appName"],
+        nexhealth_api_version=raw.get("nexhealthApiVersion"),
         environment_name=raw["environmentName"],
         account=raw["account"],
         region=raw["region"],
