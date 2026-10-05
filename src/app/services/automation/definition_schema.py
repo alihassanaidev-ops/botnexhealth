@@ -146,6 +146,17 @@ class PmsRecallSource(BaseModel):
     #: How long after any recall enrollment before the same patient can enter
     #: this workflow again.
     reenrollment_cooldown_days: int = Field(default=90, ge=1, le=730)
+    #: Clinic-approved PMS recall type ids. Empty means "no allowlist" and the
+    #: campaign keeps the legacy audience (subject to its own trigger filter).
+    #: Recall type *names* are not used for selection: they are free text and one
+    #: clinic's "Recall" is another's "Hygiene".
+    approved_recall_type_ids: list[str] = Field(default_factory=list)
+    #: Audience window: a recall is eligible when its due date is on/before
+    #: ``today + due_within_days`` in the location timezone. With
+    #: ``include_overdue`` false, overdue recalls are excluded and only the
+    #: upcoming window is called.
+    due_within_days: int = Field(default=30, ge=0, le=365)
+    include_overdue: bool = True
 
 
 class AudienceSegmentSource(BaseModel):
@@ -933,6 +944,15 @@ class SendVoiceNode(BaseModel):
     # longer consumes an attempt — without it, "does not consume an attempt"
     # means "unlimited".
     max_dials: int = Field(default=5, ge=1, le=20)
+
+    # --- Live-call booking constraints ---
+    # The agent decides what to book during the call, so the prompt is not a
+    # guard. When a call belongs to a recall campaign these lists are enforced
+    # server-side against the Retell booking tools. Empty types on a recall
+    # campaign fail closed (nothing bookable); empty providers means no provider
+    # restriction. Non-recall campaigns leave both empty and are unconstrained.
+    allowed_appointment_type_ids: list[str] = Field(default_factory=list)
+    allowed_provider_ids: list[str] = Field(default_factory=list)
 
     @model_validator(mode="after")
     def dial_cap_must_exceed_the_allowance(self) -> "SendVoiceNode":

@@ -2,54 +2,47 @@
 
 The recall campaign calls patients whose cleaning recall is coming due and books
 the visit on the call (voice), or reaches them by SMS with a booking link. It is
-built from the existing outbound automation engine; this document is the
-operator guide and the map of what is recall-specific.
+built from the existing outbound automation engine and is configured entirely on
+the campaign — there is no separate location-level recall settings screen.
 
 ## Audience
 
 The scanner (`scan_recall_workflows`, run through the DB schedule tick) reads the
-location's whole PMS recall queue and keeps a patient when **all** of these hold:
+location's whole PMS recall queue. For each recall campaign at that location it
+keeps a patient when **all** of these hold:
 
-- the recall type is on the location's approved list (`recall_config`);
-- the due date is inside the location's window (default: overdue plus the next
-  30 days, evaluated in the location timezone);
+- the recall type is among the campaign's **approved recall type ids** (empty =
+  every recall type);
+- the due date is inside the campaign's window
+  (`today + due_within_days`, and not in the past unless `include_overdue`),
+  evaluated in the location timezone;
 - the patient has no future appointment (any scheduled/booked/pending visit);
-- the patient is not inside the re-enrollment cooldown.
+- the patient is not inside the campaign's re-enrollment cooldown.
 
 A patient with several due recalls is collapsed to one **primary** recall
-(earliest due, then allowlist order) so the booking type mapping is stable.
+(earliest due, then approved-list order) so the booking type is stable.
 Enrollment is idempotent per `(workflow version, patient, month)`; the scan also
-honors `max_enrollments_per_run` per workflow so a large backlog drains in paced
-batches instead of one unbounded fan-out.
+honors `max_enrollments_per_run` per workflow.
 
 The scanner reports reason counters (`recalls_skipped_recall_type`,
-`recalls_skipped_due_window`, and the existing GoTracker/treatment counters) for
-dry-run review.
+`recalls_skipped_due_window`, and the GoTracker/treatment counters) for dry-run
+review.
 
-## Per-location configuration
+## Where the settings live
 
-`InstitutionLocation.recall_config` (JSONB) holds:
+All recall-specific settings are on the workflow definition, so a campaign is
+self-contained and location-scoped like every other campaign:
 
-```json
-{
-  "approved_recall_type_ids": ["2288000", "2288006"],
-  "due_within_days": 30,
-  "include_overdue": true,
-  "appointment_type_map": {"2288000": "nh-1230522", "2288006": "nh-1230521"},
-  "provider_ids": ["nh-502294485", "nh-506291620"]
-}
-```
+- **`PmsRecallSource`** (the schedule trigger's source) carries
+  `approved_recall_type_ids`, `due_within_days`, and `include_overdue`. These
+  are editable in the builder's schedule trigger panel.
+- **`SendVoiceNode`** carries `allowed_appointment_type_ids` and
+  `allowed_provider_ids` — the only things the live agent may book. Editable in
+  the builder's call-step panel.
 
-`NULL` means "not configured": the scanner keeps its legacy behavior and no
-booking guard is applied. Parse/validate with
-`src/app/services/automation/recall_config.py`.
-
-Two ways to set it:
-
-- API: `PUT /institution/portal/locations/{loc_slug}/recall/config`
-  (GET/DELETE mirror it), institution- or location-admin, location-scoped.
-- CLI: `python -m src.app.scripts.configure_recall_campaign ...` (see
-  `--help`). Idempotent; can also upsert the location's "Recall" voice profile.
+Defaults are conservative: a freshly instantiated recall campaign has an empty
+approved-type list (every recall type) and empty allowed booking types, which
+**fails closed** at booking until configured.
 
 ## Booking constraints (voice)
 
@@ -57,16 +50,17 @@ The AI decides what to book during the call, so the prompt cannot be the guard.
 The outbound call is correlated back to its campaign run by Retell call id
 (`WorkflowVoiceAttempt.retell_call_id`), and
 `src/app/services/automation/recall_booking_guard.py` resolves the run's
-location config. `list_appointment_types`, `find_appointment_slots`, and
-`book_appointment` then enforce:
+immutable workflow version. `list_appointment_types`, `find_appointment_slots`,
+and `book_appointment` then enforce, only when the run's schedule source is a
+PMS recall:
 
-- only the appointment type mapped for the run's recall type may be offered or
-  booked — an unconfigured mapping **fails closed**;
-- only `provider_ids` may be booked;
+- only the voice step's `allowed_appointment_type_ids` may be offered or
+  booked — an empty list refuses every booking;
+- only `allowed_provider_ids` may be booked (empty = any provider);
 - the earliest bookable date is `max(today, recall due date)`.
 
-Calls with no recall voice attempt are untouched — inbound and non-recall calls
-are unaffected.
+Calls whose workflow is not a recall campaign are left completely untouched, so
+inbound and other outbound campaigns are unaffected.
 
 ## Voice template
 
@@ -76,39 +70,36 @@ are unaffected.
 `do_not_contact`, `unreachable`, or a staff handoff default. It requires an
 outbound voice profile at instantiation.
 
-The publishing path stores the campaign's `content_class` on the workflow
-version; the runtime gate reads it from there (`step_dispatcher`), so a `recall`
-campaign enforces its consent class rather than silently running under implied
-consent.
+Publishing stores the campaign's `content_class` on the workflow version; the
+runtime gate reads it from there (`step_dispatcher`), so a `recall` campaign
+enforces its consent class rather than silently running under implied consent.
 
 ## Compliance
 
 - Content class `recall` requires an express (written) consent basis
   (`compliance_gate_service`). A location with no recorded voice consent will
   have calls blocked — decide the basis with the clinic before launch.
-- Quiet hours come from the location's operating hours; the client's requested
-  window is 9am–8pm, Mon–Fri, `America/Toronto`.
+- Quiet hours come from the location's operating hours.
 - Spoken opt-out suppression relies on `settings.retell_optout_analysis_key`;
   it is inert until that key is set.
 
-## Setup checklist (staging or production)
+## Setup (staging or production)
 
 1. Ensure the location is bound to its PMS (subdomain + location id) and has
-   appointment types and providers synced.
-2. Create the "Recall" outbound voice profile (Retell agent id + from number).
-3. Set `recall_config` (API or CLI).
-4. Confirm quiet hours and the consent basis.
-5. Instantiate `recall-voice-6month`, then keep the workflow **paused** until
-   the dry run is reviewed.
-6. Run a dry run: invoke the recall scan (or wait for the schedule tick) and
-   review the reason counters; confirm only approved types/patients appear.
-7. Launch a small pilot, verify calls/bookings/non-duplication, then scale.
-8. Test the institution emergency halt before going live.
+   appointment types, providers, and an outbound voice profile.
+2. In the dashboard, instantiate the **Recall Outreach — Voice** template and
+   pick the voice profile.
+3. In the builder, open the schedule trigger and set the **approved recall
+   type ids**, **due window**, and **include overdue**.
+4. Open each call step and set the **allowed appointment types** and
+   **allowed providers**.
+5. Keep the campaign **paused** and review the dry-run counters before launch.
+6. Launch a small pilot, verify calls/bookings/non-duplication, then scale.
+7. Test the institution emergency halt before going live.
 
 ## Known gaps
 
-- The client's "HYG" is an Open Dental descriptor, not part of the NexHealth
-  appointment-type name; the mapping must use explicit cached type ids.
-- No dashboard editor for `recall_config` yet (API + CLI only).
+- "HYG" is an Open Dental descriptor, not part of the NexHealth appointment-type
+  name; the allowed types must be picked from the synced catalog by name/id.
 - GoTracker recall still requires completed appointment-history sync before it
   will scan.

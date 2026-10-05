@@ -374,6 +374,16 @@ def test_recall_voice_template_targets_pms_recall_with_voice() -> None:
     assert template.metadata.supported_channels == ["voice"]
     # The guard maps the run's recall type, so the id must reach run metadata.
     assert "recall_type_id" in template.definition["pms_context_fields"]
+    # Campaign-scoped audience defaults.
+    assert source["due_within_days"] == 30
+    assert source["include_overdue"] is True
+    assert source["approved_recall_type_ids"] == []
+    # Live-call booking guard defaults (fail closed until configured).
+    voice_nodes = [
+        n for n in template.definition["nodes"] if n["type"] == "send_voice"
+    ]
+    assert all(n["allowed_appointment_type_ids"] == [] for n in voice_nodes)
+    assert all(n["allowed_provider_ids"] == [] for n in voice_nodes)
 
 
 def test_recall_voice_template_requires_a_voice_profile() -> None:

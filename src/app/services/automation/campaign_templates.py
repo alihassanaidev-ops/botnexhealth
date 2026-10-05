@@ -1159,6 +1159,10 @@ def _recall_voice_attempt_nodes(attempt: int) -> list[dict[str, Any]]:
             "wait_for_outcome": True,
             # Vendor placement retries stay separate from patient attempts.
             "max_attempts": 1,
+            # Live-call booking guard: the agent may only book these types and
+            # providers. Empty types fail closed; setup fills them in.
+            "allowed_appointment_type_ids": [],
+            "allowed_provider_ids": [],
             "next_node_id": f"route-recall-attempt-{suffix}",
         },
         {
@@ -1242,6 +1246,11 @@ _RECALL_VOICE: dict[str, Any] = {
             "kind": "pms_recall",
             "recall_interval_months": 6,
             "reenrollment_cooldown_days": 90,
+            # Campaign-scoped audience. Empty type list = no allowlist; setup
+            # fills it with the clinic-approved recall type ids.
+            "approved_recall_type_ids": [],
+            "due_within_days": 30,
+            "include_overdue": True,
         },
         "filter": {
             "kind": "group",

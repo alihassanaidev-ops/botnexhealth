@@ -4,14 +4,17 @@ The AI agent decides what to book during the call, so the prompt alone cannot be
 the guard: an agent that offers "any appointment type" would happily book one.
 The outbound voice step stamps ``workflow_run_id`` on the Retell call and the
 voice attempt carries ``retell_call_id``; from the call id this resolves the
-campaign run, its location, and that location's ``recall_config``.
+campaign run and its immutable workflow version.
 
-When a call belongs to a recall campaign the configured constraints are
-enforced by the booking handlers:
+Recall audience settings live on the campaign, not the location: the run's
+schedule trigger must source from PMS recalls, and the voice step that placed
+the call carries the approved appointment types and providers. When a call
+belongs to a recall campaign those constraints are enforced by the booking
+handlers:
 
-* only the appointment type mapped for the run's recall type may be offered or
-  booked (an unconfigured mapping fails closed);
-* only the configured providers may be booked;
+* only the voice step's ``allowed_appointment_type_ids`` may be offered or
+  booked — an empty list fails closed;
+* only its ``allowed_provider_ids`` may be booked (empty means no restriction);
 * the earliest bookable date is ``max(today, recall due date)``.
 
 A call with no recall voice attempt returns ``None`` and is left completely
@@ -26,10 +29,17 @@ from datetime import date, datetime, timezone
 
 from sqlalchemy import select
 
-from src.app.models.automation_workflow import AutomationWorkflowRun
+from src.app.models.automation_workflow import (
+    AutomationWorkflowRun,
+    AutomationWorkflowVersion,
+)
 from src.app.models.institution_location import InstitutionLocation
 from src.app.models.outbound_voice import WorkflowVoiceAttempt
-from src.app.services.automation.recall_config import parse_recall_config
+from src.app.services.automation.definition_schema import (
+    PmsRecallSource,
+    ScheduleTrigger,
+    WorkflowDefinition,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -67,22 +77,19 @@ class RecallBookingConstraints:
         return normalized is not None and normalized in self.provider_ids
 
 
-def _location_today(location: InstitutionLocation | None) -> date:
-    timezone_name = getattr(location, "timezone", None)
+def _location_today(timezone_name: str | None) -> date:
     try:
         if isinstance(timezone_name, str) and timezone_name.strip():
             from zoneinfo import ZoneInfo
 
             return datetime.now(ZoneInfo(timezone_name.strip())).date()
-    except Exception:  # noqa: BLE001 - bad zone must not break the guard
+    except Exception:  # noqa: BLE001 - a bad zone must not break the guard
         pass
     return datetime.now(timezone.utc).date()
 
 
-def _earliest_booking_date(
-    metadata: dict, location: InstitutionLocation | None
-) -> date:
-    today = _location_today(location)
+def _earliest_booking_date(metadata: dict, timezone_name: str | None) -> date:
+    today = _location_today(timezone_name)
     raw_due = metadata.get("recall_due_date")
     if not raw_due:
         return today
@@ -93,35 +100,64 @@ def _earliest_booking_date(
     return max(due, today)
 
 
+def _is_recall_definition(definition: WorkflowDefinition) -> bool:
+    return any(
+        isinstance(trigger, ScheduleTrigger)
+        and isinstance(trigger.source, PmsRecallSource)
+        for trigger in definition.triggers
+    )
+
+
+def _voice_node_allowed_ids(definition: WorkflowDefinition, step_id: str | None):
+    for node in definition.nodes:
+        if getattr(node, "type", None) == "send_voice" and (
+            step_id is None or getattr(node, "id", None) == step_id
+        ):
+            return (
+                list(getattr(node, "allowed_appointment_type_ids", []) or []),
+                list(getattr(node, "allowed_provider_ids", []) or []),
+            )
+    return [], []
+
+
 async def resolve_recall_constraints_for_call(session, call_id: str | None):
     """Return constraints when this call is part of a recall campaign."""
     if not call_id:
         return None
 
-    run_id = (
+    attempt = (
         await session.execute(
-            select(WorkflowVoiceAttempt.workflow_run_id)
+            select(
+                WorkflowVoiceAttempt.workflow_run_id,
+                WorkflowVoiceAttempt.step_id,
+            )
             .where(WorkflowVoiceAttempt.retell_call_id == str(call_id))
             .limit(1)
         )
-    ).scalar_one_or_none()
-    if not run_id:
+    ).first()
+    if attempt is None:
         return None
+    run_id, step_id = attempt[0], attempt[1]
 
     run = await session.get(AutomationWorkflowRun, run_id)
-    if run is None:
+    if run is None or not run.workflow_version_id:
         return None
 
-    location = None
-    if run.location_id:
-        location = await session.get(InstitutionLocation, run.location_id)
-    config = (
-        parse_recall_config(getattr(location, "recall_config", None))
-        if location is not None
-        else None
+    version = await session.get(
+        AutomationWorkflowVersion, run.workflow_version_id
     )
-    if config is None:
+    if version is None or not version.definition:
         return None
+    try:
+        definition = WorkflowDefinition.model_validate(version.definition)
+    except Exception:  # noqa: BLE001
+        logger.warning("recall guard: unreadable definition run=%s", run_id)
+        return None
+
+    if not _is_recall_definition(definition):
+        return None
+
+    allowed_types, allowed_providers = _voice_node_allowed_ids(definition, step_id)
 
     metadata = run.trigger_metadata if isinstance(run.trigger_metadata, dict) else {}
     raw_recall_type = metadata.get("recall_type_id")
@@ -129,8 +165,6 @@ async def resolve_recall_constraints_for_call(session, call_id: str | None):
         str(raw_recall_type) if raw_recall_type not in (None, "") else None
     )
 
-    mapped = config.appointment_type_id_for(recall_type_id)
-    allowed_types = {mapped} if mapped else set(config.appointment_type_map.values())
     normalized_types = frozenset(
         value
         for value in (_normalize_source_id(item) for item in allowed_types)
@@ -138,13 +172,18 @@ async def resolve_recall_constraints_for_call(session, call_id: str | None):
     )
     normalized_providers = frozenset(
         value
-        for value in (_normalize_source_id(item) for item in config.provider_ids)
+        for value in (_normalize_source_id(item) for item in allowed_providers)
         if value
     )
+
+    timezone_name = None
+    if run.location_id:
+        location = await session.get(InstitutionLocation, run.location_id)
+        timezone_name = getattr(location, "timezone", None)
 
     return RecallBookingConstraints(
         recall_type_id=recall_type_id,
         appointment_type_ids=normalized_types,
         provider_ids=normalized_providers,
-        earliest_date=_earliest_booking_date(metadata, location),
+        earliest_date=_earliest_booking_date(metadata, timezone_name),
     )

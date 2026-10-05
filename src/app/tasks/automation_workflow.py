@@ -3815,7 +3815,8 @@ def _recall_within_window(
     *,
     now: datetime,
     timezone_name: str,
-    config: Any,
+    due_within_days: int,
+    include_overdue: bool,
 ) -> bool:
     """Due-date eligibility, evaluated in the location's timezone.
 
@@ -3829,65 +3830,66 @@ def _recall_within_window(
         return True
     local_day = _location_now(now, timezone_name).date()
     due_day = due.date()
-    if due_day > local_day + timedelta(days=int(config.due_within_days)):
+    if due_day > local_day + timedelta(days=int(due_within_days)):
         return False
-    if not config.include_overdue and due_day < local_day:
+    if not include_overdue and due_day < local_day:
         return False
     return True
 
 
-def _recall_priority_index(recall: dict, config: Any) -> int:
-    recall_type_id = _recall_type_id_raw(recall)
-    if recall_type_id in config.approved_recall_type_ids:
-        return config.approved_recall_type_ids.index(recall_type_id)
-    return len(config.approved_recall_type_ids)
+def _recall_type_allowed(
+    recall: dict, approved_recall_type_ids: Any
+) -> bool:
+    approved = list(approved_recall_type_ids or ())
+    if not approved:
+        return True
+    return _recall_type_id_raw(recall) in set(approved)
 
 
-def _select_primary_recall(patient_recalls: list[dict], config: Any) -> dict:
+def _select_primary_recall(
+    patient_recalls: list[dict], approved_recall_type_ids: Any
+) -> dict:
     """One deterministic recall per patient.
 
     A patient can carry several due recalls. The campaign books one visit, so
     the audience must collapse to a single recall: earliest due date first, then
-    the clinic's allowlist order, then the raw record id for stability.
+    the campaign's allowlist order, then the raw record id for stability.
     """
+    approved = list(approved_recall_type_ids or ())
 
     def sort_key(recall: dict) -> tuple[int, int, str]:
         due = _recall_due_date(recall)
         due_ordinal = due.date().toordinal() if due is not None else 10**9
-        return (
-            due_ordinal,
-            _recall_priority_index(recall, config),
-            str(recall.get("id", "")),
+        recall_type_id = _recall_type_id_raw(recall)
+        priority = (
+            approved.index(recall_type_id) if recall_type_id in approved else len(approved)
         )
+        return (due_ordinal, priority, str(recall.get("id", "")))
 
     return min(patient_recalls, key=sort_key)
 
 
-def _group_recalls_by_patient(
-    recalls: list[dict],
-    *,
-    now: datetime,
-    timezone_name: str,
-    config: Any,
-    counts: dict[str, int] | None = None,
-) -> dict[str, list[dict]]:
+def _group_recalls_by_patient(recalls: list[dict]) -> dict[str, list[dict]]:
+    """Bucket recall rows by patient. Eligibility is applied per campaign."""
     grouped: dict[str, list[dict]] = {}
     for recall in recalls:
         raw_patient_id = _recall_patient_id(recall)
         if not raw_patient_id:
             continue
-        if not config.allows_recall_type(_recall_type_id_raw(recall)):
-            if counts is not None:
-                counts["recalls_skipped_recall_type"] += 1
-            continue
-        if not _recall_within_window(
-            recall, now=now, timezone_name=timezone_name, config=config
-        ):
-            if counts is not None:
-                counts["recalls_skipped_due_window"] += 1
-            continue
         grouped.setdefault(raw_patient_id, []).append(recall)
     return grouped
+
+
+def _recall_source_for_workflow(candidate: dict) -> Any:
+    """The campaign's PMS-recall source, which carries its audience settings."""
+    workflow = candidate.get("workflow")
+    if workflow is None or not getattr(workflow, "definition", None):
+        return None
+    try:
+        definition = WorkflowDefinition.model_validate(workflow.definition)
+    except Exception:
+        return None
+    return _pms_recall_source(definition)
 
 
 def _recall_cooldown_days(candidate: dict) -> int:
@@ -4369,35 +4371,18 @@ async def _enroll_recalls_for_institution(
                 await _close_adapter_safe(adapter)
                 continue
             try:
-                from src.app.services.automation.recall_config import (
-                    recall_config_for_location,
-                )
-
                 treatment_plan_cache: dict[str, list[Any] | None] = {}
                 location_timezone = _location_timezone(location)
-                recall_config = recall_config_for_location(location)
+                # Recall eligibility is campaign-scoped: each workflow declares
+                # its own approved types and due window on its recall source.
+                recall_sources = {
+                    wf["workflow_id"]: _recall_source_for_workflow(wf)
+                    for wf in location_workflows
+                }
 
-                grouped_recalls = _group_recalls_by_patient(
-                    recalls,
-                    now=now,
-                    timezone_name=location_timezone,
-                    config=recall_config,
-                    counts=counts,
-                )
+                grouped_recalls = _group_recalls_by_patient(recalls)
                 for raw_patient_id, patient_recalls in grouped_recalls.items():
-                    # One visit per patient: pick the deterministic primary
-                    # recall so the booking type mapping is stable.
-                    recall = _select_primary_recall(patient_recalls, recall_config)
-
-                    recall_model = patient_recall_from_raw(
-                        recall, source=adapter_source
-                    )
                     patient_id = _recall_patient_key(raw_patient_id, adapter_source)
-                    base_metadata = {
-                        "nexhealth_patient_id": patient_id,
-                        "recall_due_date": _recall_due_date_value(recall),
-                        "recall_period": period,
-                    }
 
                     contact_row = await session.execute(
                         sa_select(Contact).where(
@@ -4422,6 +4407,48 @@ async def _enroll_recalls_for_institution(
                     for wf in location_workflows:
                         if remaining_enrollments.get(wf["workflow_id"], 0) <= 0:
                             continue
+
+                        source = recall_sources.get(wf["workflow_id"])
+                        approved_type_ids = (
+                            source.approved_recall_type_ids if source else ()
+                        )
+                        due_within_days = source.due_within_days if source else 30
+                        include_overdue = source.include_overdue if source else True
+
+                        eligible_recalls: list[dict] = []
+                        for candidate in patient_recalls:
+                            if not _recall_type_allowed(
+                                candidate, approved_type_ids
+                            ):
+                                counts["recalls_skipped_recall_type"] += 1
+                                continue
+                            if not _recall_within_window(
+                                candidate,
+                                now=now,
+                                timezone_name=location_timezone,
+                                due_within_days=due_within_days,
+                                include_overdue=include_overdue,
+                            ):
+                                counts["recalls_skipped_due_window"] += 1
+                                continue
+                            eligible_recalls.append(candidate)
+                        if not eligible_recalls:
+                            continue
+
+                        # One visit per patient per campaign: pick the
+                        # deterministic primary so the booking type is stable.
+                        recall = _select_primary_recall(
+                            eligible_recalls, approved_type_ids
+                        )
+                        recall_model = patient_recall_from_raw(
+                            recall, source=adapter_source
+                        )
+                        base_metadata = {
+                            "nexhealth_patient_id": patient_id,
+                            "recall_due_date": _recall_due_date_value(recall),
+                            "recall_period": period,
+                        }
+
                         if (
                             adapter_source == "gotracker"
                             and await _gotracker_patient_has_recent_visit(

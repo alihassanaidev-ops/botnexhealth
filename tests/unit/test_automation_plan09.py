@@ -49,6 +49,7 @@ def _make_workflow(
     location_id=None,
     trigger_filter=None,
     pms_context_fields=None,
+    recall_source=None,
 ):
     wf = MagicMock()
     wf.id = "wf-1"
@@ -56,7 +57,18 @@ def _make_workflow(
     wf.location_id = location_id
     wf.status = AutomationWorkflowStatus.ACTIVE.value
     wf.current_version_id = version_id
-    if trigger_type == "recall_scan":
+    if recall_source is not None:
+        # Campaign-scoped recall settings live on the schedule source.
+        trigger = {
+            "type": "schedule",
+            "cron": "0 9 * * *",
+            "source": {
+                "kind": "pms_recall",
+                "recall_interval_months": 6,
+                **recall_source,
+            },
+        }
+    elif trigger_type == "recall_scan":
         trigger = {"type": trigger_type, "recall_interval_months": 6}
     else:
         trigger = {"type": trigger_type, "offset_hours": offset_hours}
@@ -652,14 +664,17 @@ async def _run_scan_with_recalls(scan_session, inst_session, recalls):
 
 @pytest.mark.asyncio
 async def test_scan_recall_honors_approved_recall_type_allowlist():
-    wf = _make_workflow(trigger_type="recall_scan", version_id="ver-1")
+    wf = _make_workflow(
+        recall_source={
+            "approved_recall_type_ids": ["2288000"],
+            "due_within_days": 365,
+        },
+        version_id="ver-1",
+    )
     scan_session = _make_session(workflows=[wf])
-    inst_session, location = _recall_inst_session(1)
-    location.recall_config = {
-        "approved_recall_type_ids": ["2288000"],
-        "due_within_days": 3650,
-        "include_overdue": True,
-    }
+    # The contact/future-appointment probes run per grouped patient before the
+    # per-workflow allowlist filter, so budget one slot per patient.
+    inst_session, _ = _recall_inst_session(2)
     recalls = [
         {
             "id": 1,
@@ -687,9 +702,12 @@ async def test_scan_recall_honors_approved_recall_type_allowlist():
 
 @pytest.mark.asyncio
 async def test_scan_recall_window_covers_next_30_days_and_overdue():
-    wf = _make_workflow(trigger_type="recall_scan", version_id="ver-1")
+    wf = _make_workflow(
+        recall_source={"due_within_days": 30, "include_overdue": True},
+        version_id="ver-1",
+    )
     scan_session = _make_session(workflows=[wf])
-    inst_session, _ = _recall_inst_session(2)
+    inst_session, _ = _recall_inst_session(3)
     today = datetime.now(timezone.utc).date()
 
     def due(days):
@@ -715,14 +733,15 @@ async def test_scan_recall_window_covers_next_30_days_and_overdue():
 
 @pytest.mark.asyncio
 async def test_scan_recall_groups_multiple_recalls_into_one_enrollment():
-    wf = _make_workflow(trigger_type="recall_scan", version_id="ver-1")
+    wf = _make_workflow(
+        recall_source={
+            "approved_recall_type_ids": ["2288000", "2288006"],
+            "due_within_days": 365,
+        },
+        version_id="ver-1",
+    )
     scan_session = _make_session(workflows=[wf])
-    inst_session, location = _recall_inst_session(1)
-    location.recall_config = {
-        "approved_recall_type_ids": ["2288000", "2288006"],
-        "due_within_days": 3650,
-        "include_overdue": True,
-    }
+    inst_session, _ = _recall_inst_session(1)
     recalls = [
         {"id": 1, "patient_id": "p1", "date_due": "2021-01-01", "recall_type": {"id": 2288006}},
         {"id": 2, "patient_id": "p1", "date_due": "2020-01-01", "recall_type": {"id": 2288000}},
