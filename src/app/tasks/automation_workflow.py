@@ -3710,6 +3710,9 @@ _RECALL_SCAN_COUNT_KEYS = (
     "locations_skipped_history_incomplete",
     "patients_skipped_recent_visit",
     "patients_skipped_missing_treatment_context",
+    # Reason codes so a dry run can explain why a recall row was left out.
+    "recalls_skipped_recall_type",
+    "recalls_skipped_due_window",
 )
 
 
@@ -3866,6 +3869,7 @@ def _group_recalls_by_patient(
     now: datetime,
     timezone_name: str,
     config: Any,
+    counts: dict[str, int] | None = None,
 ) -> dict[str, list[dict]]:
     grouped: dict[str, list[dict]] = {}
     for recall in recalls:
@@ -3873,10 +3877,14 @@ def _group_recalls_by_patient(
         if not raw_patient_id:
             continue
         if not config.allows_recall_type(_recall_type_id_raw(recall)):
+            if counts is not None:
+                counts["recalls_skipped_recall_type"] += 1
             continue
         if not _recall_within_window(
             recall, now=now, timezone_name=timezone_name, config=config
         ):
+            if counts is not None:
+                counts["recalls_skipped_due_window"] += 1
             continue
         grouped.setdefault(raw_patient_id, []).append(recall)
     return grouped
@@ -4230,7 +4238,8 @@ async def _scan_recall_async() -> dict:
     logger.info(
         (
             "scan_recall_workflows: institutions=%d workflows=%d enrolled=%d "
-            "history_skips=%d recent_visit_skips=%d treatment_context_skips=%d"
+            "history_skips=%d recent_visit_skips=%d treatment_context_skips=%d "
+            "recall_type_skips=%d due_window_skips=%d"
         ),
         len(by_institution),
         active_workflows,
@@ -4238,6 +4247,8 @@ async def _scan_recall_async() -> dict:
         totals["locations_skipped_history_incomplete"],
         totals["patients_skipped_recent_visit"],
         totals["patients_skipped_missing_treatment_context"],
+        totals["recalls_skipped_recall_type"],
+        totals["recalls_skipped_due_window"],
     )
     return {
         "active_recall_workflows": active_workflows,
@@ -4371,6 +4382,7 @@ async def _enroll_recalls_for_institution(
                     now=now,
                     timezone_name=location_timezone,
                     config=recall_config,
+                    counts=counts,
                 )
                 for raw_patient_id, patient_recalls in grouped_recalls.items():
                     # One visit per patient: pick the deterministic primary

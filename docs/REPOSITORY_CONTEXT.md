@@ -21,6 +21,7 @@
 | Recurring jobs catalog + local debug harness | [SCHEDULED_JOBS.md](SCHEDULED_JOBS.md) |
 | Meta/Typeform lead forms: OAuth, form sync, field mapping, the `form_submitted` trigger | [LEAD_FORMS.md](LEAD_FORMS.md) |
 | Outbound automation/campaign roadmap and current implementation plan | [ROADMAP_OUTBOUND_ENGAGEMENT.md](ROADMAP_OUTBOUND_ENGAGEMENT.md), [OUTBOUND_ENGAGEMENT_IMPLEMENTATION_PLAN.md](OUTBOUND_ENGAGEMENT_IMPLEMENTATION_PLAN.md) |
+| Recall campaign audience, config, booking guard, and setup | [RECALL_CAMPAIGN.md](RECALL_CAMPAIGN.md) |
 | NexHealth v3 migration risks and webhook cutover notes | [nexhealth-v3-inbound-compatibility.md](nexhealth-v3-inbound-compatibility.md), [nexhealth-api-version-research.md](nexhealth-api-version-research.md) |
 | CDK infra (ECS Fargate, RDS, etc.) | [../infra/README.md](../infra/README.md) |
 
