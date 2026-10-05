@@ -406,6 +406,108 @@ async def test_scan_recall_async_no_workflows_returns_empty_summary():
 
 
 # ---------------------------------------------------------------------------
+# _tick_workflow_schedules_async — recall schedules enroll, not crash
+# ---------------------------------------------------------------------------
+
+
+def _recall_schedule_workflow():
+    workflow = MagicMock()
+    workflow.id = "wf-1"
+    workflow.institution_id = "inst-1"
+    workflow.location_id = None
+    workflow.definition = {
+        "trigger": {
+            "type": "schedule",
+            "cron": "0 9 * * *",
+            "source": {
+                "kind": "pms_recall",
+                "recall_interval_months": 6,
+                "reenrollment_cooldown_days": 90,
+            },
+            "max_enrollments_per_run": 7,
+        },
+        "entry_node_id": "exit-1",
+        "nodes": [{"type": "exit", "id": "exit-1", "outcome": "done"}],
+    }
+    return workflow
+
+
+def _schedule_row(workflow_id="wf-1", location_id=None, version_id="ver-9"):
+    return SimpleNamespace(
+        workflow_id=workflow_id,
+        institution_id="inst-1",
+        location_id=location_id,
+        workflow_version_id=version_id,
+    )
+
+
+@pytest.mark.asyncio
+async def test_tick_schedule_hands_scanner_canonical_recall_entries():
+    import src.app.tasks.automation_workflow as aw
+
+    workflow = _recall_schedule_workflow()
+    schedule_session = AsyncMock()
+    workflow_session = AsyncMock()
+    workflow_session.get = AsyncMock(return_value=workflow)
+    enroll = AsyncMock(return_value={"enrolled": 5})
+
+    with (
+        patch.object(
+            aw, "_superadmin_system_session", return_value=_cm(schedule_session)
+        ),
+        patch(
+            "src.app.services.automation.schedule_service.WorkflowScheduleService.claim_due",
+            AsyncMock(return_value=[_schedule_row()]),
+        ),
+        patch.object(aw, "get_system_db_session", return_value=_cm(workflow_session)),
+        patch.object(aw, "_enroll_recalls_for_institution", enroll),
+    ):
+        result = await aw._tick_workflow_schedules_async()
+
+    enroll.assert_awaited_once()
+    institution_id, entries = enroll.await_args.args
+    assert institution_id == "inst-1"
+    assert len(entries) == 1
+    entry = entries[0]
+    # The shape _enroll_recalls_for_institution actually reads. The old tick
+    # wrote `workflow_version_id`/`definition`, so every scheduled recall hit
+    # KeyError('workflow') and enrolled nothing.
+    assert entry["workflow"] is workflow
+    assert entry["version_id"] == "ver-9"
+    assert entry["workflow_id"] == "wf-1"
+    assert entry["location_id"] is None
+    assert entry["max_enrollments"] == 7
+    # `enrolled` is the scanner counter; the tick used to read a key that
+    # never existed and always reported zero.
+    assert result["recall"] == 5
+
+
+@pytest.mark.asyncio
+async def test_tick_schedule_collapses_duplicate_recall_rows():
+    import src.app.tasks.automation_workflow as aw
+
+    workflow = _recall_schedule_workflow()
+    workflow_session = AsyncMock()
+    workflow_session.get = AsyncMock(return_value=workflow)
+    enroll = AsyncMock(return_value={"enrolled": 0})
+
+    with (
+        patch.object(aw, "_superadmin_system_session", return_value=_cm(AsyncMock())),
+        patch(
+            "src.app.services.automation.schedule_service.WorkflowScheduleService.claim_due",
+            # An institution-wide workflow has one schedule row per location.
+            AsyncMock(return_value=[_schedule_row(), _schedule_row()]),
+        ),
+        patch.object(aw, "get_system_db_session", return_value=_cm(workflow_session)),
+        patch.object(aw, "_enroll_recalls_for_institution", enroll),
+    ):
+        await aw._tick_workflow_schedules_async()
+
+    _, entries = enroll.await_args.args
+    assert len(entries) == 1
+
+
+# ---------------------------------------------------------------------------
 # _scan_recall_async — enrolls due patients from the NexHealth recall list
 # ---------------------------------------------------------------------------
 
@@ -486,6 +588,8 @@ async def test_scan_recall_async_enrolls_due_patients():
     assert result["enrolled"] == 3
     assert result["institutions"] == 1
     assert mock_task.apply_async.call_count == 3
+    # The scanner must request the whole recall queue, not the adapter default.
+    assert adapter.list_patient_recalls.await_args.kwargs.get("max_items") is None
 
     # Idempotency keys follow recall:{version}:{patient}:{period}.
     keys = {

@@ -3554,15 +3554,22 @@ async def _tick_workflow_schedules_async() -> dict:
                 # alias-tolerant due-date parsing, the fail-closed treatment-plan
                 # check and GoTracker's history-sync gate, none of which should
                 # be reimplemented here.
-                recall_by_institution.setdefault(entry["institution_id"], []).append(
-                    {
-                        "workflow_id": entry["workflow_id"],
-                        "workflow_version_id": entry["workflow_version_id"],
-                        "location_id": workflow.location_id,
-                        "definition": workflow.definition,
-                        "campaign_goal": trigger.campaign_goal,
-                    }
+                entries = recall_by_institution.setdefault(
+                    entry["institution_id"], []
                 )
+                # A schedule row exists per location, so an institution-wide
+                # workflow is claimed several times in one tick. Collapse it to
+                # one candidate; _enroll_recalls_for_institution already scans
+                # every active location for location_id=None.
+                if not any(e["workflow_id"] == str(workflow.id) for e in entries):
+                    entries.append(
+                        _recall_workflow_entry(
+                            workflow,
+                            version_id=entry["workflow_version_id"],
+                            location_id=workflow.location_id,
+                            max_enrollments=trigger.max_enrollments_per_run,
+                        )
+                    )
             else:
                 result = await CampaignAudienceService(session).enqueue_enrollment(
                     workflow,
@@ -3585,7 +3592,10 @@ async def _tick_workflow_schedules_async() -> dict:
     for institution_id, workflows in recall_by_institution.items():
         try:
             counters = await _enroll_recalls_for_institution(institution_id, workflows)
-            recall_enrolled += int(counters.get("enrollments_scheduled", 0))
+            # `enrolled` is the counter the scanner actually returns;
+            # `enrollments_scheduled` never existed, so the tick reported
+            # recall=0 no matter how many runs it queued.
+            recall_enrolled += int(counters.get("enrolled", 0))
         except Exception:
             # One tenant's PMS being unreachable must not stop the others.
             logger.exception(
@@ -3648,6 +3658,50 @@ def _pms_recall_source(definition: "WorkflowDefinition"):
         ):
             return trigger.source
     return None
+
+
+_RECALL_DEFAULT_MAX_ENROLLMENTS = 500
+
+
+def _recall_schedule_trigger(definition: "WorkflowDefinition"):
+    """The schedule trigger on this definition, if any."""
+    from src.app.services.automation.definition_schema import ScheduleTrigger
+
+    for trigger in definition.triggers:
+        if isinstance(trigger, ScheduleTrigger):
+            return trigger
+    return None
+
+
+def _recall_max_enrollments(definition: "WorkflowDefinition") -> int:
+    trigger = _recall_schedule_trigger(definition)
+    if trigger is None:
+        return _RECALL_DEFAULT_MAX_ENROLLMENTS
+    return int(trigger.max_enrollments_per_run)
+
+
+def _recall_workflow_entry(
+    workflow: Any,
+    *,
+    version_id: Any,
+    location_id: Any,
+    max_enrollments: int,
+) -> dict:
+    """One canonical recall-scan candidate.
+
+    The manual scanner and the DB schedule tick both feed
+    ``_enroll_recalls_for_institution``; they must hand it the same shape.
+    The tick once passed ``workflow_version_id``/``definition`` while the
+    enrollment loop reads ``workflow``/``version_id``, so every scheduled
+    recall raised ``KeyError`` and enrolled nothing.
+    """
+    return {
+        "workflow_id": str(workflow.id),
+        "version_id": str(version_id),
+        "location_id": str(location_id) if location_id is not None else None,
+        "workflow": workflow,
+        "max_enrollments": int(max_enrollments),
+    }
 
 
 _FUTURE_APPOINTMENT_STATUSES = ("scheduled", "booked", "booked_waiting", "pending")
@@ -4022,17 +4076,26 @@ async def _scan_recall_async() -> dict:
             # the literal old type would skip every one of them.
             if not workflow_starts_from(wf, "recall_scan"):
                 continue
+            max_enrollments = _RECALL_DEFAULT_MAX_ENROLLMENTS
+            try:
+                max_enrollments = _recall_max_enrollments(
+                    WorkflowDefinition.model_validate(wf.definition)
+                )
+            except Exception:
+                logger.warning(
+                    "recall scanner could not read schedule for workflow %s; "
+                    "using default enrollment cap",
+                    wf.id,
+                )
             by_institution.setdefault(str(wf.institution_id), []).append(
-                {
-                    "workflow_id": str(wf.id),
-                    "version_id": str(wf.current_version_id),
+                _recall_workflow_entry(
+                    wf,
+                    version_id=wf.current_version_id,
                     # None means institution-wide; a value binds the workflow to
                     # one location and it must not enroll from another's recalls.
-                    "location_id": (
-                        str(wf.location_id) if wf.location_id is not None else None
-                    ),
-                    "workflow": wf,
-                }
+                    location_id=wf.location_id,
+                    max_enrollments=max_enrollments,
+                )
             )
 
     active_workflows = sum(len(w) for w in by_institution.values())
@@ -4088,6 +4151,16 @@ async def _enroll_recalls_for_institution(
     now = datetime.now(tz=timezone.utc)
     period = now.strftime("%Y-%m")
     counts = _recall_scan_counts()
+    # Per-workflow enrollment budget for this run. One patient is queued at
+    # most once per workflow, so this bounds fan-out from a large recall
+    # backlog without dropping anyone permanently: the next scheduled tick
+    # finds the same overdue patients and fills the next batch.
+    remaining_enrollments = {
+        wf["workflow_id"]: max(
+            0, int(wf.get("max_enrollments", _RECALL_DEFAULT_MAX_ENROLLMENTS))
+        )
+        for wf in workflows
+    }
 
     async with get_system_db_session(
         "celery",
@@ -4159,7 +4232,10 @@ async def _enroll_recalls_for_institution(
                         )
                         continue
 
-                recalls = await adapter.list_patient_recalls()
+                # Read the whole recall queue. A fixed cap silently dropped the
+                # tail of large clinics (one carried ~9k recalls against a 500
+                # default), so the scanner never saw most due patients.
+                recalls = await adapter.list_patient_recalls(max_items=None)
                 recall_types = await _list_recall_types_safe(adapter)
             except Exception as exc:  # noqa: BLE001
                 logger.warning(
@@ -4210,6 +4286,8 @@ async def _enroll_recalls_for_institution(
 
                     matched_workflows: list[tuple[dict, dict[str, Any]]] = []
                     for wf in location_workflows:
+                        if remaining_enrollments.get(wf["workflow_id"], 0) <= 0:
+                            continue
                         if (
                             adapter_source == "gotracker"
                             and await _gotracker_patient_has_recent_visit(
@@ -4292,6 +4370,8 @@ async def _enroll_recalls_for_institution(
                         continue
 
                     for wf, trigger_metadata in matched_workflows:
+                        if remaining_enrollments.get(wf["workflow_id"], 0) <= 0:
+                            continue
                         cooldown_days = _recall_cooldown_days(wf)
                         trigger_metadata = merge_canonical_context(
                             {
@@ -4320,6 +4400,9 @@ async def _enroll_recalls_for_institution(
                             queue="workflow",
                         )
                         counts["enrolled"] += 1
+                        remaining_enrollments[wf["workflow_id"]] = (
+                            remaining_enrollments.get(wf["workflow_id"], 0) - 1
+                        )
             finally:
                 await adapter.close()
 

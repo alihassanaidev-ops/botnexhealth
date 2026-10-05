@@ -613,7 +613,7 @@ class NexHealthAdapter(
         self,
         *,
         updated_since: str | None = None,
-        max_items: int = 1000,
+        max_items: int | None = 1000,
     ) -> list[dict[str, Any]]:
         """List raw NexHealth patients for this location.
 
@@ -870,7 +870,7 @@ class NexHealthAdapter(
         return all_rows
 
     async def list_patient_recalls(
-        self, *, patient_id: str | None = None, max_items: int = 500
+        self, *, patient_id: str | None = None, max_items: int | None = 500
     ) -> list[dict[str, Any]]:
         """List patient recall records for this location from NexHealth.
 
@@ -975,7 +975,7 @@ class NexHealthAdapter(
         ]
 
     async def list_recall_types(
-        self, *, max_items: int = 500
+        self, *, max_items: int | None = 500
     ) -> list[UniversalRecallType]:
         """List the location's recall type catalog from NexHealth."""
         params = self._default_params()
@@ -1003,7 +1003,7 @@ class NexHealthAdapter(
         patient_id: str,
         *,
         status: str | None = None,
-        max_items: int = 500,
+        max_items: int | None = 500,
     ) -> list[UniversalTreatmentPlan]:
         """List PHI-minimized treatment-plan metadata for one patient."""
         params = {**self._default_params(), "patient_id": _strip(patient_id)}
