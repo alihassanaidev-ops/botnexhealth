@@ -118,6 +118,20 @@ class InstitutionLocation(Base):
     #: billed once per institution and is apportioned at calculation time.
     roi_config: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
 
+    #: Per-location recall campaign configuration. NULL means "not configured",
+    #: which leaves the legacy recall behavior untouched. Shape (validated by
+    #: src/app/services/automation/recall_config.py):
+    #:   {
+    #:     "approved_recall_type_ids": ["2288000", "2288006", ...],
+    #:     "due_within_days": 30,
+    #:     "include_overdue": true,
+    #:     "appointment_type_map": {"2288000": "nh-1230522", ...},
+    #:     "provider_ids": ["nh-502294485", "nh-506291620"]
+    #:   }
+    #: The scanner sources the campaign audience from this; the live-call
+    #: booking guard reads it to constrain types/providers/earliest date.
+    recall_config: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
+
     # Address
     address: Mapped[str | None] = mapped_column(String(500), nullable=True)
     city: Mapped[str | None] = mapped_column(String(100), nullable=True)

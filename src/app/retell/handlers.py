@@ -39,6 +39,7 @@ from src.app.pms.base import (
 from src.app.pms.factory import get_adapter_for_institution_location
 from src.app.pms.models import BookingRequest, PatientCreateRequest
 from src.app.retell.functions import (
+    get_call_context,
     get_institution_from_call_context,
     register_function,
     update_call_context,
@@ -123,6 +124,35 @@ async def _resolve_context(require_pms: bool = True) -> ResolvedContext:
         )
 
     return ResolvedContext(institution=institution, location=location, adapter=adapter)
+
+
+async def _recall_booking_constraints():
+    """Constraints when this call belongs to a recall campaign, else None.
+
+    Never raises: a lookup failure must not break booking for ordinary calls.
+    When it does resolve, the booking handlers treat the result as a hard
+    restriction.
+    """
+    from src.app.services.automation.recall_booking_guard import (
+        resolve_recall_constraints_for_call,
+    )
+
+    call_context = get_call_context()
+    call_id = call_context.get("call_id")
+    institution_id = call_context.get("institution_id")
+    if not call_id or not institution_id:
+        return None
+    location_id = call_context.get("location_id")
+    try:
+        async with get_system_db_session(
+            "retell",
+            institution_id=str(institution_id),
+            location_id=str(location_id) if location_id else None,
+        ) as session:
+            return await resolve_recall_constraints_for_call(session, call_id)
+    except Exception:  # noqa: BLE001
+        logger.exception("recall booking guard lookup failed")
+        return None
 
 
 # ============================================================================
@@ -899,6 +929,22 @@ async def find_appointment_slots(args: dict[str, Any]) -> dict[str, Any]:
         else:
             provider_ids = None
 
+    constraints = await _recall_booking_constraints()
+    if constraints is not None:
+        if appt_type_id and not constraints.permits_appointment_type(appt_type_id):
+            return {
+                "error": "This appointment type is not available for this recall campaign."
+            }
+        if provider_id and not constraints.permits_provider(provider_id):
+            return {
+                "error": "That provider is not available for this recall campaign."
+            }
+        if constraints.earliest_date:
+            earliest = constraints.earliest_date.isoformat()
+            if not start_date or str(start_date) < earliest:
+                # Offer nothing before the recall is due.
+                start_date = earliest
+
     if appt_type_id and provider_id:
         validation_error = await _validate_appointment_type_for_provider(
             ctx, provider_id, appt_type_id
@@ -1126,6 +1172,29 @@ async def book_appointment(args: dict[str, Any]) -> dict[str, Any]:
     except ValueError as e:
         return {"success": False, "error": str(e)}
 
+    constraints = await _recall_booking_constraints()
+    if constraints is not None:
+        if not constraints.permits_appointment_type(args.get("appointment_type_id")):
+            return {
+                "success": False,
+                "error": "This appointment type is not available for this recall campaign.",
+            }
+        if not constraints.permits_provider(args.get("provider_id")):
+            return {
+                "success": False,
+                "error": "That provider is not available for this recall campaign.",
+            }
+        if constraints.earliest_date:
+            start = str(args.get("start_time") or "")
+            if start and start[:10] < constraints.earliest_date.isoformat():
+                return {
+                    "success": False,
+                    "error": (
+                        "Appointments can only be booked on or after "
+                        f"{constraints.earliest_date.isoformat()}."
+                    ),
+                }
+
     validation_error = await _validate_appointment_type_for_provider(
         ctx, args.get("provider_id"), args.get("appointment_type_id")
     )
@@ -1335,6 +1404,15 @@ async def list_appointment_types(args: dict[str, Any]) -> dict[str, Any]:
             }
             for t in types
         ]
+        constraints = await _recall_booking_constraints()
+        if constraints is not None:
+            # A recall call may only see the clinic-approved types. An
+            # unconfigured mapping intentionally yields an empty list.
+            simplified = [
+                item
+                for item in simplified
+                if constraints.permits_appointment_type(item["id"])
+            ]
         return {
             "count": len(simplified),
             "appointment_types": simplified,

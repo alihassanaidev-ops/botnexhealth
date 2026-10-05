@@ -610,6 +610,135 @@ async def test_scan_recall_async_enrolls_due_patients():
     )
 
 
+def _recall_inst_session(patient_count):
+    """Institution session whose execute() feeds one recall-scan per patient."""
+    session = AsyncMock()
+    session.get = AsyncMock(return_value=MagicMock())
+    location = MagicMock()
+    location.id = "loc-1"
+    location.nexhealth_subdomain = "sub"
+    location.nexhealth_location_id = "nexloc-1"
+    loc_result = MagicMock()
+    loc_result.scalars.return_value.all.return_value = [location]
+    results = [loc_result]
+    for _ in range(patient_count):
+        # contact lookup, future-appointment probe, existing-enrollment probe
+        results.extend([_scalar_result(None), _scalar_result(None), _scalar_result(None)])
+    session.execute = AsyncMock(side_effect=results)
+    return session, location
+
+
+async def _run_scan_with_recalls(scan_session, inst_session, recalls):
+    adapter = AsyncMock()
+    adapter.list_patient_recalls = AsyncMock(return_value=recalls)
+    adapter.close = AsyncMock()
+    with (
+        patch(
+            "src.app.tasks.automation_workflow.get_system_db_session",
+            side_effect=[_cm(scan_session), _cm(inst_session)],
+        ),
+        patch(
+            "src.app.pms.nexhealth.adapter.NexHealthAdapter.create",
+            AsyncMock(return_value=adapter),
+        ),
+        patch(
+            "src.app.tasks.automation_workflow.enroll_and_start_workflow_run"
+        ) as mock_task,
+    ):
+        mock_task.apply_async = MagicMock()
+        result = await _scan_recall_async()
+    return result, mock_task
+
+
+@pytest.mark.asyncio
+async def test_scan_recall_honors_approved_recall_type_allowlist():
+    wf = _make_workflow(trigger_type="recall_scan", version_id="ver-1")
+    scan_session = _make_session(workflows=[wf])
+    inst_session, location = _recall_inst_session(1)
+    location.recall_config = {
+        "approved_recall_type_ids": ["2288000"],
+        "due_within_days": 3650,
+        "include_overdue": True,
+    }
+    recalls = [
+        {
+            "id": 1,
+            "patient_id": "p1",
+            "date_due": "2020-01-01",
+            "recall_type": {"id": 2288000},
+        },
+        {
+            "id": 2,
+            "patient_id": "p2",
+            "date_due": "2020-01-01",
+            "recall_type": {"id": 2288002},  # BW's — not approved
+        },
+    ]
+
+    result, mock_task = await _run_scan_with_recalls(
+        scan_session, inst_session, recalls
+    )
+
+    assert result["enrolled"] == 1
+    assert (
+        mock_task.apply_async.call_args.kwargs["kwargs"]["trigger_ref_id"] == "p1"
+    )
+
+
+@pytest.mark.asyncio
+async def test_scan_recall_window_covers_next_30_days_and_overdue():
+    wf = _make_workflow(trigger_type="recall_scan", version_id="ver-1")
+    scan_session = _make_session(workflows=[wf])
+    inst_session, _ = _recall_inst_session(2)
+    today = datetime.now(timezone.utc).date()
+
+    def due(days):
+        return (today + timedelta(days=days)).isoformat()
+
+    recalls = [
+        {"id": 1, "patient_id": "soon", "date_due": due(10), "recall_type": {"id": 2288000}},
+        {"id": 2, "patient_id": "far", "date_due": due(60), "recall_type": {"id": 2288000}},
+        {"id": 3, "patient_id": "overdue", "date_due": due(-5), "recall_type": {"id": 2288000}},
+    ]
+
+    result, mock_task = await _run_scan_with_recalls(
+        scan_session, inst_session, recalls
+    )
+
+    assert result["enrolled"] == 2
+    refs = {
+        c.kwargs["kwargs"]["trigger_ref_id"]
+        for c in mock_task.apply_async.call_args_list
+    }
+    assert refs == {"soon", "overdue"}
+
+
+@pytest.mark.asyncio
+async def test_scan_recall_groups_multiple_recalls_into_one_enrollment():
+    wf = _make_workflow(trigger_type="recall_scan", version_id="ver-1")
+    scan_session = _make_session(workflows=[wf])
+    inst_session, location = _recall_inst_session(1)
+    location.recall_config = {
+        "approved_recall_type_ids": ["2288000", "2288006"],
+        "due_within_days": 3650,
+        "include_overdue": True,
+    }
+    recalls = [
+        {"id": 1, "patient_id": "p1", "date_due": "2021-01-01", "recall_type": {"id": 2288006}},
+        {"id": 2, "patient_id": "p1", "date_due": "2020-01-01", "recall_type": {"id": 2288000}},
+    ]
+
+    result, mock_task = await _run_scan_with_recalls(
+        scan_session, inst_session, recalls
+    )
+
+    assert result["enrolled"] == 1
+    kwargs = mock_task.apply_async.call_args.kwargs["kwargs"]
+    assert kwargs["trigger_ref_id"] == "p1"
+    # Primary is the earliest due recall, so the booking type mapping is stable.
+    assert kwargs["trigger_metadata"]["recall_due_date"] == "2020-01-01"
+
+
 @pytest.mark.asyncio
 async def test_scan_recall_applies_declared_patient_communication_context_filter():
     wf = _make_workflow(

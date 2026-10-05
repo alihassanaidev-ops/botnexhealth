@@ -3771,6 +3771,117 @@ def _recall_is_due(recall: dict, *, now: datetime) -> bool:
     return due <= now
 
 
+def _recall_due_date(recall: dict) -> datetime | None:
+    raw = _recall_due_date_value(recall)
+    if not raw:
+        return None
+    try:
+        return datetime.fromisoformat(str(raw).replace("Z", "+00:00"))
+    except ValueError:
+        return None
+
+
+def _recall_type_id_raw(recall: dict) -> str | None:
+    """The PMS recall type id on a raw recall row, without any source prefix."""
+    recall_type = recall.get("recall_type") or recall.get("recallType")
+    if isinstance(recall_type, dict):
+        raw_id = recall_type.get("id")
+    else:
+        raw_id = (
+            recall.get("recall_type_id")
+            or recall.get("recallTypeId")
+            or recall.get("recall_id")
+            or recall.get("recallId")
+        )
+    if raw_id in (None, ""):
+        return None
+    return str(raw_id)
+
+
+def _location_now(now: datetime, timezone_name: str) -> datetime:
+    try:
+        from zoneinfo import ZoneInfo
+
+        return now.astimezone(ZoneInfo(timezone_name))
+    except Exception:
+        return now.astimezone(timezone.utc)
+
+
+def _recall_within_window(
+    recall: dict,
+    *,
+    now: datetime,
+    timezone_name: str,
+    config: Any,
+) -> bool:
+    """Due-date eligibility, evaluated in the location's timezone.
+
+    A recall with no parseable due date is kept (it is on the queue), matching
+    the legacy overdue rule. Otherwise the due date must be on/before
+    ``today + due_within_days`` and, when ``include_overdue`` is false, not in
+    the past.
+    """
+    due = _recall_due_date(recall)
+    if due is None:
+        return True
+    local_day = _location_now(now, timezone_name).date()
+    due_day = due.date()
+    if due_day > local_day + timedelta(days=int(config.due_within_days)):
+        return False
+    if not config.include_overdue and due_day < local_day:
+        return False
+    return True
+
+
+def _recall_priority_index(recall: dict, config: Any) -> int:
+    recall_type_id = _recall_type_id_raw(recall)
+    if recall_type_id in config.approved_recall_type_ids:
+        return config.approved_recall_type_ids.index(recall_type_id)
+    return len(config.approved_recall_type_ids)
+
+
+def _select_primary_recall(patient_recalls: list[dict], config: Any) -> dict:
+    """One deterministic recall per patient.
+
+    A patient can carry several due recalls. The campaign books one visit, so
+    the audience must collapse to a single recall: earliest due date first, then
+    the clinic's allowlist order, then the raw record id for stability.
+    """
+
+    def sort_key(recall: dict) -> tuple[int, int, str]:
+        due = _recall_due_date(recall)
+        due_ordinal = due.date().toordinal() if due is not None else 10**9
+        return (
+            due_ordinal,
+            _recall_priority_index(recall, config),
+            str(recall.get("id", "")),
+        )
+
+    return min(patient_recalls, key=sort_key)
+
+
+def _group_recalls_by_patient(
+    recalls: list[dict],
+    *,
+    now: datetime,
+    timezone_name: str,
+    config: Any,
+) -> dict[str, list[dict]]:
+    grouped: dict[str, list[dict]] = {}
+    for recall in recalls:
+        raw_patient_id = _recall_patient_id(recall)
+        if not raw_patient_id:
+            continue
+        if not config.allows_recall_type(_recall_type_id_raw(recall)):
+            continue
+        if not _recall_within_window(
+            recall, now=now, timezone_name=timezone_name, config=config
+        ):
+            continue
+        grouped.setdefault(raw_patient_id, []).append(recall)
+    return grouped
+
+
 def _recall_cooldown_days(candidate: dict) -> int:
     workflow = candidate.get("workflow")
     if workflow is None or not getattr(workflow, "definition", None):
@@ -4247,13 +4358,24 @@ async def _enroll_recalls_for_institution(
                 await _close_adapter_safe(adapter)
                 continue
             try:
+                from src.app.services.automation.recall_config import (
+                    recall_config_for_location,
+                )
+
                 treatment_plan_cache: dict[str, list[Any] | None] = {}
                 location_timezone = _location_timezone(location)
+                recall_config = recall_config_for_location(location)
 
-                for recall in recalls:
-                    raw_patient_id = _recall_patient_id(recall)
-                    if not raw_patient_id or not _recall_is_due(recall, now=now):
-                        continue
+                grouped_recalls = _group_recalls_by_patient(
+                    recalls,
+                    now=now,
+                    timezone_name=location_timezone,
+                    config=recall_config,
+                )
+                for raw_patient_id, patient_recalls in grouped_recalls.items():
+                    # One visit per patient: pick the deterministic primary
+                    # recall so the booking type mapping is stable.
+                    recall = _select_primary_recall(patient_recalls, recall_config)
 
                     recall_model = patient_recall_from_raw(
                         recall, source=adapter_source
