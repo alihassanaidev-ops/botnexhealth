@@ -73,6 +73,7 @@ def test_priority_dental_templates_present() -> None:
     assert set(TEMPLATES.keys()) == {
         "appointment-reminder-24h",
         "recall-sms-6month",
+        "recall-voice-6month",
         "surgery-pre-appointment-confirmation",
         "post-op-followup-after-confirmation",
         "sales-qualification",
@@ -81,7 +82,7 @@ def test_priority_dental_templates_present() -> None:
 
 def test_list_templates_hides_retired_appointment_reminder() -> None:
     templates = list_templates()
-    assert len(templates) == 4
+    assert len(templates) == 5
     assert "appointment-reminder-24h" not in {template.id for template in templates}
 
 
@@ -361,6 +362,52 @@ def test_overdue_recall_setup_rejects_invalid_cooldown() -> None:
             TEMPLATES["recall-sms-6month"],
             setup_options={"recall_reenrollment_cooldown_days": 0},
         )
+
+
+def test_recall_voice_template_targets_pms_recall_with_voice() -> None:
+    template = TEMPLATES["recall-voice-6month"]
+    source = template.definition["trigger"]["source"]
+
+    assert template.trigger_type == "schedule"
+    assert source["kind"] == "pms_recall"
+    assert template.metadata.default_compliance_content_class == "recall"
+    assert template.metadata.supported_channels == ["voice"]
+    # The guard maps the run's recall type, so the id must reach run metadata.
+    assert "recall_type_id" in template.definition["pms_context_fields"]
+
+
+def test_recall_voice_template_requires_a_voice_profile() -> None:
+    with pytest.raises(ValueError, match="voice_profile_id is required"):
+        instantiate_definition(TEMPLATES["recall-voice-6month"])
+
+
+def test_recall_voice_template_routes_booked_and_callback_outcomes() -> None:
+    definition = instantiate_definition(
+        TEMPLATES["recall-voice-6month"],
+        voice_profile_id="profile-1",
+    )
+    nodes = {node["id"]: node for node in definition["nodes"]}
+
+    voice_nodes = [n for n in nodes.values() if n["type"] == "send_voice"]
+    assert len(voice_nodes) == 3
+    for node in voice_nodes:
+        assert node["voice_profile_id"] == "profile-1"
+        assert node["wait_for_outcome"] is True
+
+    labels = set()
+    for node in nodes.values():
+        if node["type"] == "switch":
+            labels.update(case["label"] for case in node["cases"])
+    assert {"Booked", "Callback requested", "Do not call", "Unreachable"} <= labels
+
+    exits = {
+        node["id"]: node["outcome"]
+        for node in nodes.values()
+        if node["type"] == "exit"
+    }
+    assert exits["exit-recall-booked"] == "booked"
+    assert exits["exit-recall-callback"] == "callback_requested"
+    assert exits["exit-recall-dnc"] == "do_not_contact"
 
 
 def test_surgery_confirmation_template_marks_confirmed_status() -> None:
@@ -820,7 +867,7 @@ def test_list_route_returns_visible_templates() -> None:
         new=AsyncMock(return_value="gotracker"),
     ):
         result = asyncio.run(list_campaign_templates(user))
-    assert len(result) == 4
+    assert len(result) == 5
     assert "appointment-reminder-24h" not in {template.id for template in result}
 
 
@@ -841,7 +888,7 @@ def test_list_route_offers_every_launch_template_to_nexhealth() -> None:
         result = asyncio.run(list_campaign_templates(user))
     ids = {t.id for t in result}
     assert "post-op-followup-after-confirmation" in ids
-    assert len(result) == 4
+    assert len(result) == 5
 
 
 def test_list_route_still_hides_a_template_whose_nodes_are_gotracker_only() -> None:

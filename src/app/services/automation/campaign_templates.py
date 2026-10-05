@@ -1136,6 +1136,150 @@ _RECALL_SMS_6MONTH: dict[str, Any] = {
     "compliance": {"content_class": "recall", "consent_required": True},
 }
 
+
+def _recall_voice_attempt_nodes(attempt: int) -> list[dict[str, Any]]:
+    """One outbound call attempt and its ``call_outcome`` router.
+
+    The library's existing voice template routes through a single ``switch``;
+    this mirrors that shape. Unlike the pre-appointment flow, the agent books
+    the cleaning during the call, so the terminal outcomes are booked/callback
+    rather than a write-back to an existing appointment.
+    """
+    final_attempt = attempt == 3
+    suffix = str(attempt)
+    unreachable_target = (
+        "exit-recall-unreachable" if final_attempt else f"wait-recall-retry-{suffix}"
+    )
+    nodes: list[dict[str, Any]] = [
+        {
+            "type": "send_voice",
+            "id": f"voice-recall-attempt-{suffix}",
+            "retell_agent_id": "",
+            "voice_profile_id": VOICE_PROFILE_PLACEHOLDER,
+            "wait_for_outcome": True,
+            # Vendor placement retries stay separate from patient attempts.
+            "max_attempts": 1,
+            "next_node_id": f"route-recall-attempt-{suffix}",
+        },
+        {
+            "type": "switch",
+            "id": f"route-recall-attempt-{suffix}",
+            "subject": "call_outcome",
+            "cases": [
+                {
+                    "label": "Booked",
+                    "filter": {
+                        "kind": "rule",
+                        "field": "call_outcome",
+                        "op": "in_case_insensitive",
+                        "value": ["booked", "appointment_booked", "scheduled"],
+                    },
+                    "next_node_id": "exit-recall-booked",
+                },
+                {
+                    "label": "Callback requested",
+                    "filter": {
+                        "kind": "rule",
+                        "field": "call_outcome",
+                        "op": "in_case_insensitive",
+                        "value": [
+                            "callback_requested",
+                            "needs_callback",
+                            "callback",
+                        ],
+                    },
+                    "next_node_id": "exit-recall-callback",
+                },
+                {
+                    "label": "Do not call",
+                    "filter": {
+                        "kind": "rule",
+                        "field": "call_outcome",
+                        "op": "in_case_insensitive",
+                        "value": ["do_not_call", "dnc"],
+                    },
+                    "next_node_id": "exit-recall-dnc",
+                },
+                {
+                    "label": "Unreachable",
+                    "filter": {
+                        "kind": "rule",
+                        "field": "call_outcome",
+                        "op": "in_case_insensitive",
+                        "value": [
+                            "no_answer",
+                            "voicemail",
+                            "busy",
+                            "timeout",
+                            "declined",
+                        ],
+                    },
+                    "next_node_id": unreachable_target,
+                },
+            ],
+            # An outcome we did not model goes to a human, not to "unreachable".
+            "default_next_node_id": "exit-recall-handoff",
+        },
+    ]
+    if not final_attempt:
+        nodes.append(
+            {
+                "type": "wait",
+                "id": f"wait-recall-retry-{suffix}",
+                "delay": {"delay_type": "duration", "duration_seconds": 18000},
+                "next_node_id": f"voice-recall-attempt-{attempt + 1}",
+            }
+        )
+    return nodes
+
+
+_RECALL_VOICE: dict[str, Any] = {
+    "schema_version": "1.0",
+    "trigger": {
+        "type": "schedule",
+        "cron": "0 9 * * *",
+        "source": {
+            "kind": "pms_recall",
+            "recall_interval_months": 6,
+            "reenrollment_cooldown_days": 90,
+        },
+        "filter": {
+            "kind": "group",
+            "op": "and",
+            "children": [
+                {
+                    "kind": "rule",
+                    "field": "recall_type_name",
+                    "op": "is_not_empty",
+                },
+            ],
+        },
+    },
+    # `recall_type_id` reaches the booking guard so the approved
+    # recall-to-appointment mapping can be resolved for this run.
+    "pms_context_fields": [
+        "recall_due_date",
+        "recall_type_id",
+        "recall_type_name",
+    ],
+    "entry_node_id": "voice-recall-attempt-1",
+    "nodes": [
+        *_recall_voice_attempt_nodes(1),
+        *_recall_voice_attempt_nodes(2),
+        *_recall_voice_attempt_nodes(3),
+        {"type": "exit", "id": "exit-recall-booked", "outcome": "booked"},
+        {
+            "type": "exit",
+            "id": "exit-recall-callback",
+            "outcome": "callback_requested",
+        },
+        {"type": "exit", "id": "exit-recall-dnc", "outcome": "do_not_contact"},
+        {"type": "exit", "id": "exit-recall-handoff", "outcome": "staff_handoff"},
+        {"type": "exit", "id": "exit-recall-unreachable", "outcome": "unreachable"},
+    ],
+    "compliance": {"content_class": "recall", "consent_required": True},
+}
+
 _REACTIVATION_SMS_EMAIL_18MONTH: dict[str, Any] = {
     "schema_version": "1.0",
     "trigger": {
@@ -2184,6 +2328,97 @@ _ALL_TEMPLATES: dict[str, CampaignTemplate] = {
         ),
         tags=["recall", "sms"],
     ),
+    "recall-voice-6month": CampaignTemplate(
+        id="recall-voice-6month",
+        name="Recall Outreach — Voice",
+        description=(
+            "Call patients due for a cleaning recall and book the appointment on "
+            "the call, with a callback path and bounded retries."
+        ),
+        trigger_type="schedule",
+        definition=_RECALL_VOICE,
+        metadata=_metadata(
+            category="recall",
+            goal="Call patients due for an approved cleaning recall and book the visit on the call.",
+            outcome_labels=[
+                "booked",
+                "callback_requested",
+                "staff_handoff",
+                "unreachable",
+                "do_not_contact",
+            ],
+            supported_channels=["voice"],
+            required_readiness_checks=[
+                "location",
+                "nexhealth_patient_recalls",
+                "pms_recall_types",
+                "voice",
+                "consent",
+                "quiet_hours",
+                "staff_handoff",
+            ],
+            required_merge_fields=[
+                "patient_first_name",
+                "clinic_name",
+                "recall_type_name",
+                "recall_due_date",
+            ],
+            content_class="recall",
+            audience=(
+                "Patients due or overdue for an approved cleaning recall with no "
+                "future appointment"
+            ),
+            eligibility=[
+                "PMS supports patient_recalls",
+                "recall type is on the location's approved list",
+                "recall due date is inside the location's due window",
+                "patient has no future appointment",
+                "patient is not suppressed",
+                "the location has an outbound voice profile and a recall booking mapping",
+            ],
+            handoff_reason="patient_asks_for_staff",
+            analytics={
+                "booked": "booked",
+                "callback_requested": "handoff",
+                "staff_handoff": "handoff",
+                "unreachable": "unreachable",
+                "do_not_contact": "opt_out",
+            },
+            sample_context={
+                "patient_first_name": "Jordan",
+                "clinic_name": "Riverside Dental",
+                "recall_type_name": "Scaling",
+                "recall_due_date": "August 15, 2026",
+                "call_outcome": "booked",
+            },
+            setup_fields=[
+                {
+                    "id": "voice_profile_id",
+                    "label": "Recall voice profile",
+                    "type": "voice_profile_select",
+                    "required": True,
+                    "placeholder": "Choose outbound voice profile",
+                },
+                {
+                    "id": "recall_reenrollment_cooldown_days",
+                    "label": "Recall cooldown (days)",
+                    "type": "number",
+                    "required": True,
+                    "default": 90,
+                },
+            ],
+            frequency_cap=TemplateFrequencyCap(
+                max_per_day=1,
+                max_per_rolling_7_days=3,
+            ),
+            pms_capabilities=[
+                "patient_recalls",
+                "recall_types",
+                "appointment_booking",
+            ],
+        ),
+        tags=["recall", "voice"],
+    ),
     "reactivation-sms-email-18month": CampaignTemplate(
         id="reactivation-sms-email-18month",
         name="Reactivation Campaign (18-Month)",
@@ -2729,6 +2964,7 @@ _ALL_TEMPLATES: dict[str, CampaignTemplate] = {
 LAUNCH_TEMPLATE_IDS: tuple[str, ...] = (
     "appointment-reminder-24h",
     "recall-sms-6month",
+    "recall-voice-6month",
     "surgery-pre-appointment-confirmation",
     "post-op-followup-after-confirmation",
     "sales-qualification",
