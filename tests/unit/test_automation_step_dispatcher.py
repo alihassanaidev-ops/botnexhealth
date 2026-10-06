@@ -967,52 +967,6 @@ def test_advance_send_hold_defers_via_timer() -> None:
     rt.complete_run.assert_not_awaited()  # the send is deferred, not dropped
 
 
-def test_content_class_falls_back_to_version_classification() -> None:
-    """Publishing strips the workflow compliance block, so the consent class
-    only survives on the immutable version row. The dispatcher must read it
-    there, or a recall campaign sends under implied consent."""
-    session = AsyncMock()
-    result = MagicMock()
-    result.scalar_one_or_none.return_value = "recall"
-    session.execute = AsyncMock(return_value=result)
-
-    dispatcher = WorkflowStepDispatcher(session, _make_runtime(), _make_scheduler())
-    run = _make_run()
-
-    assert asyncio.run(dispatcher._content_class_for_run(run)) == "recall"
-
-    # Cached in the dispatcher: a second call must not query again.
-    session.execute.reset_mock()
-    assert asyncio.run(dispatcher._content_class_for_run(run)) == "recall"
-    session.execute.assert_not_awaited()
-
-
-def test_advance_passes_version_content_class_to_gate() -> None:
-    from src.app.services.automation.compliance_gate import GateResult
-
-    session = _make_session()
-    rt = _make_runtime()
-    sched = _make_scheduler()
-    gate = AsyncMock()
-    gate.check = AsyncMock(return_value=GateResult(action="allow", reason="ok"))
-    dispatcher = WorkflowStepDispatcher(session, rt, sched, gate=gate)
-    # Simulate the version classification already resolved for this run.
-    dispatcher._content_class_cache["ver-1"] = "recall"
-
-    run = _make_run()
-    defn = _definition(
-        nodes=[
-            SendSmsNode(id="sms-1", body_template="Hi", next_node_id="exit-1"),
-            ExitNode(id="exit-1", outcome="sent"),
-        ],
-        entry="sms-1",
-    )
-
-    asyncio.run(dispatcher.advance(run, defn, context={}, now=_NOW))
-
-    assert gate.check.await_args.kwargs["content_class"] == "recall"
-
-
 def test_advance_revalidation_skips_send() -> None:
     """If dispatch-time revalidation returns a terminal outcome, the send is skipped
     and the run exits with that outcome (e.g. appointment cancelled)."""

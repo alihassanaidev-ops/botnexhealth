@@ -3713,6 +3713,9 @@ _RECALL_SCAN_COUNT_KEYS = (
     # Reason codes so a dry run can explain why a recall row was left out.
     "recalls_skipped_recall_type",
     "recalls_skipped_due_window",
+    # Total recall rows pulled this sweep — the denominator for the
+    # zero-enrollment alert (eligible-but-enrolled-nobody signals a failure).
+    "recalls_read",
 )
 
 
@@ -4003,6 +4006,54 @@ def _merge_recall_scan_counts(target: dict[str, int], source: dict[str, int]) ->
         target[key] = target.get(key, 0) + int(source.get(key, 0) or 0)
 
 
+def _recall_scan_should_alert(counts: dict[str, int]) -> bool:
+    """True when a scan read recalls but eligible ones enrolled nobody.
+
+    A sweep that read recalls, enrolled none, and did not filter them all away
+    by a known reason (recall type / due window) is the signature of a silent
+    failure — exactly the shape a broken enrollment path takes.
+    """
+    read = int(counts.get("recalls_read", 0) or 0)
+    if read <= 0 or int(counts.get("enrolled", 0) or 0) != 0:
+        return False
+    filtered = int(counts.get("recalls_skipped_recall_type", 0) or 0) + int(
+        counts.get("recalls_skipped_due_window", 0) or 0
+    )
+    return filtered < read
+
+
+async def _notify_recall_scan_issue(
+    institution_id: str, *, title: str, message: str
+) -> None:
+    """Raise an in-app alert to the institution's admins.
+
+    The original recall bug was invisible because a scan that enrolled nobody
+    looked exactly like a scan with nothing to do. This surfaces the failure
+    instead of leaving it in the logs.
+    """
+    from src.app.models.notification import NotificationType
+    from src.app.services.notification_service import NotificationService
+
+    try:
+        async with get_system_db_session(
+            "celery",
+            institution_id=institution_id,
+            external_id=f"recall_scan_alert:{institution_id}",
+        ) as session:
+            await NotificationService(session).create_bulk_notifications(
+                institution_id=institution_id,
+                location_id=None,
+                notification_type=NotificationType.URGENT.value,
+                title=title,
+                message=message,
+            )
+            await session.commit()
+    except Exception:  # noqa: BLE001 — an alert must never break the sweep
+        logger.exception(
+            "recall_scan: failed to raise alert institution=%s", institution_id
+        )
+
+
 def _institution_pms_type(institution: Any) -> str:
     value = getattr(institution, "pms_type", None)
     if isinstance(value, str) and value.strip():
@@ -4261,19 +4312,39 @@ async def _scan_recall_async() -> dict:
                 institution_id, workflows
             )
             _merge_recall_scan_counts(totals, institution_counts)
+            if _recall_scan_should_alert(institution_counts):
+                await _notify_recall_scan_issue(
+                    institution_id,
+                    title="Recall campaign enrolled nobody",
+                    message=(
+                        f"{institution_counts.get('recalls_read', 0)} recall rows "
+                        "were read but none enrolled, and not all were filtered by "
+                        "type or due window. Check the campaign's approved recall "
+                        "types, filters, and booking mapping."
+                    ),
+                )
         except Exception as exc:  # noqa: BLE001 — one institution must not abort the sweep
             logger.exception(
                 "scan_recall_workflows: institution=%s failed: %s", institution_id, exc
             )
+            await _notify_recall_scan_issue(
+                institution_id,
+                title="Recall campaign scan failed",
+                message=(
+                    f"The recall scan failed with {type(exc).__name__}, so no "
+                    "patients were enrolled for this run."
+                ),
+            )
 
     logger.info(
         (
-            "scan_recall_workflows: institutions=%d workflows=%d enrolled=%d "
+            "scan_recall_workflows: institutions=%d workflows=%d read=%d enrolled=%d "
             "history_skips=%d recent_visit_skips=%d treatment_context_skips=%d "
             "recall_type_skips=%d due_window_skips=%d"
         ),
         len(by_institution),
         active_workflows,
+        totals["recalls_read"],
         totals["enrolled"],
         totals["locations_skipped_history_incomplete"],
         totals["patients_skipped_recent_visit"],
@@ -4389,6 +4460,7 @@ async def _enroll_recalls_for_institution(
                 # tail of large clinics (one carried ~9k recalls against a 500
                 # default), so the scanner never saw most due patients.
                 recalls = await adapter.list_patient_recalls(max_items=None)
+                counts["recalls_read"] += len(recalls)
                 recall_types = await _list_recall_types_safe(adapter)
             except Exception as exc:  # noqa: BLE001
                 logger.warning(

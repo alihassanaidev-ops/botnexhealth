@@ -88,6 +88,10 @@ def _gotracker_start_time(appointment: dict) -> str | None:
 # fixed-time batch all dispatches at once. Tunable.
 _FRESHNESS_WINDOW_SECONDS = 900  # 15 minutes
 
+# Appointment statuses that mean "this patient already has a visit booked".
+# Mirrors the recall scanner's future-appointment suppression so the two agree.
+_FUTURE_APPOINTMENT_STATUSES = ("scheduled", "booked", "booked_waiting", "pending")
+
 
 class PmsLiveRevalidationService:
     """Plan 09 dispatch-time revalidator backed by the appointment working set +
@@ -121,6 +125,23 @@ class PmsLiveRevalidationService:
             if deadline is not None and deadline <= datetime.now(timezone.utc):
                 return "skipped_post_op_window_expired"
 
+        # Recall campaigns suppress patients who already have a future
+        # appointment at scan time, but the scan and the call can be far apart.
+        # Re-check right before the send so someone who booked elsewhere in the
+        # meantime is not called. Fail open on lookup error, like the rest.
+        if getattr(run, "trigger_ref_type", None) == "recall":
+            try:
+                if await self._recall_has_future_appointment(run):
+                    return "skipped_has_future_appointment"
+            except Exception as exc:  # noqa: BLE001 — never drop a send on a lookup blip
+                logger.warning(
+                    "revalidate: recall future-appointment check failed run=%s: %s "
+                    "— proceeding with send",
+                    getattr(run, "id", None),
+                    exc,
+                )
+            return None
+
         appointment_id = (
             getattr(run, "trigger_ref_id", None)
             if getattr(run, "trigger_ref_type", None) == "appointment"
@@ -145,6 +166,46 @@ class PmsLiveRevalidationService:
                 exc,
             )
             return None
+
+    async def _recall_has_future_appointment(
+        self, run: "AutomationWorkflowRun"
+    ) -> bool:
+        """True when the run's patient now has a future appointment booked."""
+        from sqlalchemy import or_
+
+        from src.app.models.appointment_working_set import AppointmentWorkingSet
+
+        patient_id = str(run.trigger_ref_id) if run.trigger_ref_id else None
+        contact_id = str(run.contact_id) if run.contact_id else None
+        if not patient_id and not contact_id:
+            return False
+
+        patient_clauses = []
+        if patient_id:
+            patient_clauses.append(
+                AppointmentWorkingSet.nexhealth_patient_id == patient_id
+            )
+        if contact_id:
+            patient_clauses.append(
+                AppointmentWorkingSet.contact_id == contact_id
+            )
+
+        filters = [
+            AppointmentWorkingSet.institution_id == run.institution_id,
+            AppointmentWorkingSet.status.in_(_FUTURE_APPOINTMENT_STATUSES),
+            AppointmentWorkingSet.start_time.is_not(None),
+            AppointmentWorkingSet.start_time >= datetime.now(timezone.utc),
+            or_(*patient_clauses),
+        ]
+        if run.location_id:
+            filters.append(AppointmentWorkingSet.location_id == run.location_id)
+
+        row = (
+            await self._session.execute(
+                select(AppointmentWorkingSet.id).where(*filters).limit(1)
+            )
+        ).scalar_one_or_none()
+        return row is not None
 
     async def _check_appointment(
         self,

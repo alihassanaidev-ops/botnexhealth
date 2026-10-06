@@ -566,3 +566,41 @@ async def test_revalidate_failopen_when_location_not_wired_to_nexhealth():
     session.begin_nested = MagicMock(return_value=_AsyncNullContext())
     svc = PmsLiveRevalidationService(session)
     assert await svc.revalidate(run) is None
+
+
+# ---------------------------------------------------------------------------
+# Recall campaigns — pre-dial future-appointment re-check
+# ---------------------------------------------------------------------------
+
+
+def _recall_run():
+    run = _make_run(
+        trigger_ref_type="recall",
+        trigger_ref_id="522729216",
+        trigger_metadata={},
+    )
+    run.contact_id = "contact-1"
+    return run
+
+
+@pytest.mark.asyncio
+async def test_recall_revalidation_skips_when_future_appointment_exists():
+    session = _make_session(projection=object())
+    assert (
+        await PmsLiveRevalidationService(session).revalidate(_recall_run())
+        == "skipped_has_future_appointment"
+    )
+
+
+@pytest.mark.asyncio
+async def test_recall_revalidation_proceeds_when_no_future_appointment():
+    session = _make_session(projection=None)
+    assert await PmsLiveRevalidationService(session).revalidate(_recall_run()) is None
+
+
+@pytest.mark.asyncio
+async def test_recall_revalidation_fails_open_on_lookup_error():
+    session = _make_session()
+    session.execute = AsyncMock(side_effect=RuntimeError("db down"))
+    # A DB blip must never drop a legitimate call.
+    assert await PmsLiveRevalidationService(session).revalidate(_recall_run()) is None

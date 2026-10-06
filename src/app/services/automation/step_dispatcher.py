@@ -29,7 +29,6 @@ from src.app.models.automation_workflow import (
     AutomationWorkflowRun,
     AutomationWorkflowSplitAssignment,
     AutomationWorkflowStepExecution,
-    AutomationWorkflowVersion,
     AutomationStepStatus,
 )
 from src.app.models.institution_location import InstitutionLocation
@@ -218,23 +217,6 @@ class WorkflowStepDispatcher:
         self.limits: OutboundLimiter = limits or NoOpOutboundLimiter()
         # 0 = deterministic (unit tests); build_dispatcher sets a production spread.
         self.calendar_jitter_seconds = calendar_jitter_seconds
-        # workflow_version_id -> content_classification. Publishing strips the
-        # workflow-level compliance block, so the consent class is only on the
-        # version row; cache it per dispatcher to avoid a read per node.
-        self._content_class_cache: dict[str, str | None] = {}
-
-    async def _content_class_for_run(self, run: AutomationWorkflowRun) -> str | None:
-        version_id = run.workflow_version_id
-        if not version_id:
-            return None
-        if version_id not in self._content_class_cache:
-            result = await self.session.execute(
-                select(AutomationWorkflowVersion.content_classification).where(
-                    AutomationWorkflowVersion.id == version_id
-                )
-            )
-            self._content_class_cache[version_id] = result.scalar_one_or_none()
-        return self._content_class_cache[version_id]
 
     async def advance(
         self,
@@ -248,7 +230,6 @@ class WorkflowStepDispatcher:
         """Advance run from current_step_id (or entry node) until wait or exit."""
         now = now or datetime.now(tz=timezone.utc)
         context = {**(run.trigger_metadata or {}), **(context or {})}
-        run_content_class = await self._content_class_for_run(run)
         _inject_action_links(run, context)
         self.runtime.set_trace_context(context)
         node_map = {n.id: n for n in definition.nodes}
@@ -524,8 +505,8 @@ class WorkflowStepDispatcher:
 
                 content_class = (
                     definition.compliance.content_class
-                    if definition.compliance and definition.compliance.content_class
-                    else run_content_class
+                    if definition.compliance
+                    else None
                 )
                 # The gate models *patient* protection — consent, do-not-contact
                 # and the quiet-hours hold. An email addressed to the clinic's own

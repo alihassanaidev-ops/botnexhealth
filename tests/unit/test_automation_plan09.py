@@ -26,6 +26,7 @@ from src.app.tasks.automation_workflow import (
     _recall_is_due,
     _recall_patient_id,
     _recall_type_allowed,
+    _recall_scan_should_alert,
 )
 from src.app.api.routes.automation_workflows import (
     BulkEnrollRequest,
@@ -386,6 +387,39 @@ def test_recall_patient_id_direct_and_nested():
     assert _recall_patient_id({"patient_id": 42}) == "42"
     assert _recall_patient_id({"patient": {"id": 7}}) == "7"
     assert _recall_patient_id({}) is None
+
+
+def test_recall_scan_alert_fires_only_for_eligible_but_unenrolled():
+    # Nothing read → not an issue.
+    assert _recall_scan_should_alert({"recalls_read": 0, "enrolled": 0}) is False
+    # Everything enrolled → fine.
+    assert (
+        _recall_scan_should_alert({"recalls_read": 5, "enrolled": 5}) is False
+    )
+    # Read some, enrolled none, and all were filtered for a known reason → no-op.
+    assert (
+        _recall_scan_should_alert(
+            {
+                "recalls_read": 5,
+                "enrolled": 0,
+                "recalls_skipped_recall_type": 5,
+                "recalls_skipped_due_window": 0,
+            }
+        )
+        is False
+    )
+    # Read some, enrolled none, but some passed the filters → silent-failure shape.
+    assert (
+        _recall_scan_should_alert(
+            {
+                "recalls_read": 5,
+                "enrolled": 0,
+                "recalls_skipped_recall_type": 1,
+                "recalls_skipped_due_window": 0,
+            }
+        )
+        is True
+    )
 
 
 def test_recall_type_allowlist_matches_raw_or_prefixed_ids():
