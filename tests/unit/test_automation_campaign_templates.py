@@ -403,6 +403,9 @@ def test_recall_voice_template_routes_booked_and_callback_outcomes() -> None:
     for node in voice_nodes:
         assert node["voice_profile_id"] == "profile-1"
         assert node["wait_for_outcome"] is True
+        # Every voice outcome records a response event; without this the gate
+        # would stop the run after attempt 1 and the retry ladder would die.
+        assert node["send_after_response"] is True
 
     labels = set()
     for node in nodes.values():

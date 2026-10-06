@@ -1159,6 +1159,10 @@ def _recall_voice_attempt_nodes(attempt: int) -> list[dict[str, Any]]:
             "wait_for_outcome": True,
             # Vendor placement retries stay separate from patient attempts.
             "max_attempts": 1,
+            # Every voice outcome (including no-answer) records a response
+            # event, which would otherwise stop the whole run after attempt 1.
+            # This is the ladder's deliberate follow-up send.
+            "send_after_response": True,
             # Live-call booking guard: the agent may only book these types and
             # providers. Empty types fail closed; setup fills them in.
             "allowed_appointment_type_ids": [],

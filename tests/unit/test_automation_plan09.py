@@ -25,6 +25,7 @@ from src.app.tasks.automation_workflow import (
     _scan_recall_async,
     _recall_is_due,
     _recall_patient_id,
+    _recall_type_allowed,
 )
 from src.app.api.routes.automation_workflows import (
     BulkEnrollRequest,
@@ -385,6 +386,15 @@ def test_recall_patient_id_direct_and_nested():
     assert _recall_patient_id({"patient_id": 42}) == "42"
     assert _recall_patient_id({"patient": {"id": 7}}) == "7"
     assert _recall_patient_id({}) is None
+
+
+def test_recall_type_allowlist_matches_raw_or_prefixed_ids():
+    # Recall rows carry the raw PMS id; the catalog/UI shows it prefixed.
+    recall = {"recall_type": {"id": 2419029}}
+    assert _recall_type_allowed(recall, ["nh-2419029"]) is True
+    assert _recall_type_allowed(recall, ["2419029"]) is True
+    assert _recall_type_allowed(recall, ["nh-999"]) is False
+    assert _recall_type_allowed(recall, []) is True  # no allowlist = all types
 
 
 def test_recall_is_due():

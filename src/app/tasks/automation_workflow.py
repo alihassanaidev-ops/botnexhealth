@@ -3801,6 +3801,21 @@ def _recall_type_id_raw(recall: dict) -> str | None:
     return str(raw_id)
 
 
+def _normalize_recall_type_id(value: Any) -> str | None:
+    """Strip a source prefix so ``nh-2419029`` and ``2419029`` compare equal.
+
+    Recall types are displayed prefixed in the catalog (``nh-...``) but arrive
+    raw on the recall row, so an allowlist authored either way must match.
+    """
+    if value in (None, ""):
+        return None
+    text = str(value).strip()
+    for prefix in ("nh-", "gt-"):
+        if text.startswith(prefix):
+            return text[len(prefix) :]
+    return text or None
+
+
 def _location_now(now: datetime, timezone_name: str) -> datetime:
     try:
         from zoneinfo import ZoneInfo
@@ -3840,10 +3855,17 @@ def _recall_within_window(
 def _recall_type_allowed(
     recall: dict, approved_recall_type_ids: Any
 ) -> bool:
-    approved = list(approved_recall_type_ids or ())
+    approved = {
+        normalized
+        for normalized in (
+            _normalize_recall_type_id(value)
+            for value in (approved_recall_type_ids or ())
+        )
+        if normalized
+    }
     if not approved:
         return True
-    return _recall_type_id_raw(recall) in set(approved)
+    return _normalize_recall_type_id(_recall_type_id_raw(recall)) in approved
 
 
 def _select_primary_recall(
@@ -3855,12 +3877,19 @@ def _select_primary_recall(
     the audience must collapse to a single recall: earliest due date first, then
     the campaign's allowlist order, then the raw record id for stability.
     """
-    approved = list(approved_recall_type_ids or ())
+    approved = [
+        normalized
+        for normalized in (
+            _normalize_recall_type_id(value)
+            for value in (approved_recall_type_ids or ())
+        )
+        if normalized
+    ]
 
     def sort_key(recall: dict) -> tuple[int, int, str]:
         due = _recall_due_date(recall)
         due_ordinal = due.date().toordinal() if due is not None else 10**9
-        recall_type_id = _recall_type_id_raw(recall)
+        recall_type_id = _normalize_recall_type_id(_recall_type_id_raw(recall))
         priority = (
             approved.index(recall_type_id) if recall_type_id in approved else len(approved)
         )
