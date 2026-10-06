@@ -190,6 +190,38 @@ async def test_unbounded_v2_reads_until_the_server_says_done() -> None:
 
 
 @pytest.mark.asyncio
+async def test_unbounded_v3_scales_to_kadri_volume() -> None:
+    """A ~9k-row recall queue must page through with no truncation.
+
+    One production clinic carried 8,970 recalls; the old 500 default returned
+    0.3% of them. This drives the same page count against the real page size.
+    """
+    calls: list[dict[str, Any]] = []
+    total_pages = 9
+
+    async def fetch(params: dict[str, Any]) -> dict[str, Any]:
+        calls.append(dict(params))
+        page = len(calls)
+        return {
+            "data": [{"id": f"r-{page}-{i}"} for i in range(1000)],
+            "page_info": {
+                "has_next_page": page < total_pages,
+                "end_cursor": f"c-{page}",
+            },
+        }
+
+    rows = await fetch_all_pages(
+        fetch,
+        api_contract="stable_v3",
+        collection_key="patient_recalls",
+        max_items=None,
+    )
+
+    assert len(rows) == total_pages * 1000
+    assert len(calls) == total_pages
+
+
+@pytest.mark.asyncio
 async def test_bounded_read_still_truncates_at_max_items() -> None:
     async def fetch(params: dict[str, Any]) -> dict[str, Any]:
         return {
