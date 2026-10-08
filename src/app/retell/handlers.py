@@ -227,19 +227,30 @@ def _age_in_years(date_of_birth: Any, today: date) -> int | None:
     return age if age >= 0 else None
 
 
+#: Insurance fields the voice agent may see: enough to answer "is my insurance
+#: on file", never the identifiers (member id, group number) or employer.
+_VOICE_INSURANCE_FIELDS = ("insurance_name", "priority", "effective_date", "expiration_date")
+
+
 def _to_full_patient_payload(patient: Any) -> dict[str, Any]:
-    """Return complete patient details after server-side identity verification."""
+    """Patient details for the voice agent after server-side identity verification.
+
+    Only what the agent needs to help the caller: procedures and insurance
+    identifiers are withheld from the model.
+    """
     patient_extra = patient.extra if isinstance(patient.extra, dict) else {}
     allowed_details = {
         key: patient_extra[key]
-        for key in (
-            "upcoming_appointments",
-            "last_visit",
-            "recent_procedures",
-            "insurance_coverages",
-        )
+        for key in ("upcoming_appointments", "last_visit")
         if key in patient_extra
     }
+    coverages = patient_extra.get("insurance_coverages")
+    if isinstance(coverages, list):
+        allowed_details["insurance_coverages"] = [
+            {key: cov.get(key) for key in _VOICE_INSURANCE_FIELDS if key in cov}
+            for cov in coverages
+            if isinstance(cov, dict)
+        ]
     return {
         "id": patient.id,
         "first_name": patient.first_name,
@@ -652,7 +663,6 @@ async def lookup_patient(args: dict[str, Any]) -> dict[str, Any]:
     full_detail_include = [
         "upcoming_appts",
         "last_visited_appointment",
-        "procedures",
         "insurance_coverages",
     ]
 

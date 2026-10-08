@@ -69,12 +69,24 @@ def _verified_args(**overrides) -> dict:
     return args
 
 
-def test_full_patient_payload_contains_complete_verified_details():
+def test_full_patient_payload_withholds_procedures_and_insurance_identifiers():
     patient = _patient()
     patient.extra.update(
         {
             "recent_procedures": [{"id": "procedure-1"}],
-            "insurance_coverages": [{"id": "coverage-1"}],
+            "insurance_coverages": [
+                {
+                    "id": "coverage-1",
+                    "insurance_name": "Sun Life",
+                    "group_number": "G-77",
+                    "member_id": "M-12345",
+                    "relation": "self",
+                    "priority": 1,
+                    "effective_date": "2026-01-01",
+                    "expiration_date": None,
+                    "employer": "Acme",
+                }
+            ],
             "last_visit": {"id": "appointment-previous"},
         }
     )
@@ -91,8 +103,15 @@ def test_full_patient_payload_contains_complete_verified_details():
         "age": _ALICE_AGE,
         "upcoming_appointments": [{"id": "appt-1"}],
         "last_visit": {"id": "appointment-previous"},
-        "recent_procedures": [{"id": "procedure-1"}],
-        "insurance_coverages": [{"id": "coverage-1"}],
+        # Procedures and insurance identifiers never reach the voice model.
+        "insurance_coverages": [
+            {
+                "insurance_name": "Sun Life",
+                "priority": 1,
+                "effective_date": "2026-01-01",
+                "expiration_date": None,
+            }
+        ],
     }
 
 
