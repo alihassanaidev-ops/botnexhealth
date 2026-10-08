@@ -95,6 +95,15 @@ def _raw_patient_from_response(raw: Any) -> dict[str, Any] | None:
     return patient
 
 
+def _descriptor_id(value: str) -> int | str:
+    """A descriptor id as NexHealth's ``emr_appt_descriptor_ids`` expects it."""
+    stripped = _strip(value)
+    try:
+        return int(stripped)
+    except (TypeError, ValueError):
+        return stripped
+
+
 def _normalize_phone_for_nexhealth(phone: str | None) -> str | None:
     """Normalize phone to a 10-digit form NexHealth will accept and find,
     tolerating the common ways a user or an LLM might shape a number.
@@ -1626,7 +1635,10 @@ class NexHealthAdapter(
             "appointment_type": {
                 "name": name,
                 "minutes": duration_minutes,
-                "appointment_descriptor_ids": [_strip(d) for d in descriptor_ids],
+                # Same key as update. NexHealth silently ignores the
+                # ``appointment_descriptor_ids`` spelling, so new types were
+                # created with no descriptors linked.
+                "emr_appt_descriptor_ids": [_descriptor_id(d) for d in descriptor_ids],
             }
         }
         raw = await handle_nexhealth_request(
@@ -1652,15 +1664,9 @@ class NexHealthAdapter(
         if duration_minutes is not None:
             payload["minutes"] = duration_minutes
         if descriptor_ids is not None:
-
-            def _to_int(value: str) -> int | str:
-                stripped = _strip(value)
-                try:
-                    return int(stripped)
-                except (TypeError, ValueError):
-                    return stripped
-
-            payload["emr_appt_descriptor_ids"] = [_to_int(d) for d in descriptor_ids]
+            payload["emr_appt_descriptor_ids"] = [
+                _descriptor_id(d) for d in descriptor_ids
+            ]
 
         raw = await handle_nexhealth_request(
             self._client,

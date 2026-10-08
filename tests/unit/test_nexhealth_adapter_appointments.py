@@ -1580,7 +1580,9 @@ async def test_create_appointment_type_wraps_body_under_appointment_type_key(
         "appointment_type": {
             "name": "Hygiene",
             "minutes": 45,
-            "appointment_descriptor_ids": ["12", "34"],
+            # Same key and int form as update; NexHealth ignores
+            # ``appointment_descriptor_ids``.
+            "emr_appt_descriptor_ids": [12, 34],
         }
     }, (
         "create_appointment_type body must be wrapped under "
