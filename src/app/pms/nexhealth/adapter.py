@@ -1532,16 +1532,30 @@ class NexHealthAdapter(
     # ── Locations ────────────────────────────────────────────────────────
 
     async def list_locations(self) -> list[UniversalLocation]:
+        """This adapter's own locations, never another clinic's.
+
+        ``GET /institutions`` returns every institution the shared API key can
+        see, so the result is narrowed to this adapter's subdomain (and its
+        location, when bound to one). With no subdomain there is no way to tell
+        which rows are ours, so nothing is returned.
+        """
+        if not self._subdomain:
+            return []
         params: dict[str, Any] = {"page": 1, "per_page": 25}
         raw = await handle_nexhealth_request(
             self._client, "GET", "/institutions", params=params
         )
         data = raw.get("data", [])
+        own_location = _strip(str(self._location_id)) if self._location_id else None
 
         locations: list[UniversalLocation] = []
         for inst in data if isinstance(data, list) else []:
             subdomain = inst.get("subdomain")
+            if subdomain != self._subdomain:
+                continue
             for loc in inst.get("locations", []):
+                if own_location and str(loc.get("id")) != own_location:
+                    continue
                 locations.append(mappers.to_location(loc, subdomain=subdomain))
         return locations
 

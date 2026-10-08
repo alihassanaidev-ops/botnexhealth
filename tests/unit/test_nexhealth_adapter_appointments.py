@@ -1664,3 +1664,69 @@ async def test_v2_always_merges_both_sources(
     await adapter.list_availabilities(provider_id="nh-123")
 
     assert "/providers" in paths, "v2 must still merge the embedded source"
+
+
+def _institutions_payload() -> dict:
+    return {
+        "data": [
+            {
+                "subdomain": "test-subdomain",
+                "locations": [
+                    {"id": "test-location", "name": "Ours"},
+                    {"id": 77, "name": "Our other site"},
+                ],
+            },
+            {
+                "subdomain": "other-clinic",
+                "locations": [{"id": 99, "name": "Someone else"}],
+            },
+        ]
+    }
+
+
+@pytest.mark.asyncio
+async def test_list_locations_returns_only_the_adapters_own_location(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """/institutions lists every clinic on the shared key; none may leak."""
+
+    async def fake_request(_client, method, path, *, params=None, json=None, **_kw):
+        assert (method, path) == ("GET", "/institutions")
+        return _institutions_payload()
+
+    monkeypatch.setattr(adapter_module, "handle_nexhealth_request", fake_request)
+
+    locations = await _make_adapter().list_locations()
+
+    assert [loc.name for loc in locations] == ["Ours"]
+    assert {loc.subdomain for loc in locations} == {"test-subdomain"}
+
+
+@pytest.mark.asyncio
+async def test_list_locations_without_a_location_keeps_the_whole_subdomain(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    async def fake_request(*_a, **_kw):
+        return _institutions_payload()
+
+    monkeypatch.setattr(adapter_module, "handle_nexhealth_request", fake_request)
+
+    adapter = _make_adapter()
+    adapter._location_id = None
+    locations = await adapter.list_locations()
+
+    assert [loc.name for loc in locations] == ["Ours", "Our other site"]
+
+
+@pytest.mark.asyncio
+async def test_list_locations_without_a_subdomain_returns_nothing(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    async def fake_request(*_a, **_kw):  # pragma: no cover - must not be called
+        raise AssertionError("must not query NexHealth without a subdomain")
+
+    monkeypatch.setattr(adapter_module, "handle_nexhealth_request", fake_request)
+
+    adapter = _make_adapter()
+    adapter._subdomain = None
+    assert await adapter.list_locations() == []
