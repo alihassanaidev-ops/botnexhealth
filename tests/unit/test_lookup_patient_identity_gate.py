@@ -425,3 +425,29 @@ async def test_full_detail_discards_a_patient_that_is_not_the_verified_one(monke
 )
 def test_age_in_years(dob, today, age):
     assert handlers._age_in_years(dob, today) == age
+
+
+@pytest.mark.asyncio
+async def test_verified_lookup_is_remembered_for_the_call(monkeypatch):
+    """A later cancel/confirm/reschedule in this call checks against this record."""
+    remember = AsyncMock()
+    monkeypatch.setattr(handlers, "remember_verified_patient", remember)
+    monkeypatch.setattr(handlers, "get_call_context", lambda: {"call_id": "call-1"})
+    ctx = _ctx([_patient()])
+
+    result = await _invoke(monkeypatch, ctx, _verified_args())
+
+    assert result["verification_status"] == "verified"
+    remember.assert_awaited_once()
+    assert remember.await_args.args[:2] == ("call-1", "p1")
+
+
+@pytest.mark.asyncio
+async def test_failed_verification_is_not_remembered(monkeypatch):
+    remember = AsyncMock()
+    monkeypatch.setattr(handlers, "remember_verified_patient", remember)
+    ctx = _ctx([_patient()])
+
+    await _invoke(monkeypatch, ctx, _verified_args(date_of_birth="1970-12-31"))
+
+    remember.assert_not_awaited()
