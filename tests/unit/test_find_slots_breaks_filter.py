@@ -165,3 +165,47 @@ async def test_no_breaks_keeps_all_slots(monkeypatch):
 
     result = await _find_slots({"start_date": _DAY, "appointment_type_id": "nh-50"})
     assert result["slots_count"] == 2
+
+
+@pytest.mark.asyncio
+async def test_any_provider_search_drops_hidden_providers(monkeypatch):
+    """A provider the clinic hid must not reach the caller via "any provider"."""
+    visible = UniversalSlot(
+        start=f"{_DAY}T09:00:00{_TZ_OFFSET}",
+        end=f"{_DAY}T09:30:00{_TZ_OFFSET}",
+        provider_id="nh-123",
+    )
+    hidden_prefixed = UniversalSlot(
+        start=f"{_DAY}T10:00:00{_TZ_OFFSET}",
+        end=f"{_DAY}T10:30:00{_TZ_OFFSET}",
+        provider_id="nh-999",
+    )
+    hidden_bare = UniversalSlot(
+        start=f"{_DAY}T11:00:00{_TZ_OFFSET}",
+        end=f"{_DAY}T11:30:00{_TZ_OFFSET}",
+        provider_id="999",
+    )
+    ctx = _ctx([visible, hidden_prefixed, hidden_bare])
+
+    # Order: provider-name enrichment, operating hours, breaks, hidden providers.
+    session = _FakeSession(
+        [
+            _QueryResult([]),
+            _QueryResult(_all_days_open()),
+            _QueryResult([]),
+            _QueryResult(["nh-999"]),
+        ]
+    )
+    monkeypatch.setattr(
+        handlers, "get_system_db_session", lambda *a, **k: _FakeSessionCtx(session)
+    )
+
+    async def _fake_resolve():
+        return ctx
+
+    monkeypatch.setattr(handlers, "_resolve_context", _fake_resolve)
+
+    result = await _find_slots({"start_date": _DAY, "appointment_type_id": "nh-50"})
+
+    assert result["slots_count"] == 1
+    assert [s["start"] for s in result["slots"]] == [visible.start]

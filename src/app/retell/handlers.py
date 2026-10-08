@@ -300,6 +300,12 @@ def _provider_display_name(row: Any) -> str | None:
     return name or None
 
 
+def _is_hidden_provider(provider_id: Any, hidden_raw_ids: set[str]) -> bool:
+    """Whether a slot's provider is hidden; ids compare without their prefix."""
+    raw = _strip_source_prefix(str(provider_id or "").strip())
+    return bool(raw) and raw in hidden_raw_ids
+
+
 def _missing_provider_source_ids(source: str, slots: list[Any]) -> set[str]:
     source_ids: set[str] = set()
     for slot in slots:
@@ -1078,6 +1084,32 @@ async def find_appointment_slots(args: dict[str, Any]) -> dict[str, Any]:
                     .scalars()
                     .all()
                 )
+
+                # Providers the clinic has hidden are never offered to a caller,
+                # including on an "any provider" search, matching list_providers.
+                hidden_source_ids = set(
+                    (
+                        await session.execute(
+                            select(InstitutionProvider.source_id).where(
+                                InstitutionProvider.location_id
+                                == str(ctx.location.id),
+                                InstitutionProvider.is_hidden.is_(True),
+                            )
+                        )
+                    )
+                    .scalars()
+                    .all()
+                )
+
+            if hidden_source_ids:
+                hidden_raw_ids = {
+                    _strip_source_prefix(source_id) for source_id in hidden_source_ids
+                }
+                slots = [
+                    s
+                    for s in slots
+                    if not _is_hidden_provider(s.provider_id, hidden_raw_ids)
+                ]
 
             # Apply operating hours + breaks + buffer in one pass — parity with
             # the dashboard ``GET /slots`` route (slots.py). Without this the

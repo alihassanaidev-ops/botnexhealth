@@ -287,6 +287,7 @@ async def test_nexhealth_slots_get_provider_name_from_scalenexus_cache(monkeypat
                 ),
                 _QueryResult([]),
                 _QueryResult([]),
+                _QueryResult([]),  # hidden providers
             ]
 
         async def execute(self, *_a, **_k):
