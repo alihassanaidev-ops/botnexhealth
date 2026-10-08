@@ -532,7 +532,7 @@ def completed_visit_candidates_query(window_start: datetime, now: datetime):
     real GoTracker Chair Flow data, and dropping the ``flow_state`` one would
     re-trigger every sweep.
     """
-    from sqlalchemy import and_, or_, select
+    from sqlalchemy import String, and_, literal, or_, select
 
     from src.app.models.appointment_working_set import AppointmentWorkingSet
     from src.app.models.institution import Institution
@@ -549,8 +549,16 @@ def completed_visit_candidates_query(window_start: datetime, now: datetime):
                 InstitutionAppointmentType.location_id
                 == AppointmentWorkingSet.location_id,
                 InstitutionAppointmentType.source == "nexhealth",
-                InstitutionAppointmentType.source_id
-                == AppointmentWorkingSet.appointment_type_id,
+                # The type cache stores the mapper's prefixed id ("nh-123")
+                # while the working set holds NexHealth's bare id ("123"), so
+                # an exact match never joined and every visit fell back to the
+                # default duration. Accept either form.
+                or_(
+                    InstitutionAppointmentType.source_id
+                    == AppointmentWorkingSet.appointment_type_id,
+                    InstitutionAppointmentType.source_id
+                    == literal("nh-", String) + AppointmentWorkingSet.appointment_type_id,
+                ),
             ),
         )
         .where(

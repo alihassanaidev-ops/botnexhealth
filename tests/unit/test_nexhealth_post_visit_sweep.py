@@ -262,3 +262,16 @@ def test_a_non_completed_flow_state_does_not_match_post_op() -> None:
         preconfirmed=None,
         flow_state="InChair",
     )
+
+
+def test_type_duration_join_accepts_the_prefixed_type_id() -> None:
+    """The type cache stores "nh-123"; the working set stores "123"."""
+    sql = _candidate_sql()
+    assert (
+        "institution_appointment_types.source_id = "
+        "appointment_working_set.appointment_type_id" in sql
+    )
+    assert (
+        "institution_appointment_types.source_id = "
+        "('nh-' || appointment_working_set.appointment_type_id)" in sql
+    )
