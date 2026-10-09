@@ -164,11 +164,24 @@ def _ai_call_disclosure(clinic_name: str | None) -> str:
     )
 
 
-def _recall_patient_variables(contact: Contact) -> dict[str, str]:
-    """Extra patient facts a recall agent needs to choose and book the visit."""
+# Minimum necessary: a recall call carries the patient's first name, phone,
+# recall type and due date, and nothing else about the patient. The agent
+# verifies identity and reads anything more through its live tools.
+_RECALL_PATIENT_VARIABLES = (
+    "patient_first_name",
+    "first_name",
+    "user_number",
+    "recall_type_name",
+    "recall_due_date",
+)
+_CALL_VARIABLES = ("clinic_name", "compliance_disclosure", "leave_voicemail")
+
+
+def _recall_call_variables(dynamic_variables: dict[str, str]) -> dict[str, str]:
+    """The only dynamic variables a recall call sends to the agent."""
     return {
-        "patient_email": contact.email or "",
-        "patient_date_of_birth": contact.date_of_birth or "",
+        key: dynamic_variables.get(key, "")
+        for key in (*_RECALL_PATIENT_VARIABLES, *_CALL_VARIABLES)
     }
 
 
@@ -471,7 +484,7 @@ class VoiceNodeExecutor:
             "leave_voicemail": "true" if node.leave_voicemail else "false",
         }
         if run.trigger_type == "recall_scan":
-            dynamic_variables.update(_recall_patient_variables(contact))
+            dynamic_variables = _recall_call_variables(dynamic_variables)
         metadata = {
             "workflow_run_id": str(run.id),
             # workflow_id lets the Retell post-call usage webhook attribute voice

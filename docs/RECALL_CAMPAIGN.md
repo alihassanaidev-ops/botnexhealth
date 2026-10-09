@@ -62,12 +62,14 @@ steps saved while the campaign carried `allowed_appointment_type_ids` /
 
 ## What the agent receives
 
-A recall call's Retell dynamic variables carry `patient_first_name`,
-`patient_last_name`, `user_number` (the number dialled), `recall_type_name`,
-`recall_due_date`, `last_visit_date`, `patient_email`, and
-`patient_date_of_birth`. The agent uses the date of birth (with the recall
-type) to choose the hygiene appointment type. `patient_email` and
-`patient_date_of_birth` are sent on recall calls only.
+A recall call sends the agent only the minimum patient data:
+`patient_first_name` (also `first_name`), `user_number` (the number dialled),
+`recall_type_name`, and `recall_due_date`, plus the non-patient
+`clinic_name`, `compliance_disclosure`, and `leave_voicemail`. No last name,
+email, date of birth, or visit history is sent. The agent verifies the patient
+with `lookup_patient` during the call, which supplies the patient ID needed to
+book and the date of birth used to choose the hygiene appointment type. Other
+campaigns keep their full merge context.
 
 ## Voice template
 
