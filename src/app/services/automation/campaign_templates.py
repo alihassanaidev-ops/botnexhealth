@@ -1163,10 +1163,6 @@ def _recall_voice_attempt_nodes(attempt: int) -> list[dict[str, Any]]:
             # event, which would otherwise stop the whole run after attempt 1.
             # This is the ladder's deliberate follow-up send.
             "send_after_response": True,
-            # Live-call booking guard: the agent may only book these types and
-            # providers. Empty types fail closed; setup fills them in.
-            "allowed_appointment_type_ids": [],
-            "allowed_provider_ids": [],
             "next_node_id": f"route-recall-attempt-{suffix}",
         },
         {
@@ -1268,8 +1264,7 @@ _RECALL_VOICE: dict[str, Any] = {
             ],
         },
     },
-    # `recall_type_id` reaches the booking guard so the approved
-    # recall-to-appointment mapping can be resolved for this run.
+    # The recall facts the scanner hands each run, and so the agent.
     "pms_context_fields": [
         "recall_due_date",
         "recall_type_id",

@@ -24,8 +24,19 @@ A patient with several due recalls is collapsed to one **primary** recall
 Enrollment is idempotent per `(workflow version, patient, month)`; the scan also
 honors `max_enrollments_per_run` per workflow.
 
+### Live patient refresh
+
+For NexHealth, each patient about to be enrolled is read live
+(`GET /patients/{id}` with `last_visited_appointment`) and their contact is
+refreshed from that read before the run is queued. Recall therefore does not
+depend on the full NexHealth patient sync or webhooks being on: only patients
+actually enrolled are fetched and stored. A patient the PMS marks inactive is
+never called. If the live read fails the scanner falls back to an existing
+contact, and skips the patient when there is none.
+
 The scanner reports reason counters (`recalls_skipped_recall_type`,
-`recalls_skipped_due_window`, and the GoTracker/treatment counters) for dry-run
+`recalls_skipped_due_window`, `patients_skipped_live_fetch_failed`,
+`patients_skipped_inactive`, and the GoTracker/treatment counters) for dry-run
 review.
 
 ## Where the settings live
@@ -36,31 +47,27 @@ self-contained and location-scoped like every other campaign:
 - **`PmsRecallSource`** (the schedule trigger's source) carries
   `approved_recall_type_ids`, `due_within_days`, and `include_overdue`. These
   are editable in the builder's schedule trigger panel.
-- **`SendVoiceNode`** carries `allowed_appointment_type_ids` and
-  `allowed_provider_ids` — the only things the live agent may book. Editable in
-  the builder's call-step panel.
 
-Defaults are conservative: a freshly instantiated recall campaign has an empty
-approved-type list (every recall type) and empty allowed booking types, which
-**fails closed** at booking until configured.
+A freshly instantiated recall campaign has an empty approved-type list, which
+means every recall type; set it before launch.
 
-## Booking constraints (voice)
+## Booking (voice)
 
-The AI decides what to book during the call, so the prompt cannot be the guard.
-The outbound call is correlated back to its campaign run by Retell call id
-(`WorkflowVoiceAttempt.retell_call_id`), and
-`src/app/services/automation/recall_booking_guard.py` resolves the run's
-immutable workflow version. `list_appointment_types`, `find_appointment_slots`,
-and `book_appointment` then enforce, only when the run's schedule source is a
-PMS recall:
+Which appointment type, provider and date the agent books is decided in the
+Retell agent prompt, not on the campaign. The server applies no recall-specific
+booking limits: recall calls use the same `list_appointment_types`,
+`find_appointment_slots` and `book_appointment` tools as inbound calls. Call
+steps saved while the campaign carried `allowed_appointment_type_ids` /
+`allowed_provider_ids` still load; those fields are dropped on read.
 
-- only the voice step's `allowed_appointment_type_ids` may be offered or
-  booked — an empty list refuses every booking;
-- only `allowed_provider_ids` may be booked (empty = any provider);
-- the earliest bookable date is `max(today, recall due date)`.
+## What the agent receives
 
-Calls whose workflow is not a recall campaign are left completely untouched, so
-inbound and other outbound campaigns are unaffected.
+A recall call's Retell dynamic variables carry `patient_first_name`,
+`patient_last_name`, `user_number` (the number dialled), `recall_type_name`,
+`recall_due_date`, `last_visit_date`, `patient_email`, and
+`patient_date_of_birth`. The agent uses the date of birth (with the recall
+type) to choose the hygiene appointment type. `patient_email` and
+`patient_date_of_birth` are sent on recall calls only.
 
 ## Voice template
 
@@ -91,8 +98,8 @@ enforces its consent class rather than silently running under implied consent.
    pick the voice profile.
 3. In the builder, open the schedule trigger and set the **approved recall
    type ids**, **due window**, and **include overdue**.
-4. Open each call step and set the **allowed appointment types** and
-   **allowed providers**.
+4. Make sure the Retell recall agent's prompt maps recall type and age to
+   the clinic's hygiene appointment types.
 5. Keep the campaign **paused** and review the dry-run counters before launch.
 6. Launch a small pilot, verify calls/bookings/non-duplication, then scale.
 7. Test the institution emergency halt before going live.
@@ -100,6 +107,6 @@ enforces its consent class rather than silently running under implied consent.
 ## Known gaps
 
 - "HYG" is an Open Dental descriptor, not part of the NexHealth appointment-type
-  name; the allowed types must be picked from the synced catalog by name/id.
+  name; the agent prompt must refer to types by their NexHealth names.
 - GoTracker recall still requires completed appointment-history sync before it
   will scan.

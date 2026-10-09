@@ -323,13 +323,6 @@ export interface SendVoiceNode {
     /** Item 19. Hard ceiling on dials whatever the outcome — what stops a
      *  number that is always voicemail being redialled for ever. */
     max_dials?: number
-    /**
-     * Recall campaigns: the only appointment types the live agent may book.
-     * Empty on a recall campaign fails closed.
-     */
-    allowed_appointment_type_ids?: string[]
-    /** Recall campaigns: the only providers the live agent may book. */
-    allowed_provider_ids?: string[]
 }
 /** Who a `send_email` node addresses. Mirrors the backend `EmailRecipient`
  *  union in definition_schema.py. Omitted on definitions published before the

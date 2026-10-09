@@ -378,12 +378,13 @@ def test_recall_voice_template_targets_pms_recall_with_voice() -> None:
     assert source["due_within_days"] == 30
     assert source["include_overdue"] is True
     assert source["approved_recall_type_ids"] == []
-    # Live-call booking guard defaults (fail closed until configured).
+    # Booking choices live in the Retell agent prompt, not on the campaign.
     voice_nodes = [
         n for n in template.definition["nodes"] if n["type"] == "send_voice"
     ]
-    assert all(n["allowed_appointment_type_ids"] == [] for n in voice_nodes)
-    assert all(n["allowed_provider_ids"] == [] for n in voice_nodes)
+    assert voice_nodes
+    assert all("allowed_appointment_type_ids" not in n for n in voice_nodes)
+    assert all("allowed_provider_ids" not in n for n in voice_nodes)
 
 
 def test_recall_voice_template_requires_a_voice_profile() -> None:
@@ -1368,3 +1369,22 @@ def _sample_setup_value(field: dict) -> object:
         default = field.get("default")
         return default if isinstance(default, int) else 1
     return field.get("default") or "sample"
+
+
+def test_voice_step_saved_with_retired_booking_limits_still_loads() -> None:
+    from src.app.services.automation.definition_schema import SendVoiceNode
+
+    node = SendVoiceNode.model_validate(
+        {
+            "type": "send_voice",
+            "id": "voice-1",
+            "retell_agent_id": "agent_abc",
+            "next_node_id": "exit-1",
+            "allowed_appointment_type_ids": ["nh-1"],
+            "allowed_provider_ids": [],
+        }
+    )
+
+    dumped = node.model_dump()
+    assert "allowed_appointment_type_ids" not in dumped
+    assert "allowed_provider_ids" not in dumped

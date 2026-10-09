@@ -958,3 +958,39 @@ def test_reaching_the_cap_does_not_fail_the_run():
         asyncio.run(executor.execute(_make_run(), node, {}))
 
     runtime.fail_run.assert_not_called()
+
+
+def _recall_run():
+    run = _make_run()
+    run.trigger_type = "recall_scan"
+    return run
+
+
+def test_recall_call_gives_the_agent_email_and_date_of_birth():
+    from datetime import date
+
+    today = date.today()
+    dob = today.replace(year=today.year - 9, day=1).isoformat()
+    contact = _make_contact()
+    contact.email = "jane@example.com"
+    contact.date_of_birth = dob
+    executor, _, _ = _make_executor(contact=contact, location=_make_location())
+    with _patch_client(result=RetellCallResult(call_id="call_xyz")) as call_mock:
+        asyncio.run(executor.execute(_recall_run(), _make_node(), {}))
+
+    dv = call_mock.call_args.kwargs["dynamic_variables"]
+    assert dv["patient_email"] == "jane@example.com"
+    assert dv["patient_date_of_birth"] == dob
+
+
+def test_non_recall_call_does_not_get_recall_patient_variables():
+    contact = _make_contact()
+    contact.email = "jane@example.com"
+    contact.date_of_birth = "2015-03-02"
+    executor, _, _ = _make_executor(contact=contact, location=_make_location())
+    with _patch_client(result=RetellCallResult(call_id="call_xyz")) as call_mock:
+        asyncio.run(executor.execute(_make_run(), _make_node(), {}))
+
+    dv = call_mock.call_args.kwargs["dynamic_variables"]
+    assert "patient_email" not in dv
+    assert "patient_date_of_birth" not in dv

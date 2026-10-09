@@ -86,6 +86,15 @@ def _strip(prefixed_id: str) -> str:
     return prefixed_id.removeprefix(f"{PREFIX}-")
 
 
+def _raw_patient_from_response(raw: Any) -> dict[str, Any] | None:
+    """The patient object from a single-patient read, under either envelope."""
+    data = (raw.get("data") if isinstance(raw, dict) else None) or {}
+    patient = data.get("user") or data.get("patient") or data
+    if not isinstance(patient, dict) or not patient.get("id"):
+        return None
+    return patient
+
+
 def _normalize_phone_for_nexhealth(phone: str | None) -> str | None:
     """Normalize phone to a 10-digit form NexHealth will accept and find,
     tolerating the common ways a user or an LLM might shape a number.
@@ -537,11 +546,33 @@ class NexHealthAdapter(
             )
         except Exception:
             return None
-        data = raw.get("data") or {}
-        patient = data.get("user") or data.get("patient") or data
-        if not isinstance(patient, dict) or not patient.get("id"):
+        patient = _raw_patient_from_response(raw)
+        if patient is None:
             return None
         return mappers.to_patient(patient)
+
+    async def get_patient_raw(
+        self,
+        patient_id: str,
+        include: list[str] | None = None,
+    ) -> dict[str, Any] | None:
+        """Fetch one raw NexHealth patient payload, or ``None`` if unavailable.
+
+        The recall scanner refreshes the contact it is about to call from this
+        live read. It needs the raw shape because
+        ``NexHealthProjectionService.upsert_patient`` reads ``bio`` and
+        ``location_ids``.
+        """
+        params = self._default_params()
+        if include:
+            params["include[]"] = include
+        try:
+            raw = await handle_nexhealth_request(
+                self._client, "GET", f"/patients/{_strip(patient_id)}", params=params
+            )
+        except Exception:
+            return None
+        return _raw_patient_from_response(raw)
 
     async def browse_patients(
         self,

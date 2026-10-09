@@ -947,8 +947,6 @@ function NodeForm({
                         onChange={onNodeChange}
                         onDefinitionChange={onDefinitionChange}
                         voiceProfiles={voiceProfiles ?? []}
-                        appointmentTypes={appointmentTypes ?? []}
-                        providers={providers ?? []}
                         readOnly={readOnly}
                     />
                 )}
@@ -1668,8 +1666,6 @@ function VoiceFields({
     onChange,
     onDefinitionChange,
     voiceProfiles,
-    appointmentTypes,
-    providers,
     readOnly,
 }: {
     node: SendVoiceNode
@@ -1677,8 +1673,6 @@ function VoiceFields({
     onChange: (n: WorkflowNode) => void
     onDefinitionChange: (def: WorkflowDefinition) => void
     voiceProfiles: OutboundVoiceProfile[]
-    appointmentTypes: CachedAppointmentType[]
-    providers: CachedProvider[]
     readOnly?: boolean
 }) {
     const hasLegacyAgent = Boolean(node.retell_agent_id?.trim() && !node.voice_profile_id)
@@ -1765,104 +1759,6 @@ function VoiceFields({
                     This workflow has an older voice agent configured. Switch it to a named profile when one is available.
                 </p>
             )}
-            <div className="space-y-3 rounded-md border border-border px-3 py-2">
-                <div>
-                    <Label className="text-sm">Recall booking restrictions</Label>
-                    <p className="text-xs text-muted-foreground">
-                        During the call the agent may only book these. Leave types empty to
-                        keep the guard off; a recall campaign with no types refuses every booking.
-                    </p>
-                </div>
-                <Field label="Allowed appointment types">
-                    {appointmentTypes.length > 0 ? (
-                        <div className="max-h-40 space-y-1 overflow-y-auto rounded-md border p-2">
-                            {appointmentTypes.map((t) => {
-                                const id = t.source_id
-                                const selected = node.allowed_appointment_type_ids ?? []
-                                const checked = selected.includes(id)
-                                return (
-                                    <label key={id} className="flex items-center gap-2 text-sm cursor-pointer">
-                                        <input
-                                            type="checkbox"
-                                            checked={checked}
-                                            disabled={readOnly}
-                                            onChange={() =>
-                                                onChange({
-                                                    ...node,
-                                                    allowed_appointment_type_ids: checked
-                                                        ? selected.filter((v) => v !== id)
-                                                        : [...selected, id],
-                                                })
-                                            }
-                                        />
-                                        <span>{t.name}</span>
-                                    </label>
-                                )
-                            })}
-                        </div>
-                    ) : (
-                        <Input
-                            value={(node.allowed_appointment_type_ids ?? []).join(", ")}
-                            disabled={readOnly}
-                            placeholder="Leave empty for no restriction"
-                            onChange={(e) =>
-                                onChange({
-                                    ...node,
-                                    allowed_appointment_type_ids: e.target.value
-                                        .split(",")
-                                        .map((v) => v.trim())
-                                        .filter(Boolean),
-                                })
-                            }
-                        />
-                    )}
-                </Field>
-                <Field label="Allowed providers">
-                    {providers.length > 0 ? (
-                        <div className="max-h-40 space-y-1 overflow-y-auto rounded-md border p-2">
-                            {providers
-                                .filter((p) => !p.is_hidden)
-                                .map((p) => {
-                                    const selected = node.allowed_provider_ids ?? []
-                                    const checked = selected.includes(p.source_id)
-                                    return (
-                                        <label key={p.source_id} className="flex items-center gap-2 text-sm cursor-pointer">
-                                            <input
-                                                type="checkbox"
-                                                checked={checked}
-                                                disabled={readOnly}
-                                                onChange={() =>
-                                                    onChange({
-                                                        ...node,
-                                                        allowed_provider_ids: checked
-                                                            ? selected.filter((v) => v !== p.source_id)
-                                                            : [...selected, p.source_id],
-                                                    })
-                                                }
-                                            />
-                                            <span>{providerLabel(p)}</span>
-                                        </label>
-                                    )
-                                })}
-                        </div>
-                    ) : (
-                        <Input
-                            value={(node.allowed_provider_ids ?? []).join(", ")}
-                            disabled={readOnly}
-                            placeholder="Leave empty for any provider"
-                            onChange={(e) =>
-                                onChange({
-                                    ...node,
-                                    allowed_provider_ids: e.target.value
-                                        .split(",")
-                                        .map((v) => v.trim())
-                                        .filter(Boolean),
-                                })
-                            }
-                        />
-                    )}
-                </Field>
-            </div>
             <div className="space-y-3 rounded-md border border-border px-3 py-2">
                 <div className="flex items-center justify-between gap-3">
                     <div>

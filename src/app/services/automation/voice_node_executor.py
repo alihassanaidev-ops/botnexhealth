@@ -164,6 +164,14 @@ def _ai_call_disclosure(clinic_name: str | None) -> str:
     )
 
 
+def _recall_patient_variables(contact: Contact) -> dict[str, str]:
+    """Extra patient facts a recall agent needs to choose and book the visit."""
+    return {
+        "patient_email": contact.email or "",
+        "patient_date_of_birth": contact.date_of_birth or "",
+    }
+
+
 class VoiceNodeExecutor:
     def __init__(
         self,
@@ -462,6 +470,8 @@ class VoiceNodeExecutor:
             # because Retell's dynamic variables are substituted as text.
             "leave_voicemail": "true" if node.leave_voicemail else "false",
         }
+        if run.trigger_type == "recall_scan":
+            dynamic_variables.update(_recall_patient_variables(contact))
         metadata = {
             "workflow_run_id": str(run.id),
             # workflow_id lets the Retell post-call usage webhook attribute voice

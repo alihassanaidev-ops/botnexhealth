@@ -7,6 +7,7 @@ import calendar
 import logging
 import random
 import time
+from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
@@ -3716,6 +3717,11 @@ _RECALL_SCAN_COUNT_KEYS = (
     # Total recall rows pulled this sweep — the denominator for the
     # zero-enrollment alert (eligible-but-enrolled-nobody signals a failure).
     "recalls_read",
+    # The patient about to be enrolled is refreshed from a live NexHealth read.
+    # A patient that cannot be read and has no stored contact is skipped; one
+    # marked inactive in the PMS is never called.
+    "patients_skipped_live_fetch_failed",
+    "patients_skipped_inactive",
 )
 
 
@@ -4340,7 +4346,8 @@ async def _scan_recall_async() -> dict:
         (
             "scan_recall_workflows: institutions=%d workflows=%d read=%d enrolled=%d "
             "history_skips=%d recent_visit_skips=%d treatment_context_skips=%d "
-            "recall_type_skips=%d due_window_skips=%d"
+            "recall_type_skips=%d due_window_skips=%d "
+            "live_fetch_skips=%d inactive_skips=%d"
         ),
         len(by_institution),
         active_workflows,
@@ -4351,6 +4358,8 @@ async def _scan_recall_async() -> dict:
         totals["patients_skipped_missing_treatment_context"],
         totals["recalls_skipped_recall_type"],
         totals["recalls_skipped_due_window"],
+        totals["patients_skipped_live_fetch_failed"],
+        totals["patients_skipped_inactive"],
     )
     return {
         "active_recall_workflows": active_workflows,
@@ -4631,6 +4640,33 @@ async def _enroll_recalls_for_institution(
                     if not matched_workflows:
                         continue
 
+                    if adapter_source == "nexhealth":
+                        # Read the patient live rather than trusting the stored
+                        # copy, so recall works without the full patient sync.
+                        # Only patients about to be enrolled are fetched.
+                        live = await _refresh_recall_contact_live(
+                            session,
+                            adapter,
+                            institution_id=institution_id,
+                            location=location,
+                            patient_id=patient_id,
+                        )
+                        if live is None:
+                            if contact_id is None:
+                                counts["patients_skipped_live_fetch_failed"] += 1
+                                continue
+                        elif live.inactive:
+                            counts["patients_skipped_inactive"] += 1
+                            continue
+                        else:
+                            contact_id = live.contact_id
+                            if live.last_visit_date:
+                                for _, metadata in matched_workflows:
+                                    if not metadata.get("last_visit_date"):
+                                        metadata["last_visit_date"] = (
+                                            live.last_visit_date
+                                        )
+
                     for wf, trigger_metadata in matched_workflows:
                         if remaining_enrollments.get(wf["workflow_id"], 0) <= 0:
                             continue
@@ -4669,6 +4705,85 @@ async def _enroll_recalls_for_institution(
                 await adapter.close()
 
     return counts
+
+
+@dataclass(frozen=True)
+class _LiveRecallPatient:
+    contact_id: str
+    inactive: bool
+    last_visit_date: str | None
+
+
+async def _refresh_recall_contact_live(
+    session: Any,
+    adapter: Any,
+    *,
+    institution_id: str,
+    location: Any,
+    patient_id: str,
+) -> _LiveRecallPatient | None:
+    """Refresh one recall patient's contact from a live NexHealth read.
+
+    Returns ``None`` when the patient cannot be read, so the caller can fall
+    back to an existing contact. The contact is committed before returning
+    because the enrollment task that dials it runs in another session.
+    """
+    from src.app.services.automation.nexhealth_projection_service import (
+        NexHealthProjectionService,
+    )
+
+    get_patient_raw = getattr(adapter, "get_patient_raw", None)
+    if get_patient_raw is None:
+        return None
+    try:
+        patient = await get_patient_raw(
+            patient_id, include=["last_visited_appointment"]
+        )
+    except Exception as exc:  # noqa: BLE001 - a failed read must not stop the scan.
+        logger.warning(
+            "recall_scan: live patient read failed patient=%s type=%s",
+            patient_id,
+            type(exc).__name__,
+        )
+        return None
+    if not isinstance(patient, dict):
+        return None
+
+    raw_location_ids = patient.get("location_ids")
+    nexhealth_location_ids = (
+        [str(value) for value in raw_location_ids if value not in (None, "")]
+        if isinstance(raw_location_ids, list)
+        else []
+    ) or [str(location.nexhealth_location_id)]
+    try:
+        # A savepoint, so a failed upsert leaves the scan's session usable
+        # without expiring the location and institution it is iterating.
+        async with session.begin_nested():
+            result = await NexHealthProjectionService(session).upsert_patient(
+                institution_id=institution_id,
+                patient=patient,
+                local_location_ids=[str(location.id)],
+                nexhealth_location_ids=nexhealth_location_ids,
+                event="patient.recall_refresh",
+            )
+        await session.commit()
+    except Exception as exc:  # noqa: BLE001
+        logger.warning(
+            "recall_scan: contact refresh failed patient=%s type=%s",
+            patient_id,
+            type(exc).__name__,
+        )
+        return None
+
+    last_visited = patient.get("last_visited_appointment")
+    last_visit_start = (
+        last_visited.get("start_time") if isinstance(last_visited, dict) else None
+    )
+    return _LiveRecallPatient(
+        contact_id=str(result.contact.id),
+        inactive=bool(patient.get("inactive", False)),
+        last_visit_date=str(last_visit_start)[:10] if last_visit_start else None,
+    )
 
 
 async def _list_recall_types_safe(adapter: Any) -> list[UniversalRecallType]:

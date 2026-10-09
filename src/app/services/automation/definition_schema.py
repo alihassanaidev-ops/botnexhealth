@@ -945,14 +945,25 @@ class SendVoiceNode(BaseModel):
     # means "unlimited".
     max_dials: int = Field(default=5, ge=1, le=20)
 
-    # --- Live-call booking constraints ---
-    # The agent decides what to book during the call, so the prompt is not a
-    # guard. When a call belongs to a recall campaign these lists are enforced
-    # server-side against the Retell booking tools. Empty types on a recall
-    # campaign fail closed (nothing bookable); empty providers means no provider
-    # restriction. Non-recall campaigns leave both empty and are unconstrained.
-    allowed_appointment_type_ids: list[str] = Field(default_factory=list)
-    allowed_provider_ids: list[str] = Field(default_factory=list)
+    @model_validator(mode="before")
+    @classmethod
+    def drop_retired_booking_constraints(cls, data: Any) -> Any:
+        """Accept definitions saved while the call step carried booking limits.
+
+        Which appointment types and providers a recall agent books is decided
+        in the Retell agent prompt, not on the campaign. Recall campaigns saved
+        before that change still hold the two empty lists; dropping them here
+        keeps those definitions loading under ``extra="forbid"``.
+        """
+        if isinstance(data, dict) and (
+            "allowed_appointment_type_ids" in data or "allowed_provider_ids" in data
+        ):
+            data = {
+                key: value
+                for key, value in data.items()
+                if key not in ("allowed_appointment_type_ids", "allowed_provider_ids")
+            }
+        return data
 
     @model_validator(mode="after")
     def dial_cap_must_exceed_the_allowance(self) -> "SendVoiceNode":
