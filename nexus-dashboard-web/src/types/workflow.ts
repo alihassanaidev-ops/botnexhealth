@@ -95,6 +95,8 @@ export interface PmsRecallSource {
     reenrollment_cooldown_days?: number
     /** Clinic-approved PMS recall type ids. Empty means every recall type. */
     approved_recall_type_ids?: string[]
+    /** Appointment type ids a recall call may see and book. Empty means every type. */
+    allowed_appointment_type_ids?: string[]
     /** A recall is eligible when due on/before today + this many days. */
     due_within_days?: number
     /** When false, only recalls due in the future window are called. */

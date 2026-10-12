@@ -39,11 +39,13 @@ from src.app.pms.base import (
 from src.app.pms.factory import get_adapter_for_institution_location
 from src.app.pms.models import BookingRequest, PatientCreateRequest
 from src.app.retell.functions import (
+    get_call_context,
     get_institution_from_call_context,
     register_function,
     update_call_context,
 )
 from src.app.retell.security import hash_for_logging
+from src.app.services.automation.recall_booking_guard import appointment_type_allowed
 from src.app.services.audit import phi_reveal_audit
 from src.app.services.audit_decorator import audit
 from src.app.services.slot_filter import (
@@ -123,6 +125,38 @@ async def _resolve_context(require_pms: bool = True) -> ResolvedContext:
         )
 
     return ResolvedContext(institution=institution, location=location, adapter=adapter)
+
+
+async def _recall_allowed_appointment_types() -> frozenset[str] | None:
+    """Appointment types this call may use, when it is a recall campaign call.
+
+    ``None`` means no restriction: inbound calls, other campaigns, and recall
+    campaigns without an allowed list. Never raises, so a lookup failure leaves
+    ordinary calls working.
+    """
+    from src.app.services.automation.recall_booking_guard import (
+        resolve_recall_appointment_types_for_call,
+    )
+
+    call_context = get_call_context()
+    call_id = call_context.get("call_id")
+    institution_id = call_context.get("institution_id")
+    if not call_id or not institution_id:
+        return None
+    location_id = call_context.get("location_id")
+    try:
+        async with get_system_db_session(
+            "retell",
+            institution_id=str(institution_id),
+            location_id=str(location_id) if location_id else None,
+        ) as session:
+            return await resolve_recall_appointment_types_for_call(session, call_id)
+    except Exception:  # noqa: BLE001
+        logger.exception("recall appointment-type lookup failed")
+        return None
+
+
+_RECALL_TYPE_REFUSAL = "This appointment type is not available on this recall call."
 
 
 # ============================================================================
@@ -899,6 +933,12 @@ async def find_appointment_slots(args: dict[str, Any]) -> dict[str, Any]:
         else:
             provider_ids = None
 
+    recall_types = await _recall_allowed_appointment_types()
+    if recall_types is not None and not appointment_type_allowed(
+        recall_types, appt_type_id
+    ):
+        return {"error": _RECALL_TYPE_REFUSAL}
+
     if appt_type_id and provider_id:
         validation_error = await _validate_appointment_type_for_provider(
             ctx, provider_id, appt_type_id
@@ -1126,6 +1166,12 @@ async def book_appointment(args: dict[str, Any]) -> dict[str, Any]:
     except ValueError as e:
         return {"success": False, "error": str(e)}
 
+    recall_types = await _recall_allowed_appointment_types()
+    if recall_types is not None and not appointment_type_allowed(
+        recall_types, args.get("appointment_type_id")
+    ):
+        return {"success": False, "error": _RECALL_TYPE_REFUSAL}
+
     validation_error = await _validate_appointment_type_for_provider(
         ctx, args.get("provider_id"), args.get("appointment_type_id")
     )
@@ -1335,6 +1381,13 @@ async def list_appointment_types(args: dict[str, Any]) -> dict[str, Any]:
             }
             for t in types
         ]
+        recall_types = await _recall_allowed_appointment_types()
+        if recall_types is not None:
+            simplified = [
+                item
+                for item in simplified
+                if appointment_type_allowed(recall_types, item["id"])
+            ]
         return {
             "count": len(simplified),
             "appointment_types": simplified,
@@ -1466,6 +1519,18 @@ async def list_providers(args: dict[str, Any]) -> dict[str, Any]:
             }
             for p in providers
         ]
+        recall_types = await _recall_allowed_appointment_types()
+        if recall_types is not None:
+            # A recall call sees only its allowed types, and only the providers
+            # who offer one of them.
+            for item in simplified:
+                item["appointment_types"] = [
+                    t
+                    for t in item["appointment_types"] or []
+                    if isinstance(t, dict)
+                    and appointment_type_allowed(recall_types, t.get("id"))
+                ]
+            simplified = [item for item in simplified if item["appointment_types"]]
         return {
             "count": len(simplified),
             "providers": simplified,

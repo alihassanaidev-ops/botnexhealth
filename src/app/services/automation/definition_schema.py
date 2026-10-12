@@ -157,6 +157,11 @@ class PmsRecallSource(BaseModel):
     #: upcoming window is called.
     due_within_days: int = Field(default=30, ge=0, le=365)
     include_overdue: bool = True
+    #: PMS appointment type ids a recall call may see and book. The live-call
+    #: tools hide and refuse every other type, so a recall call can only book
+    #: the clinic's recall visits. Empty means no restriction. Inbound calls and
+    #: other campaigns are never affected.
+    allowed_appointment_type_ids: list[str] = Field(default_factory=list)
 
 
 class AudienceSegmentSource(BaseModel):

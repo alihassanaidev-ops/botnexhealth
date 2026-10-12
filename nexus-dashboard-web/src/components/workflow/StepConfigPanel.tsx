@@ -743,6 +743,28 @@ function ScheduleTriggerFields({
                             }
                         />
                     </Field>
+                    <Field
+                        label="Bookable appointment types (PMS ids)"
+                        hint="On recall calls the agent only sees and books these types. Leave empty for every type."
+                    >
+                        <Input
+                            value={(source.allowed_appointment_type_ids ?? []).join(", ")}
+                            disabled={readOnly}
+                            placeholder="e.g. 1230521, 1230529"
+                            onChange={(e) =>
+                                onChange({
+                                    ...trigger,
+                                    source: {
+                                        ...source,
+                                        allowed_appointment_type_ids: e.target.value
+                                            .split(",")
+                                            .map((v) => v.trim())
+                                            .filter(Boolean),
+                                    },
+                                })
+                            }
+                        />
+                    </Field>
                 </>
             )}
 

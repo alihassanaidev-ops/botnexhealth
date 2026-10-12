@@ -46,19 +46,31 @@ self-contained and location-scoped like every other campaign:
 
 - **`PmsRecallSource`** (the schedule trigger's source) carries
   `approved_recall_type_ids`, `due_within_days`, and `include_overdue`. These
-  are editable in the builder's schedule trigger panel.
+  are editable in the builder's schedule trigger panel, as is
+  `allowed_appointment_type_ids` (see Booking).
 
 A freshly instantiated recall campaign has an empty approved-type list, which
 means every recall type; set it before launch.
 
 ## Booking (voice)
 
-Which appointment type, provider and date the agent books is decided in the
-Retell agent prompt, not on the campaign. The server applies no recall-specific
-booking limits: recall calls use the same `list_appointment_types`,
-`find_appointment_slots` and `book_appointment` tools as inbound calls. Call
-steps saved while the campaign carried `allowed_appointment_type_ids` /
-`allowed_provider_ids` still load; those fields are dropped on read.
+The recall source carries `allowed_appointment_type_ids` (builder: schedule
+trigger panel, "Bookable appointment types"). When it is set, a call placed by
+that recall campaign sees and books only those types:
+
+- `list_appointment_types` returns only the allowed types;
+- `list_providers` shows only the allowed types per provider and drops
+  providers who offer none of them;
+- `find_appointment_slots` and `book_appointment` refuse any other type.
+
+The call is matched to its campaign by Retell call id
+(`WorkflowVoiceAttempt.retell_call_id`) in
+`src/app/services/automation/recall_booking_guard.py`. Inbound calls, other
+campaigns, and a recall campaign with an empty list are unrestricted. Which
+allowed type to book for a given patient (age, recall type) and which provider
+and date are decided in the Retell agent prompt. Type ids differ per PMS, so
+set the list per campaign (Kadri production: Adult recall (16+), Teen Recall
+(13-15), Kids recall (6-12), Kids recall (3-5), 2 units scale, 3 units scale).
 
 ## What the agent receives
 
