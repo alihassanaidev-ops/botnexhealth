@@ -1205,6 +1205,26 @@ def _recall_voice_attempt_nodes(attempt: int) -> list[dict[str, Any]]:
                     "next_node_id": "exit-recall-dnc",
                 },
                 {
+                    "label": "Transferred",
+                    "filter": {
+                        "kind": "rule",
+                        "field": "call_outcome",
+                        "op": "in_case_insensitive",
+                        "value": ["transferred"],
+                    },
+                    "next_node_id": "exit-recall-transferred",
+                },
+                {
+                    "label": "Contacted",
+                    "filter": {
+                        "kind": "rule",
+                        "field": "call_outcome",
+                        "op": "in_case_insensitive",
+                        "value": ["contacted", "no_action_needed"],
+                    },
+                    "next_node_id": "exit-recall-contacted",
+                },
+                {
                     "label": "Unreachable",
                     "filter": {
                         "kind": "rule",
@@ -1282,6 +1302,8 @@ _RECALL_VOICE: dict[str, Any] = {
             "outcome": "callback_requested",
         },
         {"type": "exit", "id": "exit-recall-dnc", "outcome": "do_not_contact"},
+        {"type": "exit", "id": "exit-recall-transferred", "outcome": "transferred"},
+        {"type": "exit", "id": "exit-recall-contacted", "outcome": "contacted"},
         {"type": "exit", "id": "exit-recall-handoff", "outcome": "staff_handoff"},
         {"type": "exit", "id": "exit-recall-unreachable", "outcome": "unreachable"},
     ],
@@ -2351,6 +2373,8 @@ _ALL_TEMPLATES: dict[str, CampaignTemplate] = {
             outcome_labels=[
                 "booked",
                 "callback_requested",
+                "contacted",
+                "transferred",
                 "staff_handoff",
                 "unreachable",
                 "do_not_contact",

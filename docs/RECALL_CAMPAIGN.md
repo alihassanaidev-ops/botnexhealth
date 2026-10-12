@@ -91,8 +91,32 @@ campaigns keep their full merge context.
 `recall-voice-6month` (`src/app/services/automation/campaign_templates.py`):
 `schedule` trigger sourced from `pms_recall`, three bounded call attempts, and a
 `switch` on `call_outcome` routing to `booked`, `callback_requested`,
-`do_not_contact`, `unreachable`, or a staff handoff default. It requires an
-outbound voice profile at instantiation.
+`do_not_contact`, `transferred`, `contacted`, `unreachable`, or a staff handoff
+default. It requires an outbound voice profile at instantiation.
+
+### Call outcome
+
+`campaign_call_outcome` (`src/app/services/automation/voice_outcome.py`) turns
+a finished Retell call into that `call_outcome`, for both the call-analyzed
+webhook and the outcome poll:
+
+| How the call ended | `call_outcome` | Recall route |
+|---|---|---|
+| Patient asked not to be called (`user_requested_dnc`, or the `do_not_call` post-call field) | `do_not_call` | do not contact; number blocked |
+| No answer, voicemail, busy, silence (`inactivity`) | `no_answer` / `voicemail` / `busy` | retry, then unreachable |
+| Dial error, invalid number, spam, carrier block | `failed` | staff handoff |
+| Transferred / bridged | `transferred` | transferred |
+| Transfer failed (`transfer_cancelled`) | `callback_requested` | callback |
+| Conversation: "Call Status" Appointment Booked / Rescheduled | `booked` | booked |
+| Conversation: Needs Call Back / Needs Booking | `callback_requested` | callback |
+| Conversation: Complaint, Financial, Insurance and Billing, Emergency, Cancelled | `staff_handoff` | staff handoff |
+| Conversation: No Action Needed / FAQ Handled | `contacted` | contacted |
+
+"Call Status" is the same post-call tag inbound calls use; when several tags
+are set the strongest wins (booked > callback > transferred > staff handoff >
+contacted). An explicit `call_outcome` post-call field still overrides the tags.
+Existing campaigns keep the routes they were published with; republish to get
+the `transferred` and `contacted` endings.
 
 Publishing stores the campaign's `content_class` on the workflow version; the
 runtime gate reads it from there (`step_dispatcher`), so a `recall` campaign

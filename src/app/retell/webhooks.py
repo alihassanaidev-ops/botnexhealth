@@ -246,15 +246,12 @@ class RetellAgentLookupError(RuntimeError):
 
 
 def _campaign_voice_outcome(call: RetellCallWebhook) -> str:
-    """Return the workflow business outcome from Retell analysis when present."""
-    from src.app.services.automation.voice_outcome import map_disconnection_reason
+    """Return the outcome an outbound campaign run branches on."""
+    from src.app.services.automation.voice_outcome import campaign_call_outcome
 
     analysis = call.call_analysis or call.scrubbed_call_analysis
     custom = analysis.custom_analysis_data if analysis else {}
-    outcome = custom.get("call_outcome")
-    if isinstance(outcome, str) and outcome:
-        return outcome
-    return map_disconnection_reason(call.disconnection_reason, call.call_status)
+    return campaign_call_outcome(call.disconnection_reason, call.call_status, custom)
 
 
 def _campaign_voice_context(call: RetellCallWebhook) -> dict[str, str]:
@@ -1204,7 +1201,13 @@ async def process_retell_call_analyzed_event(
                     suppress_voice_optout,
                 )
 
-                if location and detect_voice_optout(_custom_analysis):
+                # Retell's own do-not-call detection ends an outbound call with
+                # user_requested_dnc; honor it like the post-call opt-out field.
+                retell_dnc = (
+                    event.call.disconnection_reason == "user_requested_dnc"
+                    and event.call.direction == "outbound"
+                )
+                if location and (detect_voice_optout(_custom_analysis) or retell_dnc):
                     await suppress_voice_optout(
                         institution_id=institution.id,
                         location_id=str(location.id),

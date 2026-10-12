@@ -2701,15 +2701,13 @@ def _retell_call_details_ready_for_resume(details) -> bool:
 
 def _retell_call_details_outcome(details) -> str:
     """Extract the business outcome from Retell get-call data."""
-    from src.app.services.automation.voice_outcome import map_disconnection_reason
+    from src.app.services.automation.voice_outcome import campaign_call_outcome
 
     analysis = details.call_analysis or details.scrubbed_call_analysis or {}
-    if isinstance(analysis, dict):
-        custom = analysis.get("custom_analysis_data") or {}
-        outcome = custom.get("call_outcome") if isinstance(custom, dict) else None
-        if isinstance(outcome, str) and outcome:
-            return outcome
-    return map_disconnection_reason(details.disconnection_reason, details.call_status)
+    custom = analysis.get("custom_analysis_data") if isinstance(analysis, dict) else {}
+    return campaign_call_outcome(
+        details.disconnection_reason, details.call_status, custom or {}
+    )
 
 
 def _retell_call_details_context(details) -> dict[str, str]:

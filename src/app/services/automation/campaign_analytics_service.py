@@ -452,7 +452,8 @@ _TERMINAL_OUTCOMES: dict[str, tuple[str, ...]] = {
 # patient result (``email_sent``), a non-event (``no_response``), or a result no
 # category puts on the screen (cancellations — ``cancelled`` in
 # ``appointment_ops`` counts cancelled *runs*, which is a different thing from a
-# patient cancelling their appointment).
+# patient cancelling their appointment). ``transferred`` and ``contacted`` are
+# counted from the voice attempt log (``dial_outcome`` transferred / answered).
 # ``test_every_template_exit_outcome_is_accounted_for`` fails when a template
 # grows an outcome that appears in neither this set nor _TERMINAL_OUTCOMES, so a
 # new exit cannot silently report as a zero the way ``appointment_confirmed``
@@ -462,6 +463,7 @@ UNROLLED_TERMINAL_OUTCOMES: frozenset[str] = frozenset(
         "answered",
         "appointment_cancelled",
         "cancel_requested",
+        "contacted",
         "email_sent",
         "handoff",
         "ineligible_reason",
@@ -471,6 +473,7 @@ UNROLLED_TERMINAL_OUTCOMES: frozenset[str] = frozenset(
         "post_op_cooldown_expired",
         "rebooking_link_sent",
         "staff_handoff",
+        "transferred",
     }
 )
 
