@@ -3844,14 +3844,14 @@ def _recall_within_window(
 ) -> bool:
     """Due-date eligibility, evaluated in the location's timezone.
 
-    A recall with no parseable due date is kept (it is on the queue), matching
-    the legacy overdue rule. Otherwise the due date must be on/before
-    ``today + due_within_days`` and, when ``include_overdue`` is false, not in
-    the past.
+    A recall with no parseable due date is skipped: the campaign's window cannot
+    place it, and the agent would have no due date to talk about. Otherwise the
+    due date must be on/before ``today + due_within_days`` and, when
+    ``include_overdue`` is false, not in the past.
     """
     due = _recall_due_date(recall)
     if due is None:
-        return True
+        return False
     local_day = _location_now(now, timezone_name).date()
     due_day = due.date()
     if due_day > local_day + timedelta(days=int(due_within_days)):

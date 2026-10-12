@@ -15,7 +15,7 @@ keeps a patient when **all** of these hold:
   every recall type);
 - the due date is inside the campaign's window
   (`today + due_within_days`, and not in the past unless `include_overdue`),
-  evaluated in the location timezone;
+  evaluated in the location timezone (a recall with no due date is skipped);
 - the patient has no future appointment (any scheduled/booked/pending visit);
 - the patient is not inside the campaign's re-enrollment cooldown.
 

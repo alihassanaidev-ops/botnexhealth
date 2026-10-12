@@ -791,6 +791,37 @@ async def test_scan_recall_window_covers_next_30_days_and_overdue():
 
 
 @pytest.mark.asyncio
+async def test_scan_recall_coming_due_only_skips_overdue_and_undated():
+    wf = _make_workflow(
+        recall_source={"due_within_days": 30, "include_overdue": False},
+        version_id="ver-1",
+    )
+    scan_session = _make_session(workflows=[wf])
+    inst_session, _ = _recall_inst_session(4)
+    today = datetime.now(timezone.utc).date()
+
+    def due(days):
+        return (today + timedelta(days=days)).isoformat()
+
+    recalls = [
+        {"id": 1, "patient_id": "soon", "date_due": due(10), "recall_type": {"id": 2288000}},
+        {"id": 2, "patient_id": "far", "date_due": due(60), "recall_type": {"id": 2288000}},
+        {"id": 3, "patient_id": "overdue", "date_due": due(-5), "recall_type": {"id": 2288000}},
+        {"id": 4, "patient_id": "undated", "recall_type": {"id": 2288000}},
+    ]
+
+    result, mock_task = await _run_scan_with_recalls(
+        scan_session, inst_session, recalls
+    )
+
+    assert result["enrolled"] == 1
+    assert result["recalls_skipped_due_window"] == 3
+    assert (
+        mock_task.apply_async.call_args.kwargs["kwargs"]["trigger_ref_id"] == "soon"
+    )
+
+
+@pytest.mark.asyncio
 async def test_scan_recall_groups_multiple_recalls_into_one_enrollment():
     wf = _make_workflow(
         recall_source={
