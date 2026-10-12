@@ -102,7 +102,7 @@ webhook and the outcome poll:
 
 | How the call ended | `call_outcome` | Recall route |
 |---|---|---|
-| Patient asked not to be called (`user_requested_dnc`, or the `do_not_call` post-call field) | `do_not_call` | do not contact; number blocked |
+| Patient asked not to be called (`user_requested_dnc`, or the opt-out post-call field) | `do_not_call` | do not contact; number blocked |
 | No answer, voicemail, busy, silence (`inactivity`) | `no_answer` / `voicemail` / `busy` | retry, then unreachable |
 | Dial error, invalid number, spam, carrier block | `failed` | staff handoff |
 | Transferred / bridged | `transferred` | transferred |
@@ -129,9 +129,9 @@ enforces its consent class rather than silently running under implied consent.
   have calls blocked — decide the basis with the clinic before launch.
 - Quiet hours come from the location's operating hours.
 - Spoken opt-out: the Retell agent's post-call analysis must carry a boolean
-  `do_not_call` field ("the patient asked not to be called again"). The infra
-  config key `retellOptoutAnalysisKey` sets `RETELL_OPTOUT_ANALYSIS_KEY` to
-  that field name; when the field is true, the call-analyzed webhook adds the
+  opt-out field ("the patient asked not to be called again"); the Kadri recall
+  agent names it `Do not call`. The infra config key `retellOptoutAnalysisKey`
+  sets `RETELL_OPTOUT_ANALYSIS_KEY` to that exact field name; when the field is true, the call-analyzed webhook adds the
   number to the location's do-not-contact list (all channels), which every
   later scan and the pre-dial recheck honor. Set on staging; production turns
   it on during the recall rollout. With the key unset, detection is off.

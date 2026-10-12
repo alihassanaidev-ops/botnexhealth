@@ -44,6 +44,7 @@ def test_calls_that_did_not_reach_a_conversation(reason, outcome):
         ("Appointment Rescheduled", "booked"),
         ("Needs Call Back", "callback_requested"),
         ("Needs Callback", "callback_requested"),
+        ("Need Callback", "callback_requested"),
         ("Transferred", "transferred"),
         ("Complaint", "staff_handoff"),
         ("Financial Inquiry", "staff_handoff"),
@@ -72,6 +73,15 @@ def test_spoken_opt_out_wins_over_a_booking():
     ):
         assert _outcome("user_hangup", "Appointment Booked", do_not_call=True) == "do_not_call"
         assert _outcome("user_hangup", "Appointment Booked", do_not_call=False) == "booked"
+
+
+def test_recall_agent_do_not_call_field_name_is_honored():
+    with patch(
+        "src.app.services.automation.voice_optout_service.settings.retell_optout_analysis_key",
+        "Do not call",
+    ):
+        custom = {"Do not call": True, "Call Status": "no action needed"}
+        assert campaign_call_outcome("agent_hangup", "ended", custom) == "do_not_call"
 
 
 def test_explicit_call_outcome_field_still_wins_over_tags():

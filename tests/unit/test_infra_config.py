@@ -61,7 +61,8 @@ def test_spoken_opt_out_is_configured_on_staging_only_for_now() -> None:
     staging = load_config(INFRA_ROOT / "config" / "staging.json")
     production = load_config(INFRA_ROOT / "config" / "production.json")
 
-    assert staging.retell_optout_analysis_key == "do_not_call"
+    # Matches the recall agent's post-call field name exactly.
+    assert staging.retell_optout_analysis_key == "Do not call"
     # Production turns it on during the recall rollout, once the agent's
     # post-call analysis carries the field.
     assert production.retell_optout_analysis_key is None

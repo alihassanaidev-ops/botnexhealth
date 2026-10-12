@@ -37,6 +37,7 @@ RETELL_STATUS_MAP: dict[str, str] = {
     "emergency": CallStatus.EMERGENCY.value,
     "complaint": CallStatus.COMPLAINT.value,
     "needs callback": CallStatus.NEEDS_CALLBACK.value,
+    "need callback": CallStatus.NEEDS_CALLBACK.value,  # recall agent's wording
     "faq handled": CallStatus.FAQ_HANDLED.value,
     "financial inquiry": CallStatus.FINANCIAL_INQUIRY.value,
     "transferred": CallStatus.TRANSFERRED.value,
