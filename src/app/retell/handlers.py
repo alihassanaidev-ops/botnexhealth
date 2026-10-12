@@ -211,6 +211,22 @@ async def _validate_appointment_type_for_provider(
     return None
 
 
+def _age_in_years(date_of_birth: Any, today: date) -> int | None:
+    """Whole years from a ``YYYY-MM-DD`` date of birth, or ``None``.
+
+    Computed here so the agent never has to do date arithmetic: a model reading
+    a DOB has mapped a 14-year-old into a child's age band.
+    """
+    if not date_of_birth:
+        return None
+    try:
+        dob = date.fromisoformat(str(date_of_birth).strip()[:10])
+    except (ValueError, TypeError):
+        return None
+    age = today.year - dob.year - ((today.month, today.day) < (dob.month, dob.day))
+    return age if age >= 0 else None
+
+
 def _to_full_patient_payload(patient: Any) -> dict[str, Any]:
     """Return complete patient details after server-side identity verification."""
     patient_extra = patient.extra if isinstance(patient.extra, dict) else {}
@@ -231,6 +247,8 @@ def _to_full_patient_payload(patient: Any) -> dict[str, Any]:
         "email": patient.email,
         "phone_number": patient.phone,
         "date_of_birth": patient.date_of_birth,
+        # Refined to the clinic's local date once the location is known.
+        "age": _age_in_years(patient.date_of_birth, date.today()),
         **allowed_details,
     }
 
@@ -781,8 +799,13 @@ async def lookup_patient(args: dict[str, Any]) -> dict[str, Any]:
                 local_dt = dt.astimezone(tz).replace(microsecond=0)
                 return local_dt.isoformat()
 
+            local_today = datetime.now(tz).date()
             for patient in simplified:
                 patient["timezone"] = tz_str
+                if "age" in patient:
+                    patient["age"] = _age_in_years(
+                        patient.get("date_of_birth"), local_today
+                    )
                 upcoming = patient.get("upcoming_appointments")
                 if isinstance(upcoming, list):
                     for appt in upcoming:
@@ -1477,13 +1500,8 @@ async def list_providers(args: dict[str, Any]) -> dict[str, Any]:
         patient_age: int | None = None
         if patient_dob and ctx.location:
             try:
-                dob = date.fromisoformat(patient_dob)
-                today = date.today()
-                patient_age = (
-                    today.year
-                    - dob.year
-                    - ((today.month, today.day) < (dob.month, dob.day))
-                )
+                date.fromisoformat(patient_dob)
+                patient_age = _age_in_years(patient_dob, date.today())
             except (ValueError, TypeError):
                 logger.warning(
                     f"Invalid date_of_birth format: {hash_for_logging(patient_dob)}"

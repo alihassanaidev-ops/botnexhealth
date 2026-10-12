@@ -80,7 +80,10 @@ A recall call sends the agent only the minimum patient data:
 `clinic_name`, `compliance_disclosure`, and `leave_voicemail`. No last name,
 email, date of birth, or visit history is sent. The agent verifies the patient
 with `lookup_patient` during the call, which supplies the patient ID needed to
-book and the date of birth used to choose the hygiene appointment type. Other
+book and, on a full-detail lookup, `age` (whole years on the clinic's local
+date, `null` when the DOB is missing) used to choose the hygiene appointment
+type. The server computes the age so the agent never does date arithmetic; it
+is an added field available to every agent that calls `lookup_patient`. Other
 campaigns keep their full merge context.
 
 ## Voice template

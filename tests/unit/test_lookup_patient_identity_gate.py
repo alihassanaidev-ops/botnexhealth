@@ -2,12 +2,16 @@
 
 from __future__ import annotations
 
+from datetime import date
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
 from src.app.retell import handlers
+
+# Alice's age today, so the expectation holds whatever year the suite runs.
+_ALICE_AGE = handlers._age_in_years("1990-01-01", date.today())
 
 
 def _ctx(
@@ -84,6 +88,7 @@ def test_full_patient_payload_contains_complete_verified_details():
         "email": "alice@example.com",
         "phone_number": "+15551234567",
         "date_of_birth": "1990-01-01",
+        "age": _ALICE_AGE,
         "upcoming_appointments": [{"id": "appt-1"}],
         "last_visit": {"id": "appointment-previous"},
         "recent_procedures": [{"id": "procedure-1"}],
@@ -145,6 +150,7 @@ async def test_verified_phone_returns_complete_full_details(
             "email": "alice@example.com",
             "phone_number": "+15551234567",
             "date_of_birth": "1990-01-01",
+            "age": _ALICE_AGE,
             "upcoming_appointments": [{"id": "appt-1"}],
         }
     ]
@@ -382,3 +388,21 @@ async def test_full_detail_discards_a_patient_that_is_not_the_verified_one(monke
     assert result["patient_id"] == "p1"
     assert all(p["id"] == "p1" for p in result["patients"])
     assert not any(p.get("first_name") == "Other" for p in result["patients"])
+
+
+@pytest.mark.parametrize(
+    ("dob", "today", "age"),
+    [
+        ("2012-06-25", date(2026, 10, 12), 14),  # Sis: teen, not a child
+        ("2012-10-13", date(2026, 10, 12), 13),  # birthday tomorrow
+        ("2012-10-12", date(2026, 10, 12), 14),  # birthday today
+        ("2022-03-27", date(2026, 10, 12), 4),
+        ("1974-02-08T00:00:00Z", date(2026, 10, 12), 52),
+        ("", date(2026, 10, 12), None),
+        (None, date(2026, 10, 12), None),
+        ("not-a-date", date(2026, 10, 12), None),
+        ("2030-01-01", date(2026, 10, 12), None),
+    ],
+)
+def test_age_in_years(dob, today, age):
+    assert handlers._age_in_years(dob, today) == age
