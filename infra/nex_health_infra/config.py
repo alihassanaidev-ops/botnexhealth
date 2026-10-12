@@ -156,6 +156,10 @@ class EnvironmentConfig:
     # next `cdk deploy` regenerated that definition and silently dropped it,
     # reverting staging to v2 while the deploy looked successful.
     nexhealth_api_version: str | None = None
+    # Retell post-call analysis field that flags a spoken "don't call me
+    # again". When set, the call-analyzed webhook adds the caller to the
+    # location's do-not-contact list; unset leaves opt-out detection off.
+    retell_optout_analysis_key: str | None = None
     # Opt-in switch that lets SUPER_ADMIN enrol an authenticator app (TOTP)
     # and use an emailed sign-in code, instead of being forced to a passkey.
     # Off unless a deployment's config sets `allowSuperAdminTotp: true`, so
@@ -191,6 +195,7 @@ def load_config(path: str | Path) -> EnvironmentConfig:
         app_name=raw["appName"],
         environment_name=raw["environmentName"],
         nexhealth_api_version=raw.get("nexhealthApiVersion"),
+        retell_optout_analysis_key=raw.get("retellOptoutAnalysisKey"),
         account=raw["account"],
         region=raw["region"],
         app_env=raw.get("appEnv", raw["environmentName"]),

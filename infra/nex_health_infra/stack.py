@@ -1392,6 +1392,10 @@ class NexHealthPlatformStack(Stack):
             environment["WEB_CONCURRENCY"] = str(self.config.api.web_concurrency)
         if self.config.nexhealth_api_version:
             environment["NEXHEALTH_API_VERSION"] = self.config.nexhealth_api_version
+        if self.config.retell_optout_analysis_key:
+            environment["RETELL_OPTOUT_ANALYSIS_KEY"] = (
+                self.config.retell_optout_analysis_key
+            )
         if cors_origins:
             environment["CORS_ALLOWED_ORIGINS"] = ",".join(cors_origins)
         if frontend_base_url:

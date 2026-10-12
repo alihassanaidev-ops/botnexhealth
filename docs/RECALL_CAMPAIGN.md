@@ -104,8 +104,13 @@ enforces its consent class rather than silently running under implied consent.
   (`compliance_gate_service`). A location with no recorded voice consent will
   have calls blocked — decide the basis with the clinic before launch.
 - Quiet hours come from the location's operating hours.
-- Spoken opt-out suppression relies on `settings.retell_optout_analysis_key`;
-  it is inert until that key is set.
+- Spoken opt-out: the Retell agent's post-call analysis must carry a boolean
+  `do_not_call` field ("the patient asked not to be called again"). The infra
+  config key `retellOptoutAnalysisKey` sets `RETELL_OPTOUT_ANALYSIS_KEY` to
+  that field name; when the field is true, the call-analyzed webhook adds the
+  number to the location's do-not-contact list (all channels), which every
+  later scan and the pre-dial recheck honor. Set on staging; production turns
+  it on during the recall rollout. With the key unset, detection is off.
 
 ## Setup (staging or production)
 

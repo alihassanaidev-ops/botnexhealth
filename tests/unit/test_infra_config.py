@@ -57,6 +57,16 @@ def test_production_keeps_oversize_body_waf_blocking() -> None:
     assert config.waf_count_oversize_body_requests is False
 
 
+def test_spoken_opt_out_is_configured_on_staging_only_for_now() -> None:
+    staging = load_config(INFRA_ROOT / "config" / "staging.json")
+    production = load_config(INFRA_ROOT / "config" / "production.json")
+
+    assert staging.retell_optout_analysis_key == "do_not_call"
+    # Production turns it on during the recall rollout, once the agent's
+    # post-call analysis carries the field.
+    assert production.retell_optout_analysis_key is None
+
+
 def test_ses_activation_requires_a_sending_domain(tmp_path: Path) -> None:
     source = json.loads((INFRA_ROOT / "config" / "staging.json").read_text())
     source["email"]["sesClinicSendingEnabled"] = True
