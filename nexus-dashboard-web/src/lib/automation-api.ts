@@ -58,6 +58,52 @@ export async function resumeCampaign(id: string): Promise<AutomationWorkflow> {
     return data
 }
 
+/**
+ * The server's reason a campaign action failed, e.g. the launch-checklist
+ * blockers that stop a resume, or null when it sent none.
+ */
+export function campaignActionError(error: unknown): string | null {
+    const detail = (error as { response?: { data?: { detail?: unknown } } })?.response?.data?.detail
+    if (typeof detail === "string") return detail || null
+    if (detail && typeof detail === "object") {
+        const { message, blocker_messages } = detail as {
+            message?: string
+            blocker_messages?: string[]
+        }
+        if (blocker_messages?.length) return blocker_messages.join(" ")
+        if (message) return message
+    }
+    return null
+}
+
+/** Whether a campaign pulls its patients from the PMS recall list. */
+export function isRecallCampaign(workflow: AutomationWorkflow): boolean {
+    const definition = workflow.definition as
+        | { trigger?: { source?: { kind?: string } }; triggers?: { source?: { kind?: string } }[] }
+        | null
+    const triggers = [definition?.trigger, ...(definition?.triggers ?? [])]
+    return triggers.some((trigger) => trigger?.source?.kind === "pms_recall")
+}
+
+export interface RecallPreviewPatient {
+    patient_id: string
+    patient_name: string | null
+    recall_type_name: string | null
+    recall_due_date: string | null
+}
+
+export interface RecallPreview {
+    max_enrollments_per_run: number
+    would_call: RecallPreviewPatient[]
+    counts: Record<string, number>
+}
+
+/** Who the recall campaign's next scheduled run would call. Places no calls. */
+export async function previewRecallCampaign(id: string): Promise<RecallPreview> {
+    const { data } = await api.post<RecallPreview>(`/automation/workflows/${id}/recall/preview`)
+    return data
+}
+
 export async function archiveCampaign(id: string): Promise<AutomationWorkflow> {
     const { data } = await api.post<AutomationWorkflow>(`/automation/workflows/${id}/archive`)
     return data

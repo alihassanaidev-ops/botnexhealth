@@ -689,7 +689,12 @@ def test_resume_workflow_rejects_launch_checklist_blockers():
     mock_svc.get_workflow = AsyncMock(return_value=wf)
     mock_svc.resume_workflow = AsyncMock()
     checklist_svc = AsyncMock()
-    blocker = MagicMock(id="gotracker_readiness", status="blocked")
+    blocker = MagicMock(
+        id="gotracker_readiness",
+        status="blocked",
+        label="GoTracker webhook readiness",
+        message="Location is missing its GoTracker product key.",
+    )
     checklist_svc.build = AsyncMock(
         return_value=MagicMock(blockers_count=1, items=[blocker])
     )
@@ -713,6 +718,9 @@ def test_resume_workflow_rejects_launch_checklist_blockers():
     assert exc_info.value.detail == {
         "message": "Launch checklist has blockers; workflow cannot be resumed.",
         "blockers": ["gotracker_readiness"],
+        "blocker_messages": [
+            "GoTracker webhook readiness: Location is missing its GoTracker product key."
+        ],
     }
     checklist_svc.build.assert_awaited_once_with(wf, institution_id="inst-1")
     mock_svc.resume_workflow.assert_not_awaited()

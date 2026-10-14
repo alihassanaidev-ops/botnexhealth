@@ -44,6 +44,9 @@ vi.mock("@/lib/automation-api", () => ({
     cancelCampaignRun: vi.fn(),
     deleteCampaign: vi.fn(),
     emergencyHaltCampaign: vi.fn(),
+    campaignActionError: vi.fn(() => null),
+    isRecallCampaign: vi.fn(() => false),
+    previewRecallCampaign: vi.fn(),
 }))
 vi.mock("@/lib/contacts-api", () => ({ listContacts: vi.fn() }))
 vi.mock("sonner", () => ({ toast: { error: vi.fn(), success: vi.fn(), info: vi.fn() } }))

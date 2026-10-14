@@ -47,6 +47,7 @@ from src.app.services.automation.definition_service import (
 from src.app.services.automation.channel_readiness import ChannelReadinessService
 from src.app.services.automation.dry_run import simulate_run
 from src.app.services.automation.template_renderer import build_merge_vars
+from src.app.services.automation.trigger_lookup import workflow_starts_from
 from src.app.services.automation.launch_checklist_service import (
     CampaignLaunchChecklist,
     CampaignLaunchChecklistService,
@@ -1839,6 +1840,60 @@ async def put_audience_definition(
         )
 
 
+class RecallPreviewPatient(BaseModel):
+    patient_id: str
+    patient_name: str | None = None
+    recall_type_name: str | None = None
+    recall_due_date: str | None = None
+
+
+class RecallPreviewResponse(BaseModel):
+    max_enrollments_per_run: int
+    would_call: list[RecallPreviewPatient]
+    counts: dict[str, int]
+
+
+@router.post("/{workflow_id}/recall/preview", response_model=RecallPreviewResponse)
+@audit(
+    AuditAction.CAMPAIGN_AUDIENCE_PREVIEW,
+    resource=lambda *args, **kwargs: (
+        f"campaign:{kwargs.get('workflow_id')}:recall-preview"
+    ),
+    actor=AuditActor.ADMIN,
+)
+async def preview_recall(
+    workflow_id: str,
+    current_user: _InstitutionOrLocationAdmin,
+) -> RecallPreviewResponse:
+    """Who the recall campaign's next scheduled run would call. Places no calls."""
+    from src.app.tasks.automation_workflow import preview_recall_run
+
+    async with get_db_session() as session:
+        svc = AutomationWorkflowDefinitionService(session)
+        wf = await _get_workflow_or_404(svc, workflow_id, current_user)
+        if wf.current_version is None or not workflow_starts_from(wf, "recall_scan"):
+            raise HTTPException(
+                status.HTTP_422_UNPROCESSABLE_ENTITY,
+                "Only a published recall campaign can be previewed.",
+            )
+        result = await preview_recall_run(wf)
+    return RecallPreviewResponse(
+        max_enrollments_per_run=result["max_enrollments_per_run"],
+        would_call=[
+            RecallPreviewPatient(
+                patient_id=str(p["patient_id"]),
+                patient_name=p.get("patient_name"),
+                recall_type_name=p.get("recall_type_name"),
+                recall_due_date=(
+                    str(p["recall_due_date"])[:10] if p.get("recall_due_date") else None
+                ),
+            )
+            for p in result["patients"]
+        ],
+        counts={k: int(v) for k, v in result["counts"].items() if v},
+    )
+
+
 @router.post("/{workflow_id}/audience/preview", response_model=AudiencePreviewResponse)
 @audit(
     AuditAction.CAMPAIGN_AUDIENCE_PREVIEW,
@@ -2070,12 +2125,16 @@ async def resume_workflow(
             institution_id=inst_id,
         )
         if checklist.blockers_count:
-            blockers = [item.id for item in checklist.items if item.status == "blocked"]
+            blocked = [item for item in checklist.items if item.status == "blocked"]
             raise HTTPException(
                 status_code=status.HTTP_409_CONFLICT,
                 detail={
                     "message": "Launch checklist has blockers; workflow cannot be resumed.",
-                    "blockers": blockers,
+                    "blockers": [item.id for item in blocked],
+                    # Readable reasons, so the dashboard can say what to fix.
+                    "blocker_messages": [
+                        f"{item.label}: {item.message}" for item in blocked
+                    ],
                 },
             )
         await svc.resume_workflow(wf)

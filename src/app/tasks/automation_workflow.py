@@ -4371,11 +4371,16 @@ async def _scan_recall_async() -> dict:
 
 
 async def _enroll_recalls_for_institution(
-    institution_id: str, workflows: list[dict]
+    institution_id: str,
+    workflows: list[dict],
+    *,
+    preview: list[dict] | None = None,
 ) -> dict[str, int]:
     """Pull PMS recall candidates and enqueue workflow enrollments.
 
     Returns scanner counters, including GoTracker runtime refusal reasons.
+    Given a ``preview`` list, runs as a dry run instead: the patients the run
+    would call are appended to it, and nothing is enrolled or stored.
     """
     from sqlalchemy import select as sa_select
 
@@ -4642,6 +4647,7 @@ async def _enroll_recalls_for_institution(
                     if not matched_workflows:
                         continue
 
+                    live: _LiveRecallPatient | None = None
                     if adapter_source == "nexhealth":
                         # Read the patient live rather than trusting the stored
                         # copy, so recall works without the full patient sync.
@@ -4653,6 +4659,7 @@ async def _enroll_recalls_for_institution(
                             location=location,
                             patient_id=patient_id,
                             now=now,
+                            store=preview is None,
                         )
                         if live is None:
                             if contact_id is None:
@@ -4685,6 +4692,26 @@ async def _enroll_recalls_for_institution(
                             event_key="patient.recall_due",
                             source_pms=adapter_source,
                         )
+                        if preview is not None:
+                            preview.append(
+                                {
+                                    "workflow_id": wf["workflow_id"],
+                                    "patient_id": patient_id,
+                                    "patient_name": (
+                                        live.display_name if live else None
+                                    )
+                                    or (contact.full_name if contact else None),
+                                    "recall_type_name": trigger_metadata.get(
+                                        "recall_type_name"
+                                    ),
+                                    "recall_due_date": trigger_metadata.get(
+                                        "recall_due_date"
+                                    ),
+                                }
+                            )
+                            counts["enrolled"] += 1
+                            remaining_enrollments[wf["workflow_id"]] -= 1
+                            continue
                         key = make_recall_idempotency_key(
                             wf["version_id"], patient_id, period
                         )
@@ -4713,12 +4740,41 @@ async def _enroll_recalls_for_institution(
     return counts
 
 
+async def preview_recall_run(workflow: Any) -> dict[str, Any]:
+    """Dry-run the next scheduled scan for one recall campaign.
+
+    Uses the scanner itself, so the result is exactly who the next run would
+    call (up to its per-run cap) and why the rest were left out. Nothing is
+    enrolled, dialled, or stored.
+    """
+    from src.app.services.automation.definition_schema import WorkflowDefinition
+
+    definition = WorkflowDefinition.model_validate(workflow.definition)
+    entry = _recall_workflow_entry(
+        workflow,
+        version_id=workflow.current_version_id,
+        location_id=workflow.location_id,
+        max_enrollments=_recall_max_enrollments(definition),
+    )
+    patients: list[dict] = []
+    counts = await _enroll_recalls_for_institution(
+        str(workflow.institution_id), [entry], preview=patients
+    )
+    return {
+        "max_enrollments_per_run": entry["max_enrollments"],
+        "counts": counts,
+        "patients": patients,
+    }
+
+
 @dataclass(frozen=True)
 class _LiveRecallPatient:
     contact_id: str | None
     inactive: bool
     last_visit_date: str | None
     has_future_appointment: bool = False
+    # Shown in a recall preview only; never sent to the call.
+    display_name: str | None = None
 
 
 def _has_upcoming_appointment(patient: dict, now: datetime) -> bool:
@@ -4752,6 +4808,7 @@ async def _refresh_recall_contact_live(
     location: Any,
     patient_id: str,
     now: datetime | None = None,
+    store: bool = True,
 ) -> _LiveRecallPatient | None:
     """Refresh one recall patient's contact from a live NexHealth read.
 
@@ -4759,7 +4816,8 @@ async def _refresh_recall_contact_live(
     back to an existing contact. A patient with an upcoming appointment is
     reported without storing a contact, since they will not be called. The
     contact is committed before returning because the enrollment task that
-    dials it runs in another session.
+    dials it runs in another session. ``store=False`` (a recall preview)
+    reads the patient without writing anything.
     """
     from src.app.services.automation.nexhealth_projection_service import (
         NexHealthProjectionService,
@@ -4789,6 +4847,19 @@ async def _refresh_recall_contact_live(
             has_future_appointment=True,
         )
 
+    last_visited = patient.get("last_visited_appointment")
+    last_visit_start = (
+        last_visited.get("start_time") if isinstance(last_visited, dict) else None
+    )
+    last_visit_date = str(last_visit_start)[:10] if last_visit_start else None
+    if not store:
+        return _LiveRecallPatient(
+            contact_id=None,
+            inactive=bool(patient.get("inactive", False)),
+            last_visit_date=last_visit_date,
+            display_name=_patient_display_name(patient),
+        )
+
     raw_location_ids = patient.get("location_ids")
     nexhealth_location_ids = (
         [str(value) for value in raw_location_ids if value not in (None, "")]
@@ -4815,15 +4886,19 @@ async def _refresh_recall_contact_live(
         )
         return None
 
-    last_visited = patient.get("last_visited_appointment")
-    last_visit_start = (
-        last_visited.get("start_time") if isinstance(last_visited, dict) else None
-    )
     return _LiveRecallPatient(
         contact_id=str(result.contact.id),
         inactive=bool(patient.get("inactive", False)),
-        last_visit_date=str(last_visit_start)[:10] if last_visit_start else None,
+        last_visit_date=last_visit_date,
     )
+
+
+def _patient_display_name(patient: dict) -> str | None:
+    bio = patient.get("bio") if isinstance(patient.get("bio"), dict) else {}
+    first = patient.get("first_name") or bio.get("first_name")
+    last = patient.get("last_name") or bio.get("last_name")
+    name = " ".join(str(part).strip() for part in (first, last) if part)
+    return name or (str(patient["name"]).strip() if patient.get("name") else None)
 
 
 async def _list_recall_types_safe(adapter: Any) -> list[UniversalRecallType]:

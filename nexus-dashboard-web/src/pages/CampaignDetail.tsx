@@ -65,6 +65,10 @@ import {
     listCampaignRuns,
     pauseCampaign,
     resumeCampaign,
+    campaignActionError,
+    isRecallCampaign,
+    previewRecallCampaign,
+    type RecallPreview,
 } from "@/lib/automation-api"
 import { listContacts, type ContactListItem } from "@/lib/contacts-api"
 import { cn } from "@/lib/utils"
@@ -905,6 +909,9 @@ export default function CampaignDetail() {
     const [acting, setActing] = useState<string | null>(null)
     const [deleteOpen, setDeleteOpen] = useState(false)
     const [haltOpen, setHaltOpen] = useState(false)
+    const [recallPreviewOpen, setRecallPreviewOpen] = useState(false)
+    const [recallPreview, setRecallPreview] = useState<RecallPreview | null>(null)
+    const [recallPreviewError, setRecallPreviewError] = useState<string | null>(null)
     const [enrollOpen, setEnrollOpen] = useState(false)
     const [cancelTarget, setCancelTarget] = useState<CampaignRunListItem | null>(null)
 
@@ -987,8 +994,25 @@ export default function CampaignDetail() {
             setCampaign(await resumeCampaign(campaign.id))
             toast.success("Campaign resumed")
             await refreshAll()
-        } catch {
-            toast.error("Failed to resume campaign")
+        } catch (err) {
+            toast.error("Failed to resume campaign", {
+                description: campaignActionError(err) ?? undefined,
+            })
+        } finally {
+            setActing(null)
+        }
+    }
+
+    async function handleRecallPreview() {
+        if (!campaign) return
+        setRecallPreviewOpen(true)
+        setRecallPreview(null)
+        setRecallPreviewError(null)
+        setActing("recall-preview")
+        try {
+            setRecallPreview(await previewRecallCampaign(campaign.id))
+        } catch (err) {
+            setRecallPreviewError(campaignActionError(err) ?? "Could not preview this campaign.")
         } finally {
             setActing(null)
         }
@@ -1100,6 +1124,12 @@ export default function CampaignDetail() {
                                 Resume
                             </Button>
                         )}
+                        {isRecallCampaign(campaign) && campaign.current_version_id && (
+                            <Button variant="outline" size="sm" disabled={acting !== null} onClick={handleRecallPreview} className="gap-1.5">
+                                {acting === "recall-preview" ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Phone className="h-3.5 w-3.5" />}
+                                Preview recall calls
+                            </Button>
+                        )}
                         {campaign.status !== "archived" && (
                             <Button variant="outline" size="sm" disabled={acting !== null || campaign.status !== "active"} onClick={() => setEnrollOpen(true)} className="gap-1.5">
                                 <UserPlus className="h-3.5 w-3.5" />
@@ -1189,6 +1219,55 @@ export default function CampaignDetail() {
                             {acting === "delete" && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
                             Delete campaign
                         </Button>
+                    </DialogFooter>
+                </DialogContent>
+            </Dialog>
+
+            <Dialog open={recallPreviewOpen} onOpenChange={(open) => !open && setRecallPreviewOpen(false)}>
+                <DialogContent className="max-w-lg">
+                    <DialogHeader>
+                        <DialogTitle>Who the next run would call</DialogTitle>
+                        <DialogDescription>
+                            A dry run of the next scheduled scan against the live recall list. No one is called and nothing is saved.
+                        </DialogDescription>
+                    </DialogHeader>
+                    {acting === "recall-preview" && (
+                        <div className="flex items-center gap-2 py-6 text-sm text-muted-foreground">
+                            <Loader2 className="h-4 w-4 animate-spin" /> Reading the recall list…
+                        </div>
+                    )}
+                    {recallPreviewError && <p className="text-sm text-destructive">{recallPreviewError}</p>}
+                    {recallPreview && (
+                        <div className="space-y-3 text-sm">
+                            <p className="text-muted-foreground">
+                                {recallPreview.would_call.length} of up to {recallPreview.max_enrollments_per_run} patients per run.
+                            </p>
+                            {recallPreview.would_call.length > 0 ? (
+                                <ul className="max-h-72 divide-y overflow-y-auto rounded-md border">
+                                    {recallPreview.would_call.map((patient) => (
+                                        <li key={patient.patient_id} className="flex items-center justify-between gap-3 px-3 py-2">
+                                            <span className="font-medium">{patient.patient_name ?? `Patient ${patient.patient_id}`}</span>
+                                            <span className="text-xs text-muted-foreground">
+                                                {[patient.recall_type_name, patient.recall_due_date && `due ${patient.recall_due_date}`].filter(Boolean).join(" · ")}
+                                            </span>
+                                        </li>
+                                    ))}
+                                </ul>
+                            ) : (
+                                <p>No patients are due for this campaign right now.</p>
+                            )}
+                            {Object.keys(recallPreview.counts).length > 0 && (
+                                <div className="rounded-md bg-muted/50 px-3 py-2 text-xs text-muted-foreground">
+                                    {Object.entries(recallPreview.counts)
+                                        .filter(([key]) => key !== "enrolled")
+                                        .map(([key, value]) => `${key.replace(/_/g, " ")}: ${value}`)
+                                        .join(" · ")}
+                                </div>
+                            )}
+                        </div>
+                    )}
+                    <DialogFooter>
+                        <Button variant="outline" onClick={() => setRecallPreviewOpen(false)}>Close</Button>
                     </DialogFooter>
                 </DialogContent>
             </Dialog>

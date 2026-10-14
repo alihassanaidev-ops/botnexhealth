@@ -36,6 +36,7 @@ import {
     pauseCampaign,
     releaseOutboundHalt,
     resumeCampaign,
+    campaignActionError,
     deleteCampaign,
 } from "@/lib/automation-api"
 import type { AutomationWorkflow, OutboundHaltStatus } from "@/types"
@@ -133,8 +134,10 @@ export default function Campaigns() {
             const updated = await resumeCampaign(wf.id)
             setCampaigns((prev) => prev.map((c) => (c.id === updated.id ? updated : c)))
             toast.success(`"${wf.name}" resumed`)
-        } catch {
-            toast.error("Failed to resume campaign")
+        } catch (err) {
+            toast.error("Failed to resume campaign", {
+                description: campaignActionError(err) ?? undefined,
+            })
         } finally {
             setActing(null)
         }

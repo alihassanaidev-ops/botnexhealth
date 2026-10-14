@@ -1900,3 +1900,82 @@ def test_has_upcoming_appointment(upcoming, booked):
     from src.app.tasks.automation_workflow import _has_upcoming_appointment
 
     assert _has_upcoming_appointment({"upcoming_appts": upcoming}, _NOW) is booked
+
+
+# ---------------------------------------------------------------------------
+# Recall preview (dry run)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_recall_preview_lists_the_next_run_without_enrolling(_live_recall_refresh):
+    from src.app.tasks.automation_workflow import preview_recall_run
+
+    _live_recall_refresh.return_value = _LiveRecallPatient(
+        contact_id=None, inactive=False, last_visit_date=None, display_name="Patty PPO"
+    )
+    wf = _make_workflow(
+        recall_source={"due_within_days": 365, "include_overdue": True},
+        version_id="ver-1",
+    )
+    recalls = [
+        {"id": 1, "patient_id": "p1", "date_due": "2020-01-01", "recall_type": {"id": 2288000}}
+    ]
+    inst_session, _ = _recall_inst_session(1)
+    adapter = AsyncMock()
+    adapter.list_patient_recalls = AsyncMock(return_value=recalls)
+    adapter.close = AsyncMock()
+    with (
+        patch(
+            "src.app.tasks.automation_workflow.get_system_db_session",
+            side_effect=[_cm(inst_session)],
+        ),
+        patch(
+            "src.app.pms.nexhealth.adapter.NexHealthAdapter.create",
+            AsyncMock(return_value=adapter),
+        ),
+        patch(
+            "src.app.tasks.automation_workflow.enroll_and_start_workflow_run"
+        ) as mock_task,
+    ):
+        mock_task.apply_async = MagicMock()
+        result = await preview_recall_run(wf)
+
+    mock_task.apply_async.assert_not_called()
+    # A preview reads the patient but must not store a contact.
+    assert _live_recall_refresh.await_args.kwargs["store"] is False
+    assert result["counts"]["enrolled"] == 1
+    [patient] = result["patients"]
+    assert patient["patient_name"] == "Patty PPO"
+    assert patient["recall_due_date"] == "2020-01-01"
+
+
+@pytest.mark.asyncio
+async def test_refresh_recall_contact_live_preview_reads_without_storing():
+    session = _savepoint_session()
+    adapter = MagicMock()
+    adapter.get_patient_raw = AsyncMock(
+        return_value={
+            "id": 123,
+            "first_name": "Patty",
+            "last_name": "PPO",
+            "inactive": False,
+            "last_visited_appointment": {"start_time": "2026-04-01T14:00:00.000Z"},
+        }
+    )
+    with patch(
+        "src.app.services.automation.nexhealth_projection_service.NexHealthProjectionService"
+    ) as service:
+        live = await _refresh_recall_contact_live(
+            session, adapter, institution_id="inst-1", location=_live_location(),
+            patient_id="123", now=_NOW, store=False,
+        )
+
+    assert live == _LiveRecallPatient(
+        contact_id=None,
+        inactive=False,
+        last_visit_date="2026-04-01",
+        display_name="Patty PPO",
+    )
+    service.return_value.upsert_patient.assert_not_called()
+    session.commit.assert_not_awaited()

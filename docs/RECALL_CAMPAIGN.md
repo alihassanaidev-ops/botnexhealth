@@ -156,7 +156,14 @@ enforces its consent class rather than silently running under implied consent.
    type ids**, **due window**, and **include overdue**.
 4. Make sure the Retell recall agent's prompt maps recall type and age to
    the clinic's hygiene appointment types.
-5. Keep the campaign **paused** and review the dry-run counters before launch.
+5. Keep the campaign **paused** and open **Preview recall calls** on the
+   campaign page: a dry run of the next scheduled scan (`POST
+   /api/automation/workflows/{id}/recall/preview`) listing who it would call
+   and why the rest were left out. It calls no one and stores nothing.
+   Publishing changes to a paused campaign keeps it paused; it starts only
+   on **Resume**, which runs the launch checklist. A recall campaign's
+   audience item is a warning there, not a blocker, because its patients are
+   read from the PMS at each scan.
 6. Launch a small pilot, verify calls/bookings/non-duplication, then scale.
 7. Test the institution emergency halt before going live.
 

@@ -25,6 +25,7 @@ import {
     resumeWorkflow,
     validateDefinition as validateWorkflowDefinition,
 } from "@/lib/workflow-api"
+import { campaignActionError } from "@/lib/automation-api"
 import { listOutboundVoiceProfiles } from "@/lib/outbound-voice-api"
 import { listRetellSmsChatProfiles } from "@/lib/retell-sms-api"
 import { listAppointmentTypes, listProviders } from "@/lib/tenant-api"
@@ -606,8 +607,8 @@ export default function WorkflowBuilder() {
         try {
             setWorkflow(await action(id))
             toast.success(okMsg)
-        } catch {
-            toast.error("Action failed")
+        } catch (err) {
+            toast.error("Action failed", { description: campaignActionError(err) ?? undefined })
         } finally {
             setBusy(false)
         }
@@ -662,7 +663,11 @@ export default function WorkflowBuilder() {
             serverDef.current = def
             setDirty(false)
             localStorage.removeItem(draftKey(id))
-            toast.success("Changes published")
+            toast.success(
+                updated.status === "paused"
+                    ? "Changes published. The campaign is still paused; resume it to start."
+                    : "Changes published",
+            )
         } catch (err) {
             // Surface the real server reason (e.g. a status conflict or validation
             // detail) instead of a generic "rejected the definition" message.
