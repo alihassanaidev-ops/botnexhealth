@@ -1233,6 +1233,7 @@ def _recall_voice_attempt_nodes(attempt: int) -> list[dict[str, Any]]:
                         "value": [
                             "no_answer",
                             "voicemail",
+                            "ivr",  # the agent hangs up on a phone menu
                             "busy",
                             "timeout",
                             "declined",

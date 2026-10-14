@@ -96,6 +96,23 @@ def _boolish(value: Any) -> bool:
     return text in {"true", "yes", "1", "y"}
 
 
+def _requested_availability(
+    custom: dict[str, Any], dynamic_vars: dict[str, Any]
+) -> str | None:
+    """When the patient wants to hear back: their stated availability, or the
+    callback time the recall agent records ("Call back time")."""
+    return _nonempty_any(
+        _pick_any(
+            custom,
+            ["Availability", "availability", "preferred_time", "preferred_times"],
+        )
+        or _pick_any(
+            dynamic_vars,
+            ["availability", "preferred_time", "preferred_times"],
+        )
+    ) or _nonempty_any(_pick_any(custom, ["Call back time", "callback_time"]))
+
+
 # DOB shapes Retell sends, in the order we try them. The dashed variants come
 # from agents whose extraction prompt asks for "month-DD-YYYY" (e.g. the no-PMS
 # receptionist, which emits "February-21-2001"); the comma variants come from
@@ -321,16 +338,7 @@ class PostCallService:
                 ],
             )
         )
-        requested_availability = _nonempty_any(
-            _pick_any(
-                custom,
-                ["Availability", "availability", "preferred_time", "preferred_times"],
-            )
-            or _pick_any(
-                dynamic_vars,
-                ["availability", "preferred_time", "preferred_times"],
-            )
-        )
+        requested_availability = _requested_availability(custom, dynamic_vars)
 
         # Extract NexHealth patient ID from webhook data
         pms_patient_id: str | None = self._extract_patient_id(custom, dynamic_vars)

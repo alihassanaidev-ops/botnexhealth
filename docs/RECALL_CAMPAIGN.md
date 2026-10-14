@@ -103,7 +103,7 @@ webhook and the outcome poll:
 | How the call ended | `call_outcome` | Recall route |
 |---|---|---|
 | Patient asked not to be called (`user_requested_dnc`, or the opt-out post-call field) | `do_not_call` | do not contact; number blocked |
-| No answer, voicemail, busy, silence (`inactivity`) | `no_answer` / `voicemail` / `busy` | retry, then unreachable |
+| No answer, voicemail, phone menu (`ivr_reached`), busy, silence (`inactivity`) | `no_answer` / `voicemail` / `ivr` / `busy` | retry, then unreachable |
 | Dial error, invalid number, spam, carrier block | `failed` | staff handoff |
 | Transferred / bridged | `transferred` | transferred |
 | Transfer failed (`transfer_cancelled`) | `callback_requested` | callback |
@@ -111,6 +111,9 @@ webhook and the outcome poll:
 | Conversation: Needs Call Back / Needs Booking | `callback_requested` | callback |
 | Conversation: Complaint, Financial, Insurance and Billing, Emergency, Cancelled | `staff_handoff` | staff handoff |
 | Conversation: No Action Needed / FAQ Handled | `contacted` | contacted |
+
+The agent's "Call back time" post-call field is saved as the call's requested
+availability, so staff see when the patient asked to be called back.
 
 "Call Status" is the same post-call tag inbound calls use; when several tags
 are set the strongest wins (booked > callback > transferred > staff handoff >

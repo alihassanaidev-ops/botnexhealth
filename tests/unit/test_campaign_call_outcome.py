@@ -108,3 +108,15 @@ def test_recall_routes_cover_every_outcome():
     assert exits[route_for("failed")] == "staff_handoff"
     # Missed calls retry: attempt 1 routes to the wait before attempt 2.
     assert route_for("no_answer") == "wait-recall-retry-1"
+    # The agent hangs up on a phone menu; that is a missed call, not a handoff.
+    assert route_for("ivr") == "wait-recall-retry-1"
+
+
+def test_recall_agent_callback_time_is_kept_as_requested_availability():
+    from src.app.services.post_call_service import _requested_availability
+
+    assert _requested_availability({"Call back time": "Tuesday at 3 PM"}, {}) == "Tuesday at 3 PM"
+    assert _requested_availability({"Call back time": "None"}, {}) is None
+    # An explicit availability answer still wins.
+    custom = {"Availability": "Mornings", "Call back time": "Tuesday at 3 PM"}
+    assert _requested_availability(custom, {}) == "Mornings"
