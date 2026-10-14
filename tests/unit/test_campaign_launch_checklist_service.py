@@ -398,3 +398,41 @@ def test_callback_campaign_surfaces_voice_outcome_and_handoff_readiness() -> Non
 
 def _item(checklist, item_id: str):
     return next(item for item in checklist.items if item.id == item_id)
+
+
+def test_recall_campaign_audience_is_a_warning_not_a_resume_blocker() -> None:
+    # A recall audience is read from the PMS at each scan, so no audience
+    # preview ever exists for it; blocking on one stopped every resume.
+    recall = WorkflowDefinition.model_validate(
+        {
+            "trigger": {
+                "type": "schedule",
+                "cron": "0 9 * * *",
+                "source": {"kind": "pms_recall", "recall_interval_months": 6},
+            },
+            "entry_node_id": "x1",
+            "nodes": [{"type": "exit", "id": "x1", "outcome": "done"}],
+        }
+    )
+    status, message, estimate = CampaignLaunchChecklistService._audience_status(recall, None)
+
+    assert status == "warning"
+    assert "Preview recall calls" in message
+    assert estimate is None
+
+
+def test_scheduled_audience_campaign_still_needs_a_preview() -> None:
+    scheduled = WorkflowDefinition.model_validate(
+        {
+            "trigger": {
+                "type": "schedule",
+                "cron": "0 9 * * *",
+                "source": {"kind": "audience_segment"},
+            },
+            "entry_node_id": "x1",
+            "nodes": [{"type": "exit", "id": "x1", "outcome": "done"}],
+        }
+    )
+    status, _, _ = CampaignLaunchChecklistService._audience_status(scheduled, None)
+
+    assert status == "blocked"
