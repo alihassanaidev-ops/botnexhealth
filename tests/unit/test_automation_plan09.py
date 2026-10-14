@@ -1750,6 +1750,31 @@ async def test_scan_recall_skips_a_patient_nexhealth_shows_as_already_booked(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("probe_results", "counter"),
+    [
+        # contact lookup, stored future-appointment probe, cooldown probe
+        ([None, "appt-1"], "patients_skipped_future_appointment"),
+        ([None, None, "run-1"], "patients_skipped_cooldown"),
+    ],
+)
+async def test_scan_recall_counts_why_a_patient_was_left_out(probe_results, counter):
+    scan_session, recalls = _single_recall_scan()
+    inst_session, location = _recall_inst_session(0)
+    loc_result = MagicMock()
+    loc_result.scalars.return_value.all.return_value = [location]
+    inst_session.execute = AsyncMock(
+        side_effect=[loc_result, *(_scalar_result(value) for value in probe_results)]
+    )
+
+    result, mock_task = await _run_scan_with_recalls(scan_session, inst_session, recalls)
+
+    assert result["enrolled"] == 0
+    assert result[counter] == 1
+    mock_task.apply_async.assert_not_called()
+
+
+@pytest.mark.asyncio
 async def test_scan_recall_skips_unreadable_patient_without_stored_contact(_live_recall_refresh):
     _live_recall_refresh.return_value = None
     scan_session, recalls = _single_recall_scan()

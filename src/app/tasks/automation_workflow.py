@@ -3723,6 +3723,10 @@ _RECALL_SCAN_COUNT_KEYS = (
     # The same live read returns the patient's upcoming appointments, so an
     # already-booked patient is skipped even without the appointment sync.
     "patients_skipped_future_appointment_live",
+    # A booked visit in the stored appointment copy, and a patient this
+    # campaign enrolled inside its re-enrollment cooldown.
+    "patients_skipped_future_appointment",
+    "patients_skipped_cooldown",
 )
 
 
@@ -4348,7 +4352,8 @@ async def _scan_recall_async() -> dict:
             "scan_recall_workflows: institutions=%d workflows=%d read=%d enrolled=%d "
             "history_skips=%d recent_visit_skips=%d treatment_context_skips=%d "
             "recall_type_skips=%d due_window_skips=%d "
-            "live_fetch_skips=%d inactive_skips=%d future_appointment_live_skips=%d"
+            "live_fetch_skips=%d inactive_skips=%d future_appointment_live_skips=%d "
+            "future_appointment_skips=%d cooldown_skips=%d"
         ),
         len(by_institution),
         active_workflows,
@@ -4362,6 +4367,8 @@ async def _scan_recall_async() -> dict:
         totals["patients_skipped_live_fetch_failed"],
         totals["patients_skipped_inactive"],
         totals["patients_skipped_future_appointment_live"],
+        totals["patients_skipped_future_appointment"],
+        totals["patients_skipped_cooldown"],
     )
     return {
         "active_recall_workflows": active_workflows,
@@ -4518,6 +4525,7 @@ async def _enroll_recalls_for_institution(
                         contact_id=contact_id,
                         now=now,
                     ):
+                        counts["patients_skipped_future_appointment"] += 1
                         continue
 
                     matched_workflows: list[tuple[dict, dict[str, Any]]] = []
@@ -4640,6 +4648,7 @@ async def _enroll_recalls_for_institution(
                             now=now,
                             cooldown_days=cooldown_days,
                         ):
+                            counts["patients_skipped_cooldown"] += 1
                             continue
 
                         matched_workflows.append((wf, trigger_metadata))

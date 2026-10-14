@@ -42,8 +42,9 @@ contact, and skips the patient when there is none.
 
 The scanner reports reason counters (`recalls_skipped_recall_type`,
 `recalls_skipped_due_window`, `patients_skipped_live_fetch_failed`,
-`patients_skipped_inactive`, `patients_skipped_future_appointment_live`, and
-the GoTracker/treatment counters) for dry-run
+`patients_skipped_inactive`, `patients_skipped_future_appointment_live`,
+`patients_skipped_future_appointment`, `patients_skipped_cooldown`, and the
+GoTracker/treatment counters) for dry-run
 review.
 
 ## Where the settings live

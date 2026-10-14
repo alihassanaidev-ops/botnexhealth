@@ -892,6 +892,18 @@ function RunFilters({
     )
 }
 
+/** Plain-English names for the recall scanner's skip counters. */
+const RECALL_PREVIEW_REASONS: Record<string, string> = {
+    recalls_read: "Recall rows read",
+    recalls_skipped_recall_type: "Other recall types",
+    recalls_skipped_due_window: "Not due in the window",
+    patients_skipped_future_appointment: "Already booked",
+    patients_skipped_future_appointment_live: "Already booked (checked live)",
+    patients_skipped_cooldown: "Called recently",
+    patients_skipped_inactive: "Inactive in the PMS",
+    patients_skipped_live_fetch_failed: "Could not read the patient",
+}
+
 export default function CampaignDetail() {
     const { id } = useParams<{ id: string }>()
     const locationId = useSelectedLocationId()
@@ -1260,7 +1272,7 @@ export default function CampaignDetail() {
                                 <div className="rounded-md bg-muted/50 px-3 py-2 text-xs text-muted-foreground">
                                     {Object.entries(recallPreview.counts)
                                         .filter(([key]) => key !== "enrolled")
-                                        .map(([key, value]) => `${key.replace(/_/g, " ")}: ${value}`)
+                                        .map(([key, value]) => `${RECALL_PREVIEW_REASONS[key] ?? key.replace(/_/g, " ")}: ${value}`)
                                         .join(" · ")}
                                 </div>
                             )}
