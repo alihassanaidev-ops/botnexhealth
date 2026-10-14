@@ -13,6 +13,7 @@ from aws_cdk import (
     aws_applicationautoscaling as appscaling,
     aws_cloudfront as cloudfront,
     aws_cloudfront_origins as origins,
+    aws_cloudtrail as cloudtrail,
     aws_cloudwatch as cloudwatch,
     aws_cloudwatch_actions as cw_actions,
     custom_resources as cr,
@@ -71,6 +72,49 @@ class NexHealthPlatformStack(Stack):
             vpc=vpc,
             container_insights_v2=ecs.ContainerInsights.ENABLED,
         )
+
+        # --- Account audit trail -------------------------------------------
+        # Who called what, across every service in this account. Required by
+        # the HIPAA Security Rule's audit-controls specification, and the thing
+        # that answers "who read this patient's data" after the fact.
+        #
+        # Owned by production alone. Staging shares this AWS account, and
+        # CloudTrail bills the first copy of management events at nothing and
+        # every additional copy per event — a second trail would be a second
+        # copy of the same events, paid for.
+        #
+        # Management events only. Data events (S3 object reads) are charged per
+        # event and would be a real bill against the recordings bucket; that is
+        # a separate, costed decision.
+        if config.environment_name == "production":
+            trail_bucket = s3.Bucket(
+                self,
+                "CloudTrailBucket",
+                encryption=s3.BucketEncryption.S3_MANAGED,
+                block_public_access=s3.BlockPublicAccess.BLOCK_ALL,
+                enforce_ssl=True,
+                versioned=True,
+                # Object Lock can only be set at creation, never added later.
+                # COMPLIANCE mode cannot be shortened or overridden by anyone,
+                # including the account root: that is the point — an audit log
+                # a privileged user can delete is not evidence of anything.
+                object_lock_enabled=True,
+                object_lock_default_retention=s3.ObjectLockRetention.compliance(
+                    Duration.days(365)
+                ),
+                removal_policy=RemovalPolicy.RETAIN,
+                auto_delete_objects=False,
+            )
+            cloudtrail.Trail(
+                self,
+                "AccountTrail",
+                bucket=trail_bucket,
+                is_multi_region_trail=True,
+                include_global_service_events=True,
+                # Makes tampering detectable, which Object Lock alone does not:
+                # together they are tamper-proof and tamper-evident.
+                enable_file_validation=True,
+            )
 
         recordings_bucket = s3.Bucket(
             self,
