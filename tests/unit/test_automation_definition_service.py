@@ -187,6 +187,16 @@ def test_publish_version_increments_version_number() -> None:
     assert version.version_number == 4
 
 
+def test_publish_version_keeps_a_paused_workflow_paused() -> None:
+    # Editing a paused campaign must not start it; it goes live via resume.
+    session = _make_session(execute_returns=None)
+    svc = AutomationWorkflowDefinitionService(session)
+    workflow = _make_workflow(AutomationWorkflowStatus.PAUSED.value)
+    version = asyncio.run(svc.publish_version(workflow, _VALID_DEFINITION))
+    assert workflow.status == AutomationWorkflowStatus.PAUSED.value
+    assert workflow.current_version_id == version.id
+
+
 def test_publish_version_raises_for_archived() -> None:
     session = _make_session(execute_returns=None)
     svc = AutomationWorkflowDefinitionService(session)

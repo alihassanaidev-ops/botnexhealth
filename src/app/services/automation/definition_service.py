@@ -191,10 +191,12 @@ class AutomationWorkflowDefinitionService:
         content_classification: str | None = None,
         published_by_user_id: str | None = None,
     ) -> AutomationWorkflowVersion:
-        """Snapshot the definition as an immutable version and activate the workflow.
+        """Snapshot the definition as an immutable version.
 
-        If *definition* is omitted the current version's definition is reused,
-        which is the correct behaviour for re-activating a paused workflow.
+        A draft becomes active. A paused workflow stays paused: editing a
+        paused campaign must not start it, so it goes live only through
+        resume and its launch checklist. If *definition* is omitted the
+        current version's definition is reused.
         """
         if workflow.status not in _PUBLISHABLE_STATUSES:
             raise HTTPException(
@@ -269,7 +271,8 @@ class AutomationWorkflowDefinitionService:
 
         workflow.current_version_id = version.id
         workflow.current_version = version
-        workflow.status = AutomationWorkflowStatus.ACTIVE.value
+        if workflow.status != AutomationWorkflowStatus.PAUSED.value:
+            workflow.status = AutomationWorkflowStatus.ACTIVE.value
         await self.session.flush()
         await self._sync_schedules(workflow)
         await self.session.refresh(workflow, attribute_names=["updated_at"])
