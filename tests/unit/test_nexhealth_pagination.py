@@ -131,3 +131,109 @@ async def test_legacy_v2_keeps_the_callers_page_size() -> None:
     )
 
     assert calls[0]["per_page"] == 100
+
+
+@pytest.mark.asyncio
+async def test_unbounded_v3_reads_every_page_past_the_default_cap() -> None:
+    """max_items=None must not stop at the old 500-row default.
+
+    One clinic held ~9k recalls; the capped read returned 500 and the recall
+    scanner silently missed most due patients.
+    """
+    calls: list[dict[str, Any]] = []
+    total_pages = 6
+
+    async def fetch(params: dict[str, Any]) -> dict[str, Any]:
+        calls.append(dict(params))
+        page = len(calls)
+        return {
+            "data": [{"id": f"recall-{page}-{i}"} for i in range(1000)],
+            "page_info": {
+                "has_next_page": page < total_pages,
+                "end_cursor": f"cursor-{page}",
+            },
+        }
+
+    rows = await fetch_all_pages(
+        fetch,
+        api_contract="stable_v3",
+        collection_key="patient_recalls",
+        max_items=None,
+    )
+
+    assert len(rows) == total_pages * 1000
+    assert len(calls) == total_pages
+    assert calls[0]["per_page"] == 1000  # v3 ceiling, not the v2-safe default
+
+
+@pytest.mark.asyncio
+async def test_unbounded_v2_reads_until_the_server_says_done() -> None:
+    calls: list[dict[str, Any]] = []
+
+    async def fetch(params: dict[str, Any]) -> dict[str, Any]:
+        calls.append(dict(params))
+        page = params["page"]
+        if page <= 3:
+            return {"data": {"patient_recalls": [{"id": f"r-{page}"}]}, "count": 3}
+        return {"data": {"patient_recalls": []}, "count": 3}
+
+    rows = await fetch_all_pages(
+        fetch,
+        api_contract="legacy_v2",
+        collection_key="patient_recalls",
+        per_page=1,
+        max_items=None,
+    )
+
+    assert [row["id"] for row in rows] == ["r-1", "r-2", "r-3"]
+    assert len(calls) == 3
+
+
+@pytest.mark.asyncio
+async def test_unbounded_v3_scales_to_kadri_volume() -> None:
+    """A ~9k-row recall queue must page through with no truncation.
+
+    One production clinic carried 8,970 recalls; the old 500 default returned
+    0.3% of them. This drives the same page count against the real page size.
+    """
+    calls: list[dict[str, Any]] = []
+    total_pages = 9
+
+    async def fetch(params: dict[str, Any]) -> dict[str, Any]:
+        calls.append(dict(params))
+        page = len(calls)
+        return {
+            "data": [{"id": f"r-{page}-{i}"} for i in range(1000)],
+            "page_info": {
+                "has_next_page": page < total_pages,
+                "end_cursor": f"c-{page}",
+            },
+        }
+
+    rows = await fetch_all_pages(
+        fetch,
+        api_contract="stable_v3",
+        collection_key="patient_recalls",
+        max_items=None,
+    )
+
+    assert len(rows) == total_pages * 1000
+    assert len(calls) == total_pages
+
+
+@pytest.mark.asyncio
+async def test_bounded_read_still_truncates_at_max_items() -> None:
+    async def fetch(params: dict[str, Any]) -> dict[str, Any]:
+        return {
+            "data": [{"id": f"p-{i}"} for i in range(1000)],
+            "page_info": {"has_next_page": True, "end_cursor": "c"},
+        }
+
+    rows = await fetch_all_pages(
+        fetch,
+        api_contract="stable_v3",
+        collection_key="patients",
+        max_items=500,
+    )
+
+    assert len(rows) == 500

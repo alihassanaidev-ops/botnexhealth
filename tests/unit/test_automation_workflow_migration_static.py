@@ -22,7 +22,7 @@ AUTOMATION_TABLES = {
 def test_automation_migration_chains_after_current_head() -> None:
     source = MIGRATION.read_text()
 
-    assert 'down_revision = "20260831_call_notes"' in source
+    assert 'down_revision = "20260622_nopms_call_status"' in source
 
 
 def test_automation_tables_are_rls_protected_in_migration_and_baseline() -> None:

@@ -39,11 +39,13 @@ from src.app.pms.base import (
 from src.app.pms.factory import get_adapter_for_institution_location
 from src.app.pms.models import BookingRequest, PatientCreateRequest
 from src.app.retell.functions import (
+    get_call_context,
     get_institution_from_call_context,
     register_function,
     update_call_context,
 )
 from src.app.retell.security import hash_for_logging
+from src.app.services.automation.recall_booking_guard import appointment_type_allowed
 from src.app.services.audit import phi_reveal_audit
 from src.app.services.audit_decorator import audit
 from src.app.services.slot_filter import (
@@ -125,6 +127,38 @@ async def _resolve_context(require_pms: bool = True) -> ResolvedContext:
     return ResolvedContext(institution=institution, location=location, adapter=adapter)
 
 
+async def _recall_allowed_appointment_types() -> frozenset[str] | None:
+    """Appointment types this call may use, when it is a recall campaign call.
+
+    ``None`` means no restriction: inbound calls, other campaigns, and recall
+    campaigns without an allowed list. Never raises, so a lookup failure leaves
+    ordinary calls working.
+    """
+    from src.app.services.automation.recall_booking_guard import (
+        resolve_recall_appointment_types_for_call,
+    )
+
+    call_context = get_call_context()
+    call_id = call_context.get("call_id")
+    institution_id = call_context.get("institution_id")
+    if not call_id or not institution_id:
+        return None
+    location_id = call_context.get("location_id")
+    try:
+        async with get_system_db_session(
+            "retell",
+            institution_id=str(institution_id),
+            location_id=str(location_id) if location_id else None,
+        ) as session:
+            return await resolve_recall_appointment_types_for_call(session, call_id)
+    except Exception:  # noqa: BLE001
+        logger.exception("recall appointment-type lookup failed")
+        return None
+
+
+_RECALL_TYPE_REFUSAL = "This appointment type is not available on this recall call."
+
+
 # ============================================================================
 # Privacy Helpers
 # ============================================================================
@@ -177,6 +211,22 @@ async def _validate_appointment_type_for_provider(
     return None
 
 
+def _age_in_years(date_of_birth: Any, today: date) -> int | None:
+    """Whole years from a ``YYYY-MM-DD`` date of birth, or ``None``.
+
+    Computed here so the agent never has to do date arithmetic: a model reading
+    a DOB has mapped a 14-year-old into a child's age band.
+    """
+    if not date_of_birth:
+        return None
+    try:
+        dob = date.fromisoformat(str(date_of_birth).strip()[:10])
+    except (ValueError, TypeError):
+        return None
+    age = today.year - dob.year - ((today.month, today.day) < (dob.month, dob.day))
+    return age if age >= 0 else None
+
+
 def _to_full_patient_payload(patient: Any) -> dict[str, Any]:
     """Return complete patient details after server-side identity verification."""
     patient_extra = patient.extra if isinstance(patient.extra, dict) else {}
@@ -197,6 +247,8 @@ def _to_full_patient_payload(patient: Any) -> dict[str, Any]:
         "email": patient.email,
         "phone_number": patient.phone,
         "date_of_birth": patient.date_of_birth,
+        # Refined to the clinic's local date once the location is known.
+        "age": _age_in_years(patient.date_of_birth, date.today()),
         **allowed_details,
     }
 
@@ -432,6 +484,22 @@ def _supplied_patient_name(args: dict[str, Any]) -> str | None:
     return _normalize_name_for_identity(split_name)
 
 
+def _supplied_patient_first_name(args: dict[str, Any]) -> str | None:
+    """Return the caller-stated first name for a narrow lookup retry.
+
+    Prefer the explicit future ``first_name`` field.  The current Retell tool
+    sends one combined ``name`` value, so fall back to its first whitespace-
+    separated component.  This value is never logged or returned.
+    """
+    explicit = _normalize_name_for_identity(args.get("first_name"))
+    if explicit:
+        return explicit
+    combined = _normalize_name_for_identity(args.get("name"))
+    if not combined:
+        return None
+    return combined.split(" ", 1)[0]
+
+
 def _verification_required_response(args: dict[str, Any]) -> dict[str, Any]:
     """Return a neutral response before any PMS search is attempted."""
     required_fields: list[str] = []
@@ -591,6 +659,32 @@ async def lookup_patient(args: dict[str, Any]) -> dict[str, Any]:
             date_of_birth=args.get("date_of_birth"),
             include=None,
         )
+        supplied_first_name = _supplied_patient_first_name(args)
+        if (
+            not patients
+            and supplied_first_name
+            and supplied_first_name != supplied_name
+            and _normalize_phone_for_identity(args.get("phone_number"))
+        ):
+            logger.info(
+                "Patient lookup retry attempted: "
+                "strategy=first_name_dob_phone initial_candidates=0"
+            )
+            patients = await ctx.adapter.search_patients(
+                supplied_first_name,
+                name=supplied_first_name,
+                email=args.get("email"),
+                phone_number=args.get("phone_number"),
+                date_of_birth=args.get("date_of_birth"),
+                include=None,
+            )
+            verification_args = {**args, "name": supplied_first_name}
+            match_strategy = "first_name_dob_phone"
+            logger.info(
+                "Patient lookup retry completed: "
+                "strategy=first_name_dob_phone candidates=%d",
+                len(patients),
+            )
     except Exception as e:
         logger.error(
             "Patient lookup failed: %s",
@@ -705,8 +799,13 @@ async def lookup_patient(args: dict[str, Any]) -> dict[str, Any]:
                 local_dt = dt.astimezone(tz).replace(microsecond=0)
                 return local_dt.isoformat()
 
+            local_today = datetime.now(tz).date()
             for patient in simplified:
                 patient["timezone"] = tz_str
+                if "age" in patient:
+                    patient["age"] = _age_in_years(
+                        patient.get("date_of_birth"), local_today
+                    )
                 upcoming = patient.get("upcoming_appointments")
                 if isinstance(upcoming, list):
                     for appt in upcoming:
@@ -857,6 +956,12 @@ async def find_appointment_slots(args: dict[str, Any]) -> dict[str, Any]:
         else:
             provider_ids = None
 
+    recall_types = await _recall_allowed_appointment_types()
+    if recall_types is not None and not appointment_type_allowed(
+        recall_types, appt_type_id
+    ):
+        return {"error": _RECALL_TYPE_REFUSAL}
+
     if appt_type_id and provider_id:
         validation_error = await _validate_appointment_type_for_provider(
             ctx, provider_id, appt_type_id
@@ -878,7 +983,7 @@ async def find_appointment_slots(args: dict[str, Any]) -> dict[str, Any]:
         try:
             # Voice booking must never offer a slot that is already in the
             # past. Callers can request a larger lead time explicitly.
-            buffer_minutes = max(0, int(args.get("buffer_minutes", 0)))
+            buffer_minutes = max(0, int(args.get("buffer_minutes", 10)))
         except (TypeError, ValueError):
             return {"error": "buffer_minutes must be an integer >= 0."}
 
@@ -1083,6 +1188,12 @@ async def book_appointment(args: dict[str, Any]) -> dict[str, Any]:
         ctx = await _resolve_context()
     except ValueError as e:
         return {"success": False, "error": str(e)}
+
+    recall_types = await _recall_allowed_appointment_types()
+    if recall_types is not None and not appointment_type_allowed(
+        recall_types, args.get("appointment_type_id")
+    ):
+        return {"success": False, "error": _RECALL_TYPE_REFUSAL}
 
     validation_error = await _validate_appointment_type_for_provider(
         ctx, args.get("provider_id"), args.get("appointment_type_id")
@@ -1293,6 +1404,13 @@ async def list_appointment_types(args: dict[str, Any]) -> dict[str, Any]:
             }
             for t in types
         ]
+        recall_types = await _recall_allowed_appointment_types()
+        if recall_types is not None:
+            simplified = [
+                item
+                for item in simplified
+                if appointment_type_allowed(recall_types, item["id"])
+            ]
         return {
             "count": len(simplified),
             "appointment_types": simplified,
@@ -1382,13 +1500,8 @@ async def list_providers(args: dict[str, Any]) -> dict[str, Any]:
         patient_age: int | None = None
         if patient_dob and ctx.location:
             try:
-                dob = date.fromisoformat(patient_dob)
-                today = date.today()
-                patient_age = (
-                    today.year
-                    - dob.year
-                    - ((today.month, today.day) < (dob.month, dob.day))
-                )
+                date.fromisoformat(patient_dob)
+                patient_age = _age_in_years(patient_dob, date.today())
             except (ValueError, TypeError):
                 logger.warning(
                     f"Invalid date_of_birth format: {hash_for_logging(patient_dob)}"
@@ -1424,6 +1537,18 @@ async def list_providers(args: dict[str, Any]) -> dict[str, Any]:
             }
             for p in providers
         ]
+        recall_types = await _recall_allowed_appointment_types()
+        if recall_types is not None:
+            # A recall call sees only its allowed types, and only the providers
+            # who offer one of them.
+            for item in simplified:
+                item["appointment_types"] = [
+                    t
+                    for t in item["appointment_types"] or []
+                    if isinstance(t, dict)
+                    and appointment_type_allowed(recall_types, t.get("id"))
+                ]
+            simplified = [item for item in simplified if item["appointment_types"]]
         return {
             "count": len(simplified),
             "providers": simplified,

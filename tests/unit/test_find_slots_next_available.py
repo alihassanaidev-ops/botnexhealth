@@ -189,7 +189,7 @@ async def test_gotracker_slots_let_synchronizer_resolve_timezone(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_retell_slots_default_to_no_future_buffer(monkeypatch):
+async def test_retell_slots_default_to_ten_minute_future_buffer(monkeypatch):
     slot = UniversalSlot(
         start="2026-09-03T09:00:00-04:00",
         end="2026-09-03T09:30:00-04:00",
@@ -234,7 +234,7 @@ async def test_retell_slots_default_to_no_future_buffer(monkeypatch):
     result = await _find_slots({"start_date": "2026-09-03"})
 
     assert result["slots_count"] == 1
-    assert captured["buffer_minutes"] == 0
+    assert captured["buffer_minutes"] == 10
 
 
 @pytest.mark.asyncio

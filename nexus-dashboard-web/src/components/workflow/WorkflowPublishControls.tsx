@@ -94,8 +94,9 @@ export default function WorkflowPublishControls(props: WorkflowPublishControlsPr
                     <DialogHeader>
                         <DialogTitle>Publish changes?</DialogTitle>
                         <DialogDescription>
-                            This publishes a new active version. New enrollments use it immediately; contacts
-                            already in a sequence continue on the version they enrolled under.
+                            {status === "paused"
+                                ? "This publishes a new version. The campaign stays paused until you resume it; contacts already in a sequence continue on the version they enrolled under."
+                                : "This publishes a new active version. New enrollments use it immediately; contacts already in a sequence continue on the version they enrolled under."}
                         </DialogDescription>
                     </DialogHeader>
                     {props.readinessWarning && (

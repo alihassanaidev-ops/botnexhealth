@@ -10,7 +10,7 @@ from alembic import op
 
 
 revision = "20260829_call_disconnection_reason"
-down_revision = "20260819_provider_hidden"
+down_revision = "20260829_merge_campaign_email_retell_sms"
 branch_labels = None
 depends_on = None
 

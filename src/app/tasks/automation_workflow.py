@@ -7,6 +7,7 @@ import calendar
 import logging
 import random
 import time
+from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
@@ -2700,15 +2701,13 @@ def _retell_call_details_ready_for_resume(details) -> bool:
 
 def _retell_call_details_outcome(details) -> str:
     """Extract the business outcome from Retell get-call data."""
-    from src.app.services.automation.voice_outcome import map_disconnection_reason
+    from src.app.services.automation.voice_outcome import campaign_call_outcome
 
     analysis = details.call_analysis or details.scrubbed_call_analysis or {}
-    if isinstance(analysis, dict):
-        custom = analysis.get("custom_analysis_data") or {}
-        outcome = custom.get("call_outcome") if isinstance(custom, dict) else None
-        if isinstance(outcome, str) and outcome:
-            return outcome
-    return map_disconnection_reason(details.disconnection_reason, details.call_status)
+    custom = analysis.get("custom_analysis_data") if isinstance(analysis, dict) else {}
+    return campaign_call_outcome(
+        details.disconnection_reason, details.call_status, custom or {}
+    )
 
 
 def _retell_call_details_context(details) -> dict[str, str]:
@@ -3554,15 +3553,22 @@ async def _tick_workflow_schedules_async() -> dict:
                 # alias-tolerant due-date parsing, the fail-closed treatment-plan
                 # check and GoTracker's history-sync gate, none of which should
                 # be reimplemented here.
-                recall_by_institution.setdefault(entry["institution_id"], []).append(
-                    {
-                        "workflow_id": entry["workflow_id"],
-                        "workflow_version_id": entry["workflow_version_id"],
-                        "location_id": workflow.location_id,
-                        "definition": workflow.definition,
-                        "campaign_goal": trigger.campaign_goal,
-                    }
+                entries = recall_by_institution.setdefault(
+                    entry["institution_id"], []
                 )
+                # A schedule row exists per location, so an institution-wide
+                # workflow is claimed several times in one tick. Collapse it to
+                # one candidate; _enroll_recalls_for_institution already scans
+                # every active location for location_id=None.
+                if not any(e["workflow_id"] == str(workflow.id) for e in entries):
+                    entries.append(
+                        _recall_workflow_entry(
+                            workflow,
+                            version_id=entry["workflow_version_id"],
+                            location_id=workflow.location_id,
+                            max_enrollments=trigger.max_enrollments_per_run,
+                        )
+                    )
             else:
                 result = await CampaignAudienceService(session).enqueue_enrollment(
                     workflow,
@@ -3585,7 +3591,10 @@ async def _tick_workflow_schedules_async() -> dict:
     for institution_id, workflows in recall_by_institution.items():
         try:
             counters = await _enroll_recalls_for_institution(institution_id, workflows)
-            recall_enrolled += int(counters.get("enrollments_scheduled", 0))
+            # `enrolled` is the counter the scanner actually returns;
+            # `enrollments_scheduled` never existed, so the tick reported
+            # recall=0 no matter how many runs it queued.
+            recall_enrolled += int(counters.get("enrolled", 0))
         except Exception:
             # One tenant's PMS being unreachable must not stop the others.
             logger.exception(
@@ -3650,12 +3659,74 @@ def _pms_recall_source(definition: "WorkflowDefinition"):
     return None
 
 
+_RECALL_DEFAULT_MAX_ENROLLMENTS = 500
+
+
+def _recall_schedule_trigger(definition: "WorkflowDefinition"):
+    """The schedule trigger on this definition, if any."""
+    from src.app.services.automation.definition_schema import ScheduleTrigger
+
+    for trigger in definition.triggers:
+        if isinstance(trigger, ScheduleTrigger):
+            return trigger
+    return None
+
+
+def _recall_max_enrollments(definition: "WorkflowDefinition") -> int:
+    trigger = _recall_schedule_trigger(definition)
+    if trigger is None:
+        return _RECALL_DEFAULT_MAX_ENROLLMENTS
+    return int(trigger.max_enrollments_per_run)
+
+
+def _recall_workflow_entry(
+    workflow: Any,
+    *,
+    version_id: Any,
+    location_id: Any,
+    max_enrollments: int,
+) -> dict:
+    """One canonical recall-scan candidate.
+
+    The manual scanner and the DB schedule tick both feed
+    ``_enroll_recalls_for_institution``; they must hand it the same shape.
+    The tick once passed ``workflow_version_id``/``definition`` while the
+    enrollment loop reads ``workflow``/``version_id``, so every scheduled
+    recall raised ``KeyError`` and enrolled nothing.
+    """
+    return {
+        "workflow_id": str(workflow.id),
+        "version_id": str(version_id),
+        "location_id": str(location_id) if location_id is not None else None,
+        "workflow": workflow,
+        "max_enrollments": int(max_enrollments),
+    }
+
+
 _FUTURE_APPOINTMENT_STATUSES = ("scheduled", "booked", "booked_waiting", "pending")
 _RECALL_SCAN_COUNT_KEYS = (
     "enrolled",
     "locations_skipped_history_incomplete",
     "patients_skipped_recent_visit",
     "patients_skipped_missing_treatment_context",
+    # Reason codes so a dry run can explain why a recall row was left out.
+    "recalls_skipped_recall_type",
+    "recalls_skipped_due_window",
+    # Total recall rows pulled this sweep — the denominator for the
+    # zero-enrollment alert (eligible-but-enrolled-nobody signals a failure).
+    "recalls_read",
+    # The patient about to be enrolled is refreshed from a live NexHealth read.
+    # A patient that cannot be read and has no stored contact is skipped; one
+    # marked inactive in the PMS is never called.
+    "patients_skipped_live_fetch_failed",
+    "patients_skipped_inactive",
+    # The same live read returns the patient's upcoming appointments, so an
+    # already-booked patient is skipped even without the appointment sync.
+    "patients_skipped_future_appointment_live",
+    # A booked visit in the stored appointment copy, and a patient this
+    # campaign enrolled inside its re-enrollment cooldown.
+    "patients_skipped_future_appointment",
+    "patients_skipped_cooldown",
 )
 
 
@@ -3715,6 +3786,153 @@ def _recall_is_due(recall: dict, *, now: datetime) -> bool:
     if due.tzinfo is None:
         due = due.replace(tzinfo=timezone.utc)
     return due <= now
+
+
+def _recall_due_date(recall: dict) -> datetime | None:
+    raw = _recall_due_date_value(recall)
+    if not raw:
+        return None
+    try:
+        return datetime.fromisoformat(str(raw).replace("Z", "+00:00"))
+    except ValueError:
+        return None
+
+
+def _recall_type_id_raw(recall: dict) -> str | None:
+    """The PMS recall type id on a raw recall row, without any source prefix."""
+    recall_type = recall.get("recall_type") or recall.get("recallType")
+    if isinstance(recall_type, dict):
+        raw_id = recall_type.get("id")
+    else:
+        raw_id = (
+            recall.get("recall_type_id")
+            or recall.get("recallTypeId")
+            or recall.get("recall_id")
+            or recall.get("recallId")
+        )
+    if raw_id in (None, ""):
+        return None
+    return str(raw_id)
+
+
+def _normalize_recall_type_id(value: Any) -> str | None:
+    """Strip a source prefix so ``nh-2419029`` and ``2419029`` compare equal.
+
+    Recall types are displayed prefixed in the catalog (``nh-...``) but arrive
+    raw on the recall row, so an allowlist authored either way must match.
+    """
+    if value in (None, ""):
+        return None
+    text = str(value).strip()
+    for prefix in ("nh-", "gt-"):
+        if text.startswith(prefix):
+            return text[len(prefix) :]
+    return text or None
+
+
+def _location_now(now: datetime, timezone_name: str) -> datetime:
+    try:
+        from zoneinfo import ZoneInfo
+
+        return now.astimezone(ZoneInfo(timezone_name))
+    except Exception:
+        return now.astimezone(timezone.utc)
+
+
+def _recall_within_window(
+    recall: dict,
+    *,
+    now: datetime,
+    timezone_name: str,
+    due_within_days: int,
+    include_overdue: bool,
+) -> bool:
+    """Due-date eligibility, evaluated in the location's timezone.
+
+    A recall with no parseable due date is skipped: the campaign's window cannot
+    place it, and the agent would have no due date to talk about. Otherwise the
+    due date must be on/before ``today + due_within_days`` and, when
+    ``include_overdue`` is false, not in the past.
+    """
+    due = _recall_due_date(recall)
+    if due is None:
+        return False
+    local_day = _location_now(now, timezone_name).date()
+    due_day = due.date()
+    if due_day > local_day + timedelta(days=int(due_within_days)):
+        return False
+    if not include_overdue and due_day < local_day:
+        return False
+    return True
+
+
+def _recall_type_allowed(
+    recall: dict, approved_recall_type_ids: Any
+) -> bool:
+    approved = {
+        normalized
+        for normalized in (
+            _normalize_recall_type_id(value)
+            for value in (approved_recall_type_ids or ())
+        )
+        if normalized
+    }
+    if not approved:
+        return True
+    return _normalize_recall_type_id(_recall_type_id_raw(recall)) in approved
+
+
+def _select_primary_recall(
+    patient_recalls: list[dict], approved_recall_type_ids: Any
+) -> dict:
+    """One deterministic recall per patient.
+
+    A patient can carry several due recalls. The campaign books one visit, so
+    the audience must collapse to a single recall: earliest due date first, then
+    the campaign's allowlist order, then the raw record id for stability.
+    """
+    approved = [
+        normalized
+        for normalized in (
+            _normalize_recall_type_id(value)
+            for value in (approved_recall_type_ids or ())
+        )
+        if normalized
+    ]
+
+    def sort_key(recall: dict) -> tuple[int, int, str]:
+        due = _recall_due_date(recall)
+        due_ordinal = due.date().toordinal() if due is not None else 10**9
+        recall_type_id = _normalize_recall_type_id(_recall_type_id_raw(recall))
+        priority = (
+            approved.index(recall_type_id) if recall_type_id in approved else len(approved)
+        )
+        return (due_ordinal, priority, str(recall.get("id", "")))
+
+    return min(patient_recalls, key=sort_key)
+
+
+def _group_recalls_by_patient(recalls: list[dict]) -> dict[str, list[dict]]:
+    """Bucket recall rows by patient. Eligibility is applied per campaign."""
+    grouped: dict[str, list[dict]] = {}
+    for recall in recalls:
+        raw_patient_id = _recall_patient_id(recall)
+        if not raw_patient_id:
+            continue
+        grouped.setdefault(raw_patient_id, []).append(recall)
+    return grouped
+
+
+def _recall_source_for_workflow(candidate: dict) -> Any:
+    """The campaign's PMS-recall source, which carries its audience settings."""
+    workflow = candidate.get("workflow")
+    if workflow is None or not getattr(workflow, "definition", None):
+        return None
+    try:
+        definition = WorkflowDefinition.model_validate(workflow.definition)
+    except Exception:
+        return None
+    return _pms_recall_source(definition)
 
 
 def _recall_cooldown_days(candidate: dict) -> int:
@@ -3797,6 +4015,54 @@ def _recall_scan_counts() -> dict[str, int]:
 def _merge_recall_scan_counts(target: dict[str, int], source: dict[str, int]) -> None:
     for key in _RECALL_SCAN_COUNT_KEYS:
         target[key] = target.get(key, 0) + int(source.get(key, 0) or 0)
+
+
+def _recall_scan_should_alert(counts: dict[str, int]) -> bool:
+    """True when a scan read recalls but eligible ones enrolled nobody.
+
+    A sweep that read recalls, enrolled none, and did not filter them all away
+    by a known reason (recall type / due window) is the signature of a silent
+    failure — exactly the shape a broken enrollment path takes.
+    """
+    read = int(counts.get("recalls_read", 0) or 0)
+    if read <= 0 or int(counts.get("enrolled", 0) or 0) != 0:
+        return False
+    filtered = int(counts.get("recalls_skipped_recall_type", 0) or 0) + int(
+        counts.get("recalls_skipped_due_window", 0) or 0
+    )
+    return filtered < read
+
+
+async def _notify_recall_scan_issue(
+    institution_id: str, *, title: str, message: str
+) -> None:
+    """Raise an in-app alert to the institution's admins.
+
+    The original recall bug was invisible because a scan that enrolled nobody
+    looked exactly like a scan with nothing to do. This surfaces the failure
+    instead of leaving it in the logs.
+    """
+    from src.app.models.notification import NotificationType
+    from src.app.services.notification_service import NotificationService
+
+    try:
+        async with get_system_db_session(
+            "celery",
+            institution_id=institution_id,
+            external_id=f"recall_scan_alert:{institution_id}",
+        ) as session:
+            await NotificationService(session).create_bulk_notifications(
+                institution_id=institution_id,
+                location_id=None,
+                notification_type=NotificationType.URGENT.value,
+                title=title,
+                message=message,
+            )
+            await session.commit()
+    except Exception:  # noqa: BLE001 — an alert must never break the sweep
+        logger.exception(
+            "recall_scan: failed to raise alert institution=%s", institution_id
+        )
 
 
 def _institution_pms_type(institution: Any) -> str:
@@ -4022,17 +4288,26 @@ async def _scan_recall_async() -> dict:
             # the literal old type would skip every one of them.
             if not workflow_starts_from(wf, "recall_scan"):
                 continue
+            max_enrollments = _RECALL_DEFAULT_MAX_ENROLLMENTS
+            try:
+                max_enrollments = _recall_max_enrollments(
+                    WorkflowDefinition.model_validate(wf.definition)
+                )
+            except Exception:
+                logger.warning(
+                    "recall scanner could not read schedule for workflow %s; "
+                    "using default enrollment cap",
+                    wf.id,
+                )
             by_institution.setdefault(str(wf.institution_id), []).append(
-                {
-                    "workflow_id": str(wf.id),
-                    "version_id": str(wf.current_version_id),
+                _recall_workflow_entry(
+                    wf,
+                    version_id=wf.current_version_id,
                     # None means institution-wide; a value binds the workflow to
                     # one location and it must not enroll from another's recalls.
-                    "location_id": (
-                        str(wf.location_id) if wf.location_id is not None else None
-                    ),
-                    "workflow": wf,
-                }
+                    location_id=wf.location_id,
+                    max_enrollments=max_enrollments,
+                )
             )
 
     active_workflows = sum(len(w) for w in by_institution.values())
@@ -4048,22 +4323,52 @@ async def _scan_recall_async() -> dict:
                 institution_id, workflows
             )
             _merge_recall_scan_counts(totals, institution_counts)
+            if _recall_scan_should_alert(institution_counts):
+                await _notify_recall_scan_issue(
+                    institution_id,
+                    title="Recall campaign enrolled nobody",
+                    message=(
+                        f"{institution_counts.get('recalls_read', 0)} recall rows "
+                        "were read but none enrolled, and not all were filtered by "
+                        "type or due window. Check the campaign's approved recall "
+                        "types, filters, and booking mapping."
+                    ),
+                )
         except Exception as exc:  # noqa: BLE001 — one institution must not abort the sweep
             logger.exception(
                 "scan_recall_workflows: institution=%s failed: %s", institution_id, exc
             )
+            await _notify_recall_scan_issue(
+                institution_id,
+                title="Recall campaign scan failed",
+                message=(
+                    f"The recall scan failed with {type(exc).__name__}, so no "
+                    "patients were enrolled for this run."
+                ),
+            )
 
     logger.info(
         (
-            "scan_recall_workflows: institutions=%d workflows=%d enrolled=%d "
-            "history_skips=%d recent_visit_skips=%d treatment_context_skips=%d"
+            "scan_recall_workflows: institutions=%d workflows=%d read=%d enrolled=%d "
+            "history_skips=%d recent_visit_skips=%d treatment_context_skips=%d "
+            "recall_type_skips=%d due_window_skips=%d "
+            "live_fetch_skips=%d inactive_skips=%d future_appointment_live_skips=%d "
+            "future_appointment_skips=%d cooldown_skips=%d"
         ),
         len(by_institution),
         active_workflows,
+        totals["recalls_read"],
         totals["enrolled"],
         totals["locations_skipped_history_incomplete"],
         totals["patients_skipped_recent_visit"],
         totals["patients_skipped_missing_treatment_context"],
+        totals["recalls_skipped_recall_type"],
+        totals["recalls_skipped_due_window"],
+        totals["patients_skipped_live_fetch_failed"],
+        totals["patients_skipped_inactive"],
+        totals["patients_skipped_future_appointment_live"],
+        totals["patients_skipped_future_appointment"],
+        totals["patients_skipped_cooldown"],
     )
     return {
         "active_recall_workflows": active_workflows,
@@ -4073,11 +4378,16 @@ async def _scan_recall_async() -> dict:
 
 
 async def _enroll_recalls_for_institution(
-    institution_id: str, workflows: list[dict]
+    institution_id: str,
+    workflows: list[dict],
+    *,
+    preview: list[dict] | None = None,
 ) -> dict[str, int]:
     """Pull PMS recall candidates and enqueue workflow enrollments.
 
     Returns scanner counters, including GoTracker runtime refusal reasons.
+    Given a ``preview`` list, runs as a dry run instead: the patients the run
+    would call are appended to it, and nothing is enrolled or stored.
     """
     from sqlalchemy import select as sa_select
 
@@ -4088,6 +4398,16 @@ async def _enroll_recalls_for_institution(
     now = datetime.now(tz=timezone.utc)
     period = now.strftime("%Y-%m")
     counts = _recall_scan_counts()
+    # Per-workflow enrollment budget for this run. One patient is queued at
+    # most once per workflow, so this bounds fan-out from a large recall
+    # backlog without dropping anyone permanently: the next scheduled tick
+    # finds the same overdue patients and fills the next batch.
+    remaining_enrollments = {
+        wf["workflow_id"]: max(
+            0, int(wf.get("max_enrollments", _RECALL_DEFAULT_MAX_ENROLLMENTS))
+        )
+        for wf in workflows
+    }
 
     async with get_system_db_session(
         "celery",
@@ -4159,7 +4479,11 @@ async def _enroll_recalls_for_institution(
                         )
                         continue
 
-                recalls = await adapter.list_patient_recalls()
+                # Read the whole recall queue. A fixed cap silently dropped the
+                # tail of large clinics (one carried ~9k recalls against a 500
+                # default), so the scanner never saw most due patients.
+                recalls = await adapter.list_patient_recalls(max_items=None)
+                counts["recalls_read"] += len(recalls)
                 recall_types = await _list_recall_types_safe(adapter)
             except Exception as exc:  # noqa: BLE001
                 logger.warning(
@@ -4173,21 +4497,16 @@ async def _enroll_recalls_for_institution(
             try:
                 treatment_plan_cache: dict[str, list[Any] | None] = {}
                 location_timezone = _location_timezone(location)
+                # Recall eligibility is campaign-scoped: each workflow declares
+                # its own approved types and due window on its recall source.
+                recall_sources = {
+                    wf["workflow_id"]: _recall_source_for_workflow(wf)
+                    for wf in location_workflows
+                }
 
-                for recall in recalls:
-                    raw_patient_id = _recall_patient_id(recall)
-                    if not raw_patient_id or not _recall_is_due(recall, now=now):
-                        continue
-
-                    recall_model = patient_recall_from_raw(
-                        recall, source=adapter_source
-                    )
+                grouped_recalls = _group_recalls_by_patient(recalls)
+                for raw_patient_id, patient_recalls in grouped_recalls.items():
                     patient_id = _recall_patient_key(raw_patient_id, adapter_source)
-                    base_metadata = {
-                        "nexhealth_patient_id": patient_id,
-                        "recall_due_date": _recall_due_date_value(recall),
-                        "recall_period": period,
-                    }
 
                     contact_row = await session.execute(
                         sa_select(Contact).where(
@@ -4206,10 +4525,55 @@ async def _enroll_recalls_for_institution(
                         contact_id=contact_id,
                         now=now,
                     ):
+                        counts["patients_skipped_future_appointment"] += 1
                         continue
 
                     matched_workflows: list[tuple[dict, dict[str, Any]]] = []
                     for wf in location_workflows:
+                        if remaining_enrollments.get(wf["workflow_id"], 0) <= 0:
+                            continue
+
+                        source = recall_sources.get(wf["workflow_id"])
+                        approved_type_ids = (
+                            source.approved_recall_type_ids if source else ()
+                        )
+                        due_within_days = source.due_within_days if source else 30
+                        include_overdue = source.include_overdue if source else True
+
+                        eligible_recalls: list[dict] = []
+                        for candidate in patient_recalls:
+                            if not _recall_type_allowed(
+                                candidate, approved_type_ids
+                            ):
+                                counts["recalls_skipped_recall_type"] += 1
+                                continue
+                            if not _recall_within_window(
+                                candidate,
+                                now=now,
+                                timezone_name=location_timezone,
+                                due_within_days=due_within_days,
+                                include_overdue=include_overdue,
+                            ):
+                                counts["recalls_skipped_due_window"] += 1
+                                continue
+                            eligible_recalls.append(candidate)
+                        if not eligible_recalls:
+                            continue
+
+                        # One visit per patient per campaign: pick the
+                        # deterministic primary so the booking type is stable.
+                        recall = _select_primary_recall(
+                            eligible_recalls, approved_type_ids
+                        )
+                        recall_model = patient_recall_from_raw(
+                            recall, source=adapter_source
+                        )
+                        base_metadata = {
+                            "nexhealth_patient_id": patient_id,
+                            "recall_due_date": _recall_due_date_value(recall),
+                            "recall_period": period,
+                        }
+
                         if (
                             adapter_source == "gotracker"
                             and await _gotracker_patient_has_recent_visit(
@@ -4284,6 +4648,7 @@ async def _enroll_recalls_for_institution(
                             now=now,
                             cooldown_days=cooldown_days,
                         ):
+                            counts["patients_skipped_cooldown"] += 1
                             continue
 
                         matched_workflows.append((wf, trigger_metadata))
@@ -4291,7 +4656,42 @@ async def _enroll_recalls_for_institution(
                     if not matched_workflows:
                         continue
 
+                    live: _LiveRecallPatient | None = None
+                    if adapter_source == "nexhealth":
+                        # Read the patient live rather than trusting the stored
+                        # copy, so recall works without the full patient sync.
+                        # Only patients about to be enrolled are fetched.
+                        live = await _refresh_recall_contact_live(
+                            session,
+                            adapter,
+                            institution_id=institution_id,
+                            location=location,
+                            patient_id=patient_id,
+                            now=now,
+                            store=preview is None,
+                        )
+                        if live is None:
+                            if contact_id is None:
+                                counts["patients_skipped_live_fetch_failed"] += 1
+                                continue
+                        elif live.has_future_appointment:
+                            counts["patients_skipped_future_appointment_live"] += 1
+                            continue
+                        elif live.inactive:
+                            counts["patients_skipped_inactive"] += 1
+                            continue
+                        else:
+                            contact_id = live.contact_id
+                            if live.last_visit_date:
+                                for _, metadata in matched_workflows:
+                                    if not metadata.get("last_visit_date"):
+                                        metadata["last_visit_date"] = (
+                                            live.last_visit_date
+                                        )
+
                     for wf, trigger_metadata in matched_workflows:
+                        if remaining_enrollments.get(wf["workflow_id"], 0) <= 0:
+                            continue
                         cooldown_days = _recall_cooldown_days(wf)
                         trigger_metadata = merge_canonical_context(
                             {
@@ -4301,6 +4701,26 @@ async def _enroll_recalls_for_institution(
                             event_key="patient.recall_due",
                             source_pms=adapter_source,
                         )
+                        if preview is not None:
+                            preview.append(
+                                {
+                                    "workflow_id": wf["workflow_id"],
+                                    "patient_id": patient_id,
+                                    "patient_name": (
+                                        live.display_name if live else None
+                                    )
+                                    or (contact.full_name if contact else None),
+                                    "recall_type_name": trigger_metadata.get(
+                                        "recall_type_name"
+                                    ),
+                                    "recall_due_date": trigger_metadata.get(
+                                        "recall_due_date"
+                                    ),
+                                }
+                            )
+                            counts["enrolled"] += 1
+                            remaining_enrollments[wf["workflow_id"]] -= 1
+                            continue
                         key = make_recall_idempotency_key(
                             wf["version_id"], patient_id, period
                         )
@@ -4320,10 +4740,174 @@ async def _enroll_recalls_for_institution(
                             queue="workflow",
                         )
                         counts["enrolled"] += 1
+                        remaining_enrollments[wf["workflow_id"]] = (
+                            remaining_enrollments.get(wf["workflow_id"], 0) - 1
+                        )
             finally:
                 await adapter.close()
 
     return counts
+
+
+async def preview_recall_run(workflow: Any) -> dict[str, Any]:
+    """Dry-run the next scheduled scan for one recall campaign.
+
+    Uses the scanner itself, so the result is exactly who the next run would
+    call (up to its per-run cap) and why the rest were left out. Nothing is
+    enrolled, dialled, or stored.
+    """
+    from src.app.services.automation.definition_schema import WorkflowDefinition
+
+    definition = WorkflowDefinition.model_validate(workflow.definition)
+    entry = _recall_workflow_entry(
+        workflow,
+        version_id=workflow.current_version_id,
+        location_id=workflow.location_id,
+        max_enrollments=_recall_max_enrollments(definition),
+    )
+    patients: list[dict] = []
+    counts = await _enroll_recalls_for_institution(
+        str(workflow.institution_id), [entry], preview=patients
+    )
+    return {
+        "max_enrollments_per_run": entry["max_enrollments"],
+        "counts": counts,
+        "patients": patients,
+    }
+
+
+@dataclass(frozen=True)
+class _LiveRecallPatient:
+    contact_id: str | None
+    inactive: bool
+    last_visit_date: str | None
+    has_future_appointment: bool = False
+    # Shown in a recall preview only; never sent to the call.
+    display_name: str | None = None
+
+
+def _has_upcoming_appointment(patient: dict, now: datetime) -> bool:
+    """Whether NexHealth's ``upcoming_appts`` holds a visit that has not started.
+
+    NexHealth leaves cancelled appointments out of this list. A start time that
+    cannot be read counts as upcoming, so a doubtful row skips the call.
+    """
+    upcoming = patient.get("upcoming_appts")
+    if not isinstance(upcoming, list):
+        return False
+    for appointment in upcoming:
+        if not isinstance(appointment, dict):
+            continue
+        try:
+            start = datetime.fromisoformat(str(appointment.get("start_time")))
+        except ValueError:
+            return True
+        if start.tzinfo is None:
+            start = start.replace(tzinfo=timezone.utc)
+        if start >= now:
+            return True
+    return False
+
+
+async def _refresh_recall_contact_live(
+    session: Any,
+    adapter: Any,
+    *,
+    institution_id: str,
+    location: Any,
+    patient_id: str,
+    now: datetime | None = None,
+    store: bool = True,
+) -> _LiveRecallPatient | None:
+    """Refresh one recall patient's contact from a live NexHealth read.
+
+    Returns ``None`` when the patient cannot be read, so the caller can fall
+    back to an existing contact. A patient with an upcoming appointment is
+    reported without storing a contact, since they will not be called. The
+    contact is committed before returning because the enrollment task that
+    dials it runs in another session. ``store=False`` (a recall preview)
+    reads the patient without writing anything.
+    """
+    from src.app.services.automation.nexhealth_projection_service import (
+        NexHealthProjectionService,
+    )
+
+    get_patient_raw = getattr(adapter, "get_patient_raw", None)
+    if get_patient_raw is None:
+        return None
+    try:
+        patient = await get_patient_raw(
+            patient_id, include=["last_visited_appointment", "upcoming_appts"]
+        )
+    except Exception as exc:  # noqa: BLE001 - a failed read must not stop the scan.
+        logger.warning(
+            "recall_scan: live patient read failed patient=%s type=%s",
+            patient_id,
+            type(exc).__name__,
+        )
+        return None
+    if not isinstance(patient, dict):
+        return None
+    if _has_upcoming_appointment(patient, now or datetime.now(tz=timezone.utc)):
+        return _LiveRecallPatient(
+            contact_id=None,
+            inactive=bool(patient.get("inactive", False)),
+            last_visit_date=None,
+            has_future_appointment=True,
+        )
+
+    last_visited = patient.get("last_visited_appointment")
+    last_visit_start = (
+        last_visited.get("start_time") if isinstance(last_visited, dict) else None
+    )
+    last_visit_date = str(last_visit_start)[:10] if last_visit_start else None
+    if not store:
+        return _LiveRecallPatient(
+            contact_id=None,
+            inactive=bool(patient.get("inactive", False)),
+            last_visit_date=last_visit_date,
+            display_name=_patient_display_name(patient),
+        )
+
+    raw_location_ids = patient.get("location_ids")
+    nexhealth_location_ids = (
+        [str(value) for value in raw_location_ids if value not in (None, "")]
+        if isinstance(raw_location_ids, list)
+        else []
+    ) or [str(location.nexhealth_location_id)]
+    try:
+        # A savepoint, so a failed upsert leaves the scan's session usable
+        # without expiring the location and institution it is iterating.
+        async with session.begin_nested():
+            result = await NexHealthProjectionService(session).upsert_patient(
+                institution_id=institution_id,
+                patient=patient,
+                local_location_ids=[str(location.id)],
+                nexhealth_location_ids=nexhealth_location_ids,
+                event="patient.recall_refresh",
+            )
+        await session.commit()
+    except Exception as exc:  # noqa: BLE001
+        logger.warning(
+            "recall_scan: contact refresh failed patient=%s type=%s",
+            patient_id,
+            type(exc).__name__,
+        )
+        return None
+
+    return _LiveRecallPatient(
+        contact_id=str(result.contact.id),
+        inactive=bool(patient.get("inactive", False)),
+        last_visit_date=last_visit_date,
+    )
+
+
+def _patient_display_name(patient: dict) -> str | None:
+    bio = patient.get("bio") if isinstance(patient.get("bio"), dict) else {}
+    first = patient.get("first_name") or bio.get("first_name")
+    last = patient.get("last_name") or bio.get("last_name")
+    name = " ".join(str(part).strip() for part in (first, last) if part)
+    return name or (str(patient["name"]).strip() if patient.get("name") else None)
 
 
 async def _list_recall_types_safe(adapter: Any) -> list[UniversalRecallType]:

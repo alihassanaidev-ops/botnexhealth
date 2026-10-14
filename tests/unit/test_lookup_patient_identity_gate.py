@@ -2,12 +2,16 @@
 
 from __future__ import annotations
 
+from datetime import date
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
 from src.app.retell import handlers
+
+# Alice's age today, so the expectation holds whatever year the suite runs.
+_ALICE_AGE = handlers._age_in_years("1990-01-01", date.today())
 
 
 def _ctx(
@@ -84,6 +88,7 @@ def test_full_patient_payload_contains_complete_verified_details():
         "email": "alice@example.com",
         "phone_number": "+15551234567",
         "date_of_birth": "1990-01-01",
+        "age": _ALICE_AGE,
         "upcoming_appointments": [{"id": "appt-1"}],
         "last_visit": {"id": "appointment-previous"},
         "recent_procedures": [{"id": "procedure-1"}],
@@ -145,6 +150,7 @@ async def test_verified_phone_returns_complete_full_details(
             "email": "alice@example.com",
             "phone_number": "+15551234567",
             "date_of_birth": "1990-01-01",
+            "age": _ALICE_AGE,
             "upcoming_appointments": [{"id": "appt-1"}],
         }
     ]
@@ -172,6 +178,97 @@ async def test_first_name_shape_remains_supported(monkeypatch):
 
     assert result["verification_status"] == "verified"
     assert result["patients"][0]["first_name"] == "Alice"
+
+
+@pytest.mark.asyncio
+async def test_zero_full_name_matches_retries_with_first_name_dob_and_phone(
+    monkeypatch,
+    caplog,
+):
+    patient = _patient(
+        first_name="Shelley",
+        last_name="St. Julien",
+        dob="1970-05-05",
+        phone="+12269757455",
+    )
+    ctx = _ctx([])
+    ctx.adapter.search_patients.side_effect = [[], [patient]]
+    ctx.adapter.get_patient.return_value = patient
+
+    result = await _invoke(
+        monkeypatch,
+        ctx,
+        _verified_args(
+            name="Shelley St. Julian",
+            date_of_birth="1970-05-05",
+            phone_number="+1 226 975 7455",
+        ),
+    )
+
+    assert result["verification_status"] == "verified"
+    assert result["patient_id"] == "p1"
+    assert ctx.adapter.search_patients.await_count == 2
+    initial, retry = ctx.adapter.search_patients.await_args_list
+    assert initial.args[0] == "shelley st. julian"
+    assert initial.kwargs["name"] == "shelley st. julian"
+    assert retry.args[0] == "shelley"
+    assert retry.kwargs == {
+        "name": "shelley",
+        "email": None,
+        "phone_number": "+1 226 975 7455",
+        "date_of_birth": "1970-05-05",
+        "include": None,
+    }
+    assert "Shelley" not in caplog.text
+    assert "St. Julian" not in caplog.text
+    assert "1970-05-05" not in caplog.text
+    assert "2269757455" not in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_first_name_retry_still_denies_wrong_first_name(monkeypatch):
+    ctx = _ctx([])
+    ctx.adapter.search_patients.side_effect = [
+        [],
+        [_patient(first_name="Mallory", last_name="Julian")],
+    ]
+
+    result = await _invoke(
+        monkeypatch,
+        ctx,
+        _verified_args(name="Alice Julian"),
+    )
+
+    assert result == handlers._verification_failed_response()
+    assert ctx.adapter.search_patients.await_count == 2
+
+
+@pytest.mark.asyncio
+async def test_first_name_retry_still_denies_ambiguous_matches(monkeypatch):
+    ctx = _ctx([])
+    ctx.adapter.search_patients.side_effect = [
+        [],
+        [_patient(pid="p1"), _patient(pid="p2")],
+    ]
+
+    result = await _invoke(monkeypatch, ctx, _verified_args())
+
+    assert result == handlers._verification_failed_response()
+    assert ctx.adapter.search_patients.await_count == 2
+
+
+@pytest.mark.asyncio
+async def test_first_name_retry_requires_a_phone(monkeypatch):
+    ctx = _ctx([])
+
+    result = await _invoke(
+        monkeypatch,
+        ctx,
+        _verified_args(phone_number=None, email="alice@example.com"),
+    )
+
+    assert result == handlers._verification_failed_response()
+    assert ctx.adapter.search_patients.await_count == 1
 
 
 @pytest.mark.asyncio
@@ -291,3 +388,21 @@ async def test_full_detail_discards_a_patient_that_is_not_the_verified_one(monke
     assert result["patient_id"] == "p1"
     assert all(p["id"] == "p1" for p in result["patients"])
     assert not any(p.get("first_name") == "Other" for p in result["patients"])
+
+
+@pytest.mark.parametrize(
+    ("dob", "today", "age"),
+    [
+        ("2012-06-25", date(2026, 10, 12), 14),  # Sis: teen, not a child
+        ("2012-10-13", date(2026, 10, 12), 13),  # birthday tomorrow
+        ("2012-10-12", date(2026, 10, 12), 14),  # birthday today
+        ("2022-03-27", date(2026, 10, 12), 4),
+        ("1974-02-08T00:00:00Z", date(2026, 10, 12), 52),
+        ("", date(2026, 10, 12), None),
+        (None, date(2026, 10, 12), None),
+        ("not-a-date", date(2026, 10, 12), None),
+        ("2030-01-01", date(2026, 10, 12), None),
+    ],
+)
+def test_age_in_years(dob, today, age):
+    assert handlers._age_in_years(dob, today) == age

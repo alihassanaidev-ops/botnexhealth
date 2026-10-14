@@ -310,7 +310,9 @@ async def test_patient_backfill_projects_contact_and_patient_working_set():
     assert summary.projected == 1
     assert subscription.last_patient_backfill_at is not None
     assert subscription.error_metadata is None
-    adapter.list_patients.assert_awaited_once_with(updated_since=None)
+    adapter.list_patients.assert_awaited_once_with(
+        updated_since=None, max_items=None
+    )
     projection.upsert_patient.assert_awaited_once()
     assert projection.upsert_patient.call_args.kwargs["local_location_ids"] == ["loc-1"]
     assert projection.upsert_patient.call_args.kwargs["nexhealth_location_ids"] == [
@@ -419,7 +421,7 @@ async def test_patient_reconciliation_uses_patient_watermark_overlap():
     assert summary.locations_scanned == 1
     assert subscription.last_patient_reconciliation_at is not None
     adapter.list_patients.assert_awaited_once_with(
-        updated_since="2026-07-21T09:00:00+00:00"
+        updated_since="2026-07-21T09:00:00+00:00", max_items=None
     )
 
 

@@ -958,3 +958,48 @@ def test_reaching_the_cap_does_not_fail_the_run():
         asyncio.run(executor.execute(_make_run(), node, {}))
 
     runtime.fail_run.assert_not_called()
+
+
+def _recall_run():
+    run = _make_run()
+    run.trigger_type = "recall_scan"
+    return run
+
+
+def test_recall_call_sends_only_the_minimum_patient_fields():
+    contact = _make_contact()
+    contact.email = "jane@example.com"
+    contact.date_of_birth = "2015-03-01"
+    executor, _, _ = _make_executor(contact=contact, location=_make_location())
+    context = {
+        "recall_type_name": "Polish",
+        "recall_due_date": "2026-06-01",
+        "last_visit_date": "2025-09-01",
+    }
+    with _patch_client(result=RetellCallResult(call_id="call_xyz")) as call_mock:
+        asyncio.run(executor.execute(_recall_run(), _make_node(), context))
+
+    dv = call_mock.call_args.kwargs["dynamic_variables"]
+    assert set(dv) == {
+        "patient_first_name", "first_name", "user_number", "recall_type_name",
+        "recall_due_date", "clinic_name", "compliance_disclosure", "leave_voicemail",
+    }
+    assert dv["patient_first_name"] == "Jane"
+    assert dv["recall_type_name"] == "Polish"
+    assert dv["recall_due_date"]
+    assert dv["user_number"] == "+14165551234"
+    for withheld in ("Doe", "jane@example.com", "2015-03-01", "2025-09-01"):
+        assert withheld not in dv.values()
+
+
+def test_non_recall_call_keeps_its_full_merge_context():
+    contact = _make_contact()
+    contact.email = "jane@example.com"
+    contact.date_of_birth = "2015-03-02"
+    executor, _, _ = _make_executor(contact=contact, location=_make_location())
+    with _patch_client(result=RetellCallResult(call_id="call_xyz")) as call_mock:
+        asyncio.run(executor.execute(_make_run(), _make_node(), {}))
+
+    dv = call_mock.call_args.kwargs["dynamic_variables"]
+    assert dv["patient_last_name"] == "Doe"
+    assert "appointment_date" in dv

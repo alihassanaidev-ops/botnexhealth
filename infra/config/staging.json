@@ -4,9 +4,11 @@
   "account": "287553036543",
   "region": "ca-central-1",
   "appEnv": "staging",
+  "allowSuperAdminTotp": true,
   "logLevel": "info",
   "refreshTokenTtlMinutes": 480,
   "alarmEmail": "zulkhaifahmed@gmail.com",
+  "wafCountOversizeBodyRequests": true,
   "network": {
     "maxAzs": 2,
     "natGateways": 1
@@ -22,6 +24,20 @@
     "192.168.0.0/16"
   ],
   "recordingsBucketName": "nex-health-staging-recordings",
+  "email": {
+    "patientEmailProvider": "resend",
+    "sesRegion": "ca-central-1",
+    "sesSendingDomain": "mail.staging.scalenexus.ai",
+    "sesSendingHostedZoneName": "staging.scalenexus.ai",
+    "sesClinicSendingEnabled": false,
+    "sesConfigurationSetPrefix": "scalenexus",
+    "sesInboundEnabled": true,
+    "sesInboundDomain": "inbound.staging.scalenexus.ai",
+    "sesInboundHostedZoneName": "staging.scalenexus.ai",
+    "sesInboundPrefix": "inbound/",
+    "inboundEmailMaxBodyBytes": 256000,
+    "inboundEmailSenderHourlyLimit": 60
+  },
   "retention": {
     "clinicalRecordDays": 3650,
     "minorRecordAgeYears": 28,
@@ -75,7 +91,7 @@
     "memoryMiB": 1024,
     "desiredCount": 1,
     "minCount": 1,
-    "maxCount": 2,
+    "maxCount": 1,
     "queueScaleUpDepth": 25,
     "queueScaleDownDepth": 2,
     "command": [
@@ -85,6 +101,9 @@
       "worker",
       "--loglevel=info"
     ]
+  },
+  "scheduler": {
+    "enabled": true
   },
   "frontend": {
     "enabled": true,
@@ -98,6 +117,10 @@
     "RESEND_API_KEY": "arn:aws:secretsmanager:ca-central-1:287553036543:secret:nex-health/staging/resend-api-key-Oa3iKd",
     "RESEND_FROM_EMAIL": "arn:aws:secretsmanager:ca-central-1:287553036543:secret:nex-health/staging/resend-from-email-Upf1bK",
     "TWILLIO_SID": "arn:aws:secretsmanager:ca-central-1:287553036543:secret:nex-health/staging/twillio-sid-SF6GPp",
-    "TWILLIO_API_SECRET": "arn:aws:secretsmanager:ca-central-1:287553036543:secret:nex-health/staging/twillio-api-secret-Wcvoaw"
-  }
+    "TWILLIO_API_SECRET": "arn:aws:secretsmanager:ca-central-1:287553036543:secret:nex-health/staging/twillio-api-secret-Wcvoaw",
+    "GOTRACKER_WEBHOOK_SECRET": "arn:aws:secretsmanager:ca-central-1:287553036543:secret:nex-health/staging/gotracker-webhook-secret-To8vZC",
+    "TEST_SUITE_API_KEY": "arn:aws:secretsmanager:ca-central-1:287553036543:secret:nex-health/staging/test-suite-api-key-9oFQXe"
+  },
+  "nexhealthApiVersion": "v3.0.0",
+  "retellOptoutAnalysisKey": "Do not call"
 }

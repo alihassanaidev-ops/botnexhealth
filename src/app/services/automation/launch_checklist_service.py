@@ -1237,6 +1237,18 @@ class CampaignLaunchChecklistService:
                 0,
             )
         trigger_type = definition.trigger.type
+        if uses_pms_recall_source(definition):
+            # The recall audience is read from the PMS at every scan, so an
+            # audience preview can never exist for it; blocking on one made a
+            # recall campaign impossible to resume.
+            return (
+                "warning",
+                (
+                    "Recall patients come from the PMS recall list at each scan. "
+                    "Use Preview recall calls to see who the next run would call."
+                ),
+                None,
+            )
         if trigger_type in _BROAD_TRIGGER_TYPES:
             return (
                 "blocked",

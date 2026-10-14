@@ -24,6 +24,12 @@ PageFetcher = Callable[[dict[str, Any]], Awaitable[dict[str, Any]]]
 # 11.5s at per_page=100 to 3 requests / 2.3s at 1000.
 V3_MAX_PER_PAGE = 1000
 
+#: Safety ceiling for callers that ask for every page (``max_items=None``).
+#: The largest real list we know of is ~9k recalls / ~5k patients; at v3's
+#: 1000 rows/page that is 9 requests. This leaves generous headroom while still
+#: terminating if an endpoint ever returns a stable cursor forever.
+UNBOUNDED_MAX_PAGES = 1000
+
 _COMMON_COLLECTION_KEYS = (
     "patients",
     "providers",
@@ -86,15 +92,20 @@ async def fetch_all_pages(
     api_contract: NexHealthAPIContract | str,
     collection_key: str | None = None,
     per_page: int = 50,
-    max_items: int = 500,
+    max_items: int | None = 500,
     max_pages: int | None = None,
 ) -> list[dict[str, Any]]:
-    """Fetch a bounded NexHealth list under the selected API contract.
+    """Fetch a NexHealth list under the selected API contract.
 
     ``fetch_page`` receives only pagination params. The caller owns endpoint
     filters such as subdomain, location, dates, and includes.
+
+    Pass ``max_items=None`` to fetch every page. That is what a full-population
+    read (patient backfill, recall scanner) needs — a fixed cap silently drops
+    the tail of a large clinic. Termination is still guaranteed by
+    :data:`UNBOUNDED_MAX_PAGES` and by the server's own page metadata.
     """
-    if max_items <= 0:
+    if max_items is not None and max_items <= 0:
         return []
     if per_page <= 0:
         raise ValueError("per_page must be greater than zero")
@@ -104,11 +115,11 @@ async def fetch_all_pages(
     # Page budget stays derived from the caller's per_page, not the raised one.
     # It is a runaway guard, and a server is free to return short pages — sizing
     # it off a larger per_page would cut the loop off early.
-    page_limit = max_pages or max(1, ceil(max_items / per_page))
+    page_limit = max_pages or _page_budget(max_items=max_items, per_page=per_page)
 
     if contract is NexHealthAPIContract.STABLE_V3:
         # Use the full v3 page size, but never fetch more than asked for.
-        cursor_per_page = min(max(per_page, V3_MAX_PER_PAGE), max_items) or per_page
+        cursor_per_page = _v3_page_size(per_page=per_page, max_items=max_items)
         return await _fetch_cursor_pages(
             fetch_page,
             collection_key=collection_key,
@@ -126,12 +137,25 @@ async def fetch_all_pages(
     )
 
 
+def _page_budget(*, max_items: int | None, per_page: int) -> int:
+    if max_items is None:
+        return UNBOUNDED_MAX_PAGES
+    return max(1, ceil(max_items / per_page))
+
+
+def _v3_page_size(*, per_page: int, max_items: int | None) -> int:
+    raised = max(per_page, V3_MAX_PER_PAGE)
+    if max_items is None:
+        return raised
+    return min(raised, max_items) or per_page
+
+
 async def _fetch_offset_pages(
     fetch_page: PageFetcher,
     *,
     collection_key: str | None,
     per_page: int,
-    max_items: int,
+    max_items: int | None,
     max_pages: int,
 ) -> list[dict[str, Any]]:
     all_items: list[dict[str, Any]] = []
@@ -141,7 +165,7 @@ async def _fetch_offset_pages(
         items = extract_list_items(response, collection_key=collection_key)
         all_items.extend(items)
 
-        if len(all_items) >= max_items:
+        if max_items is not None and len(all_items) >= max_items:
             logger.warning(
                 "fetch_all_pages: hit max_items limit (%s), stopping", max_items
             )
@@ -167,7 +191,7 @@ async def _fetch_cursor_pages(
     *,
     collection_key: str | None,
     per_page: int,
-    max_items: int,
+    max_items: int | None,
     max_pages: int,
 ) -> list[dict[str, Any]]:
     all_items: list[dict[str, Any]] = []
@@ -182,7 +206,7 @@ async def _fetch_cursor_pages(
         items = extract_list_items(response, collection_key=collection_key)
         all_items.extend(items)
 
-        if len(all_items) >= max_items:
+        if max_items is not None and len(all_items) >= max_items:
             logger.warning(
                 "fetch_all_pages: hit max_items limit (%s), stopping", max_items
             )

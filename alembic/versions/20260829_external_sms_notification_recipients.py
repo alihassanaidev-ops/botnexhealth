@@ -12,7 +12,7 @@ from sqlalchemy.dialects import postgresql
 
 
 revision = "20260829_external_sms_recipients"
-down_revision = "20260829_call_disconnection_reason"
+down_revision = "20260829_merge_nh_credential_mode_call_reason"
 branch_labels = None
 depends_on = None
 

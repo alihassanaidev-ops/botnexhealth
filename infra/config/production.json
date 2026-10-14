@@ -88,6 +88,15 @@
       "--loglevel=info"
     ]
   },
+  "scheduler": {
+    "enabled": false,
+    "beatTasks": [
+      "tick-workflow-schedules",
+      "poll-workflow-timers",
+      "recover-stale-workflow-timers",
+      "poll-retell-voice-outcomes"
+    ]
+  },
   "frontend": {
     "enabled": true,
     "domainName": "app.scalenexus.ai",

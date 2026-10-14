@@ -37,6 +37,7 @@ RETELL_STATUS_MAP: dict[str, str] = {
     "emergency": CallStatus.EMERGENCY.value,
     "complaint": CallStatus.COMPLAINT.value,
     "needs callback": CallStatus.NEEDS_CALLBACK.value,
+    "need callback": CallStatus.NEEDS_CALLBACK.value,  # recall agent's wording
     "faq handled": CallStatus.FAQ_HANDLED.value,
     "financial inquiry": CallStatus.FINANCIAL_INQUIRY.value,
     "transferred": CallStatus.TRANSFERRED.value,
@@ -93,6 +94,23 @@ def _boolish(value: Any) -> bool:
         return False
     text = str(value).strip().lower()
     return text in {"true", "yes", "1", "y"}
+
+
+def _requested_availability(
+    custom: dict[str, Any], dynamic_vars: dict[str, Any]
+) -> str | None:
+    """When the patient wants to hear back: their stated availability, or the
+    callback time the recall agent records ("Call back time")."""
+    return _nonempty_any(
+        _pick_any(
+            custom,
+            ["Availability", "availability", "preferred_time", "preferred_times"],
+        )
+        or _pick_any(
+            dynamic_vars,
+            ["availability", "preferred_time", "preferred_times"],
+        )
+    ) or _nonempty_any(_pick_any(custom, ["Call back time", "callback_time"]))
 
 
 # DOB shapes Retell sends, in the order we try them. The dashed variants come
@@ -320,16 +338,7 @@ class PostCallService:
                 ],
             )
         )
-        requested_availability = _nonempty_any(
-            _pick_any(
-                custom,
-                ["Availability", "availability", "preferred_time", "preferred_times"],
-            )
-            or _pick_any(
-                dynamic_vars,
-                ["availability", "preferred_time", "preferred_times"],
-            )
-        )
+        requested_availability = _requested_availability(custom, dynamic_vars)
 
         # Extract NexHealth patient ID from webhook data
         pms_patient_id: str | None = self._extract_patient_id(custom, dynamic_vars)

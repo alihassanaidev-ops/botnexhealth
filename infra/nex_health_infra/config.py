@@ -61,6 +61,22 @@ class ServiceConfig:
 
 
 @dataclass(frozen=True)
+class SchedulerConfig:
+    """A single Celery beat task, separate from the autoscaled worker.
+
+    Beat inside the worker (``worker -B``) runs once per worker task, so an
+    environment whose worker scales out would schedule every periodic job
+    several times. ``beat_tasks`` limits which beat entries it starts (empty
+    means all of them), via ``CELERY_BEAT_TASKS``.
+    """
+
+    enabled: bool = False
+    cpu: int = 256
+    memory_mib: int = 512
+    beat_tasks: list[str] = field(default_factory=list)
+
+
+@dataclass(frozen=True)
 class FrontendConfig:
     enabled: bool = True
     domain_name: str | None = None
@@ -78,6 +94,22 @@ class RetentionConfig:
     notification_days: int = 180
     dead_letter_raw_days: int = 30
     idempotency_days: int = 7
+
+
+@dataclass(frozen=True)
+class EmailConfig:
+    patient_email_provider: str = "resend"
+    ses_region: str = "ca-central-1"
+    ses_sending_domain: str | None = None
+    ses_sending_hosted_zone_name: str | None = None
+    ses_clinic_sending_enabled: bool = False
+    ses_configuration_set_prefix: str = "scalenexus"
+    ses_inbound_enabled: bool = False
+    ses_inbound_domain: str | None = None
+    ses_inbound_hosted_zone_name: str | None = None
+    ses_inbound_prefix: str = "inbound/"
+    inbound_email_max_body_bytes: int = 256_000
+    inbound_email_sender_hourly_limit: int = 60
 
 
 @dataclass(frozen=True)
@@ -116,8 +148,10 @@ class EnvironmentConfig:
     redis: RedisConfig
     api: ServiceConfig
     worker: ServiceConfig
+    scheduler: SchedulerConfig
     frontend: FrontendConfig
     retention: RetentionConfig
+    email: EmailConfig
     external_secrets: dict[str, str]
     optional_secrets: dict[str, str]
     # Optional email for CloudWatch alarm notifications (RDS metrics, audit
@@ -125,20 +159,29 @@ class EnvironmentConfig:
     # SNS topic without subscribers — operators can add a subscription
     # manually in the console without redeploying.
     alarm_email: str | None = None
-    # Opt-in switch that lets SUPER_ADMIN enrol an authenticator app (TOTP)
-    # and use an emailed sign-in code, instead of being forced to a passkey.
-    # Off unless a deployment's config sets `allowSuperAdminTotp: true`, so
-    # production stays passkey-only by default.
-    allow_super_admin_totp: bool = False
-    # NexHealth API contract for this environment ("v2" / "v3.0.0"). Must live
-    # in CDK config: a value set by hand on a task definition is dropped by the
-    # next `cdk deploy`, silently reverting the environment to v2.
-    nexhealth_api_version: str | None = None
     # Per-IP edge rate limit (requests / 5-minute window). Layered on top of
     # slowapi (per-process) so a flood at the edge gets blocked before it
     # touches the application. AWS default minimum is 100; raise as traffic
     # grows. 2_000 is comfortable for staging.
     waf_rate_limit_per_5min: int = 2000
+    # AWS's managed ALB body-size rule blocks requests over 8 KiB before they
+    # reach the application. Enable only in environments where larger,
+    # authenticated JSON payloads have been explicitly tested.
+    waf_count_oversize_body_requests: bool = False
+    # NexHealth API contract for this environment ("v2" / "v3.0.0"). Must live
+    # in CDK config: it was set by hand on the staging task definition and the
+    # next `cdk deploy` regenerated that definition and silently dropped it,
+    # reverting staging to v2 while the deploy looked successful.
+    nexhealth_api_version: str | None = None
+    # Retell post-call analysis field that flags a spoken "don't call me
+    # again". When set, the call-analyzed webhook adds the caller to the
+    # location's do-not-contact list; unset leaves opt-out detection off.
+    retell_optout_analysis_key: str | None = None
+    # Opt-in switch that lets SUPER_ADMIN enrol an authenticator app (TOTP)
+    # and use an emailed sign-in code, instead of being forced to a passkey.
+    # Off unless a deployment's config sets `allowSuperAdminTotp: true`, so
+    # production stays passkey-only by default.
+    allow_super_admin_totp: bool = False
 
 
 def _read_json(path: Path) -> dict[str, Any]:
@@ -157,13 +200,25 @@ def load_config(path: str | Path) -> EnvironmentConfig:
     redis = raw["redis"]
     api = raw["api"]
     worker = raw["worker"]
+    scheduler = raw.get("scheduler", {})
+    if scheduler.get("enabled") and "-B" in worker.get("command", []):
+        raise ValueError(
+            "worker.command embeds beat (-B) while scheduler.enabled is true; "
+            "every periodic job would be scheduled twice"
+        )
     frontend = raw.get("frontend", {})
     retention = raw.get("retention", {})
+    email = raw.get("email", {})
+    if email.get("sesClinicSendingEnabled") and not email.get("sesSendingDomain"):
+        raise ValueError(
+            "email.sesSendingDomain is required when SES clinic sending is enabled"
+        )
 
     return EnvironmentConfig(
         app_name=raw["appName"],
-        nexhealth_api_version=raw.get("nexhealthApiVersion"),
         environment_name=raw["environmentName"],
+        nexhealth_api_version=raw.get("nexhealthApiVersion"),
+        retell_optout_analysis_key=raw.get("retellOptoutAnalysisKey"),
         account=raw["account"],
         region=raw["region"],
         app_env=raw.get("appEnv", raw["environmentName"]),
@@ -234,6 +289,12 @@ def load_config(path: str | Path) -> EnvironmentConfig:
             queue_scale_up_depth=worker.get("queueScaleUpDepth"),
             queue_scale_down_depth=worker.get("queueScaleDownDepth"),
         ),
+        scheduler=SchedulerConfig(
+            enabled=bool(scheduler.get("enabled", False)),
+            cpu=int(scheduler.get("cpu", 256)),
+            memory_mib=int(scheduler.get("memoryMiB", 512)),
+            beat_tasks=[str(name) for name in scheduler.get("beatTasks", [])],
+        ),
         frontend=FrontendConfig(
             enabled=frontend.get("enabled", True),
             domain_name=frontend.get("domainName"),
@@ -250,9 +311,34 @@ def load_config(path: str | Path) -> EnvironmentConfig:
             dead_letter_raw_days=int(retention.get("deadLetterRawDays", 30)),
             idempotency_days=int(retention.get("idempotencyDays", 7)),
         ),
+        email=EmailConfig(
+            patient_email_provider=email.get("patientEmailProvider", "resend"),
+            ses_region=email.get("sesRegion", "ca-central-1"),
+            ses_sending_domain=email.get("sesSendingDomain") or None,
+            ses_sending_hosted_zone_name=email.get("sesSendingHostedZoneName") or None,
+            ses_clinic_sending_enabled=bool(
+                email.get("sesClinicSendingEnabled", False)
+            ),
+            ses_configuration_set_prefix=email.get(
+                "sesConfigurationSetPrefix", "scalenexus"
+            ),
+            ses_inbound_enabled=bool(email.get("sesInboundEnabled", False)),
+            ses_inbound_domain=email.get("sesInboundDomain") or None,
+            ses_inbound_hosted_zone_name=email.get("sesInboundHostedZoneName") or None,
+            ses_inbound_prefix=email.get("sesInboundPrefix", "inbound/"),
+            inbound_email_max_body_bytes=int(
+                email.get("inboundEmailMaxBodyBytes", 256_000)
+            ),
+            inbound_email_sender_hourly_limit=int(
+                email.get("inboundEmailSenderHourlyLimit", 60)
+            ),
+        ),
         external_secrets=dict(raw.get("externalSecrets", {})),
         optional_secrets=dict(raw.get("optionalSecrets", {})),
         alarm_email=raw.get("alarmEmail") or None,
         allow_super_admin_totp=bool(raw.get("allowSuperAdminTotp", False)),
         waf_rate_limit_per_5min=int(raw.get("wafRateLimitPer5Min", 2000)),
+        waf_count_oversize_body_requests=bool(
+            raw.get("wafCountOversizeBodyRequests", False)
+        ),
     )

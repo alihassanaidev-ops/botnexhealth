@@ -690,6 +690,81 @@ function ScheduleTriggerFields({
                             }
                         />
                     </Field>
+                    <Field
+                        label="Call recalls due within (days)"
+                        hint="Patients whose recall is due on or before today plus this many days."
+                    >
+                        <Input
+                            type="number"
+                            value={source.due_within_days ?? 30}
+                            disabled={readOnly}
+                            onChange={(e) =>
+                                onChange({
+                                    ...trigger,
+                                    source: {
+                                        ...source,
+                                        due_within_days: toInt(e.target.value, 30),
+                                    },
+                                })
+                            }
+                        />
+                    </Field>
+                    <Field label="Include already-overdue recalls">
+                        <Switch
+                            checked={source.include_overdue ?? true}
+                            disabled={readOnly}
+                            onCheckedChange={(checked) =>
+                                onChange({
+                                    ...trigger,
+                                    source: { ...source, include_overdue: checked },
+                                })
+                            }
+                        />
+                    </Field>
+                    <Field
+                        label="Approved recall types (PMS ids)"
+                        hint="Only these recall type ids are called. Leave empty for every recall type."
+                    >
+                        <Input
+                            value={(source.approved_recall_type_ids ?? []).join(", ")}
+                            disabled={readOnly}
+                            placeholder="e.g. 2288000, 2288006"
+                            onChange={(e) =>
+                                onChange({
+                                    ...trigger,
+                                    source: {
+                                        ...source,
+                                        approved_recall_type_ids: e.target.value
+                                            .split(",")
+                                            .map((v) => v.trim())
+                                            .filter(Boolean),
+                                    },
+                                })
+                            }
+                        />
+                    </Field>
+                    <Field
+                        label="Bookable appointment types (PMS ids)"
+                        hint="On recall calls the agent only sees and books these types. Leave empty for every type."
+                    >
+                        <Input
+                            value={(source.allowed_appointment_type_ids ?? []).join(", ")}
+                            disabled={readOnly}
+                            placeholder="e.g. 1230521, 1230529"
+                            onChange={(e) =>
+                                onChange({
+                                    ...trigger,
+                                    source: {
+                                        ...source,
+                                        allowed_appointment_type_ids: e.target.value
+                                            .split(",")
+                                            .map((v) => v.trim())
+                                            .filter(Boolean),
+                                    },
+                                })
+                            }
+                        />
+                    </Field>
                 </>
             )}
 

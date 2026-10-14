@@ -14,7 +14,7 @@ from alembic import op
 
 
 revision = "20260702_auto_workflow_core"
-down_revision = "20260831_call_notes"
+down_revision = "20260622_nopms_call_status"
 branch_labels = None
 depends_on = None
 

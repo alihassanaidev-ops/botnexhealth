@@ -19,6 +19,7 @@ vi.mock("@/lib/automation-api", () => ({
     pauseCampaign: vi.fn(),
     releaseOutboundHalt: vi.fn(),
     resumeCampaign: vi.fn(),
+    campaignActionError: vi.fn(() => null),
 }))
 vi.mock("sonner", () => ({
     toast: { error: vi.fn(), success: vi.fn() },

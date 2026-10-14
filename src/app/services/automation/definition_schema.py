@@ -146,6 +146,22 @@ class PmsRecallSource(BaseModel):
     #: How long after any recall enrollment before the same patient can enter
     #: this workflow again.
     reenrollment_cooldown_days: int = Field(default=90, ge=1, le=730)
+    #: Clinic-approved PMS recall type ids. Empty means "no allowlist" and the
+    #: campaign keeps the legacy audience (subject to its own trigger filter).
+    #: Recall type *names* are not used for selection: they are free text and one
+    #: clinic's "Recall" is another's "Hygiene".
+    approved_recall_type_ids: list[str] = Field(default_factory=list)
+    #: Audience window: a recall is eligible when its due date is on/before
+    #: ``today + due_within_days`` in the location timezone. With
+    #: ``include_overdue`` false, overdue recalls are excluded and only the
+    #: upcoming window is called.
+    due_within_days: int = Field(default=30, ge=0, le=365)
+    include_overdue: bool = True
+    #: PMS appointment type ids a recall call may see and book. The live-call
+    #: tools hide and refuse every other type, so a recall call can only book
+    #: the clinic's recall visits. Empty means no restriction. Inbound calls and
+    #: other campaigns are never affected.
+    allowed_appointment_type_ids: list[str] = Field(default_factory=list)
 
 
 class AudienceSegmentSource(BaseModel):
@@ -933,6 +949,26 @@ class SendVoiceNode(BaseModel):
     # longer consumes an attempt — without it, "does not consume an attempt"
     # means "unlimited".
     max_dials: int = Field(default=5, ge=1, le=20)
+
+    @model_validator(mode="before")
+    @classmethod
+    def drop_retired_booking_constraints(cls, data: Any) -> Any:
+        """Accept definitions saved while the call step carried booking limits.
+
+        Which appointment types and providers a recall agent books is decided
+        in the Retell agent prompt, not on the campaign. Recall campaigns saved
+        before that change still hold the two empty lists; dropping them here
+        keeps those definitions loading under ``extra="forbid"``.
+        """
+        if isinstance(data, dict) and (
+            "allowed_appointment_type_ids" in data or "allowed_provider_ids" in data
+        ):
+            data = {
+                key: value
+                for key, value in data.items()
+                if key not in ("allowed_appointment_type_ids", "allowed_provider_ids")
+            }
+        return data
 
     @model_validator(mode="after")
     def dial_cap_must_exceed_the_allowance(self) -> "SendVoiceNode":

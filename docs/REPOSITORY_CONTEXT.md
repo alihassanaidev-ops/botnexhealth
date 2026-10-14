@@ -21,6 +21,7 @@
 | Recurring jobs catalog + local debug harness | [SCHEDULED_JOBS.md](SCHEDULED_JOBS.md) |
 | Meta/Typeform lead forms: OAuth, form sync, field mapping, the `form_submitted` trigger | [LEAD_FORMS.md](LEAD_FORMS.md) |
 | Outbound automation/campaign roadmap and current implementation plan | [ROADMAP_OUTBOUND_ENGAGEMENT.md](ROADMAP_OUTBOUND_ENGAGEMENT.md), [OUTBOUND_ENGAGEMENT_IMPLEMENTATION_PLAN.md](OUTBOUND_ENGAGEMENT_IMPLEMENTATION_PLAN.md) |
+| Recall campaign audience, config, agent variables, and setup | [RECALL_CAMPAIGN.md](RECALL_CAMPAIGN.md) |
 | NexHealth v3 migration risks and webhook cutover notes | [nexhealth-v3-inbound-compatibility.md](nexhealth-v3-inbound-compatibility.md), [nexhealth-api-version-research.md](nexhealth-api-version-research.md) |
 | CDK infra (ECS Fargate, RDS, etc.) | [../infra/README.md](../infra/README.md) |
 
@@ -1222,6 +1223,16 @@ NexHealth, GoTracker, Resend, Meta and Typeform are plain `httpx` HTTP calls. S3
 | `inbound_email.py` | Poll SES inbound SQS, parse/quarantine MIME, route signed replies, resume email waits, and forward staff copies |
 | `email_identity_verification.py` | Poll newly provisioned sending domains and re-check verified ones so removed DNS is caught as an alert |
 | `form_integrations.py` | Warn before a Meta/Typeform authorisation expires, and reconcile lead submissions the webhook never delivered |
+
+Celery beat runs as its own single-task **Scheduler** ECS service (`scheduler`
+in the infra config), never inside the worker: the worker autoscales, and beat
+in every worker task would schedule each periodic job several times. The
+`scheduler.beatTasks` list (env `CELERY_BEAT_TASKS`) limits which entries of
+`src/app/worker.py`'s beat schedule it starts; empty means all. Staging runs all
+of them. Production lists only the campaign jobs (`tick-workflow-schedules`,
+`poll-workflow-timers`, `recover-stale-workflow-timers`,
+`poll-retell-voice-outcomes`) and keeps the scheduler off until a campaign
+launches, so the NexHealth syncs and other sweeps it has never run stay off.
 
 Recurring jobs (dashboard rollup, usage/cost rollup, campaign analytics rollup,
 audit-partition pre-creation, idempotency/dead-letter pruning) run as

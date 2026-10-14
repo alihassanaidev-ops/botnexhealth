@@ -13,8 +13,10 @@ from aws_cdk import (
     aws_applicationautoscaling as appscaling,
     aws_cloudfront as cloudfront,
     aws_cloudfront_origins as origins,
+    aws_cloudtrail as cloudtrail,
     aws_cloudwatch as cloudwatch,
     aws_cloudwatch_actions as cw_actions,
+    custom_resources as cr,
     aws_ec2 as ec2,
     aws_ecr_assets as ecr_assets,
     aws_ecs as ecs,
@@ -23,13 +25,16 @@ from aws_cdk import (
     aws_events as events,
     aws_events_targets as events_targets,
     aws_iam as iam,
+    aws_kms as kms,
     aws_logs as logs,
     aws_rds as rds,
     aws_route53 as route53,
     aws_route53_targets as route53_targets,
-    aws_cloudtrail as cloudtrail,
     aws_s3 as s3,
+    aws_ses as ses,
+    aws_ses_actions as ses_actions,
     aws_secretsmanager as secretsmanager,
+    aws_sqs as sqs,
     aws_sns as sns,
     aws_sns_subscriptions as sns_subs,
     aws_wafv2 as wafv2,
@@ -40,7 +45,14 @@ from .config import EnvironmentConfig
 
 
 class NexHealthPlatformStack(Stack):
-    def __init__(self, scope: Construct, construct_id: str, *, config: EnvironmentConfig, **kwargs) -> None:
+    def __init__(
+        self,
+        scope: Construct,
+        construct_id: str,
+        *,
+        config: EnvironmentConfig,
+        **kwargs,
+    ) -> None:
         super().__init__(scope, construct_id, **kwargs)
         self.config = config
 
@@ -49,7 +61,9 @@ class NexHealthPlatformStack(Stack):
         Tags.of(self).add("managed-by", "cdk")
 
         vpc = self._build_vpc()
-        private_subnets = ec2.SubnetSelection(subnet_type=ec2.SubnetType.PRIVATE_WITH_EGRESS)
+        private_subnets = ec2.SubnetSelection(
+            subnet_type=ec2.SubnetType.PRIVATE_WITH_EGRESS
+        )
 
         cluster = ecs.Cluster(
             self,
@@ -167,6 +181,215 @@ class NexHealthPlatformStack(Stack):
 
         frontend_bundle = self._build_frontend()
         frontend_base_url = config.auth_frontend_base_url or frontend_bundle["url"]
+
+        ses_sending_zone: route53.IHostedZone | None = None
+        if config.email.ses_sending_hosted_zone_name:
+            ses_sending_zone = route53.HostedZone.from_lookup(
+                self,
+                "SesSendingHostedZone",
+                domain_name=config.email.ses_sending_hosted_zone_name,
+            )
+
+        inbound_bucket: s3.Bucket | None = None
+        inbound_queue: sqs.Queue | None = None
+        inbound_dlq: sqs.Queue | None = None
+        if config.email.ses_inbound_enabled:
+            if not (
+                config.email.ses_inbound_domain
+                and config.email.ses_inbound_hosted_zone_name
+            ):
+                raise ValueError(
+                    "sesInboundDomain and sesInboundHostedZoneName are required "
+                    "when sesInboundEnabled is true"
+                )
+            if config.email.ses_region != config.region:
+                raise ValueError(
+                    "sesRegion must match the stack region when inbound email is enabled"
+                )
+            inbound_zone = route53.HostedZone.from_lookup(
+                self,
+                "SesInboundHostedZone",
+                domain_name=config.email.ses_inbound_hosted_zone_name,
+            )
+            inbound_identity = ses.EmailIdentity(
+                self,
+                "InboundEmailIdentity",
+                identity=ses.Identity.domain(config.email.ses_inbound_domain),
+            )
+            for index, (name, value) in enumerate(
+                (
+                    (inbound_identity.dkim_dns_token_name1, inbound_identity.dkim_dns_token_value1),
+                    (inbound_identity.dkim_dns_token_name2, inbound_identity.dkim_dns_token_value2),
+                    (inbound_identity.dkim_dns_token_name3, inbound_identity.dkim_dns_token_value3),
+                ),
+                start=1,
+            ):
+                # The DKIM name is a CloudFormation token that already resolves
+                # to an FQDN. CnameRecord cannot see that at synth time and
+                # appends the hosted-zone name a second time; use the L1 record
+                # so SES's exact returned hostname is published.
+                route53.CfnRecordSet(
+                    self,
+                    f"InboundEmailDkim{index}",
+                    hosted_zone_id=inbound_zone.hosted_zone_id,
+                    name=name,
+                    type="CNAME",
+                    resource_records=[value],
+                    ttl="1800",
+                )
+            route53.MxRecord(
+                self,
+                "InboundEmailMx",
+                zone=inbound_zone,
+                record_name=config.email.ses_inbound_domain,
+                values=[
+                    route53.MxRecordValue(
+                        host_name=f"inbound-smtp.{config.email.ses_region}.amazonaws.com",
+                        priority=10,
+                    )
+                ],
+            )
+
+            inbound_bucket = s3.Bucket(
+                self,
+                "InboundEmailBucket",
+                encryption=s3.BucketEncryption.S3_MANAGED,
+                block_public_access=s3.BlockPublicAccess.BLOCK_ALL,
+                enforce_ssl=True,
+                lifecycle_rules=[
+                    s3.LifecycleRule(
+                        id="expire-processed-and-orphaned-mail",
+                        enabled=True,
+                        expiration=Duration.days(7),
+                        abort_incomplete_multipart_upload_after=Duration.days(1),
+                    )
+                ],
+                removal_policy=RemovalPolicy.RETAIN,
+            )
+            inbound_dlq = sqs.Queue(
+                self,
+                "InboundEmailDeadLetterQueue",
+                encryption=sqs.QueueEncryption.SQS_MANAGED,
+                retention_period=Duration.days(14),
+            )
+            inbound_queue = sqs.Queue(
+                self,
+                "InboundEmailQueue",
+                encryption=sqs.QueueEncryption.SQS_MANAGED,
+                visibility_timeout=Duration.minutes(5),
+                retention_period=Duration.days(14),
+                dead_letter_queue=sqs.DeadLetterQueue(
+                    max_receive_count=5, queue=inbound_dlq
+                ),
+            )
+            inbound_notification_key = kms.Key(
+                self,
+                "InboundEmailNotificationKey",
+                enable_key_rotation=True,
+                removal_policy=RemovalPolicy.RETAIN,
+                description="Encrypts inbound SES receipt metadata carried through SNS",
+            )
+            inbound_notification_key.add_to_resource_policy(
+                iam.PolicyStatement(
+                    sid="AllowSesReceiptEncryption",
+                    effect=iam.Effect.ALLOW,
+                    principals=[iam.ServicePrincipal("ses.amazonaws.com")],
+                    actions=["kms:GenerateDataKey*", "kms:Decrypt"],
+                    resources=["*"],
+                    conditions={"StringEquals": {"aws:SourceAccount": self.account}},
+                )
+            )
+            inbound_topic = sns.Topic(
+                self,
+                "InboundEmailTopic",
+                master_key=inbound_notification_key,
+            )
+            inbound_publish_policy = inbound_topic.add_to_resource_policy(
+                iam.PolicyStatement(
+                    sid="AllowSesReceiptPublish",
+                    effect=iam.Effect.ALLOW,
+                    principals=[iam.ServicePrincipal("ses.amazonaws.com")],
+                    actions=["sns:Publish"],
+                    resources=[inbound_topic.topic_arn],
+                    conditions={"StringEquals": {"aws:SourceAccount": self.account}},
+                )
+            )
+            inbound_topic.add_subscription(sns_subs.SqsSubscription(inbound_queue))
+            receipt_rules = ses.ReceiptRuleSet(
+                self,
+                "InboundEmailReceiptRules",
+                receipt_rule_set_name=f"{config.app_name}-{config.environment_name}-inbound",
+            )
+            receipt_rule = receipt_rules.add_rule(
+                "StoreAndNotify",
+                # Catch every SES-verified receiving identity in this account:
+                # the platform fallback plus clinic-owned reply subdomains.
+                # Application routing still requires a signed token and checks
+                # custom recipient-domain ownership before tenant attribution.
+                scan_enabled=True,
+                tls_policy=ses.TlsPolicy.REQUIRE,
+                actions=[
+                    ses_actions.S3(
+                        bucket=inbound_bucket,
+                        object_key_prefix=config.email.ses_inbound_prefix,
+                        topic=inbound_topic,
+                    )
+                ],
+            )
+            if inbound_publish_policy.policy_dependable is not None:
+                receipt_rule.node.add_dependency(
+                    inbound_publish_policy.policy_dependable
+                )
+            # SES validates access to the notification topic while creating a
+            # receipt rule. Make the generated L1 dependency explicit; a normal
+            # ARN reference orders the topic itself but not its resource policy.
+            topic_policy = inbound_topic.node.find_child("Policy")
+            receipt_rule.node.default_child.add_dependency(
+                topic_policy.node.default_child
+            )
+            # CloudFormation creates SES receipt rule sets but does not make
+            # them active. Without this call SES accepts no inbound mail even
+            # though the identity, MX record, and rules all exist. Keep the
+            # activation in CDK so a fresh environment is functional without
+            # a manual console/CLI step. Disable receipt processing before the
+            # rule set is deleted so stack teardown can remove it cleanly.
+            activate_receipt_rules = cr.AwsCustomResource(
+                self,
+                "ActivateInboundEmailReceiptRules",
+                on_create=cr.AwsSdkCall(
+                    service="SES",
+                    action="setActiveReceiptRuleSet",
+                    parameters={
+                        "RuleSetName": receipt_rules.receipt_rule_set_name,
+                    },
+                    physical_resource_id=cr.PhysicalResourceId.of(
+                        f"{config.app_name}-{config.environment_name}-inbound-active"
+                    ),
+                ),
+                on_update=cr.AwsSdkCall(
+                    service="SES",
+                    action="setActiveReceiptRuleSet",
+                    parameters={
+                        "RuleSetName": receipt_rules.receipt_rule_set_name,
+                    },
+                    physical_resource_id=cr.PhysicalResourceId.of(
+                        f"{config.app_name}-{config.environment_name}-inbound-active"
+                    ),
+                ),
+                on_delete=cr.AwsSdkCall(
+                    service="SES",
+                    action="setActiveReceiptRuleSet",
+                    parameters={},
+                    physical_resource_id=cr.PhysicalResourceId.of(
+                        f"{config.app_name}-{config.environment_name}-inbound-inactive"
+                    ),
+                ),
+                policy=cr.AwsCustomResourcePolicy.from_sdk_calls(
+                    resources=cr.AwsCustomResourcePolicy.ANY_RESOURCE
+                ),
+                install_latest_aws_sdk=False,
+            )
+            activate_receipt_rules.node.add_dependency(receipt_rule)
 
         jwt_secret = secretsmanager.Secret(
             self,
@@ -360,6 +583,9 @@ class NexHealthPlatformStack(Stack):
             recordings_bucket,
             database_host_for_runtime,
             database.db_instance_endpoint_port,
+            ses_sending_zone.hosted_zone_id if ses_sending_zone else None,
+            inbound_bucket,
+            inbound_queue,
         )
         runtime_secrets = self._build_app_runtime_secrets(
             jwt_secret,
@@ -429,6 +655,21 @@ class NexHealthPlatformStack(Stack):
             default_value=0,
         )
 
+        # Circuit-breaker cut-off (Item 17). The breaker logs one line per
+        # outage transition rather than one per rejected call, so this counts
+        # outages, not traffic — see services/circuit_breaker.py.
+        breaker_open_filter = logs.MetricFilter(
+            self,
+            "CircuitBreakerOpenedFilter",
+            log_group=api_log_group,
+            filter_pattern=logs.FilterPattern.literal('"circuit breaker OPENED"'),
+            metric_namespace=f"{config.app_name}/{config.environment_name}",
+            metric_name="CircuitBreakerOpened",
+            metric_value="1",
+            default_value=0,
+        )
+        self._breaker_open_filter = breaker_open_filter
+
         api_task_definition = ecs.FargateTaskDefinition(
             self,
             "ApiTaskDefinition",
@@ -449,14 +690,19 @@ class NexHealthPlatformStack(Stack):
                 log_group=api_log_group,
             ),
             health_check=ecs.HealthCheck(
-                command=["CMD-SHELL", "curl --fail http://localhost:8000/livez || exit 1"],
+                command=[
+                    "CMD-SHELL",
+                    "curl --fail http://localhost:8000/livez || exit 1",
+                ],
                 interval=Duration.seconds(30),
                 timeout=Duration.seconds(10),
                 retries=3,
                 start_period=Duration.seconds(20),
             ),
         )
-        api_container.add_port_mappings(ecs.PortMapping(container_port=config.api.container_port))
+        api_container.add_port_mappings(
+            ecs.PortMapping(container_port=config.api.container_port)
+        )
 
         api_service = self._build_api_service(
             cluster=cluster,
@@ -465,7 +711,9 @@ class NexHealthPlatformStack(Stack):
             subnet_selection=private_subnets,
         )
         api_service.load_balancer.set_attribute("idle_timeout.timeout_seconds", "300")
-        api_service.target_group.configure_health_check(path="/livez", healthy_http_codes="200")
+        api_service.target_group.configure_health_check(
+            path="/livez", healthy_http_codes="200"
+        )
 
         if hasattr(self, "frontend_distribution"):
             # CloudFront → ALB origin protocol must match the ALB listener.
@@ -546,7 +794,9 @@ class NexHealthPlatformStack(Stack):
             scale_in_cooldown=Duration.seconds(180),
             scale_out_cooldown=Duration.seconds(60),
         )
-        api_scaling.scale_on_memory_utilization("ApiMemoryScaling", target_utilization_percent=75)
+        api_scaling.scale_on_memory_utilization(
+            "ApiMemoryScaling", target_utilization_percent=75
+        )
         if config.api.requests_per_target:
             api_scaling.scale_on_request_count(
                 "ApiRequestCountScaling",
@@ -575,7 +825,10 @@ class NexHealthPlatformStack(Stack):
                 log_group=worker_log_group,
             ),
             health_check=ecs.HealthCheck(
-                command=["CMD-SHELL", "celery -A src.app.worker inspect ping || exit 1"],
+                command=[
+                    "CMD-SHELL",
+                    "celery -A src.app.worker inspect ping || exit 1",
+                ],
                 interval=Duration.seconds(30),
                 timeout=Duration.seconds(10),
                 retries=3,
@@ -596,12 +849,71 @@ class NexHealthPlatformStack(Stack):
             min_healthy_percent=100,
             max_healthy_percent=200,
         )
+
+        scheduler_service = self._scheduler_service(
+            cluster=cluster,
+            app_image=app_image,
+            runtime_environment=runtime_environment,
+            runtime_secrets=runtime_secrets,
+            log_group=worker_log_group,
+            private_subnets=private_subnets,
+        )
+
+        if config.email.ses_sending_domain:
+            # The API owns the onboarding lifecycle; the worker only verifies
+            # and sends. Keep the worker unable to create/delete identities or
+            # DNS records even though both tasks run the same image.
+            api_task_definition.task_role.add_to_principal_policy(
+                iam.PolicyStatement(
+                    actions=[
+                        "ses:CreateEmailIdentity",
+                        "ses:GetEmailIdentity",
+                        "ses:PutEmailIdentityMailFromAttributes",
+                        "ses:DeleteEmailIdentity",
+                        "ses:CreateConfigurationSet",
+                        "ses:DeleteConfigurationSet",
+                        "ses:CreateTenant",
+                        "ses:DeleteTenant",
+                        "ses:CreateTenantResourceAssociation",
+                    ],
+                    resources=["*"],
+                    conditions={
+                        "StringEquals": {"aws:RequestedRegion": config.email.ses_region}
+                    },
+                )
+            )
+            worker_task_definition.task_role.add_to_principal_policy(
+                iam.PolicyStatement(
+                    actions=["ses:GetEmailIdentity", "ses:SendEmail"],
+                    resources=["*"],
+                    conditions={
+                        "StringEquals": {"aws:RequestedRegion": config.email.ses_region}
+                    },
+                )
+            )
+            if ses_sending_zone is not None:
+                api_task_definition.task_role.add_to_principal_policy(
+                    iam.PolicyStatement(
+                        actions=["route53:ChangeResourceRecordSets"],
+                        resources=[
+                            f"arn:{self.partition}:route53:::hostedzone/"
+                            f"{ses_sending_zone.hosted_zone_id}"
+                        ],
+                    )
+                )
+        if inbound_bucket is not None and inbound_queue is not None:
+            inbound_bucket.grant_read_write(worker_task_definition.task_role)
+            inbound_queue.grant_consume_messages(worker_task_definition.task_role)
         worker_scaling = worker_service.auto_scale_task_count(
             min_capacity=config.worker.min_count,
             max_capacity=config.worker.max_count,
         )
-        worker_scaling.scale_on_cpu_utilization("WorkerCpuScaling", target_utilization_percent=65)
-        worker_scaling.scale_on_memory_utilization("WorkerMemoryScaling", target_utilization_percent=75)
+        worker_scaling.scale_on_cpu_utilization(
+            "WorkerCpuScaling", target_utilization_percent=65
+        )
+        worker_scaling.scale_on_memory_utilization(
+            "WorkerMemoryScaling", target_utilization_percent=75
+        )
         if config.worker.queue_scale_up_depth is not None:
             queue_metrics_security_group = ec2.SecurityGroup(
                 self,
@@ -732,6 +1044,22 @@ class NexHealthPlatformStack(Stack):
         recordings_bucket.grant_read_write(worker_task_definition.task_role)
         recordings_bucket.grant_read_write(migration_task_definition.task_role)
 
+        # The embedded beat `publish_workflow_metrics` task publishes workflow
+        # engine metrics to CloudWatch from inside the worker, so the worker
+        # task role needs PutMetricData (scoped to this env's namespace, mirroring
+        # the standalone queue-metrics task role).
+        worker_task_definition.task_role.add_to_principal_policy(
+            iam.PolicyStatement(
+                actions=["cloudwatch:PutMetricData"],
+                resources=["*"],
+                conditions={
+                    "StringEquals": {
+                        "cloudwatch:namespace": f"{config.app_name}/{config.app_env}"
+                    }
+                },
+            )
+        )
+
         # ── Scheduled admin background jobs ─────────────────────────────
         # Periodic ECS RunTask invocations triggered by EventBridge.
         # Each one runs as the database master role (NOT the runtime
@@ -768,6 +1096,59 @@ class NexHealthPlatformStack(Stack):
             db_security_group=db_security_group,
             private_subnets=private_subnets,
             schedule=events.Schedule.rate(Duration.minutes(5)),
+        )
+
+        # Recompute the usage & cost rollup (Plan 11). ``usage_cost_rollups`` is
+        # the table behind the /institution/usage + /group/usage-summary reports;
+        # without this scheduled recompute those endpoints read an empty rollup.
+        # Runs as the admin role (RLS-bypass, all tenants in one query), same as
+        # the dashboard rollup. 15-min cadence — usage/cost tolerates more lag
+        # than the dashboard volume cards.
+        recompute_usage_rollup_task = self._build_scheduled_admin_task(
+            id_prefix="RecomputeUsageRollup",
+            command=[
+                "python",
+                "-m",
+                "src.app.scripts.recompute_usage_rollup",
+            ],
+            log_group=scheduled_jobs_log_group,
+            log_stream_prefix="usage-rollup",
+            image=app_image,
+            environment=migration_environment,
+            secrets=migration_secrets,
+            vpc=vpc,
+            cluster=cluster,
+            db_security_group=db_security_group,
+            private_subnets=private_subnets,
+            schedule=events.Schedule.rate(Duration.minutes(15)),
+        )
+
+        # Recompute the campaign analytics rollup. ``campaign_metrics_daily`` is
+        # the table behind the campaign Outcomes tab. The recompute script has
+        # existed since the rollup was written but was never scheduled, so the
+        # table stayed empty in every deployed environment and the tab reported
+        # zero for campaigns with dozens of completed runs. Admin role for the
+        # same reason as the other two — one cross-tenant query, RLS bypassed.
+        # 15-min cadence: outcome counts are read by humans reviewing a campaign,
+        # not by anything that reacts to them, so they tolerate the same lag as
+        # usage.
+        recompute_campaign_analytics_task = self._build_scheduled_admin_task(
+            id_prefix="RecomputeCampaignAnalytics",
+            command=[
+                "python",
+                "-m",
+                "src.app.scripts.recompute_campaign_analytics",
+            ],
+            log_group=scheduled_jobs_log_group,
+            log_stream_prefix="campaign-analytics",
+            image=app_image,
+            environment=migration_environment,
+            secrets=migration_secrets,
+            vpc=vpc,
+            cluster=cluster,
+            db_security_group=db_security_group,
+            private_subnets=private_subnets,
+            schedule=events.Schedule.rate(Duration.minutes(15)),
         )
 
         # Ensure audit_logs has the next N monthly partitions pre-created
@@ -839,6 +1220,14 @@ class NexHealthPlatformStack(Stack):
             "RecomputeDashboardRollupTaskArn",
             value=recompute_rollup_task.task_definition_arn,
         )
+        # Exported because this is the task an operator runs by hand, with
+        # ``--start``/``--end``, to backfill campaign_metrics_daily for the
+        # period before the schedule existed.
+        CfnOutput(
+            self,
+            "RecomputeCampaignAnalyticsTaskArn",
+            value=recompute_campaign_analytics_task.task_definition_arn,
+        )
         CfnOutput(
             self,
             "EnsureAuditPartitionsTaskArn",
@@ -892,6 +1281,13 @@ class NexHealthPlatformStack(Stack):
             ec2.Port.tcp(6379),
             "Worker access to Redis",
         )
+        if scheduler_service is not None:
+            # Beat only publishes to the broker; it never opens the database.
+            redis_security_group.add_ingress_rule(
+                scheduler_service.connections.security_groups[0],
+                ec2.Port.tcp(6379),
+                "Scheduler access to Redis",
+            )
 
         self._attach_waf(api_service.load_balancer.load_balancer_arn)
         self._attach_alarms(
@@ -899,22 +1295,46 @@ class NexHealthPlatformStack(Stack):
             worker_service=worker_service,
             database=database,
             audit_failure_filter=audit_failure_filter,
+            inbound_queue=inbound_queue,
+            inbound_dlq=inbound_dlq,
         )
         api_url = self._api_base_url(api_service)
 
         CfnOutput(self, "ClusterName", value=cluster.cluster_name)
+        if inbound_bucket is not None and inbound_queue is not None:
+            CfnOutput(self, "InboundEmailBucketName", value=inbound_bucket.bucket_name)
+            CfnOutput(self, "InboundEmailQueueUrl", value=inbound_queue.queue_url)
+            CfnOutput(
+                self,
+                "InboundEmailDomain",
+                value=config.email.ses_inbound_domain or "",
+            )
         CfnOutput(self, "ApiBaseUrl", value=api_url)
-        CfnOutput(self, "AppSecurityGroupId", value=api_service.service.connections.security_groups[0].security_group_id)
-        CfnOutput(self, "MigrationSecurityGroupId", value=migration_security_group.security_group_id)
+        CfnOutput(
+            self,
+            "AppSecurityGroupId",
+            value=api_service.service.connections.security_groups[0].security_group_id,
+        )
+        CfnOutput(
+            self,
+            "MigrationSecurityGroupId",
+            value=migration_security_group.security_group_id,
+        )
         CfnOutput(
             self,
             "PrivateSubnetIds",
             value=",".join(subnet.subnet_id for subnet in vpc.private_subnets),
         )
-        CfnOutput(self, "MigrationTaskDefinitionArn", value=migration_task_definition.task_definition_arn)
+        CfnOutput(
+            self,
+            "MigrationTaskDefinitionArn",
+            value=migration_task_definition.task_definition_arn,
+        )
         CfnOutput(self, "RecordingsBucketName", value=recordings_bucket.bucket_name)
         CfnOutput(self, "RedisUrl", value=redis_url)
-        CfnOutput(self, "DatabaseEndpointAddress", value=database.db_instance_endpoint_address)
+        CfnOutput(
+            self, "DatabaseEndpointAddress", value=database.db_instance_endpoint_address
+        )
         if database_proxy is not None:
             CfnOutput(self, "DatabaseProxyEndpoint", value=database_proxy.endpoint)
         CfnOutput(self, "DatabasePort", value=database.db_instance_endpoint_port)
@@ -927,13 +1347,21 @@ class NexHealthPlatformStack(Stack):
             ),
         )
         if database.secret is not None:
-            CfnOutput(self, "DatabaseCredentialsSecretArn", value=database.secret.secret_arn)
+            CfnOutput(
+                self, "DatabaseCredentialsSecretArn", value=database.secret.secret_arn
+            )
         CfnOutput(self, "GeneratedJwtSecretArn", value=jwt_secret.secret_arn)
-        CfnOutput(self, "GeneratedEncryptionKeySecretArn", value=encryption_key_secret.secret_arn)
+        CfnOutput(
+            self,
+            "GeneratedEncryptionKeySecretArn",
+            value=encryption_key_secret.secret_arn,
+        )
         if frontend_bundle["bucket_name"]:
             CfnOutput(self, "FrontendBucketName", value=frontend_bundle["bucket_name"])
         if frontend_bundle["distribution_id"]:
-            CfnOutput(self, "FrontendDistributionId", value=frontend_bundle["distribution_id"])
+            CfnOutput(
+                self, "FrontendDistributionId", value=frontend_bundle["distribution_id"]
+            )
             CfnOutput(self, "FrontendUrl", value=frontend_bundle["url"])
 
     def _build_vpc(self) -> ec2.IVpc:
@@ -947,6 +1375,61 @@ class NexHealthPlatformStack(Stack):
             nat_gateways=self.config.network.nat_gateways,
         )
 
+    def _scheduler_service(
+        self,
+        *,
+        cluster: ecs.Cluster,
+        app_image: ecs.ContainerImage,
+        runtime_environment: dict[str, str],
+        runtime_secrets: dict[str, ecs.Secret],
+        log_group: logs.LogGroup,
+        private_subnets: ec2.SubnetSelection,
+    ) -> ecs.FargateService | None:
+        """One Celery beat task, never more, when the config enables it."""
+        scheduler = self.config.scheduler
+        if not scheduler.enabled:
+            return None
+        task_definition = ecs.FargateTaskDefinition(
+            self,
+            "SchedulerTaskDefinition",
+            cpu=scheduler.cpu,
+            memory_limit_mib=scheduler.memory_mib,
+            runtime_platform=ecs.RuntimePlatform(
+                cpu_architecture=ecs.CpuArchitecture.X86_64,
+                operating_system_family=ecs.OperatingSystemFamily.LINUX,
+            ),
+        )
+        environment = dict(runtime_environment)
+        if scheduler.beat_tasks:
+            environment["CELERY_BEAT_TASKS"] = ",".join(scheduler.beat_tasks)
+        task_definition.add_container(
+            "SchedulerContainer",
+            image=app_image,
+            command=["celery", "-A", "src.app.worker", "beat", "--loglevel=info"],
+            environment=environment,
+            secrets=runtime_secrets,
+            logging=ecs.LogDrivers.aws_logs(
+                stream_prefix="scheduler",
+                log_group=log_group,
+            ),
+        )
+        return ecs.FargateService(
+            self,
+            "SchedulerService",
+            cluster=cluster,
+            task_definition=task_definition,
+            desired_count=1,
+            assign_public_ip=False,
+            enable_execute_command=True,
+            vpc_subnets=private_subnets,
+            circuit_breaker=ecs.DeploymentCircuitBreaker(rollback=True),
+            # Stop the old beat before starting the new one: two beats at once
+            # would send every periodic job twice. A missed tick is harmless;
+            # campaign schedules fire a missed slot on the next tick.
+            min_healthy_percent=0,
+            max_healthy_percent=100,
+        )
+
     def _build_runtime_environment(
         self,
         frontend_base_url: str | None,
@@ -955,6 +1438,9 @@ class NexHealthPlatformStack(Stack):
         recordings_bucket: s3.Bucket,
         database_host: str,
         database_port: str,
+        ses_sending_hosted_zone_id: str | None,
+        inbound_bucket: s3.Bucket | None,
+        inbound_queue: sqs.Queue | None,
     ) -> dict[str, str]:
         cors_origins = list(self.config.cors_allowed_origins)
         if frontend_bundle_url and frontend_bundle_url not in cors_origins:
@@ -989,29 +1475,58 @@ class NexHealthPlatformStack(Stack):
             ),
             "RETENTION_RECORDING_DAYS": str(self.config.retention.recording_days),
             "RETENTION_SMS_BODY_DAYS": str(self.config.retention.sms_body_days),
-            "RETENTION_SMS_METADATA_DAYS": str(
-                self.config.retention.sms_metadata_days
-            ),
-            "RETENTION_NOTIFICATION_DAYS": str(
-                self.config.retention.notification_days
-            ),
+            "RETENTION_SMS_METADATA_DAYS": str(self.config.retention.sms_metadata_days),
+            "RETENTION_NOTIFICATION_DAYS": str(self.config.retention.notification_days),
             "RETENTION_DEAD_LETTER_RAW_DAYS": str(
                 self.config.retention.dead_letter_raw_days
             ),
-            "RETENTION_IDEMPOTENCY_DAYS": str(
-                self.config.retention.idempotency_days
+            "RETENTION_IDEMPOTENCY_DAYS": str(self.config.retention.idempotency_days),
+            "PATIENT_EMAIL_PROVIDER": self.config.email.patient_email_provider,
+            "SES_REGION": self.config.email.ses_region,
+            "SES_CLINIC_SENDING_ENABLED": str(
+                self.config.email.ses_clinic_sending_enabled
+            ).lower(),
+            "SES_CONFIGURATION_SET_PREFIX": self.config.email.ses_configuration_set_prefix,
+            "SES_INBOUND_PREFIX": self.config.email.ses_inbound_prefix,
+            "INBOUND_EMAIL_MAX_BODY_BYTES": str(
+                self.config.email.inbound_email_max_body_bytes
+            ),
+            "INBOUND_EMAIL_SENDER_HOURLY_LIMIT": str(
+                self.config.email.inbound_email_sender_hourly_limit
             ),
         }
+        if self.config.email.ses_sending_domain:
+            environment["SES_SENDING_DOMAIN"] = self.config.email.ses_sending_domain
+        if self.config.email.ses_inbound_domain and inbound_bucket and inbound_queue:
+            environment["SES_INBOUND_DOMAIN"] = self.config.email.ses_inbound_domain
+            environment["SES_INBOUND_BUCKET"] = inbound_bucket.bucket_name
+            environment["SES_INBOUND_QUEUE_URL"] = inbound_queue.queue_url
+        if ses_sending_hosted_zone_id:
+            environment["SES_SENDING_HOSTED_ZONE_ID"] = ses_sending_hosted_zone_id
         if self.config.api.web_concurrency:
             environment["WEB_CONCURRENCY"] = str(self.config.api.web_concurrency)
         if self.config.nexhealth_api_version:
             environment["NEXHEALTH_API_VERSION"] = self.config.nexhealth_api_version
+        if self.config.retell_optout_analysis_key:
+            environment["RETELL_OPTOUT_ANALYSIS_KEY"] = (
+                self.config.retell_optout_analysis_key
+            )
         if cors_origins:
             environment["CORS_ALLOWED_ORIGINS"] = ",".join(cors_origins)
         if frontend_base_url:
             environment["AUTH_FRONTEND_BASE_URL"] = frontend_base_url
+            # Patient action links (booking, reschedule, cancel, registration)
+            # are built from this. It defaults to the production host in code,
+            # so without setting it here every non-production deployment mints
+            # links that send patients to production — which publish validation
+            # cannot catch, since it only refuses an *empty* base URL. Same
+            # value as the auth emails: both are "where a patient or user opens
+            # a link we sent them".
+            environment["PUBLIC_BASE_URL"] = frontend_base_url
         if self.config.trusted_proxy_cidrs:
-            environment["TRUSTED_PROXY_CIDRS"] = ",".join(self.config.trusted_proxy_cidrs)
+            environment["TRUSTED_PROXY_CIDRS"] = ",".join(
+                self.config.trusted_proxy_cidrs
+            )
         # WebAuthn — falls back to frontend host / origin when the config
         # didn't override. Required: without these the container resolves
         # rp_id = "localhost" and the browser rejects passkey registration
@@ -1019,6 +1534,7 @@ class NexHealthPlatformStack(Stack):
         rp_id = self.config.webauthn_rp_id
         if not rp_id and frontend_base_url:
             from urllib.parse import urlparse
+
             rp_id = urlparse(frontend_base_url).hostname
         if rp_id:
             environment["WEBAUTHN_RP_ID"] = rp_id
@@ -1029,6 +1545,14 @@ class NexHealthPlatformStack(Stack):
             environment["WEBAUTHN_ALLOWED_ORIGINS"] = ",".join(allowed_origins)
         if self.config.webauthn_rp_name:
             environment["WEBAUTHN_RP_NAME"] = self.config.webauthn_rp_name
+        # Provider callbacks use the deployment's API host. PUBLIC_API_URL is
+        # non-secret runtime metadata used to derive Twilio inbound/status URLs.
+        # GoTracker uses the same host for auto-created subscription callbacks.
+        environment["GOTRACKER_BASE_URL"] = "https://synchronizer.scalenexus.ai"
+        if self.config.api.domain_name:
+            public_api_url = f"https://{self.config.api.domain_name}"
+            environment["PUBLIC_API_URL"] = public_api_url
+            environment["GOTRACKER_WEBHOOK_CALLBACK_BASE_URL"] = public_api_url
         # Opt-in: let SUPER_ADMIN enrol a TOTP authenticator app and use an
         # emailed sign-in code instead of being forced to a passkey. Driven by
         # the deployment config so it can be turned on or off without a code
@@ -1053,8 +1577,12 @@ class NexHealthPlatformStack(Stack):
         secrets: dict[str, ecs.Secret] = {
             "JWT_SECRET": ecs.Secret.from_secrets_manager(jwt_secret),
             "ENCRYPTION_KEY": ecs.Secret.from_secrets_manager(encryption_key_secret),
-            "DATABASE_USER": ecs.Secret.from_secrets_manager(app_role_secret, "username"),
-            "DATABASE_PASSWORD": ecs.Secret.from_secrets_manager(app_role_secret, "password"),
+            "DATABASE_USER": ecs.Secret.from_secrets_manager(
+                app_role_secret, "username"
+            ),
+            "DATABASE_PASSWORD": ecs.Secret.from_secrets_manager(
+                app_role_secret, "password"
+            ),
         }
         return self._add_external_secrets(secrets, "AppRuntime")
 
@@ -1075,8 +1603,12 @@ class NexHealthPlatformStack(Stack):
             "ENCRYPTION_KEY": ecs.Secret.from_secrets_manager(encryption_key_secret),
         }
         if database.secret is not None:
-            secrets["DATABASE_USER"] = ecs.Secret.from_secrets_manager(database.secret, "username")
-            secrets["DATABASE_PASSWORD"] = ecs.Secret.from_secrets_manager(database.secret, "password")
+            secrets["DATABASE_USER"] = ecs.Secret.from_secrets_manager(
+                database.secret, "username"
+            )
+            secrets["DATABASE_PASSWORD"] = ecs.Secret.from_secrets_manager(
+                database.secret, "password"
+            )
         return self._add_external_secrets(secrets, "Migration")
 
     def _add_external_secrets(
@@ -1194,7 +1726,11 @@ class NexHealthPlatformStack(Stack):
             "max_healthy_percent": 200,
         }
 
-        if service_config.domain_name and service_config.certificate_arn and service_config.hosted_zone_name:
+        if (
+            service_config.domain_name
+            and service_config.certificate_arn
+            and service_config.hosted_zone_name
+        ):
             zone = route53.HostedZone.from_lookup(
                 self,
                 "ApiHostedZone",
@@ -1278,7 +1814,9 @@ class NexHealthPlatformStack(Stack):
                 self.config.frontend.certificate_arn,
             )
 
-        distribution = cloudfront.Distribution(self, "FrontendDistribution", **distribution_kwargs)
+        distribution = cloudfront.Distribution(
+            self, "FrontendDistribution", **distribution_kwargs
+        )
         self.frontend_distribution = distribution
 
         if self.config.frontend.domain_name and self.config.frontend.hosted_zone_name:
@@ -1292,14 +1830,18 @@ class NexHealthPlatformStack(Stack):
                 "FrontendAliasRecord",
                 zone=hosted_zone,
                 record_name=self.config.frontend.domain_name,
-                target=route53.RecordTarget.from_alias(route53_targets.CloudFrontTarget(distribution)),
+                target=route53.RecordTarget.from_alias(
+                    route53_targets.CloudFrontTarget(distribution)
+                ),
             )
             route53.AaaaRecord(
                 self,
                 "FrontendAliasRecordIpv6",
                 zone=hosted_zone,
                 record_name=self.config.frontend.domain_name,
-                target=route53.RecordTarget.from_alias(route53_targets.CloudFrontTarget(distribution)),
+                target=route53.RecordTarget.from_alias(
+                    route53_targets.CloudFrontTarget(distribution)
+                ),
             )
 
         frontend_url = (
@@ -1402,6 +1944,21 @@ class NexHealthPlatformStack(Stack):
                         "managedRuleGroupStatement": {
                             "vendorName": "AWS",
                             "name": "AWSManagedRulesCommonRuleSet",
+                            # ALB inspection is fixed at 8 KiB. Staging can
+                            # explicitly count this rule instead of blocking so
+                            # larger authenticated JSON reaches app validation.
+                            **(
+                                {
+                                    "ruleActionOverrides": [
+                                        {
+                                            "name": "SizeRestrictions_BODY",
+                                            "actionToUse": {"count": {}},
+                                        }
+                                    ]
+                                }
+                                if self.config.waf_count_oversize_body_requests
+                                else {}
+                            ),
                         }
                     },
                     "visibilityConfig": {
@@ -1462,6 +2019,8 @@ class NexHealthPlatformStack(Stack):
         worker_service: ecs.FargateService,
         database: rds.DatabaseInstance,
         audit_failure_filter: logs.MetricFilter,
+        inbound_queue: sqs.Queue | None,
+        inbound_dlq: sqs.Queue | None,
     ) -> None:
         """Provision a SNS topic + CloudWatch alarms.
 
@@ -1552,6 +2111,229 @@ class NexHealthPlatformStack(Stack):
         )
         alb_5xx.add_alarm_action(action)
 
+        # ── Campaign engine alarms (Item 35) ─────────────────────────────
+        #
+        # publish_workflow_metrics runs every minute and nothing consumed any of
+        # it. If overdue work climbs or failures spike, patients are not being
+        # contacted and nobody finds out until a clinic phones in.
+        #
+        # THRESHOLDS. Two are structural — they follow from what the metric
+        # means and would be the same at any volume. The rest are estimates
+        # sized for the current deployment: a handful of clinics and two live
+        # campaigns. Each states the reasoning it was derived from, so when
+        # volume grows the number can be re-derived rather than re-guessed.
+        #
+        # All are set deliberately loose. An alarm that fires on a busy-but-fine
+        # afternoon gets muted, and a muted channel takes the structural alarms
+        # down with it. Missing the first hour of a real incident costs less
+        # than losing the channel.
+        #
+        # Every alarm is scoped to business-relevant sustain periods rather than
+        # single datapoints, because campaign volume legitimately falls to zero
+        # overnight and a low-volume alarm would page every night for nothing.
+        engine_ns = f"{self.config.app_name}/{self.config.app_env}"
+
+        def engine_metric(name: str, *, minutes: int = 5) -> cloudwatch.Metric:
+            return cloudwatch.Metric(
+                namespace=engine_ns,
+                metric_name=name,
+                period=Duration.minutes(minutes),
+                statistic="Maximum",
+            )
+
+        def engine_alarm(
+            construct_id: str,
+            *,
+            metric: cloudwatch.Metric,
+            threshold: float,
+            evaluation_periods: int,
+            datapoints_to_alarm: int,
+            description: str,
+        ) -> None:
+            alarm = cloudwatch.Alarm(
+                self,
+                construct_id,
+                metric=metric,
+                threshold=threshold,
+                evaluation_periods=evaluation_periods,
+                datapoints_to_alarm=datapoints_to_alarm,
+                comparison_operator=(
+                    cloudwatch.ComparisonOperator.GREATER_THAN_THRESHOLD
+                ),
+                treat_missing_data=cloudwatch.TreatMissingData.NOT_BREACHING,
+                alarm_description=description,
+            )
+            alarm.add_alarm_action(action)
+
+        # 5. Stuck work. STRUCTURAL, not a guess: a timer whose claim has
+        #    expired is by definition a fault — a worker took it and never came
+        #    back. Any sustained non-zero value is real. Fifteen minutes of it
+        #    rules out the moment a deploy rolls workers.
+        engine_alarm(
+            "WorkflowStaleTimersAlarm",
+            metric=engine_metric("WorkflowStaleTimers"),
+            threshold=0,
+            evaluation_periods=3,
+            datapoints_to_alarm=3,
+            description=(
+                "Campaign timers claimed by a worker that never released them, "
+                "sustained 15 minutes. Work is stuck: a worker died holding "
+                "claims, or claim expiry is not being honoured."
+            ),
+        )
+
+        # 6. Overdue work. Structural in kind — a timer past its due time is
+        #    late by definition — but the tolerance is a judgement. A healthy
+        #    engine clears due timers within a publish cycle or two, so a small
+        #    backlog is ordinary jitter. 50 sustained for a quarter of an hour
+        #    is not jitter at this volume: it means the workers have stopped
+        #    keeping up rather than briefly fallen behind.
+        engine_alarm(
+            "WorkflowDueTimerBacklogAlarm",
+            metric=engine_metric("WorkflowDueTimerBacklog"),
+            threshold=50,
+            evaluation_periods=3,
+            datapoints_to_alarm=3,
+            description=(
+                "More than 50 campaign timers overdue for 15 minutes. Patients "
+                "are not being contacted on schedule. Sized for a handful of "
+                "clinics; raise it as campaign volume grows."
+            ),
+        )
+
+        # 7. Failed runs, over a rolling 24 hours. A campaign legitimately
+        #    fails runs — unreachable patients, disconnected numbers — so this
+        #    alarms on a spike above that floor, not on failure as such. Item 14
+        #    also raised the baseline deliberately: sends that used to advance
+        #    silently past a provider rejection now fail the run, which is the
+        #    point. 50 a day sits above ordinary churn at this volume while
+        #    still catching a campaign misfiring for everyone.
+        engine_alarm(
+            "WorkflowFailedRunsAlarm",
+            metric=engine_metric("WorkflowFailedRuns"),
+            threshold=50,
+            evaluation_periods=2,
+            datapoints_to_alarm=2,
+            description=(
+                "More than 50 campaign runs failed in the last 24 hours. Above "
+                "the expected floor of unreachable patients - something is "
+                "failing for everyone, not for individuals."
+            ),
+        )
+
+        # 8. Failed steps, same rolling 24 hours. A run holds many steps, so
+        #    the floor is higher than for runs. This metric was cumulative until
+        #    Item 35 windowed it: counted for all time it only ever rises, so
+        #    any threshold is crossed once and then stays crossed, and an alarm
+        #    that can never return to OK reports nothing after its first day.
+        engine_alarm(
+            "WorkflowFailedStepsAlarm",
+            metric=engine_metric("WorkflowFailedSteps"),
+            threshold=100,
+            evaluation_periods=2,
+            datapoints_to_alarm=2,
+            description=(
+                "More than 100 campaign steps failed in the last 24 hours. A run "
+                "holds several steps, so this sits above the run alarm; both "
+                "firing together points at a provider rather than a campaign."
+            ),
+        )
+
+        # 9. Undeliverable items. An event nobody has replayed or discarded is
+        #    work the engine gave up on. A healthy system trends toward zero
+        #    because someone reviews them, but a few permanently-bad recipients
+        #    are ordinary, so this alarms on accumulation rather than existence:
+        #    ten unreviewed means nobody is reviewing.
+        engine_alarm(
+            "WorkflowUndeliverableAlarm",
+            metric=engine_metric("WorkflowUndeliverable"),
+            threshold=10,
+            evaluation_periods=3,
+            datapoints_to_alarm=3,
+            description=(
+                "More than 10 undeliverable events open and unreviewed for 15 "
+                "minutes. Work the engine gave up on that nobody is triaging."
+            ),
+        )
+
+        # 10. Queue depth. Depth alone says little — a deep queue that drains
+        #     is healthy, a shallow one that never moves is not — which is why
+        #     this alarms on depth *sustained*, not on depth. Fifteen minutes
+        #     above 500 means the queue is not draining, whatever its size.
+        engine_alarm(
+            "CeleryQueueDepthAlarm",
+            metric=cloudwatch.Metric(
+                namespace=engine_ns,
+                metric_name="CeleryQueueDepth",
+                period=Duration.minutes(5),
+                statistic="Maximum",
+            ),
+            threshold=500,
+            evaluation_periods=3,
+            datapoints_to_alarm=3,
+            description=(
+                "Celery queue above 500 for 15 minutes and not draining - the "
+                "workers are not keeping up with what campaigns are producing."
+            ),
+        )
+
+        # 11. Service cut-off (Item 17). STRUCTURAL: the breaker logs once per
+        #     outage, not once per rejected call, so any occurrence is a real
+        #     supplier outage for a real clinic and is worth knowing about
+        #     immediately. Held work recovers on its own, so this is
+        #     informational rather than urgent - but silence here while a
+        #     clinic's sends pile up is exactly what Item 17 set out to end.
+        breaker_alarm = cloudwatch.Alarm(
+            self,
+            "CircuitBreakerOpenedAlarm",
+            metric=self._breaker_open_filter.metric(
+                statistic="Sum", period=Duration.minutes(5)
+            ),
+            threshold=1,
+            evaluation_periods=1,
+            datapoints_to_alarm=1,
+            comparison_operator=(
+                cloudwatch.ComparisonOperator.GREATER_THAN_OR_EQUAL_TO_THRESHOLD
+            ),
+            treat_missing_data=cloudwatch.TreatMissingData.NOT_BREACHING,
+            alarm_description=(
+                "A service circuit breaker opened: an outside provider is "
+                "failing for a clinic and its work is being held. Recovery is "
+                "automatic; investigate if it does not close."
+            ),
+        )
+        breaker_alarm.add_alarm_action(action)
+
+        if inbound_queue is not None:
+            inbound_age = cloudwatch.Alarm(
+                self,
+                "InboundEmailQueueAgeAlarm",
+                metric=inbound_queue.metric_approximate_age_of_oldest_message(
+                    period=Duration.minutes(5)
+                ),
+                threshold=600,
+                evaluation_periods=2,
+                datapoints_to_alarm=2,
+                comparison_operator=cloudwatch.ComparisonOperator.GREATER_THAN_THRESHOLD,
+                treat_missing_data=cloudwatch.TreatMissingData.NOT_BREACHING,
+                alarm_description="Inbound patient email has waited more than 10 minutes.",
+            )
+            inbound_age.add_alarm_action(action)
+        if inbound_dlq is not None:
+            inbound_dead_letters = cloudwatch.Alarm(
+                self,
+                "InboundEmailDeadLetterAlarm",
+                metric=inbound_dlq.metric_approximate_number_of_messages_visible(
+                    period=Duration.minutes(5)
+                ),
+                threshold=1,
+                evaluation_periods=1,
+                comparison_operator=cloudwatch.ComparisonOperator.GREATER_THAN_OR_EQUAL_TO_THRESHOLD,
+                treat_missing_data=cloudwatch.TreatMissingData.NOT_BREACHING,
+                alarm_description="An inbound patient email could not be processed after retries.",
+            )
+            inbound_dead_letters.add_alarm_action(action)
+
         CfnOutput(self, "AlarmTopicArn", value=topic.topic_arn)
 
         # ── Consolidated CloudWatch dashboard ────────────────────────────────
@@ -1582,22 +2364,35 @@ class NexHealthPlatformStack(Stack):
         dashboard.add_widgets(
             cloudwatch.GraphWidget(
                 title="ALB — Requests / min",
-                left=[lb.metric_request_count(period=m1, statistic="Sum", label="requests")],
-                width=8, height=6,
+                left=[
+                    lb.metric_request_count(
+                        period=m1, statistic="Sum", label="requests"
+                    )
+                ],
+                width=8,
+                height=6,
             ),
             cloudwatch.GraphWidget(
                 title="ALB — Target latency (s)",
                 left=[
-                    lb.metric_target_response_time(period=m1, statistic="p50", label="p50"),
-                    lb.metric_target_response_time(period=m1, statistic="p95", label="p95"),
-                    lb.metric_target_response_time(period=m1, statistic="p99", label="p99"),
+                    lb.metric_target_response_time(
+                        period=m1, statistic="p50", label="p50"
+                    ),
+                    lb.metric_target_response_time(
+                        period=m1, statistic="p95", label="p95"
+                    ),
+                    lb.metric_target_response_time(
+                        period=m1, statistic="p99", label="p99"
+                    ),
                 ],
-                width=8, height=6,
+                width=8,
+                height=6,
             ),
             cloudwatch.GraphWidget(
                 title="ALB — Target 5xx / min",
                 left=[alb_5xx_1m],
-                width=8, height=6,
+                width=8,
+                height=6,
             ),
         )
         dashboard.add_widgets(
@@ -1607,44 +2402,57 @@ class NexHealthPlatformStack(Stack):
                     api_service.service.metric_cpu_utilization(period=m1, label="api"),
                     worker_service.metric_cpu_utilization(period=m1, label="worker"),
                 ],
-                width=12, height=6,
+                width=12,
+                height=6,
             ),
             cloudwatch.GraphWidget(
                 title="ECS — Memory %",
                 left=[
-                    api_service.service.metric_memory_utilization(period=m1, label="api"),
+                    api_service.service.metric_memory_utilization(
+                        period=m1, label="api"
+                    ),
                     worker_service.metric_memory_utilization(period=m1, label="worker"),
                 ],
-                width=12, height=6,
+                width=12,
+                height=6,
             ),
         )
         dashboard.add_widgets(
             cloudwatch.GraphWidget(
                 title="RDS — CPU %",
                 left=[database.metric_cpu_utilization(period=m1)],
-                width=8, height=6,
+                width=8,
+                height=6,
             ),
             cloudwatch.GraphWidget(
                 title="RDS — Connections",
                 left=[database.metric_database_connections(period=m1)],
-                width=8, height=6,
+                width=8,
+                height=6,
             ),
             cloudwatch.GraphWidget(
                 title="RDS — Free storage (bytes)",
                 left=[database.metric_free_storage_space(period=m1)],
-                width=8, height=6,
+                width=8,
+                height=6,
             ),
         )
         dashboard.add_widgets(
             cloudwatch.GraphWidget(
                 title="Celery — queue depth",
                 left=[celery_depth],
-                width=12, height=6,
+                width=12,
+                height=6,
             ),
             cloudwatch.GraphWidget(
                 title="Audit-write failures (5m)",
-                left=[audit_failure_filter.metric(statistic="Sum", period=Duration.minutes(5))],
-                width=12, height=6,
+                left=[
+                    audit_failure_filter.metric(
+                        statistic="Sum", period=Duration.minutes(5)
+                    )
+                ],
+                width=12,
+                height=6,
             ),
         )
         CfnOutput(
@@ -1656,7 +2464,9 @@ class NexHealthPlatformStack(Stack):
             ),
         )
 
-    def _api_base_url(self, api_service: ecs_patterns.ApplicationLoadBalancedFargateService) -> str:
+    def _api_base_url(
+        self, api_service: ecs_patterns.ApplicationLoadBalancedFargateService
+    ) -> str:
         if self.config.api.domain_name and self.config.api.certificate_arn:
             return f"https://{self.config.api.domain_name}"
         return f"http://{api_service.load_balancer.load_balancer_dns_name}"

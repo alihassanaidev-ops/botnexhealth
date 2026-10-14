@@ -22,7 +22,7 @@ from __future__ import annotations
 from alembic import op
 
 revision = "20260831_outbound_call_limit"
-down_revision = "20260830_campaign_enquiries"
+down_revision = "20260831_call_notes"
 branch_labels = None
 depends_on = None
 

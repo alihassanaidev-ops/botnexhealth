@@ -443,7 +443,12 @@ class NexHealthPatientSyncService:
         try:
             with nexhealth_background_traffic():
                 patients = await adapter.list_patients(
-                    updated_since=updated_since.isoformat() if updated_since else None
+                    updated_since=(
+                        updated_since.isoformat() if updated_since else None
+                    ),
+                    # A clinic can hold several thousand patients; the old
+                    # 1,000 default projected only a fraction of them.
+                    max_items=None,
                 )
         finally:
             await adapter.close()
