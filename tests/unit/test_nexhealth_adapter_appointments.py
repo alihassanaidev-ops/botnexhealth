@@ -678,6 +678,32 @@ async def test_list_availabilities_routes_to_working_hours_for_v3(
     assert calls[1] == "/providers"
 
 
+@pytest.mark.parametrize("api_contract", ["legacy_v2", "stable_v3"])
+@pytest.mark.asyncio
+async def test_work_window_reads_get_a_60s_budget_and_no_retries(
+    monkeypatch: pytest.MonkeyPatch, api_contract: str
+):
+    # The Retell appointment-type check reads work windows mid-call, so a hung
+    # NexHealth must fail after one 60s attempt, not 30s x 4 retries.
+    adapter = _make_adapter(api_contract=api_contract)
+    calls: list[tuple[str, dict]] = []
+
+    async def fake_request(_client, method, path, *, params=None, json=None, **kw):
+        calls.append((path, kw))
+        return {"data": [], "count": 0}
+
+    monkeypatch.setattr(adapter_module, "handle_nexhealth_request", fake_request)
+
+    await adapter.list_availabilities(provider_id="nh-123")
+
+    assert [path for path, _ in calls] == [
+        adapter._api_contract.working_windows_path,
+        "/providers",
+    ]
+    for _path, kw in calls:
+        assert kw == {"timeout": 60.0, "max_retries": 0}
+
+
 @pytest.mark.asyncio
 async def test_create_availability_wraps_body_under_availability_key(
     monkeypatch: pytest.MonkeyPatch,

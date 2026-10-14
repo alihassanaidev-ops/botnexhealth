@@ -83,9 +83,23 @@ class NexHealthClient:
 
         return await self._token_manager.get_valid_token(fetch_token)
 
-    async def get(self, path: str, params: dict[str, Any] | None = None) -> dict[str, Any]:
-        """GET request."""
-        return await self.request("GET", path, params=params)
+    async def get(
+        self,
+        path: str,
+        params: dict[str, Any] | None = None,
+        timeout: float | None = None,
+        max_retries: int | None = None,
+        headers_override: dict[str, str] | None = None,
+    ) -> dict[str, Any]:
+        """GET request. See `request` for the per-request overrides."""
+        return await self.request(
+            "GET",
+            path,
+            params=params,
+            timeout=timeout,
+            max_retries=max_retries,
+            headers_override=headers_override,
+        )
 
     async def post(
         self,
@@ -115,6 +129,9 @@ class NexHealthClient:
         path: str,
         params: dict[str, Any] | None = None,
         json: dict[str, Any] | None = None,
+        timeout: float | None = None,
+        max_retries: int | None = None,
+        headers_override: dict[str, str] | None = None,
     ) -> dict[str, Any]:
         """
         Make API request.
@@ -124,6 +141,9 @@ class NexHealthClient:
             path: API path
             params: Query parameters
             json: JSON body
+            timeout: Per-request timeout override, seconds.
+            max_retries: Per-request retry override.
+            headers_override: Per-request header overrides (API contract switch).
 
         Returns:
             Response payload
@@ -132,4 +152,13 @@ class NexHealthClient:
             raise NexHealthError("Client not initialized. Use as context manager.")
 
         token = await self._get_token()
-        return await self._http_client.request(method, path, token=token, params=params, json=json)
+        return await self._http_client.request(
+            method,
+            path,
+            token=token,
+            params=params,
+            json=json,
+            timeout=timeout,
+            max_retries=max_retries,
+            headers_override=headers_override,
+        )
