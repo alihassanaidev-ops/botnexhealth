@@ -133,11 +133,10 @@ def test_redact_payload_retell_payload_only_keeps_allowlisted_identifiers() -> N
     }
 
 
-def test_prepare_outbound_sms_body_keeps_message_body_and_adds_casl_footer() -> None:
-    prepared = prepare_outbound_sms_body(body="Your appointment is confirmed.")
+def test_prepare_outbound_sms_body_adds_identity_and_casl_footer() -> None:
+    prepared = prepare_outbound_sms_body(body="Your appointment is confirmed.", clinic_identity="Downtown Clinic")
 
-    assert prepared.startswith("Your appointment is confirmed.")
-    assert "Downtown Clinic" not in prepared
+    assert prepared.startswith("Downtown Clinic:")
     assert CASL_FOOTER in prepared
 
 
@@ -153,6 +152,7 @@ def test_prepare_outbound_sms_body_can_omit_stop_footer() -> None:
     prepared = prepare_outbound_sms_body(
         body="Your appointment is confirmed.",
         include_opt_out_footer=False,
+        include_clinic_identity=False,
     )
 
     assert prepared == "Your appointment is confirmed."

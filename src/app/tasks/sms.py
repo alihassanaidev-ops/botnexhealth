@@ -33,6 +33,7 @@ async def _send_sms_async(
     patient_contact_id: str | None,
     call_id: str | None,
     include_opt_out_footer: bool = True,
+    include_clinic_identity: bool = True,
 ) -> dict[str, Any]:
     if not settings.database_url:
         raise RuntimeError("DATABASE_URL is required to process SMS tasks")
@@ -55,6 +56,7 @@ async def _send_sms_async(
             patient_contact_id=patient_contact_id,
             call_id=call_id,
             include_opt_out_footer=include_opt_out_footer,
+            include_clinic_identity=include_clinic_identity,
         )
         await session.commit()
 
@@ -118,6 +120,7 @@ def send_sms_message(
     patient_contact_id: str | None = None,
     call_id: str | None = None,
     include_opt_out_footer: bool = True,
+    include_clinic_identity: bool = True,
 ) -> None:
     payload = {
         "from_number": from_number,
@@ -127,6 +130,7 @@ def send_sms_message(
         "patient_contact_id": patient_contact_id,
         "call_id": call_id,
         "include_opt_out_footer": include_opt_out_footer,
+        "include_clinic_identity": include_clinic_identity,
     }
     try:
         result = asyncio.run(
@@ -138,6 +142,7 @@ def send_sms_message(
                 patient_contact_id=patient_contact_id,
                 call_id=call_id,
                 include_opt_out_footer=include_opt_out_footer,
+                include_clinic_identity=include_clinic_identity,
             )
         )
     except Exception as exc:
@@ -199,13 +204,18 @@ def enqueue_auto_sms(
     patient_contact_id: str | None = None,
     call_id: str | None = None,
     include_opt_out_footer: bool = True,
+    include_clinic_identity: bool = True,
 ) -> None:
     """Queue a call-triggered SMS for worker processing.
 
-    ``include_opt_out_footer`` is False for the no-PMS sends whose wording is
-    owned end-to-end by the institution admin's editable SMS templates: what
-    the admin saves is exactly what the recipient receives, with no copy
-    appended underneath it at send time.
+    Both flags are False for the no-PMS sends whose wording is owned end-to-end
+    by the institution admin's editable SMS templates: what the admin saves is
+    exactly what the recipient receives, with neither a location-name prefix in
+    front of it nor opt-out copy appended underneath.
+
+    They stay True for the PMS ``appointment_booked`` confirmation, which keeps
+    the identity prefix and CASL footer it has always carried — that clinic has
+    no access to the SMS template editor to supply its own.
     """
     if not settings.celery_broker_url:
         raise RuntimeError("CELERY_BROKER_URL is not set")
@@ -219,6 +229,7 @@ def enqueue_auto_sms(
             "patient_contact_id": patient_contact_id,
             "call_id": call_id,
             "include_opt_out_footer": include_opt_out_footer,
+            "include_clinic_identity": include_clinic_identity,
         },
         queue="notifications_default",
     )
