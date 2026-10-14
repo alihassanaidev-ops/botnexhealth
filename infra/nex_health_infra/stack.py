@@ -850,6 +850,15 @@ class NexHealthPlatformStack(Stack):
             max_healthy_percent=200,
         )
 
+        scheduler_service = self._scheduler_service(
+            cluster=cluster,
+            app_image=app_image,
+            runtime_environment=runtime_environment,
+            runtime_secrets=runtime_secrets,
+            log_group=worker_log_group,
+            private_subnets=private_subnets,
+        )
+
         if config.email.ses_sending_domain:
             # The API owns the onboarding lifecycle; the worker only verifies
             # and sends. Keep the worker unable to create/delete identities or
@@ -1272,6 +1281,13 @@ class NexHealthPlatformStack(Stack):
             ec2.Port.tcp(6379),
             "Worker access to Redis",
         )
+        if scheduler_service is not None:
+            # Beat only publishes to the broker; it never opens the database.
+            redis_security_group.add_ingress_rule(
+                scheduler_service.connections.security_groups[0],
+                ec2.Port.tcp(6379),
+                "Scheduler access to Redis",
+            )
 
         self._attach_waf(api_service.load_balancer.load_balancer_arn)
         self._attach_alarms(
@@ -1357,6 +1373,61 @@ class NexHealthPlatformStack(Stack):
             "Vpc",
             max_azs=self.config.network.max_azs,
             nat_gateways=self.config.network.nat_gateways,
+        )
+
+    def _scheduler_service(
+        self,
+        *,
+        cluster: ecs.Cluster,
+        app_image: ecs.ContainerImage,
+        runtime_environment: dict[str, str],
+        runtime_secrets: dict[str, ecs.Secret],
+        log_group: logs.LogGroup,
+        private_subnets: ec2.SubnetSelection,
+    ) -> ecs.FargateService | None:
+        """One Celery beat task, never more, when the config enables it."""
+        scheduler = self.config.scheduler
+        if not scheduler.enabled:
+            return None
+        task_definition = ecs.FargateTaskDefinition(
+            self,
+            "SchedulerTaskDefinition",
+            cpu=scheduler.cpu,
+            memory_limit_mib=scheduler.memory_mib,
+            runtime_platform=ecs.RuntimePlatform(
+                cpu_architecture=ecs.CpuArchitecture.X86_64,
+                operating_system_family=ecs.OperatingSystemFamily.LINUX,
+            ),
+        )
+        environment = dict(runtime_environment)
+        if scheduler.beat_tasks:
+            environment["CELERY_BEAT_TASKS"] = ",".join(scheduler.beat_tasks)
+        task_definition.add_container(
+            "SchedulerContainer",
+            image=app_image,
+            command=["celery", "-A", "src.app.worker", "beat", "--loglevel=info"],
+            environment=environment,
+            secrets=runtime_secrets,
+            logging=ecs.LogDrivers.aws_logs(
+                stream_prefix="scheduler",
+                log_group=log_group,
+            ),
+        )
+        return ecs.FargateService(
+            self,
+            "SchedulerService",
+            cluster=cluster,
+            task_definition=task_definition,
+            desired_count=1,
+            assign_public_ip=False,
+            enable_execute_command=True,
+            vpc_subnets=private_subnets,
+            circuit_breaker=ecs.DeploymentCircuitBreaker(rollback=True),
+            # Stop the old beat before starting the new one: two beats at once
+            # would send every periodic job twice. A missed tick is harmless;
+            # campaign schedules fire a missed slot on the next tick.
+            min_healthy_percent=0,
+            max_healthy_percent=100,
         )
 
     def _build_runtime_environment(

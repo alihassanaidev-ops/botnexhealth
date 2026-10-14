@@ -226,6 +226,8 @@ class Settings(BaseSettings):
 
     # Celery
     celery_broker_url: str | None = None
+    #: Comma-separated beat entries this process may schedule; unset = all.
+    celery_beat_tasks: str | None = None
     redis_url: str | None = None
 
     # AWS S3 (call recordings)

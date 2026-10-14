@@ -99,9 +99,11 @@
       "-A",
       "src.app.worker",
       "worker",
-      "-B",
       "--loglevel=info"
     ]
+  },
+  "scheduler": {
+    "enabled": true
   },
   "frontend": {
     "enabled": true,

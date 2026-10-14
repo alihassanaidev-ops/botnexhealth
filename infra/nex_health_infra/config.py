@@ -61,6 +61,22 @@ class ServiceConfig:
 
 
 @dataclass(frozen=True)
+class SchedulerConfig:
+    """A single Celery beat task, separate from the autoscaled worker.
+
+    Beat inside the worker (``worker -B``) runs once per worker task, so an
+    environment whose worker scales out would schedule every periodic job
+    several times. ``beat_tasks`` limits which beat entries it starts (empty
+    means all of them), via ``CELERY_BEAT_TASKS``.
+    """
+
+    enabled: bool = False
+    cpu: int = 256
+    memory_mib: int = 512
+    beat_tasks: list[str] = field(default_factory=list)
+
+
+@dataclass(frozen=True)
 class FrontendConfig:
     enabled: bool = True
     domain_name: str | None = None
@@ -132,6 +148,7 @@ class EnvironmentConfig:
     redis: RedisConfig
     api: ServiceConfig
     worker: ServiceConfig
+    scheduler: SchedulerConfig
     frontend: FrontendConfig
     retention: RetentionConfig
     email: EmailConfig
@@ -183,6 +200,12 @@ def load_config(path: str | Path) -> EnvironmentConfig:
     redis = raw["redis"]
     api = raw["api"]
     worker = raw["worker"]
+    scheduler = raw.get("scheduler", {})
+    if scheduler.get("enabled") and "-B" in worker.get("command", []):
+        raise ValueError(
+            "worker.command embeds beat (-B) while scheduler.enabled is true; "
+            "every periodic job would be scheduled twice"
+        )
     frontend = raw.get("frontend", {})
     retention = raw.get("retention", {})
     email = raw.get("email", {})
@@ -265,6 +288,12 @@ def load_config(path: str | Path) -> EnvironmentConfig:
             command=list(worker.get("command", [])),
             queue_scale_up_depth=worker.get("queueScaleUpDepth"),
             queue_scale_down_depth=worker.get("queueScaleDownDepth"),
+        ),
+        scheduler=SchedulerConfig(
+            enabled=bool(scheduler.get("enabled", False)),
+            cpu=int(scheduler.get("cpu", 256)),
+            memory_mib=int(scheduler.get("memoryMiB", 512)),
+            beat_tasks=[str(name) for name in scheduler.get("beatTasks", [])],
         ),
         frontend=FrontendConfig(
             enabled=frontend.get("enabled", True),

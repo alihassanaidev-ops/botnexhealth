@@ -14,6 +14,134 @@ from src.app.config import settings
 logger = logging.getLogger(__name__)
 
 
+_BEAT_SCHEDULE: dict[str, dict] = {
+    "poll-workflow-timers": {
+        "task": "src.app.tasks.automation_workflow.poll_workflow_timers",
+        "schedule": 30.0,  # seconds
+    },
+    # Campaign schedules are DB rows, not beat entries: beat here is
+    # static and runs in a single pinned worker, so a per-tenant cron
+    # cannot live in this dict. One frequent tick claims whatever is due
+    # and no-ops when nothing is, which is what gives a campaign its
+    # authored cron rather than this interval.
+    "tick-workflow-schedules": {
+        "task": "src.app.tasks.automation_workflow.tick_workflow_schedules",
+        "schedule": 60.0,
+    },
+    "poll-inbound-email": {
+        "task": "src.app.tasks.inbound_email.poll_inbound_email",
+        # Frequent: a patient waiting on an answer should not sit behind
+        # a long poll interval. No-ops immediately when the queue is
+        # empty or inbound is not configured.
+        "schedule": 60.0,
+    },
+    "sweep-form-connections": {
+        "task": "src.app.tasks.form_integrations.sweep_form_connections",
+        # Daily. A form authorisation dies on a scale of weeks, and the
+        # warning window is a week — checking more often would only
+        # repeat the same warning.
+        "schedule": 86400.0,
+    },
+    "reconcile-form-submissions": {
+        "task": "src.app.tasks.form_integrations.reconcile_form_submissions",
+        # Hourly. Webhooks are the normal path; this only catches what
+        # a provider gave up redelivering, so an hour of lag on a
+        # recovered lead is acceptable and the API cost stays low.
+        "schedule": 3600.0,
+    },
+    "sweep-email-identities": {
+        "task": "src.app.tasks.email_identity_verification.sweep_email_identities",
+        # Hourly. Polls newly provisioned domains until DKIM propagates,
+        # and re-checks verified ones so DNS removed later is caught as
+        # an alert rather than as a slow deliverability collapse.
+        "schedule": 3600.0,
+    },
+    "ensure-nexhealth-webhook-subscriptions": {
+        "task": "src.app.tasks.automation_workflow.ensure_nexhealth_webhook_subscriptions",
+        # Lifecycle/health is cheap and keeps setup state current.
+        "schedule": 3600.0,
+    },
+    "ensure-gotracker-webhook-subscriptions": {
+        "task": "src.app.tasks.automation_workflow.ensure_gotracker_webhook_subscriptions",
+        # Mirrors NexHealth: create missing provider subscriptions and
+        # mark stale GoTracker event delivery as unhealthy.
+        "schedule": 3600.0,
+    },
+    "reconcile-nexhealth-appointments": {
+        "task": "src.app.tasks.automation_workflow.reconcile_nexhealth_appointments",
+        # Low-frequency repair sweep; initial backfill is task-triggered
+        # after subscription setup or manually by operators. The fixed
+        # UTC offset keeps it away from the patient sweep.
+        "schedule": crontab(minute=17, hour="*/6"),
+    },
+    "reconcile-nexhealth-patients": {
+        "task": "src.app.tasks.automation_workflow.reconcile_nexhealth_patients",
+        # Repairs missed patient webhooks and keeps contact hints fresh;
+        # staggered 30 minutes after appointment reconciliation.
+        "schedule": crontab(minute=47, hour="*/6"),
+    },
+    "poll-nexhealth-sync-statuses": {
+        "task": "src.app.tasks.automation_workflow.poll_nexhealth_sync_statuses",
+        # Sync-status webhooks mainly signal recovery; polling catches
+        # PMS read/write failures that do not emit a webhook.
+        "schedule": 15 * 60.0,
+    },
+    "sweep-nexhealth-completed-visits": {
+        "task": "src.app.tasks.automation_workflow.sweep_nexhealth_completed_visits",
+        # NexHealth emits no checkout event, so post-visit campaigns
+        # depend on this deriving completion. Every 10 minutes keeps the
+        # enrolment close to the real end of the visit without polling
+        # hard; the template then waits hours before calling anyone.
+        "schedule": 600.0,
+    },
+    "recover-stale-workflow-timers": {
+        "task": "src.app.tasks.automation_workflow.recover_stale_workflow_timers",
+        # Faster than the 120 s claim TTL so a crashed-worker timer is
+        # returned to PENDING and re-dispatched within one TTL window.
+        "schedule": 60.0,
+    },
+    "poll-retell-voice-outcomes": {
+        "task": "src.app.tasks.automation_workflow.poll_retell_voice_outcomes",
+        # Fallback repair for missed/delayed Retell final webhooks so
+        # outbound voice workflow runs do not remain WAITING.
+        "schedule": 60.0,
+    },
+    "sweep-gotracker-appointment-writebacks": {
+        "task": "src.app.tasks.automation_workflow.sweep_gotracker_appointment_writebacks",
+        # Repairs missed GoTracker writeback completion/failure webhooks
+        # so patient reschedule reminders do not remain stuck pending.
+        "schedule": 60.0,
+    },
+    "publish-workflow-metrics": {
+        "task": "src.app.tasks.automation_workflow.publish_workflow_metrics",
+        # Emit workflow-engine health metrics (backlog, stale timers,
+        # active/failed runs, failed steps) to CloudWatch every minute.
+        "schedule": 60.0,
+    },
+}
+
+
+def _beat_schedule() -> dict[str, dict]:
+    """The periodic jobs this process's beat may start.
+
+    ``CELERY_BEAT_TASKS`` (comma-separated entry names) limits beat to those
+    entries; unset runs all of them. Production uses it so its scheduler starts
+    only the campaign jobs, not the NexHealth sync and other sweeps it has never
+    run. An unknown name fails startup rather than silently scheduling nothing.
+    """
+    allowed = [
+        name.strip()
+        for name in (settings.celery_beat_tasks or "").split(",")
+        if name.strip()
+    ]
+    if not allowed:
+        return dict(_BEAT_SCHEDULE)
+    unknown = sorted(set(allowed) - set(_BEAT_SCHEDULE))
+    if unknown:
+        raise ValueError(f"CELERY_BEAT_TASKS names unknown beat entries: {unknown}")
+    return {name: _BEAT_SCHEDULE[name] for name in allowed}
+
+
 def _build_celery_app() -> Celery:
     broker_url = settings.normalized_celery_broker_url or "redis://localhost:6379/0"
 
@@ -68,111 +196,7 @@ def _build_celery_app() -> Celery:
             "src.app.tasks.automation_workflow.*": {"queue": "workflow"},
             "src.app.tasks.retell_sms.*": {"queue": "workflow"},
         },
-        beat_schedule={
-            "poll-workflow-timers": {
-                "task": "src.app.tasks.automation_workflow.poll_workflow_timers",
-                "schedule": 30.0,  # seconds
-            },
-            # Campaign schedules are DB rows, not beat entries: beat here is
-            # static and runs in a single pinned worker, so a per-tenant cron
-            # cannot live in this dict. One frequent tick claims whatever is due
-            # and no-ops when nothing is, which is what gives a campaign its
-            # authored cron rather than this interval.
-            "tick-workflow-schedules": {
-                "task": "src.app.tasks.automation_workflow.tick_workflow_schedules",
-                "schedule": 60.0,
-            },
-            "poll-inbound-email": {
-                "task": "src.app.tasks.inbound_email.poll_inbound_email",
-                # Frequent: a patient waiting on an answer should not sit behind
-                # a long poll interval. No-ops immediately when the queue is
-                # empty or inbound is not configured.
-                "schedule": 60.0,
-            },
-            "sweep-form-connections": {
-                "task": "src.app.tasks.form_integrations.sweep_form_connections",
-                # Daily. A form authorisation dies on a scale of weeks, and the
-                # warning window is a week — checking more often would only
-                # repeat the same warning.
-                "schedule": 86400.0,
-            },
-            "reconcile-form-submissions": {
-                "task": "src.app.tasks.form_integrations.reconcile_form_submissions",
-                # Hourly. Webhooks are the normal path; this only catches what
-                # a provider gave up redelivering, so an hour of lag on a
-                # recovered lead is acceptable and the API cost stays low.
-                "schedule": 3600.0,
-            },
-            "sweep-email-identities": {
-                "task": "src.app.tasks.email_identity_verification.sweep_email_identities",
-                # Hourly. Polls newly provisioned domains until DKIM propagates,
-                # and re-checks verified ones so DNS removed later is caught as
-                # an alert rather than as a slow deliverability collapse.
-                "schedule": 3600.0,
-            },
-            "ensure-nexhealth-webhook-subscriptions": {
-                "task": "src.app.tasks.automation_workflow.ensure_nexhealth_webhook_subscriptions",
-                # Lifecycle/health is cheap and keeps setup state current.
-                "schedule": 3600.0,
-            },
-            "ensure-gotracker-webhook-subscriptions": {
-                "task": "src.app.tasks.automation_workflow.ensure_gotracker_webhook_subscriptions",
-                # Mirrors NexHealth: create missing provider subscriptions and
-                # mark stale GoTracker event delivery as unhealthy.
-                "schedule": 3600.0,
-            },
-            "reconcile-nexhealth-appointments": {
-                "task": "src.app.tasks.automation_workflow.reconcile_nexhealth_appointments",
-                # Low-frequency repair sweep; initial backfill is task-triggered
-                # after subscription setup or manually by operators. The fixed
-                # UTC offset keeps it away from the patient sweep.
-                "schedule": crontab(minute=17, hour="*/6"),
-            },
-            "reconcile-nexhealth-patients": {
-                "task": "src.app.tasks.automation_workflow.reconcile_nexhealth_patients",
-                # Repairs missed patient webhooks and keeps contact hints fresh;
-                # staggered 30 minutes after appointment reconciliation.
-                "schedule": crontab(minute=47, hour="*/6"),
-            },
-            "poll-nexhealth-sync-statuses": {
-                "task": "src.app.tasks.automation_workflow.poll_nexhealth_sync_statuses",
-                # Sync-status webhooks mainly signal recovery; polling catches
-                # PMS read/write failures that do not emit a webhook.
-                "schedule": 15 * 60.0,
-            },
-            "sweep-nexhealth-completed-visits": {
-                "task": "src.app.tasks.automation_workflow.sweep_nexhealth_completed_visits",
-                # NexHealth emits no checkout event, so post-visit campaigns
-                # depend on this deriving completion. Every 10 minutes keeps the
-                # enrolment close to the real end of the visit without polling
-                # hard; the template then waits hours before calling anyone.
-                "schedule": 600.0,
-            },
-            "recover-stale-workflow-timers": {
-                "task": "src.app.tasks.automation_workflow.recover_stale_workflow_timers",
-                # Faster than the 120 s claim TTL so a crashed-worker timer is
-                # returned to PENDING and re-dispatched within one TTL window.
-                "schedule": 60.0,
-            },
-            "poll-retell-voice-outcomes": {
-                "task": "src.app.tasks.automation_workflow.poll_retell_voice_outcomes",
-                # Fallback repair for missed/delayed Retell final webhooks so
-                # outbound voice workflow runs do not remain WAITING.
-                "schedule": 60.0,
-            },
-            "sweep-gotracker-appointment-writebacks": {
-                "task": "src.app.tasks.automation_workflow.sweep_gotracker_appointment_writebacks",
-                # Repairs missed GoTracker writeback completion/failure webhooks
-                # so patient reschedule reminders do not remain stuck pending.
-                "schedule": 60.0,
-            },
-            "publish-workflow-metrics": {
-                "task": "src.app.tasks.automation_workflow.publish_workflow_metrics",
-                # Emit workflow-engine health metrics (backlog, stale timers,
-                # active/failed runs, failed steps) to CloudWatch every minute.
-                "schedule": 60.0,
-            },
-        },
+        beat_schedule=_beat_schedule(),
         task_acks_late=True,
         worker_prefetch_multiplier=1,
     )

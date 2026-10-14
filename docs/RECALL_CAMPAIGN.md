@@ -149,15 +149,19 @@ enforces its consent class rather than silently running under implied consent.
 
 ## Setup (staging or production)
 
-1. Ensure the location is bound to its PMS (subdomain + location id) and has
+1. Ensure the environment's scheduler is on (`scheduler.enabled`, with
+   `tick-workflow-schedules`, `poll-workflow-timers`,
+   `recover-stale-workflow-timers`, and `poll-retell-voice-outcomes` in its
+   `beatTasks`); without it no recall scan, retry wait, or call outcome runs.
+2. Ensure the location is bound to its PMS (subdomain + location id) and has
    appointment types, providers, and an outbound voice profile.
-2. In the dashboard, instantiate the **Recall Outreach — Voice** template and
+3. In the dashboard, instantiate the **Recall Outreach — Voice** template and
    pick the voice profile.
-3. In the builder, open the schedule trigger and set the **approved recall
+4. In the builder, open the schedule trigger and set the **approved recall
    type ids**, **due window**, and **include overdue**.
-4. Make sure the Retell recall agent's prompt maps recall type and age to
+5. Make sure the Retell recall agent's prompt maps recall type and age to
    the clinic's hygiene appointment types.
-5. Keep the campaign **paused** and open **Preview recall calls** on the
+6. Keep the campaign **paused** and open **Preview recall calls** on the
    campaign page: a dry run of the next scheduled scan (`POST
    /api/automation/workflows/{id}/recall/preview`) listing who it would call
    and why the rest were left out. It calls no one and stores nothing.
@@ -165,8 +169,8 @@ enforces its consent class rather than silently running under implied consent.
    on **Resume**, which runs the launch checklist. A recall campaign's
    audience item is a warning there, not a blocker, because its patients are
    read from the PMS at each scan.
-6. Launch a small pilot, verify calls/bookings/non-duplication, then scale.
-7. Test the institution emergency halt before going live.
+7. Launch a small pilot, verify calls/bookings/non-duplication, then scale.
+8. Test the institution emergency halt before going live.
 
 ## Known gaps
 

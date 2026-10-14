@@ -81,3 +81,40 @@ def test_ses_activation_requires_a_sending_domain(tmp_path: Path) -> None:
         assert "sesSendingDomain" in str(exc)
     else:
         raise AssertionError("enabled SES sending without a domain must fail")
+
+
+def test_production_scheduler_runs_only_the_campaign_jobs() -> None:
+    production = load_config(INFRA_ROOT / "config" / "production.json")
+
+    # Off until the recall launch switches it on; the list is already pinned
+    # so turning it on cannot start the NexHealth syncs or other sweeps.
+    assert production.scheduler.enabled is False
+    assert production.scheduler.beat_tasks == [
+        "tick-workflow-schedules",
+        "poll-workflow-timers",
+        "recover-stale-workflow-timers",
+        "poll-retell-voice-outcomes",
+    ]
+    assert "-B" not in production.worker.command
+
+
+def test_staging_runs_every_job_from_its_own_scheduler() -> None:
+    staging = load_config(INFRA_ROOT / "config" / "staging.json")
+
+    assert staging.scheduler.enabled is True
+    assert staging.scheduler.beat_tasks == []
+    assert "-B" not in staging.worker.command
+
+
+def test_beat_in_the_worker_and_a_scheduler_cannot_both_run(tmp_path: Path) -> None:
+    source = json.loads((INFRA_ROOT / "config" / "staging.json").read_text())
+    source["worker"]["command"].insert(-1, "-B")
+    path = tmp_path / "double-beat.json"
+    path.write_text(json.dumps(source))
+
+    try:
+        load_config(path)
+    except ValueError as exc:
+        assert "-B" in str(exc)
+    else:
+        raise AssertionError("beat in the worker plus a scheduler must fail")
