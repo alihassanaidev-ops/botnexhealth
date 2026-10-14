@@ -3720,6 +3720,9 @@ _RECALL_SCAN_COUNT_KEYS = (
     # marked inactive in the PMS is never called.
     "patients_skipped_live_fetch_failed",
     "patients_skipped_inactive",
+    # The same live read returns the patient's upcoming appointments, so an
+    # already-booked patient is skipped even without the appointment sync.
+    "patients_skipped_future_appointment_live",
 )
 
 
@@ -4345,7 +4348,7 @@ async def _scan_recall_async() -> dict:
             "scan_recall_workflows: institutions=%d workflows=%d read=%d enrolled=%d "
             "history_skips=%d recent_visit_skips=%d treatment_context_skips=%d "
             "recall_type_skips=%d due_window_skips=%d "
-            "live_fetch_skips=%d inactive_skips=%d"
+            "live_fetch_skips=%d inactive_skips=%d future_appointment_live_skips=%d"
         ),
         len(by_institution),
         active_workflows,
@@ -4358,6 +4361,7 @@ async def _scan_recall_async() -> dict:
         totals["recalls_skipped_due_window"],
         totals["patients_skipped_live_fetch_failed"],
         totals["patients_skipped_inactive"],
+        totals["patients_skipped_future_appointment_live"],
     )
     return {
         "active_recall_workflows": active_workflows,
@@ -4648,11 +4652,15 @@ async def _enroll_recalls_for_institution(
                             institution_id=institution_id,
                             location=location,
                             patient_id=patient_id,
+                            now=now,
                         )
                         if live is None:
                             if contact_id is None:
                                 counts["patients_skipped_live_fetch_failed"] += 1
                                 continue
+                        elif live.has_future_appointment:
+                            counts["patients_skipped_future_appointment_live"] += 1
+                            continue
                         elif live.inactive:
                             counts["patients_skipped_inactive"] += 1
                             continue
@@ -4707,9 +4715,33 @@ async def _enroll_recalls_for_institution(
 
 @dataclass(frozen=True)
 class _LiveRecallPatient:
-    contact_id: str
+    contact_id: str | None
     inactive: bool
     last_visit_date: str | None
+    has_future_appointment: bool = False
+
+
+def _has_upcoming_appointment(patient: dict, now: datetime) -> bool:
+    """Whether NexHealth's ``upcoming_appts`` holds a visit that has not started.
+
+    NexHealth leaves cancelled appointments out of this list. A start time that
+    cannot be read counts as upcoming, so a doubtful row skips the call.
+    """
+    upcoming = patient.get("upcoming_appts")
+    if not isinstance(upcoming, list):
+        return False
+    for appointment in upcoming:
+        if not isinstance(appointment, dict):
+            continue
+        try:
+            start = datetime.fromisoformat(str(appointment.get("start_time")))
+        except ValueError:
+            return True
+        if start.tzinfo is None:
+            start = start.replace(tzinfo=timezone.utc)
+        if start >= now:
+            return True
+    return False
 
 
 async def _refresh_recall_contact_live(
@@ -4719,12 +4751,15 @@ async def _refresh_recall_contact_live(
     institution_id: str,
     location: Any,
     patient_id: str,
+    now: datetime | None = None,
 ) -> _LiveRecallPatient | None:
     """Refresh one recall patient's contact from a live NexHealth read.
 
     Returns ``None`` when the patient cannot be read, so the caller can fall
-    back to an existing contact. The contact is committed before returning
-    because the enrollment task that dials it runs in another session.
+    back to an existing contact. A patient with an upcoming appointment is
+    reported without storing a contact, since they will not be called. The
+    contact is committed before returning because the enrollment task that
+    dials it runs in another session.
     """
     from src.app.services.automation.nexhealth_projection_service import (
         NexHealthProjectionService,
@@ -4735,7 +4770,7 @@ async def _refresh_recall_contact_live(
         return None
     try:
         patient = await get_patient_raw(
-            patient_id, include=["last_visited_appointment"]
+            patient_id, include=["last_visited_appointment", "upcoming_appts"]
         )
     except Exception as exc:  # noqa: BLE001 - a failed read must not stop the scan.
         logger.warning(
@@ -4746,6 +4781,13 @@ async def _refresh_recall_contact_live(
         return None
     if not isinstance(patient, dict):
         return None
+    if _has_upcoming_appointment(patient, now or datetime.now(tz=timezone.utc)):
+        return _LiveRecallPatient(
+            contact_id=None,
+            inactive=bool(patient.get("inactive", False)),
+            last_visit_date=None,
+            has_future_appointment=True,
+        )
 
     raw_location_ids = patient.get("location_ids")
     nexhealth_location_ids = (

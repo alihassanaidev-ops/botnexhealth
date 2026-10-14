@@ -1733,6 +1733,23 @@ async def test_scan_recall_never_calls_a_patient_inactive_in_the_pms(_live_recal
 
 
 @pytest.mark.asyncio
+async def test_scan_recall_skips_a_patient_nexhealth_shows_as_already_booked(
+    _live_recall_refresh,
+):
+    _live_recall_refresh.return_value = _LiveRecallPatient(
+        contact_id=None, inactive=False, last_visit_date=None, has_future_appointment=True
+    )
+    scan_session, recalls = _single_recall_scan()
+    inst_session, _ = _recall_inst_session(1)
+
+    result, mock_task = await _run_scan_with_recalls(scan_session, inst_session, recalls)
+
+    assert result["enrolled"] == 0
+    assert result["patients_skipped_future_appointment_live"] == 1
+    mock_task.apply_async.assert_not_called()
+
+
+@pytest.mark.asyncio
 async def test_scan_recall_skips_unreadable_patient_without_stored_contact(_live_recall_refresh):
     _live_recall_refresh.return_value = None
     scan_session, recalls = _single_recall_scan()
@@ -1805,7 +1822,7 @@ async def test_refresh_recall_contact_live_upserts_and_commits():
         contact_id="c-9", inactive=False, last_visit_date="2026-04-01"
     )
     adapter.get_patient_raw.assert_awaited_once_with(
-        "123", include=["last_visited_appointment"]
+        "123", include=["last_visited_appointment", "upcoming_appts"]
     )
     assert upsert.await_args.kwargs["local_location_ids"] == ["loc-1"]
     assert upsert.await_args.kwargs["nexhealth_location_ids"] == ["55"]
@@ -1841,3 +1858,45 @@ async def test_refresh_recall_contact_live_returns_none_when_upsert_fails():
 
     assert live is None
     session.commit.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_refresh_recall_contact_live_reports_upcoming_visit_without_storing():
+    session = _savepoint_session()
+    adapter = MagicMock()
+    adapter.get_patient_raw = AsyncMock(
+        return_value={
+            "id": 123,
+            "inactive": False,
+            "upcoming_appts": [{"id": 9, "start_time": "2026-07-20T14:00:00.000Z"}],
+        }
+    )
+    with patch(
+        "src.app.services.automation.nexhealth_projection_service.NexHealthProjectionService"
+    ) as service:
+        live = await _refresh_recall_contact_live(
+            session, adapter, institution_id="inst-1", location=_live_location(),
+            patient_id="123", now=_NOW,
+        )
+
+    assert live.has_future_appointment is True
+    assert live.contact_id is None
+    service.return_value.upsert_patient.assert_not_called()
+    session.commit.assert_not_awaited()
+
+
+@pytest.mark.parametrize(
+    ("upcoming", "booked"),
+    [
+        ([], False),
+        (None, False),
+        ([{"start_time": "2026-07-01T14:00:00.000Z"}], False),  # already started
+        ([{"start_time": "2026-07-10T12:00:00Z"}], True),
+        ([{"start_time": "2026-08-01T09:00:00"}], True),  # no offset: read as UTC
+        ([{"start_time": "garbled"}], True),  # unreadable: do not risk the call
+    ],
+)
+def test_has_upcoming_appointment(upcoming, booked):
+    from src.app.tasks.automation_workflow import _has_upcoming_appointment
+
+    assert _has_upcoming_appointment({"upcoming_appts": upcoming}, _NOW) is booked

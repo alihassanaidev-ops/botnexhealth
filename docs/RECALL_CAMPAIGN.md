@@ -16,7 +16,9 @@ keeps a patient when **all** of these hold:
 - the due date is inside the campaign's window
   (`today + due_within_days`, and not in the past unless `include_overdue`),
   evaluated in the location timezone (a recall with no due date is skipped);
-- the patient has no future appointment (any scheduled/booked/pending visit);
+- the patient has no future appointment (any scheduled/booked/pending visit),
+  checked against the stored appointment copy and, for NexHealth, again live
+  (see below);
 - the patient is not inside the campaign's re-enrollment cooldown.
 
 A patient with several due recalls is collapsed to one **primary** recall
@@ -31,12 +33,17 @@ For NexHealth, each patient about to be enrolled is read live
 refreshed from that read before the run is queued. Recall therefore does not
 depend on the full NexHealth patient sync or webhooks being on: only patients
 actually enrolled are fetched and stored. A patient the PMS marks inactive is
-never called. If the live read fails the scanner falls back to an existing
+never called. The same read includes `upcoming_appts`; a patient with an
+appointment that has not started yet is skipped without storing a contact, so
+an already-booked patient is not called even where the NexHealth appointment
+sync is off (production today). NexHealth leaves cancelled appointments out of
+that list. If the live read fails the scanner falls back to an existing
 contact, and skips the patient when there is none.
 
 The scanner reports reason counters (`recalls_skipped_recall_type`,
 `recalls_skipped_due_window`, `patients_skipped_live_fetch_failed`,
-`patients_skipped_inactive`, and the GoTracker/treatment counters) for dry-run
+`patients_skipped_inactive`, `patients_skipped_future_appointment_live`, and
+the GoTracker/treatment counters) for dry-run
 review.
 
 ## Where the settings live
