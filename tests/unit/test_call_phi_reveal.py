@@ -272,7 +272,8 @@ async def test_super_admin_gets_the_scrubbed_preview_not_the_raw_bodies(monkeypa
     assert response.scrubbed_transcript == [
         {"role": "agent", "content": "Hi *****, how can I help?"}
     ]
-    assert response.scrubbed_recording_url == "s3://bucket/redacted-recording.wav"
+    # M-4: the scrubbed recording URL is not served on the inline detail read.
+    assert response.scrubbed_recording_url is None
 
 
 @pytest.mark.asyncio
@@ -314,6 +315,8 @@ async def test_reveal_transcript_returns_scrubbed_data_and_audits(monkeypatch):
         current_user=_user(),
     )
     assert recording.recording_url == "signed:s3://bucket/scrubbed-recording.wav"
+    # M-4: the scrubbed audio URL rides the audited reveal, not the detail read.
+    assert recording.scrubbed_recording_url == "s3://bucket/redacted-recording.wav"
 
     _install_session(monkeypatch, _call(), [(_field("diagnosis_note", is_phi=True), _value("Sensitive diagnosis"))])
     custom = await _route_target(calls_routes.reveal_custom_phi_field)(

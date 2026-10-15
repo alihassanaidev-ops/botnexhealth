@@ -156,6 +156,10 @@ class TranscriptRevealResponse(BaseModel):
 class RecordingRevealResponse(BaseModel):
     call_id: str
     recording_url: str | None
+    #: The vendor-redacted recording URL. Moved here from the call detail so it
+    #: is gated by the same reveal + VIEW_CALL_RECORDING audit as the raw audio
+    #: — the scrubbed audio still carries the patient's voice.
+    scrubbed_recording_url: str | None = None
 
 
 class PhoneRevealResponse(BaseModel):
@@ -712,7 +716,9 @@ async def get_call(
             transcript_available=bool(call.transcript_with_tool_calls_encrypted),
             recording_available=bool(call.recording_url),
             scrubbed_transcript=transcript_turns,
-            scrubbed_recording_url=getattr(call, "scrubbed_recording_url", None),
+            # Not served inline (HIPAA audit M-4): the scrubbed audio URL is now
+            # returned only by POST /{call_id}/reveal/recording, which audits it.
+            scrubbed_recording_url=None,
             transcript_redacted=not unredacted,
             recording_url=inline_recording,
             custom_fields=custom_fields,
@@ -809,7 +815,9 @@ async def reveal_recording(
                 else None
             )
             return RecordingRevealResponse(
-                call_id=call.id, recording_url=signed_recording_url
+                call_id=call.id,
+                recording_url=signed_recording_url,
+                scrubbed_recording_url=getattr(call, "scrubbed_recording_url", None),
             )
 
 
