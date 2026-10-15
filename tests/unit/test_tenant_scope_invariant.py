@@ -84,7 +84,7 @@ ALLOWLIST: set[tuple[str, int, str]] = {
     # top of the handler and spreads it with ``.where(*conditions)``. The
     # institution predicate is there — it just sits more than the scanner's
     # 60-line backward window above the ``select(Call)``.
-    ("src/app/api/routes/calls.py", 594, "Call"),
+    ("src/app/api/routes/calls.py", 596, "Call"),
 
     # Dead-letter events are read through ``get_db_session()``, the tenant
     # session that sets the RLS context. ``dead_letter_events`` carries a

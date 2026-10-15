@@ -133,7 +133,7 @@ def test_every_role_is_mapped() -> None:
 #: Routes reachable in this repo that perform one of the four actions. A new
 #: endpoint doing any of them belongs here and must carry the permission.
 EXPECTED_PERMISSION_ROUTES: dict[str, Permission] = {
-    "GET /api/institution/appointment-sync": Permission.SYNC_READ,
+    "POST /api/institution/appointment-sync": Permission.SYNC_READ,
     "POST /api/admin/dead-letter-events/{event_id}/replay": Permission.WRITE_REPLAY,
     "POST /api/institution/undeliverables/{event_id}/replay": Permission.WRITE_REPLAY,
     "POST /api/compliance/quiet-hours/exceptions": Permission.CAMPAIGN_CONFIGURE,

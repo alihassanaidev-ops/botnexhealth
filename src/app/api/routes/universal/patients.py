@@ -4,7 +4,7 @@ from datetime import datetime, timezone
 import logging
 from typing import Annotated, Literal
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
+from fastapi import APIRouter, Body, Depends, HTTPException, Query, Request, status
 from pydantic import BaseModel, Field
 from sqlalchemy import select
 
@@ -103,7 +103,7 @@ def _patient_communication_resource(*_args, **kwargs) -> str:
     return f"patient_communication:{patient_id}"
 
 
-@router.get("/page", response_model=PatientDirectoryPage)
+@router.post("/page", response_model=PatientDirectoryPage)
 @limiter.limit(RATE_READ)
 @audit(
     AuditAction.SEARCH_PATIENTS,
@@ -115,7 +115,8 @@ async def browse_patients(
     current_user: Annotated[User, Depends(get_current_institution_or_location_user)],
     cursor: str | None = Query(None, max_length=1024),
     page_size: int = Query(25, ge=1, le=100),
-    search: str | None = Query(None, min_length=2, max_length=128),
+    # HIPAA H-1: a patient name is an identifier — body, not URL.
+    search: str | None = Body(None, embed=True, min_length=2, max_length=128),
     patient_status: Literal["active", "inactive", "all"] = Query("active"),
     reveal_patient_id: str | None = Query(None, min_length=1, max_length=128),
     pms: PMSAdapter = Depends(get_institution_pms),
@@ -335,7 +336,7 @@ def _validate_patient_search(
     )
 
 
-@router.get("", response_model=list[UniversalPatient])
+@router.post("/search", response_model=list[UniversalPatient])
 @limiter.limit(RATE_READ)
 @audit(
     AuditAction.SEARCH_PATIENTS,
@@ -345,10 +346,12 @@ def _validate_patient_search(
 async def search_patients(
     request: Request,
     current_user: Annotated[User, Depends(get_current_institution_or_location_user)],
-    q: str = Query("", max_length=128),
-    email: str | None = Query(None, max_length=320),
-    phone_number: str | None = Query(None, max_length=32),
-    date_of_birth: str | None = Query(None, max_length=10),
+    # HIPAA H-1: identifiers travel in the request body, never the URL, so they
+    # cannot reach the access log, browser history or a proxy's Referer.
+    q: str = Body("", embed=True, max_length=128),
+    email: str | None = Body(None, embed=True, max_length=320),
+    phone_number: str | None = Body(None, embed=True, max_length=32),
+    date_of_birth: str | None = Body(None, embed=True, max_length=10),
     pms: PMSAdapter = Depends(get_institution_pms),
 ):
     q = _validate_patient_search(

@@ -5,7 +5,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Body, Depends, HTTPException, Query, status
 from pydantic import BaseModel
 from sqlalchemy import desc, func, nullslast, or_, select
 
@@ -63,7 +63,7 @@ class AppointmentSyncListResponse(BaseModel):
     items: list[AppointmentSyncItem]
 
 
-@router.get(
+@router.post(
     "",
     response_model=AppointmentSyncListResponse,
     dependencies=[Depends(require_permission(Permission.SYNC_READ))],
@@ -86,7 +86,8 @@ async def list_appointment_sync_status(
     current_user: Annotated[User, Depends(get_current_institution_or_location_admin)],
     limit: Annotated[int, Query(ge=1, le=100)] = 50,
     offset: Annotated[int, Query(ge=0)] = 0,
-    search: str | None = Query(default=None, max_length=120),
+    # HIPAA H-1: a patient name is an identifier — request body, not the URL.
+    search: str | None = Body(default=None, embed=True, max_length=120),
     location_id: str | None = Query(default=None),
     gotracker_status_id: int | None = Query(default=None, ge=1, le=9),
 ) -> AppointmentSyncListResponse:

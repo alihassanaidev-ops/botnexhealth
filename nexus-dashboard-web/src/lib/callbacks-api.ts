@@ -23,13 +23,16 @@ export async function listCallbacks(filters: CallbacksFilters = {}): Promise<Cal
     if (filters.limit !== undefined) params.set("limit", String(filters.limit));
     if (filters.offset !== undefined) params.set("offset", String(filters.offset));
     if (filters.resolved !== undefined) params.set("resolved", String(filters.resolved));
-    if (filters.search) params.set("search", filters.search);
     if (filters.date_from) params.set("date_from", filters.date_from);
     if (filters.date_to) params.set("date_to", filters.date_to);
     if (filters.sort) params.set("sort", filters.sort);
     if (filters.locationId) params.set("location_id", filters.locationId);
 
-    const q = params.toString() ? `?${params.toString()}` : "";
-    const { data } = await api.get<CallbacksListResponse>(`/institution/callbacks${q}`);
+    // A contact name is PHI (HIPAA H-1): it goes in the request body, not the URL.
+    const { data } = await api.post<CallbacksListResponse>(
+        "/institution/callbacks",
+        { search: filters.search ?? null },
+        { params },
+    );
     return data;
 }

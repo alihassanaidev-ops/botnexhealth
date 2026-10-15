@@ -131,10 +131,14 @@ export async function listLivePatients(filters: LivePatientFilters): Promise<Liv
     const params = new URLSearchParams({ location_id: filters.locationId })
     if (filters.cursor) params.set("cursor", filters.cursor)
     if (filters.pageSize !== undefined) params.set("page_size", String(filters.pageSize))
-    if (filters.search) params.set("search", filters.search)
     if (filters.patientStatus) params.set("patient_status", filters.patientStatus)
     if (filters.revealPatientId) params.set("reveal_patient_id", filters.revealPatientId)
-    const { data } = await api.get<LivePatientPage>(`/v1/pms/patients/page?${params.toString()}`)
+    // A patient name is PHI (HIPAA H-1): it goes in the request body, not the URL.
+    const { data } = await api.post<LivePatientPage>(
+        "/v1/pms/patients/page",
+        { search: filters.search ?? null },
+        { params },
+    )
     return data
 }
 
@@ -142,12 +146,15 @@ export async function listContacts(filters: ContactsFilters = {}): Promise<Conta
     const params = new URLSearchParams()
     if (filters.limit !== undefined) params.set("limit", String(filters.limit))
     if (filters.offset !== undefined) params.set("offset", String(filters.offset))
-    if (filters.search) params.set("search", filters.search)
     if (filters.directory) params.set("directory", filters.directory)
     if (filters.lifecycle) params.set("lifecycle", filters.lifecycle)
     if (filters.locationId) params.set("location_id", filters.locationId)
-    const q = params.toString() ? `?${params.toString()}` : ""
-    const { data } = await api.get<ContactsListResponse>(`/institution/contacts${q}`)
+    // A person name is PHI (HIPAA H-1): it goes in the request body, not the URL.
+    const { data } = await api.post<ContactsListResponse>(
+        "/institution/contacts/search",
+        { search: filters.search ?? null },
+        { params },
+    )
     return data
 }
 

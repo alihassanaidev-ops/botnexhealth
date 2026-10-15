@@ -43,12 +43,14 @@ export async function listAppointmentSyncStatus(
     const params = new URLSearchParams()
     params.set("limit", String(filters.limit ?? 50))
     params.set("offset", String(filters.offset ?? 0))
-    if (filters.search) params.set("search", filters.search)
     if (filters.gotracker_status_id) {
         params.set("gotracker_status_id", String(filters.gotracker_status_id))
     }
-    const { data } = await api.get<AppointmentSyncListResponse>(
-        `/institution/appointment-sync?${params.toString()}`,
+    // A patient name is PHI (HIPAA H-1): it goes in the request body, not the URL.
+    const { data } = await api.post<AppointmentSyncListResponse>(
+        "/institution/appointment-sync",
+        { search: filters.search ?? null },
+        { params },
     )
     return data
 }
