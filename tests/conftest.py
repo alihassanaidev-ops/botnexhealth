@@ -4,6 +4,14 @@ import os
 # Add project root to python path before importing src
 sys.path.append(os.getcwd())
 
+# Keep the suite hermetic: the shared rate limiter uses Redis when a URL is set
+# and otherwise falls back to in-process storage, which the code documents as
+# acceptable for local/test. Clearing these before the settings module loads
+# (the limiter is built at import time) means the suite passes with or without a
+# Redis server, instead of 500ing on every rate-limited route.
+os.environ["REDIS_URL"] = ""
+os.environ["CELERY_BROKER_URL"] = ""
+
 import pytest
 import pytest_asyncio
 from httpx import AsyncClient, ASGITransport

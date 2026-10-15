@@ -230,7 +230,7 @@ def test_recorded_handoff_reasons_satisfy_the_database_constraint():
 # ---------------------------------------------------------------------------
 
 
-def test_no_referrer_survives_the_middleware_stack():
+def test_no_referrer_survives_the_middleware_stack(monkeypatch):
     """The tests above mount a bare router, so they never see the middleware.
 
     SecurityHeadersMiddleware used to assign Referrer-Policy unconditionally,
@@ -238,7 +238,12 @@ def test_no_referrer_survives_the_middleware_stack():
     — a policy that still sends the full URL, token and all, to anything
     same-origin on the page. Only a request through the real app catches that.
     """
+    from src.app.config import settings
     from src.app.main import app as real_app
+
+    # The real app's lifespan opens the database. These tests only need the
+    # middleware stack, and a unit test should not require a reachable DB.
+    monkeypatch.setattr(settings, "database_url", None, raising=False)
 
     with TestClient(real_app) as c:
         resp = c.get("/api/campaigns/link/confirm?token=nonsense")
@@ -248,9 +253,12 @@ def test_no_referrer_survives_the_middleware_stack():
     assert "no-store" in resp.headers["cache-control"]
 
 
-def test_other_routes_keep_the_default_referrer_policy():
+def test_other_routes_keep_the_default_referrer_policy(monkeypatch):
     """Relaxing the middleware must not relax it for everything else."""
+    from src.app.config import settings
     from src.app.main import app as real_app
+
+    monkeypatch.setattr(settings, "database_url", None, raising=False)
 
     with TestClient(real_app) as c:
         resp = c.get("/livez")
