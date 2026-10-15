@@ -32,11 +32,12 @@ Deferred: Task 13 (blocked on the GoTracker cloud heartbeat contract), Task 3's
 cloud endpoint and Task 6 (both in the RDP repo), Tasks 1/4 (production proofs),
 Tasks 8B/9 (docs), Tasks 11/12 (client accounts / product decision).
 
-**Known pre-existing failures:** `origin/staging` already has 95 failing unit
-tests (`test_enquiry_intake_route` 31, `test_enquiries_api` 23,
-`test_test_suite` 22, `test_enquiry_intake_admin` 10, and a few others). These
-predate this branch — the rebase introduced no new failures — but the new CI
-job will be red until they are triaged.
+**Unit suite is green.** `origin/staging` carried 95 failing unit tests, all
+environmental rather than broken code: the rate limiter needed a running Redis
+(so ~90 enquiry/Test-Suite tests 500ed without one), two campaign-link tests
+needed a database, and one tenant-scope allowlist had drifted. All fixed on this
+branch — the unit suite is now 4516 passed / 0 failed, so the new CI job is
+green and no longer needs a Redis service.
 
 ## The one branch that matters
 
