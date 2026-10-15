@@ -85,6 +85,12 @@ test-rls:
 test:
 	source .venv/bin/activate && pytest -v
 
+test-cov:
+	@echo "Unit + coverage (no integration/RLS). Writes coverage.xml for CI."
+	source .venv/bin/activate && pytest \
+		-m "not integration and not rls" \
+		--cov=src/app --cov-report=term-missing --cov-report=xml
+
 lint:
 	source .venv/bin/activate && ruff check src/
 

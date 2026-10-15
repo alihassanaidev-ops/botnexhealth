@@ -55,6 +55,25 @@ dev = [
   # ad hoc, so `uv sync` would prune them out of the environment.
   "pytest>=8.0",
   "pytest-asyncio>=0.23",
+  "pytest-cov>=5.0",
+]
+
+[tool.coverage.run]
+source = ["src/app"]
+omit = [
+  "*/__pycache__/*",
+  "*/tests/*",
+  "*/alembic/*",
+  "*/scripts/*",
+]
+
+[tool.coverage.report]
+show_missing = true
+skip_covered = true
+exclude_lines = [
+  "pragma: no cover",
+  "if TYPE_CHECKING:",
+  "if __name__ == \"__main__\":",
 ]
 
 [build-system]
