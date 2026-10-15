@@ -16,11 +16,36 @@ build only what is genuinely missing.
 | 🔴 | Not started |
 | 📋 | Not a coding job (verification, doc, sign-off, or decision) |
 
+## Update — 2026-10-15 (branch `fix/platform-completion`)
+
+The branch was rebased onto `origin/staging` (`ca408e7d`) and now carries:
+
+- Task 7 + Task 8A S1–S3 — the original six fixes (rebased, tests pass).
+- Task 2 — reminder offered in the gallery again, with its tests updated.
+- Task 8A S4 — M-6 (NexHealth webhook replay window) fixed; the rest recorded
+  in `docs/HIPAA_CODE_AUDIT_REMEDIATION.md`.
+- Task 10 — backend/frontend coverage tooling and a GitHub Actions CI job.
+- Task 14 — `docs/STAGING_DATA_POLICY.md`.
+- Task 5 — verified as already implemented and tested (no code needed).
+
+Deferred: Task 13 (blocked on the GoTracker cloud heartbeat contract), Task 3's
+cloud endpoint and Task 6 (both in the RDP repo), Tasks 1/4 (production proofs),
+Tasks 8B/9 (docs), Tasks 11/12 (client accounts / product decision).
+
+**Known pre-existing failures:** `origin/staging` already has 95 failing unit
+tests (`test_enquiry_intake_route` 31, `test_enquiries_api` 23,
+`test_test_suite` 22, `test_enquiry_intake_admin` 10, and a few others). These
+predate this branch — the rebase introduced no new failures — but the new CI
+job will be red until they are triaged.
+
 ## The one branch that matters
 
-`fix/platform-completion` — **local only, never pushed.** Created from `staging` on
-6 Oct; 6 commits dated 8 Oct. Contains the entire Task 7 fix set and Security S1–S3.
-Not in `origin/staging`, not in `origin/production`.
+`fix/platform-completion` — **local only, not yet pushed.** Cut from `staging` on
+6 Oct, rebased onto `origin/staging` (`ca408e7d`) on 15 Oct. It now carries the
+original six Task 7 / Security S1–S3 commits (rebased) plus the Task 2, S4-M6,
+Task 10 and Task 14 work described in the update above.
+
+Original six (hashes below are pre-rebase; see `git log` for the rebased ids):
 
 | Commit | Item |
 |---|---|
@@ -36,7 +61,7 @@ Not in `origin/staging`, not in `origin/production`.
 | # | Task | Necessary? | Actual state | Evidence / what's missing |
 |---|---|---|---|---|
 | 1 | Confirmation campaign — live proof on both clinics | Yes (proof only) | 📋 Code ✅, proof 🔴 | Template `surgery-pre-appointment-confirmation`; NexHealth `confirm_appointment` (`pms/nexhealth/adapter.py:1376`); GoTracker `confirm_appointment` (`pms/gotracker/adapter.py:691`); `ComplianceGate` + `quiet_hours_service.py` present. Missing: production run log, 10 confirmations/clinic, quiet-hours + consent proof. |
-| 2 | Reminder as its own campaign | **Yes (P1)** | 🟠 | Template defined and in `LAUNCH_TEMPLATE_IDS`, but deliberately excluded from the gallery in `list_templates()` (`campaign_templates.py:3023`). Fix = re-offer it + verify no double-message with Confirmation + PMS-state precheck. |
+| 2 | Reminder as its own campaign | **Yes (P1)** | 🟡 Fixed on branch | Was excluded from the gallery in `list_templates()`. Now offered again; tests updated. The trigger already restricts sends to still-active statuses, so cancelled/rescheduled appointments are not reminded. Remaining: QA the Confirmation+Reminder double-message rule. |
 | 3 | Overdue Recall — fix and run for both clinics | **Yes (P1)** | 🟠 | Tick now passes `workflow`/`version_id` and reads the real counter (`automation_workflow.py:3560–3600`); pull is paginated (`patient_recalls`); `tick-workflow-schedules` is on beat (60 s). **Missing:** GoTracker cloud endpoint `GET /api/appointments/history-status` still called (`pms/gotracker/adapter.py:642`) but not served → Olive Tree skipped; recall-type intervals need a check against NexHealth types. |
 | 4 | Sales Qualification — end-to-end proof | Yes (proof only) | 📋 Code ✅, proof 🔴 | `enquiry_intake_service.py`; `form_integrations.py` / `form_webhooks.py` (Meta/Typeform); `LeadStatus` incl. `QUALIFIED`/`NOT_QUALIFIED`/`BOOKED` (`models/contact.py:31`). Missing: production recording form → qualified → booked. |
 | 5 | Cancelled / confirmed triggers | Yes | ✅ (verify) | `TRIGGER_EVENT_KEYS` maps `appointment.cancelled/confirmed/...` (`trigger_lookup.py`); NexHealth webhook fires `trigger_appointment_workflows` after cancel (`nexhealth_webhooks.py:1279,1319`); GoTracker webhook does the same (`gotracker_webhooks.py:608,693`). Missing: the "native trigger flag" match-check the task asks for, plus recordings. |
