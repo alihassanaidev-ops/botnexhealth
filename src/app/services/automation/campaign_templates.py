@@ -3015,13 +3015,8 @@ def get_template(template_id: str) -> CampaignTemplate | None:
 
 
 def list_templates() -> list[CampaignTemplate]:
-    # Keep the old reminder addressable for backwards compatibility with
-    # existing links and callers, but no longer offer it in the template gallery.
-    return [
-        template
-        for template_id, template in TEMPLATES.items()
-        if template_id != "appointment-reminder-24h"
-    ]
+    # The reminder is offered as its own campaign, independent of Confirmation.
+    return list(TEMPLATES.values())
 
 
 def template_pms_types(template: CampaignTemplate) -> frozenset[str]:

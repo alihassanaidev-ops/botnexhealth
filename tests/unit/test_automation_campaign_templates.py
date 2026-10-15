@@ -80,10 +80,10 @@ def test_priority_dental_templates_present() -> None:
     }
 
 
-def test_list_templates_hides_retired_appointment_reminder() -> None:
+def test_list_templates_offers_appointment_reminder() -> None:
     templates = list_templates()
-    assert len(templates) == 5
-    assert "appointment-reminder-24h" not in {template.id for template in templates}
+    assert len(templates) == 6
+    assert "appointment-reminder-24h" in {template.id for template in templates}
 
 
 def test_pre_appointment_template_has_generic_visible_name() -> None:
@@ -881,8 +881,8 @@ def test_list_route_returns_visible_templates() -> None:
         new=AsyncMock(return_value="gotracker"),
     ):
         result = asyncio.run(list_campaign_templates(user))
-    assert len(result) == 5
-    assert "appointment-reminder-24h" not in {template.id for template in result}
+    assert len(result) == 6
+    assert "appointment-reminder-24h" in {template.id for template in result}
 
 
 def test_list_route_offers_every_launch_template_to_nexhealth() -> None:
@@ -902,7 +902,7 @@ def test_list_route_offers_every_launch_template_to_nexhealth() -> None:
         result = asyncio.run(list_campaign_templates(user))
     ids = {t.id for t in result}
     assert "post-op-followup-after-confirmation" in ids
-    assert len(result) == 5
+    assert len(result) == 6
 
 
 def test_list_route_still_hides_a_template_whose_nodes_are_gotracker_only() -> None:
