@@ -117,6 +117,9 @@ git
 # a doc added here is silently dropped by `git add` unless it is listed.
 !/docs/TEST_SUITE.md
 !/docs/RECALL_CAMPAIGN.md
+!/docs/PLATFORM_COMPLETION_AUDIT.md
+!/docs/HIPAA_CODE_AUDIT_REMEDIATION.md
+!/docs/STAGING_DATA_POLICY.md
 /Internal/
 
 # Playwright MCP session artifacts (console logs, page snapshots)
