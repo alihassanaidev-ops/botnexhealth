@@ -120,6 +120,8 @@ git
 !/docs/PLATFORM_COMPLETION_AUDIT.md
 !/docs/HIPAA_CODE_AUDIT_REMEDIATION.md
 !/docs/STAGING_DATA_POLICY.md
+!/docs/OPERATIONS_RUNBOOK.md
+!/docs/CLINIC_ADMIN_GUIDE.md
 /Internal/
 
 # Playwright MCP session artifacts (console logs, page snapshots)

@@ -30,7 +30,17 @@ The branch was rebased onto `origin/staging` (`ca408e7d`) and now carries:
 
 Deferred: Task 13 (blocked on the GoTracker cloud heartbeat contract), Task 3's
 cloud endpoint and Task 6 (both in the RDP repo), Tasks 1/4 (production proofs),
-Tasks 8B/9 (docs), Tasks 11/12 (client accounts / product decision).
+Tasks 11/12 (client accounts / product decision).
+
+**Later the same day (H-1 and the rest of S4):** the remaining security-audit
+items are now done — H-1 (patient identifiers moved out of URL query strings),
+M-2 (voice dynamic-variable allowlist), M-4 (scrubbed recording behind the
+audited reveal), M-7 (CSP on the API and the dashboard), L-3 (inbound-email
+error logging) — plus the repo-found `internal_status_events` RLS gap. M-3 is
+left as a product decision; M-8 (key rotation) stays deferred. Task 8B (lean ops
+runbook, `OPERATIONS_RUNBOOK.md`), Task 9 (clinic admin guide,
+`CLINIC_ADMIN_GUIDE.md`) and Task 15 (SMS carrier status — 5 Canadian local
+numbers, no registration pending) are also recorded.
 
 **Unit suite is green.** `origin/staging` carried 95 failing unit tests, all
 environmental rather than broken code: the rate limiter needed a running Redis
