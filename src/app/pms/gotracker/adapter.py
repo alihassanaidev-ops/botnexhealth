@@ -642,6 +642,24 @@ class GoTrackerAdapter(
         raw = await self._client.request("GET", "/api/appointments/history-status")
         return _data_object(raw)
 
+    async def get_connector_health(self) -> dict[str, Any]:
+        """Connector/agent health the GoTracker cloud holds for this location.
+
+        Read-only. Backs the clinic-facing warning when the on-site connector
+        stops reaching the cloud (only operator alarms fire otherwise). Returns
+        an empty dict when the cloud does not recognise the location, so the
+        caller renders "unknown" rather than an error.
+        """
+        raw = await self._client.request(
+            "GET", f"/api/connectors/{self._location.id}/health"
+        )
+        if isinstance(raw, dict):
+            data = raw.get("data")
+            if isinstance(data, dict):
+                return data
+            return raw
+        return {}
+
     # ── Booking ──────────────────────────────────────────────────────────
 
     async def book_appointment(self, req: BookingRequest) -> BookingResult:

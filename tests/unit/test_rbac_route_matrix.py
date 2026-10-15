@@ -506,6 +506,7 @@ ROUTES_BY_BOUNDARY: dict[str, tuple[str, ...]] = {
         "POST /api/institution/locations/{loc_slug}/breaks",
         "DELETE /api/institution/locations/{loc_slug}/breaks/{break_id}",
         "PATCH /api/institution/locations/{loc_slug}/timezone",
+        "GET /api/institution/connector-health",
         "GET /api/institution/transfer-numbers",
         "GET /api/institution/locations/{loc_slug}/insurance-plans",
         "GET /api/institution/sms/logs",

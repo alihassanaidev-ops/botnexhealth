@@ -36,6 +36,7 @@ import { cn } from "@/lib/utils"
 import { getDashboardSummary, getMonthlyMetrics } from "@/lib/dashboard-api"
 import type { MonthlyMetricPoint } from "@/lib/dashboard-api"
 import { TrendChart } from "@/components/dashboard/TrendChart"
+import { ConnectorHealthBanner } from "@/components/dashboard/ConnectorHealthBanner"
 import { calculateLocationROI } from "@/lib/institution-portal-api"
 import { resolveCallback } from "@/lib/calls-api"
 import { STATUS_OPTIONS } from "@/lib/constants"
@@ -560,6 +561,8 @@ export default function Dashboard() {
                         </>
                     }
                 />
+
+                <ConnectorHealthBanner />
 
                 {/* Counts for the selected range. Four so the row always fills;
                     Avg Call Duration joins the value row below, or comes back
