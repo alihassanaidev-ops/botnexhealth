@@ -54,4 +54,16 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
             "geolocation=(), microphone=(), camera=()"
         )
 
+        # Content-Security-Policy. The API answers JSON, which never executes
+        # scripts, so a locked-down policy costs nothing. The interactive
+        # /docs, /redoc and /openapi.json pages load their assets from a CDN
+        # and keep their own defaults, so they are skipped. setdefault lets a
+        # route opt into something stricter.
+        if not request.url.path.startswith(("/docs", "/redoc", "/openapi.json")):
+            response.headers.setdefault(
+                "Content-Security-Policy",
+                "default-src 'none'; frame-ancestors 'none'; "
+                "base-uri 'none'; form-action 'none'",
+            )
+
         return response
