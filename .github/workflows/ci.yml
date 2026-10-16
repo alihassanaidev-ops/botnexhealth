@@ -54,7 +54,10 @@ jobs:
           cache-dependency-path: nexus-dashboard-web/package-lock.json
 
       - name: Install dependencies
-        run: npm ci
+        # The app pulls React 19 against libraries that still declare React 18
+        # peers, so a strict `npm ci` cannot reconcile the tree (and npm 10
+        # crashes resolving it). The lock is generated with the same flag.
+        run: npm ci --legacy-peer-deps
 
       - name: Run tests with coverage
         run: npm run coverage
