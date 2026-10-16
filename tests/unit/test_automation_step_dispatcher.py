@@ -558,7 +558,13 @@ def test_advance_gotracker_writeback_rejects_combined_status_and_reschedule() ->
     assert rt.fail_step.await_args.kwargs["result_code"] == "gotracker_writeback_failed"
 
 
-def test_advance_llm_node_classifies_with_keyword_rules() -> None:
+def test_advance_llm_node_classifies_with_keyword_rules(monkeypatch) -> None:
+    # Hermetic: exercise the keyword path regardless of any key a local .env or
+    # .env.example sets. Otherwise the test makes a live OpenAI call and fails.
+    monkeypatch.setattr(settings, "openai_api_key", None, raising=False)
+    monkeypatch.setattr(
+        settings, "workflow_llm_allow_keyword_fallback", True, raising=False
+    )
     session = _make_session()
     rt = _make_runtime()
     sched = _make_scheduler()
