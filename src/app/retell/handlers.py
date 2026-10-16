@@ -44,6 +44,12 @@ from src.app.retell.functions import (
     register_function,
     update_call_context,
 )
+from src.app.retell.caller_identity import (
+    call_verified_patient,
+    outbound_call_appointment_id,
+    raw_pms_id,
+    remember_verified_patient,
+)
 from src.app.retell.security import hash_for_logging
 from src.app.services.automation.recall_booking_guard import appointment_type_allowed
 from src.app.services.audit import phi_reveal_audit
@@ -227,19 +233,30 @@ def _age_in_years(date_of_birth: Any, today: date) -> int | None:
     return age if age >= 0 else None
 
 
+#: Insurance fields the voice agent may see: enough to answer "is my insurance
+#: on file", never the identifiers (member id, group number) or employer.
+_VOICE_INSURANCE_FIELDS = ("insurance_name", "priority", "effective_date", "expiration_date")
+
+
 def _to_full_patient_payload(patient: Any) -> dict[str, Any]:
-    """Return complete patient details after server-side identity verification."""
+    """Patient details for the voice agent after server-side identity verification.
+
+    Only what the agent needs to help the caller: procedures and insurance
+    identifiers are withheld from the model.
+    """
     patient_extra = patient.extra if isinstance(patient.extra, dict) else {}
     allowed_details = {
         key: patient_extra[key]
-        for key in (
-            "upcoming_appointments",
-            "last_visit",
-            "recent_procedures",
-            "insurance_coverages",
-        )
+        for key in ("upcoming_appointments", "last_visit")
         if key in patient_extra
     }
+    coverages = patient_extra.get("insurance_coverages")
+    if isinstance(coverages, list):
+        allowed_details["insurance_coverages"] = [
+            {key: cov.get(key) for key in _VOICE_INSURANCE_FIELDS if key in cov}
+            for cov in coverages
+            if isinstance(cov, dict)
+        ]
     return {
         "id": patient.id,
         "first_name": patient.first_name,
@@ -298,6 +315,12 @@ def _provider_display_name(row: Any) -> str | None:
             if part
         ).strip()
     return name or None
+
+
+def _is_hidden_provider(provider_id: Any, hidden_raw_ids: set[str]) -> bool:
+    """Whether a slot's provider is hidden; ids compare without their prefix."""
+    raw = _strip_source_prefix(str(provider_id or "").strip())
+    return bool(raw) and raw in hidden_raw_ids
 
 
 def _missing_provider_source_ids(source: str, slots: list[Any]) -> set[str]:
@@ -646,7 +669,6 @@ async def lookup_patient(args: dict[str, Any]) -> dict[str, Any]:
     full_detail_include = [
         "upcoming_appts",
         "last_visited_appointment",
-        "procedures",
         "insurance_coverages",
     ]
 
@@ -715,6 +737,10 @@ async def lookup_patient(args: dict[str, Any]) -> dict[str, Any]:
 
     verified_patient = verified_patients[0]
     patient_id = str(getattr(verified_patient, "id", "unknown"))
+    # Lets a later cancel/confirm/reschedule in this call prove ownership.
+    await remember_verified_patient(
+        get_call_context().get("call_id"), patient_id, str(ctx.institution.id)
+    )
     try:
         async with phi_reveal_audit(
             actor=AuditActor.RETELL_AGENT,
@@ -1079,6 +1105,32 @@ async def find_appointment_slots(args: dict[str, Any]) -> dict[str, Any]:
                     .all()
                 )
 
+                # Providers the clinic has hidden are never offered to a caller,
+                # including on an "any provider" search, matching list_providers.
+                hidden_source_ids = set(
+                    (
+                        await session.execute(
+                            select(InstitutionProvider.source_id).where(
+                                InstitutionProvider.location_id
+                                == str(ctx.location.id),
+                                InstitutionProvider.is_hidden.is_(True),
+                            )
+                        )
+                    )
+                    .scalars()
+                    .all()
+                )
+
+            if hidden_source_ids:
+                hidden_raw_ids = {
+                    _strip_source_prefix(source_id) for source_id in hidden_source_ids
+                }
+                slots = [
+                    s
+                    for s in slots
+                    if not _is_hidden_provider(s.provider_id, hidden_raw_ids)
+                ]
+
             # Apply operating hours + breaks + buffer in one pass — parity with
             # the dashboard ``GET /slots`` route (slots.py). Without this the
             # agent would offer slots during lunch/closed hours that the
@@ -1223,6 +1275,77 @@ async def book_appointment(args: dict[str, Any]) -> dict[str, Any]:
         return {"success": False, "error": "Failed to book appointment"}
 
 
+_NOT_VERIFIED_FOR_APPOINTMENT = {
+    "success": False,
+    "error": "appointment_not_verified",
+    "message": (
+        "I can only change an appointment after confirming it belongs to you. "
+        "Let me verify your details first."
+    ),
+}
+
+
+def _appointment_patient_id(appointment: dict[str, Any]) -> str | None:
+    for key in ("patient_id", "PatientId", "ContactId"):
+        value = appointment.get(key)
+        if value not in (None, ""):
+            return raw_pms_id(value)
+    patient = appointment.get("patient")
+    if isinstance(patient, dict) and patient.get("id") not in (None, ""):
+        return raw_pms_id(patient["id"])
+    return None
+
+
+async def _appointment_ownership_check(
+    ctx: ResolvedContext, appointment_id: str
+) -> tuple[dict[str, Any] | None, str | None]:
+    """Refuse to change an appointment the caller has not been verified for.
+
+    Allowed when the appointment's patient passed ``lookup_patient`` earlier in
+    this call, or when this is the outbound campaign call placed about this
+    very appointment. Anything unreadable is refused.
+
+    Returns ``(error, patient_id)``: ``error`` is None when the change may go
+    ahead, and ``patient_id`` is the appointment's patient when it was read.
+    """
+    call = get_call_context()
+    call_id = call.get("call_id")
+    if not call_id:
+        return _NOT_VERIFIED_FOR_APPOINTMENT, None
+
+    try:
+        campaign_appointment = await outbound_call_appointment_id(
+            call_id, str(ctx.institution.id), str(ctx.location.id) if ctx.location else None
+        )
+    except Exception as e:  # noqa: BLE001
+        logger.warning("outbound call lookup failed: %s", safe_error_summary(e))
+        campaign_appointment = None
+
+    get_appointment = getattr(ctx.adapter, "get_appointment", None)
+    appointment = None
+    if get_appointment is not None:
+        try:
+            appointment = await get_appointment(appointment_id)
+        except Exception as e:  # noqa: BLE001
+            logger.warning("ownership lookup failed: %s", safe_error_summary(e))
+    patient_id = (
+        _appointment_patient_id(appointment) if isinstance(appointment, dict) else None
+    )
+
+    if campaign_appointment and raw_pms_id(campaign_appointment) == raw_pms_id(
+        appointment_id
+    ):
+        return None, patient_id
+    if patient_id and await call_verified_patient(call_id, patient_id):
+        return None, patient_id
+
+    logger.info(
+        "appointment change refused: appointment=%s not verified for this call",
+        hash_for_logging(str(appointment_id)),
+    )
+    return _NOT_VERIFIED_FOR_APPOINTMENT, patient_id
+
+
 @register_function("cancel_appointment")
 @audit(
     AuditAction.CANCEL_APPOINTMENT,
@@ -1240,6 +1363,10 @@ async def cancel_appointment(args: dict[str, Any]) -> dict[str, Any]:
         ctx = await _resolve_context()
     except ValueError as e:
         return {"success": False, "error": str(e)}
+
+    denied, _ = await _appointment_ownership_check(ctx, appointment_id)
+    if denied:
+        return denied
 
     try:
         result = await ctx.adapter.cancel_appointment(appointment_id)
@@ -1276,6 +1403,10 @@ async def confirm_appointment(args: dict[str, Any]) -> dict[str, Any]:
             "error": "Appointment confirmation is not supported for this PMS.",
         }
 
+    denied, _ = await _appointment_ownership_check(ctx, appointment_id)
+    if denied:
+        return denied
+
     try:
         result = await ctx.adapter.confirm_appointment(appointment_id)
         return result.model_dump()
@@ -1308,6 +1439,13 @@ async def _reschedule_appointment_impl(
 
     if ctx.adapter is None:
         return {"success": False, "error": "PMS integration is not configured."}
+
+    denied, owner_patient_id = await _appointment_ownership_check(ctx, old_id)
+    if denied:
+        return denied
+    # The new booking must be for the same patient as the one being moved.
+    if owner_patient_id and raw_pms_id(args["patient_id"]) != owner_patient_id:
+        return _NOT_VERIFIED_FOR_APPOINTMENT
 
     if ctx.adapter.source != "gotracker":
         if not args.get("appointment_type_id"):

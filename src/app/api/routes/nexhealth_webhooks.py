@@ -6,6 +6,7 @@ import base64
 import hashlib
 import hmac
 import logging
+import time
 from typing import Any
 
 from fastapi import APIRouter, HTTPException, Request, status
@@ -52,6 +53,11 @@ _CANCEL_EVENTS: frozenset[str] = (
 _HANDLED_EVENTS = (
     _ENROLL_EVENTS | _CANCEL_EVENTS | _PATIENT_EVENTS | _SYNC_STATUS_EVENTS
 )
+
+#: A signed request is only accepted within this many seconds of its timestamp,
+#: so a captured delivery cannot be replayed indefinitely. Mirrors the GoTracker
+#: receiver's tolerance.
+_SIGNATURE_TOLERANCE_SECONDS = 300
 
 
 def _raw_payload_text(raw_body: bytes) -> str:
@@ -494,6 +500,20 @@ def _verify_signature(
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Missing NexHealth signature/timestamp headers",
+        )
+    # Replay window: the timestamp is part of the signed string, so it must be
+    # fresh (or a captured delivery replays forever).
+    try:
+        timestamp = float(timestamp_header)
+    except (TypeError, ValueError):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Invalid NexHealth timestamp header",
+        )
+    if abs(time.time() - timestamp) > _SIGNATURE_TOLERANCE_SECONDS:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="NexHealth webhook timestamp outside the allowed window",
         )
     # NexHealth signs `{timestamp}.{base64(raw_body)}` with HMAC-SHA256 using the endpoint
     # secret_key (verified live/docs 2026-07-14). The `timestamp` header value is used verbatim.

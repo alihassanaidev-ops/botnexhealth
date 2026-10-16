@@ -665,14 +665,60 @@ function OutcomesTab({
                             label="Per confirmation"
                             value={money(analytics.cost.cost_per_confirmation, analytics.cost.currency)}
                         />
-                        {/* Revenue attribution is deliberately absent: the rule that
-                            decides it has not been agreed, and the figure has to be
-                            shown next to its rule or it starts arguments instead of
-                            settling them. */}
-                        <p className="border-t border-border pt-3 text-xs text-muted-foreground">
-                            Revenue attributed to this campaign is not reported yet. It needs an
-                            agreed attribution rule, which is shown alongside the figure once set.
-                        </p>
+                        {analytics.revenue ? (
+                            <div className="border-t border-border pt-3 space-y-3">
+                                <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
+                                    Revenue attributed
+                                </p>
+                                {analytics.revenue.configured ? (
+                                    <>
+                                        <InfoRow
+                                            label="Generated (bookings)"
+                                            value={money(
+                                                analytics.revenue.generated,
+                                                analytics.revenue.currency,
+                                            )}
+                                        />
+                                        <InfoRow
+                                            label="Protected (confirmations)"
+                                            value={money(
+                                                analytics.revenue.protected,
+                                                analytics.revenue.currency,
+                                            )}
+                                        />
+                                        <InfoRow
+                                            label="Total attributed"
+                                            value={money(
+                                                analytics.revenue.total,
+                                                analytics.revenue.currency,
+                                            )}
+                                        />
+                                        <InfoRow
+                                            label="Return (revenue − spend)"
+                                            value={money(
+                                                analytics.revenue.roi,
+                                                analytics.revenue.currency,
+                                            )}
+                                        />
+                                        {/* The rule ships with the figure: a revenue
+                                            number shown without it starts arguments
+                                            instead of settling them. */}
+                                        <p className="text-xs text-muted-foreground">
+                                            {analytics.revenue.rule}
+                                        </p>
+                                    </>
+                                ) : (
+                                    <p className="text-xs text-muted-foreground">
+                                        Set your average visit value to see the revenue
+                                        attributed to this campaign.
+                                    </p>
+                                )}
+                            </div>
+                        ) : (
+                            <p className="border-t border-border pt-3 text-xs text-muted-foreground">
+                                Revenue attributed to this campaign is not reported yet.
+                            </p>
+                        )}
                     </CardContent>
                 </Card>
             </div>

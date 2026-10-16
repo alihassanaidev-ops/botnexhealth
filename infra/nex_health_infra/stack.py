@@ -1779,11 +1779,66 @@ class NexHealthPlatformStack(Stack):
             removal_policy=RemovalPolicy.RETAIN,
             auto_delete_objects=False,
         )
+        # Content-Security-Policy for the dashboard SPA (HIPAA audit M-7). The
+        # dashboard keeps the access token in memory and renders PHI, so one
+        # injected script would read both. Scripts stay same-origin; 'unsafe-
+        # inline' is allowed for styles only because the component library
+        # injects them at runtime. connect-src allows the API origin the SPA
+        # calls, since staging/production front and API are different hosts.
+        api_origin = (
+            f"https://{self.config.api.domain_name}"
+            if self.config.api.domain_name
+            else None
+        )
+        connect_src = "'self'" + (f" {api_origin}" if api_origin else "")
+        frontend_csp = "; ".join(
+            [
+                "default-src 'self'",
+                "base-uri 'self'",
+                "object-src 'none'",
+                "frame-ancestors 'none'",
+                "form-action 'self'",
+                "script-src 'self'",
+                "style-src 'self' 'unsafe-inline'",
+                "img-src 'self' data:",
+                "font-src 'self' data:",
+                "worker-src 'self' blob:",
+                f"connect-src {connect_src}",
+            ]
+        )
+        frontend_security_headers = cloudfront.ResponseHeadersPolicy(
+            self,
+            "FrontendSecurityHeaders",
+            security_headers_behavior=cloudfront.ResponseSecurityHeadersBehavior(
+                content_security_policy=cloudfront.ResponseHeadersContentSecurityPolicy(
+                    content_security_policy=frontend_csp,
+                    override=True,
+                ),
+                frame_options=cloudfront.ResponseHeadersFrameOptions(
+                    frame_option=cloudfront.HeadersFrameOption.DENY,
+                    override=True,
+                ),
+                content_type_options=cloudfront.ResponseHeadersContentTypeOptions(
+                    override=True
+                ),
+                referrer_policy=cloudfront.ResponseHeadersReferrerPolicy(
+                    referrer_policy=cloudfront.HeadersReferrerPolicy.STRICT_ORIGIN_WHEN_CROSS_ORIGIN,
+                    override=True,
+                ),
+                strict_transport_security=cloudfront.ResponseHeadersStrictTransportSecurity(
+                    access_control_max_age=Duration.days(365),
+                    include_subdomains=True,
+                    override=True,
+                ),
+            ),
+        )
+
         distribution_kwargs = {
             "default_root_object": "index.html",
             "default_behavior": cloudfront.BehaviorOptions(
                 origin=origins.S3BucketOrigin.with_origin_access_control(site_bucket),
                 viewer_protocol_policy=cloudfront.ViewerProtocolPolicy.REDIRECT_TO_HTTPS,
+                response_headers_policy=frontend_security_headers,
             ),
             # SPA deep-link fallback: when S3 has no object at the requested
             # key (BlockPublicAccess + OAC makes S3 return 403, NOT 404),

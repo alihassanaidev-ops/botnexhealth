@@ -26,6 +26,7 @@ from src.app.database import (
     init_database,
     is_database_initialized,
 )
+from src.app.services.sms_privacy import safe_error_summary
 from src.app.worker import celery_app
 
 logger = logging.getLogger(__name__)
@@ -54,7 +55,7 @@ def poll_inbound_email(self, *, max_batches: int = _MAX_BATCHES) -> dict:
     try:
         return asyncio.run(_poll_async(max_batches=max_batches))
     except Exception as exc:  # noqa: BLE001 — retried by Celery
-        logger.error("inbound email poll failed: %s", exc)
+        logger.error("inbound email poll failed: %s", safe_error_summary(exc))
         raise self.retry(exc=exc, countdown=120) from exc
 
 
@@ -89,7 +90,12 @@ async def _poll_async(*, max_batches: int) -> dict:
             except Exception as exc:  # noqa: BLE001 — one bad message must not
                 # stall the queue behind it; SQS redelivers, then dead-letters.
                 failed += 1
-                logger.error("inbound email message failed: %s", exc, exc_info=True)
+                # safe_error_summary rather than exc_info: an SES/provider
+                # exception can echo the patient's name, which the phone/email
+                # scrubbers cannot strip. Only the type and HTTP status log.
+                logger.error(
+                    "inbound email message failed: %s", safe_error_summary(exc)
+                )
                 continue
 
             if handled:
@@ -388,7 +394,7 @@ def _forward_to_clinic(self, *, inbound_message_id: str) -> dict:
     try:
         return asyncio.run(_forward_async(inbound_message_id))
     except Exception as exc:  # noqa: BLE001
-        logger.error("forwarding inbound email failed: %s", exc)
+        logger.error("forwarding inbound email failed: %s", safe_error_summary(exc))
         raise self.retry(exc=exc, countdown=180) from exc
 
 
@@ -474,7 +480,7 @@ async def _forward_async(inbound_message_id: str) -> dict:
                 logger.error(
                     "clinic forward outcome uncertain: inbound_message=%s error=%s",
                     inbound_message_id,
-                    exc,
+                    safe_error_summary(exc),
                 )
                 return {"uncertain": inbound_message_id}
             raise

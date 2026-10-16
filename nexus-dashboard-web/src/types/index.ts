@@ -890,8 +890,25 @@ export interface CampaignAnalytics {
         cost_per_booking: number | null;
         cost_per_confirmation: number | null;
     };
+    revenue?: CampaignRevenue | null;
     generated_at: string;
     rollup_fresh_at: string | null;
+}
+
+export interface CampaignRevenue {
+    currency: string;
+    /** Bookings the campaign produced (recall, sales). */
+    generated: number;
+    /** Confirmations the campaign protected (confirmation, reminder). */
+    protected: number;
+    total: number;
+    spend: number;
+    roi: number;
+    /** False when the clinic has not set an average visit value. */
+    configured: boolean;
+    /** Human-readable attribution rule, shown next to the figure. */
+    rule: string;
+    value_source: string | null;
 }
 
 export interface CampaignRunFilters {

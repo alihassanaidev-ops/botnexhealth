@@ -18,7 +18,7 @@ from __future__ import annotations
 import logging
 from typing import Annotated, Literal
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Body, Depends, HTTPException, Query, status
 from pydantic import BaseModel
 from sqlalchemy import select
 
@@ -126,10 +126,11 @@ def _normalize_admin_email(email: str) -> str:
     return normalized
 
 
-@router.get("", response_model=AdminUserListResponse)
+@router.post("/search", response_model=AdminUserListResponse)
 async def list_users(
     _: Annotated[User, Depends(get_current_admin)],
-    q: str | None = Query(None, description="Email substring (case-insensitive)"),
+    # HIPAA H-1: a staff email substring is an identifier — body, not the URL.
+    q: str | None = Body(None, embed=True, description="Email substring (case-insensitive)"),
     role: str | None = Query(None, description="Filter by UserRole"),
     institution_id: str | None = Query(None),
     location_id: str | None = Query(None),

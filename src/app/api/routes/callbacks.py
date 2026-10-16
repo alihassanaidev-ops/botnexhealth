@@ -11,7 +11,7 @@ import logging
 from datetime import date
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
+from fastapi import APIRouter, Body, Depends, HTTPException, Query, Request, status
 from pydantic import BaseModel
 from sqlalchemy import desc, func, or_, select
 from sqlalchemy.orm import selectinload
@@ -118,7 +118,7 @@ def _call_to_callback_item(call: Call, *, inline: bool = False) -> CallbackItem:
 # ── List callbacks ────────────────────────────────────────────────────────────
 
 
-@router.get("", response_model=CallbacksListResponse)
+@router.post("", response_model=CallbacksListResponse)
 @limiter.limit(RATE_READ)
 async def list_callbacks(
     request: Request,
@@ -126,7 +126,8 @@ async def list_callbacks(
     limit: int = Query(25, ge=1, le=100),
     offset: int = Query(0, ge=0),
     resolved: bool | None = Query(None, description="Filter: True=resolved, False=unresolved, None=all"),
-    search: str | None = Query(None, description="Filter by contact name (partial, case-insensitive)"),
+    # HIPAA H-1: a contact name is an identifier — request body, not the URL.
+    search: str | None = Body(None, embed=True, description="Filter by contact name (partial, case-insensitive)"),
     date_from: date | None = Query(None),
     date_to: date | None = Query(None),
     sort: str = Query("oldest", description="Sort order: 'oldest' or 'newest'"),

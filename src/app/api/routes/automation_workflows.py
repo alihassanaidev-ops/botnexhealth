@@ -699,6 +699,18 @@ class CostSummaryResponse(BaseModel):
     cost_per_confirmation: float | None
 
 
+class CampaignRevenueResponse(BaseModel):
+    currency: str
+    generated: float
+    protected: float
+    total: float
+    spend: float
+    roi: float
+    configured: bool
+    rule: str
+    value_source: str | None
+
+
 class CampaignAnalyticsResponse(BaseModel):
     workflow_id: str
     workflow_name: str
@@ -712,6 +724,7 @@ class CampaignAnalyticsResponse(BaseModel):
     cost: CostSummaryResponse
     generated_at: datetime
     rollup_fresh_at: datetime | None
+    revenue: CampaignRevenueResponse | None = None
 
     @classmethod
     def from_service(cls, analytics: CampaignAnalytics) -> "CampaignAnalyticsResponse":
@@ -746,6 +759,11 @@ class CampaignAnalyticsResponse(BaseModel):
             cost=CostSummaryResponse(**analytics.cost.__dict__),
             generated_at=analytics.generated_at,
             rollup_fresh_at=analytics.rollup_fresh_at,
+            revenue=(
+                CampaignRevenueResponse(**analytics.revenue.__dict__)
+                if analytics.revenue is not None
+                else None
+            ),
         )
 
 

@@ -164,6 +164,38 @@ def _ai_call_disclosure(clinic_name: str | None) -> str:
     )
 
 
+# Minimum necessary for a campaign call (HIPAA audit M-2). The merge context
+# carries every field the engine knows — including free-text clinical content
+# the voice script never references — and spreading all of it into Retell's
+# dynamic variables sent that to the vendor on every dial. This allowlist is the
+# voice twin of AUTOMATIC_RETELL_SMS_VARIABLES: the script gets what it needs to
+# greet, state the appointment and offer links, and nothing else.
+_CAMPAIGN_VOICE_VARIABLES = (
+    "patient_first_name",
+    "patient_preferred_language",
+    "clinic_name",
+    "location_name",
+    "location_phone",
+    "appointment_date",
+    "appointment_time",
+    "appointment_datetime",
+    "appointment_reason",
+    "appointment_status",
+    "appointment_type",
+    "appointment_type_name",
+    "provider_name",
+    "booking_link",
+    "registration_link",
+    "confirmation_link",
+    "reschedule_link",
+    "recall_type_name",
+    "recall_due_date",
+    "callback_requested_at",
+    "preferred_callback_time",
+    "enquiry_source",
+    "enquiry_status",
+)
+
 # Minimum necessary: a recall call carries the patient's first name, phone,
 # recall type and due date, and nothing else about the patient. The agent
 # verifies identity and reads anything more through its live tools.
@@ -471,18 +503,25 @@ class VoiceNodeExecutor:
             context=MergeContextBuilder.normalize_raw_context(context),
         )
         patient_first_name = merge_context.get("patient_first_name", "")
+        # Only allowlisted merge fields go to the vendor. Everything else in the
+        # merge context stays server-side.
         dynamic_variables = {
-            **merge_context,
-            "patient_first_name": patient_first_name,
-            "first_name": patient_first_name or merge_context.get("first_name", ""),
-            "user_number": to_number,
-            "clinic_name": clinic_name or "",
-            "compliance_disclosure": _ai_call_disclosure(clinic_name),
-            # Item 19. The agent script decides what to say; this tells it
-            # whether saying anything to a machine is wanted at all. A string
-            # because Retell's dynamic variables are substituted as text.
-            "leave_voicemail": "true" if node.leave_voicemail else "false",
+            key: merge_context.get(key, "") for key in _CAMPAIGN_VOICE_VARIABLES
         }
+        dynamic_variables.update(
+            {
+                "patient_first_name": patient_first_name,
+                "first_name": patient_first_name
+                or merge_context.get("first_name", ""),
+                "user_number": to_number,
+                "clinic_name": clinic_name or "",
+                "compliance_disclosure": _ai_call_disclosure(clinic_name),
+                # Item 19. The agent script decides what to say; this tells it
+                # whether saying anything to a machine is wanted at all. A string
+                # because Retell's dynamic variables are substituted as text.
+                "leave_voicemail": "true" if node.leave_voicemail else "false",
+            }
+        )
         if run.trigger_type == "recall_scan":
             dynamic_variables = _recall_call_variables(dynamic_variables)
         metadata = {

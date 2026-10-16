@@ -41,13 +41,16 @@ export async function listCalls(filters: CallsFilters = {}): Promise<CallsListRe
     if (filters.tags?.length) filters.tags.forEach((t) => params.append("tags", t));
     if (filters.status_ids?.length) filters.status_ids.forEach((s) => params.append("status_ids", s));
     if (filters.direction) params.set("direction", filters.direction);
-    if (filters.search) params.set("search", filters.search);
     if (filters.date_from) params.set("date_from", filters.date_from);
     if (filters.date_to) params.set("date_to", filters.date_to);
     if (filters.locationId) params.set("location_id", filters.locationId);
 
-    const q = params.toString() ? `?${params.toString()}` : "";
-    const { data } = await api.get<CallsListResponse>(`/institution/calls${q}`);
+    // A contact name is PHI (HIPAA H-1): it goes in the request body, not the URL.
+    const { data } = await api.post<CallsListResponse>(
+        "/institution/calls",
+        { search: filters.search ?? null },
+        { params },
+    );
     return data;
 }
 

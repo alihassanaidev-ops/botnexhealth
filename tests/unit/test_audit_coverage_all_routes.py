@@ -96,6 +96,11 @@ NOT_A_STATE_CHANGE: dict[str, str] = {
         "mints a signed redirect state; the connection is written at the callback, "
         "which is audited"
     ),
+    # These list reads are POST only so the search term travels in the body
+    # (HIPAA H-1). They change nothing.
+    "admin_users:list_users": "POST-shaped read: lists staff users",
+    "contacts:list_contacts": "POST-shaped read: lists people",
+    "enquiries:list_enquiries": "POST-shaped read: lists enquiries",
 }
 
 

@@ -36,7 +36,13 @@ async def test_reschedule_v2_handler_uses_adapter_v2(
     async def fake_validate_appointment_type(*_args, **_kwargs):
         return None
 
+    async def fake_ownership_check(*_args, **_kwargs):
+        return None, None
+
     monkeypatch.setattr(handlers, "_resolve_context", fake_resolve_context)
+    monkeypatch.setattr(
+        handlers, "_appointment_ownership_check", fake_ownership_check
+    )
     monkeypatch.setattr(
         handlers,
         "_validate_appointment_type_for_provider",

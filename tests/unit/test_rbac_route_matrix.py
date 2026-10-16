@@ -163,7 +163,7 @@ ROUTES_BY_BOUNDARY: dict[str, tuple[str, ...]] = {
         "GET /api/institution/setup/availabilities",
         "GET /api/institution/setup/operating-hours",
         "GET /api/institution/setup/breaks",
-        "GET /api/institution/calls",
+        "POST /api/institution/calls",
         "GET /api/institution/calls/{call_id}",
         "POST /api/institution/calls/{call_id}/reveal/transcript",
         "POST /api/institution/calls/{call_id}/reveal/recording",
@@ -180,7 +180,7 @@ ROUTES_BY_BOUNDARY: dict[str, tuple[str, ...]] = {
         "PATCH /api/institution/calls/{call_id}/notes/{note_id}",
         "DELETE /api/institution/calls/{call_id}/notes/{note_id}",
         "GET /api/institution/statuses",
-        "GET /api/institution/contacts",
+        "POST /api/institution/contacts/search",
         "GET /api/institution/contacts/{contact_id}",
         "POST /api/institution/contacts/{contact_id}/reveal/phone",
         "GET /api/institution/dashboard/summary",
@@ -192,7 +192,7 @@ ROUTES_BY_BOUNDARY: dict[str, tuple[str, ...]] = {
         "GET /api/institution/notifications/unread-count",
         "PATCH /api/institution/notifications/{notification_id}/read",
         "POST /api/institution/notifications/mark-all-read",
-        "GET /api/institution/callbacks",
+        "POST /api/institution/callbacks",
         "GET /api/institution/notification-preferences",
         "PUT /api/institution/notification-preferences",
         "POST /api/institution/events/ticket",
@@ -263,7 +263,7 @@ ROUTES_BY_BOUNDARY: dict[str, tuple[str, ...]] = {
         "PATCH /api/admin/institutions/{slug}/provisioning",
         "DELETE /api/admin/institutions/{slug}/provisioning/twilio",
         "GET /api/admin/institutions/{slug}/twilio/phone-numbers",
-        "GET /api/admin/users",
+        "POST /api/admin/users/search",
         "PATCH /api/admin/users/{user_id}",
         "DELETE /api/admin/users/{user_id}",
         "POST /api/admin/users/{user_id}/reinvite",
@@ -289,7 +289,7 @@ ROUTES_BY_BOUNDARY: dict[str, tuple[str, ...]] = {
         # The leads that landed. Institution-scoped: a lead has no location
         # until staff or a campaign assigns one, so scoping reads by location
         # would hide exactly the ones needing attention.
-        "GET /api/institution/enquiries",
+        "POST /api/institution/enquiries/search",
         "POST /api/institution/enquiries",
         "GET /api/institution/enquiries/{enquiry_id}",
         "PATCH /api/institution/enquiries/{enquiry_id}",
@@ -408,7 +408,7 @@ ROUTES_BY_BOUNDARY: dict[str, tuple[str, ...]] = {
         # Narrowed from any institution-scoped role by Item 33: a practice's
         # integration state is operational detail, and STAFF could read it until
         # then. Also carries the sync:read permission.
-        "GET /api/institution/appointment-sync",
+        "POST /api/institution/appointment-sync",
         # Tenant operators see only rows admitted by dead_letter_events RLS;
         # location admins are additionally pinned to their own location.
         "GET /api/institution/undeliverables",
@@ -481,9 +481,9 @@ ROUTES_BY_BOUNDARY: dict[str, tuple[str, ...]] = {
         "GET /api/outbound-voice/profiles",
         "GET /api/outbound-voice/profiles/{profile_id}",
         "GET /api/outbound-voice/attempts",
-        "GET /api/v1/pms/patients",
+        "POST /api/v1/pms/patients/search",
         "GET /api/v1/pms/patients/{patient_id}/communication",
-        "GET /api/v1/pms/patients/page",
+        "POST /api/v1/pms/patients/page",
         "POST /api/v1/pms/patients",
         "GET /api/v1/pms/slots",
         "POST /api/v1/pms/appointments",
@@ -506,6 +506,7 @@ ROUTES_BY_BOUNDARY: dict[str, tuple[str, ...]] = {
         "POST /api/institution/locations/{loc_slug}/breaks",
         "DELETE /api/institution/locations/{loc_slug}/breaks/{break_id}",
         "PATCH /api/institution/locations/{loc_slug}/timezone",
+        "GET /api/institution/connector-health",
         "GET /api/institution/transfer-numbers",
         "GET /api/institution/locations/{loc_slug}/insurance-plans",
         "GET /api/institution/sms/logs",

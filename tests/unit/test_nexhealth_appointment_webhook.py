@@ -6,6 +6,7 @@ import base64
 import hashlib
 import hmac
 import json
+import time
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -399,13 +400,13 @@ def test_verify_signature_raises_403_wrong_signature():
     with patch("src.app.api.routes.nexhealth_webhooks.settings") as mock_settings:
         mock_settings.nexhealth_webhook_secret = "s3cr3t"
         with pytest.raises(HTTPException) as exc:
-            _verify_signature(b"body", "badhex", "1700000000")
+            _verify_signature(b"body", "badhex", str(int(time.time())))
     assert exc.value.status_code == 403
 
 
 def test_verify_signature_passes_correct_signature():
     body = b'{"event_name":"test"}'
-    timestamp = "1700000000"
+    timestamp = str(int(time.time()))
     sig = _sign(body, timestamp, "s3cr3t")
     with patch("src.app.api.routes.nexhealth_webhooks.settings") as mock_settings:
         mock_settings.nexhealth_webhook_secret = "s3cr3t"
@@ -414,7 +415,7 @@ def test_verify_signature_passes_correct_signature():
 
 def test_verify_signature_accepts_candidate_endpoint_secret():
     body = b'{"event_name":"test"}'
-    timestamp = "1700000000"
+    timestamp = str(int(time.time()))
     sig = _sign(body, timestamp, "endpoint-secret")
     with patch("src.app.api.routes.nexhealth_webhooks.settings") as mock_settings:
         mock_settings.nexhealth_webhook_secret = "global-secret"
@@ -424,6 +425,20 @@ def test_verify_signature_accepts_candidate_endpoint_secret():
             timestamp,
             candidate_secrets=["endpoint-secret"],
         )
+
+
+def test_verify_signature_rejects_a_stale_timestamp():
+    """A correctly-signed but old request must not replay indefinitely."""
+    from fastapi import HTTPException
+
+    body = b'{"event_name":"test"}'
+    stale = str(int(time.time()) - 3600)
+    sig = _sign(body, stale, "s3cr3t")
+    with patch("src.app.api.routes.nexhealth_webhooks.settings") as mock_settings:
+        mock_settings.nexhealth_webhook_secret = "s3cr3t"
+        with pytest.raises(HTTPException) as exc:
+            _verify_signature(body, sig, stale)
+    assert exc.value.status_code == 403
 
 
 @pytest.mark.asyncio

@@ -26,7 +26,7 @@ from datetime import datetime
 from typing import Annotated, Literal
 from uuid import uuid4
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
+from fastapi import APIRouter, Body, Depends, HTTPException, Query, Request, status
 from pydantic import BaseModel, Field
 from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -191,7 +191,7 @@ def _item(row: Contact, *, inline: bool = False) -> EnquiryListItem:
     )
 
 
-@router.get("", response_model=EnquiryListResponse)
+@router.post("/search", response_model=EnquiryListResponse)
 @limiter.limit(RATE_READ)
 async def list_enquiries(
     request: Request,
@@ -199,7 +199,8 @@ async def list_enquiries(
     session: _Session,
     status_filter: str | None = Query(default=None, alias="status"),
     stage: Stage | None = Query(default=None),
-    search: str | None = Query(default=None, max_length=200),
+    # HIPAA H-1: an enquirer name is an identifier — request body, not the URL.
+    search: str | None = Body(default=None, embed=True, max_length=200),
     limit: int = Query(default=50, ge=1, le=200),
     offset: int = Query(default=0, ge=0),
 ) -> EnquiryListResponse:

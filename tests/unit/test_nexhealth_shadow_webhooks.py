@@ -6,6 +6,7 @@ import base64
 import hashlib
 import hmac
 import json
+import time
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -158,10 +159,11 @@ async def test_shadow_route_accepts_stored_shadow_endpoint_secret(monkeypatch):
         },
     }
     raw_body = json.dumps(payload).encode()
+    fresh_timestamp = str(int(time.time()))
     request = _make_request(
         raw_body,
-        signature=_sign(raw_body, "1700000000", "shadow-secret"),
-        timestamp="1700000000",
+        signature=_sign(raw_body, fresh_timestamp, "shadow-secret"),
+        timestamp=fresh_timestamp,
     )
     subscription_secret = SimpleNamespace(secret_key="shadow-secret")
     capture_subscription = SimpleNamespace(

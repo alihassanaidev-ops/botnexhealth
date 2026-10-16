@@ -69,12 +69,24 @@ def _verified_args(**overrides) -> dict:
     return args
 
 
-def test_full_patient_payload_contains_complete_verified_details():
+def test_full_patient_payload_withholds_procedures_and_insurance_identifiers():
     patient = _patient()
     patient.extra.update(
         {
             "recent_procedures": [{"id": "procedure-1"}],
-            "insurance_coverages": [{"id": "coverage-1"}],
+            "insurance_coverages": [
+                {
+                    "id": "coverage-1",
+                    "insurance_name": "Sun Life",
+                    "group_number": "G-77",
+                    "member_id": "M-12345",
+                    "relation": "self",
+                    "priority": 1,
+                    "effective_date": "2026-01-01",
+                    "expiration_date": None,
+                    "employer": "Acme",
+                }
+            ],
             "last_visit": {"id": "appointment-previous"},
         }
     )
@@ -91,8 +103,15 @@ def test_full_patient_payload_contains_complete_verified_details():
         "age": _ALICE_AGE,
         "upcoming_appointments": [{"id": "appt-1"}],
         "last_visit": {"id": "appointment-previous"},
-        "recent_procedures": [{"id": "procedure-1"}],
-        "insurance_coverages": [{"id": "coverage-1"}],
+        # Procedures and insurance identifiers never reach the voice model.
+        "insurance_coverages": [
+            {
+                "insurance_name": "Sun Life",
+                "priority": 1,
+                "effective_date": "2026-01-01",
+                "expiration_date": None,
+            }
+        ],
     }
 
 
@@ -406,3 +425,29 @@ async def test_full_detail_discards_a_patient_that_is_not_the_verified_one(monke
 )
 def test_age_in_years(dob, today, age):
     assert handlers._age_in_years(dob, today) == age
+
+
+@pytest.mark.asyncio
+async def test_verified_lookup_is_remembered_for_the_call(monkeypatch):
+    """A later cancel/confirm/reschedule in this call checks against this record."""
+    remember = AsyncMock()
+    monkeypatch.setattr(handlers, "remember_verified_patient", remember)
+    monkeypatch.setattr(handlers, "get_call_context", lambda: {"call_id": "call-1"})
+    ctx = _ctx([_patient()])
+
+    result = await _invoke(monkeypatch, ctx, _verified_args())
+
+    assert result["verification_status"] == "verified"
+    remember.assert_awaited_once()
+    assert remember.await_args.args[:2] == ("call-1", "p1")
+
+
+@pytest.mark.asyncio
+async def test_failed_verification_is_not_remembered(monkeypatch):
+    remember = AsyncMock()
+    monkeypatch.setattr(handlers, "remember_verified_patient", remember)
+    ctx = _ctx([_patient()])
+
+    await _invoke(monkeypatch, ctx, _verified_args(date_of_birth="1970-12-31"))
+
+    remember.assert_not_awaited()

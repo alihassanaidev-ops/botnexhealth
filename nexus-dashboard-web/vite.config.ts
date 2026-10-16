@@ -77,6 +77,17 @@ export default defineConfig(({ mode }) => {
       globals: true,
       setupFiles: ['./src/test/setup.ts'],
       css: false,
+      // Run files sequentially. In parallel, a few UI tests raced the shared
+      // jsdom/network mocks and failed intermittently (each passes alone). A
+      // deterministic suite is worth the extra minutes in CI.
+      fileParallelism: false,
+      testTimeout: 30_000,
+      hookTimeout: 30_000,
+      coverage: {
+        provider: 'v8',
+        reporter: ['text', 'lcov'],
+        reportsDirectory: './coverage',
+      },
     },
   }
 })

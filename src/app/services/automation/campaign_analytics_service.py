@@ -16,7 +16,14 @@ from src.app.models.campaign_analytics import (
     CampaignMetricsDaily,
     CampaignSplitMetricsDaily,
 )
+from src.app.models.institution import Institution
+from src.app.models.institution_location import InstitutionLocation
 from src.app.models.usage_cost_rollup import NULL_LOCATION_SENTINEL
+from src.app.services.automation.campaign_revenue_service import (
+    CampaignRevenue,
+    compute_campaign_revenue,
+)
+from src.app.services.roi_values import resolved_roi_values
 
 logger = logging.getLogger(__name__)
 
@@ -171,6 +178,7 @@ class CampaignAnalytics:
     cost: CostSummary
     generated_at: datetime
     rollup_fresh_at: datetime | None
+    revenue: CampaignRevenue | None = None
 
 
 _ZERO_METRICS: dict[str, int | Decimal] = {
@@ -961,6 +969,42 @@ class CampaignAnalyticsService:
     def __init__(self, session: AsyncSession) -> None:
         self.session = session
 
+    async def _roi_values_for(
+        self,
+        *,
+        workflow: AutomationWorkflow,
+        institution: Institution | None,
+        locations_by_id: dict[str, InstitutionLocation] | None = None,
+    ) -> tuple[dict[str, Any] | None, str | None]:
+        """The clinic value inputs a campaign's revenue is priced with."""
+        location: InstitutionLocation | None = None
+        if workflow.location_id:
+            if locations_by_id is not None:
+                location = locations_by_id.get(str(workflow.location_id))
+            else:
+                location = await self.session.get(
+                    InstitutionLocation, workflow.location_id
+                )
+        resolved = resolved_roi_values(location, institution)
+        return resolved if resolved is not None else (None, None)
+
+    def _revenue(
+        self,
+        *,
+        category: str,
+        metrics: dict[str, Any],
+        values: dict[str, Any] | None,
+        source: str | None,
+    ) -> CampaignRevenue:
+        return compute_campaign_revenue(
+            category=category,
+            summary=metrics,
+            values=values,
+            value_source=source,
+            currency="USD",
+            spend=float(metrics.get("total_cost") or 0),
+        )
+
     async def workflow_analytics(
         self,
         workflow: AutomationWorkflow,
@@ -982,6 +1026,10 @@ class CampaignAnalyticsService:
             end_date=end_date,
         )
         category = campaign_category(workflow)
+        institution = await self.session.get(Institution, institution_id)
+        values, source = await self._roi_values_for(
+            workflow=workflow, institution=institution
+        )
         return _analytics_from_metrics(
             workflow_id=str(workflow.id),
             workflow_name=workflow.name,
@@ -990,6 +1038,9 @@ class CampaignAnalyticsService:
             end_date=end_date,
             metrics=metrics,
             trend=trend,
+            revenue=self._revenue(
+                category=category, metrics=metrics, values=values, source=source
+            ),
         )
 
     async def split_analytics(
@@ -1080,6 +1131,7 @@ class CampaignAnalyticsService:
         start_date: date,
         end_date: date,
         limit: int,
+        location_id: str | None = None,
     ) -> list[CampaignAnalytics]:
         sum_columns = [
             func.coalesce(func.sum(getattr(CampaignMetricsDaily, column)), 0).label(
@@ -1087,6 +1139,16 @@ class CampaignAnalyticsService:
             )
             for column in ROLLUP_METRIC_COLUMNS
         ]
+        filters = [
+            CampaignMetricsDaily.institution_id == institution_id,
+            CampaignMetricsDaily.metric_date >= start_date,
+            CampaignMetricsDaily.metric_date <= end_date,
+        ]
+        # A location dashboard's headline counts that clinic's own campaigns;
+        # institution-wide campaigns are reported at the institution, not
+        # attributed to one clinic.
+        if location_id:
+            filters.append(AutomationWorkflow.location_id == location_id)
         rows = (
             await self.session.execute(
                 select(
@@ -1098,11 +1160,7 @@ class CampaignAnalyticsService:
                     CampaignMetricsDaily,
                     CampaignMetricsDaily.workflow_id == AutomationWorkflow.id,
                 )
-                .where(
-                    CampaignMetricsDaily.institution_id == institution_id,
-                    CampaignMetricsDaily.metric_date >= start_date,
-                    CampaignMetricsDaily.metric_date <= end_date,
-                )
+                .where(*filters)
                 .group_by(AutomationWorkflow.id)
                 .order_by(
                     func.coalesce(func.sum(CampaignMetricsDaily.total_cost), 0).desc()
@@ -1110,22 +1168,44 @@ class CampaignAnalyticsService:
                 .limit(limit)
             )
         ).all()
+        institution = await self.session.get(Institution, institution_id)
+        location_ids = {
+            str(row[0].location_id) for row in rows if row[0].location_id
+        }
+        locations_by_id: dict[str, InstitutionLocation] = {}
+        if location_ids:
+            locations = (
+                await self.session.execute(
+                    select(InstitutionLocation).where(
+                        InstitutionLocation.id.in_(location_ids)
+                    )
+                )
+            ).scalars().all()
+            locations_by_id = {str(loc.id): loc for loc in locations}
+
         results: list[CampaignAnalytics] = []
         for row in rows:
             workflow = row[0]
-            values = dict(
+            metrics = dict(
                 zip(ROLLUP_METRIC_COLUMNS, row[1 : 1 + len(ROLLUP_METRIC_COLUMNS)])
             )
-            values["rollup_fresh_at"] = row[-1]
+            metrics["rollup_fresh_at"] = row[-1]
+            category = campaign_category(workflow)
+            values, source = await self._roi_values_for(
+                workflow=workflow, institution=institution, locations_by_id=locations_by_id
+            )
             results.append(
                 _analytics_from_metrics(
                     workflow_id=str(workflow.id),
                     workflow_name=workflow.name,
-                    category=campaign_category(workflow),
+                    category=category,
                     start_date=start_date,
                     end_date=end_date,
-                    metrics=values,
+                    metrics=metrics,
                     trend=[],
+                    revenue=self._revenue(
+                        category=category, metrics=metrics, values=values, source=source
+                    ),
                 )
             )
         return results
@@ -1264,6 +1344,7 @@ def _analytics_from_metrics(
     end_date: date,
     metrics: dict[str, Any],
     trend: list[TrendPoint],
+    revenue: CampaignRevenue | None = None,
 ) -> CampaignAnalytics:
     summary = {
         column: int(metrics.get(column) or 0)
@@ -1326,6 +1407,7 @@ def _analytics_from_metrics(
         ),
         generated_at=datetime.now(timezone.utc),
         rollup_fresh_at=metrics.get("rollup_fresh_at"),
+        revenue=revenue,
     )
 
 

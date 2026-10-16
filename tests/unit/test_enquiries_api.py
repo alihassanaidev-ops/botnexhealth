@@ -134,7 +134,7 @@ class TestMasking:
 
     def test_the_list_never_carries_a_full_phone_or_email(self):
         session = _session(rows=[_enquiry()])
-        r = _client(session).get(BASE)
+        r = _client(session).post(f"{BASE}/search")
         assert r.status_code == 200
         body = r.text
         assert "5054821234" not in body
@@ -147,13 +147,13 @@ class TestMasking:
 class TestListing:
     def test_it_reports_the_true_total_not_the_page_size(self):
         session = _session(rows=[_enquiry()], total=137)
-        r = _client(session).get(f"{BASE}?limit=1")
+        r = _client(session).post(f"{BASE}/search?limit=1")
         assert r.json()["total"] == 137
 
     def test_the_stage_filter_narrows_the_page(self):
         rows = [_enquiry(id="a"), _enquiry(id="b", nexhealth_patient_id="nh-1")]
         session = _session(rows=rows)
-        r = _client(session).get(f"{BASE}?stage=registered")
+        r = _client(session).post(f"{BASE}/search?stage=registered")
         ids = [i["id"] for i in r.json()["items"]]
         assert ids == ["b"]
 
@@ -162,16 +162,16 @@ class TestListing:
         row = _enquiry()
         row.notes = "Rang twice, no answer"
         session = _session(rows=[row])
-        item = _client(session).get(BASE).json()["items"][0]
+        item = _client(session).post(f"{BASE}/search").json()["items"][0]
         assert item["has_notes"] is True
-        assert "Rang twice" not in _client(_session(rows=[row])).get(BASE).text
+        assert "Rang twice" not in _client(_session(rows=[row])).post(f"{BASE}/search").text
 
     def test_an_oversized_page_is_refused(self):
-        r = _client(_session()).get(f"{BASE}?limit=5000")
+        r = _client(_session()).post(f"{BASE}/search?limit=5000")
         assert r.status_code == 422
 
     def test_a_user_with_no_institution_is_refused(self):
-        r = _client(_session(), user=_user(institution_id=None)).get(BASE)
+        r = _client(_session(), user=_user(institution_id=None)).post(f"{BASE}/search")
         assert r.status_code == 400
 
 

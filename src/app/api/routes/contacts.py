@@ -20,7 +20,7 @@ import logging
 from typing import Annotated, Literal
 from uuid import uuid4
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
+from fastapi import APIRouter, Body, Depends, HTTPException, Query, Request, status
 from pydantic import BaseModel, Field
 from sqlalchemy import desc, func, nullslast, or_, select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
@@ -296,7 +296,7 @@ async def _scoped_contact(
 # ── List people ───────────────────────────────────────────────────────────────
 
 
-@router.get("", response_model=ContactsListResponse)
+@router.post("/search", response_model=ContactsListResponse)
 @limiter.limit(RATE_READ)
 async def list_contacts(
     request: Request,
@@ -311,8 +311,10 @@ async def list_contacts(
         None,
         description="Optional lifecycle filter for the relationship workspace.",
     ),
-    search: str | None = Query(
+    # HIPAA H-1: a person name is an identifier — request body, not the URL.
+    search: str | None = Body(
         None,
+        embed=True,
         max_length=200,
         pattern=r"^[^%_]*$",
         description="Filter by person name (partial, case-insensitive). Wildcards not allowed.",

@@ -316,6 +316,17 @@ binding is strictly **1 Retell agent ↔ 1 InstitutionLocation**.
   caller-stated first name plus the same DOB and phone. The retry still requires
   exactly one candidate and exact first-name, DOB, and full-phone verification;
   it does not fuzzy-match or disclose whether a surname differed.
+- **Appointment ownership** (`src/app/retell/caller_identity.py`): each patient
+  that passes the identity gate is recorded against the call (a
+  `verified_patient` row in `retell_function_invocations`, patient id stored as
+  an HMAC). `cancel_appointment`, `confirm_appointment` and both reschedule
+  tools read the appointment from the PMS and act only when its patient was
+  verified earlier in the same call, or when the call is the outbound campaign
+  call placed for that appointment. A reschedule must also book the same
+  patient. Anything unreadable is refused with `appointment_not_verified`.
+- **Voice payload:** a full lookup sends upcoming appointments, last visit and
+  insurance plan name/priority/dates only — no procedures, member ids, group
+  numbers or employers.
 - **GoTracker full lookup:** after that identity gate passes,
   `lookup_patient(detail_level="full")` queries the Synchronizer's appointment
   list for the verified `contactId` from the clinic-local current day onward,

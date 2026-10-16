@@ -82,7 +82,13 @@ async def test_confirm_appointment_success():
             adapter=mock_adapter,
         )
 
-    with patch("src.app.retell.handlers._resolve_context", new=mock_resolve):
+    with (
+        patch("src.app.retell.handlers._resolve_context", new=mock_resolve),
+        patch(
+            "src.app.retell.handlers._appointment_ownership_check",
+            new=AsyncMock(return_value=(None, "patient-1")),
+        ),
+    ):
         result = await confirm_appointment({"appointment_id": "nh-appt-123"})
 
     assert result["success"] is True

@@ -13,7 +13,7 @@ import logging
 from datetime import date, datetime, timezone
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
+from fastapi import APIRouter, Body, Depends, HTTPException, Query, Request, status
 from pydantic import BaseModel, Field
 from sqlalchemy import desc, func, nullslast, or_, select
 from sqlalchemy.orm import selectinload
@@ -156,6 +156,10 @@ class TranscriptRevealResponse(BaseModel):
 class RecordingRevealResponse(BaseModel):
     call_id: str
     recording_url: str | None
+    #: The vendor-redacted recording URL. Moved here from the call detail so it
+    #: is gated by the same reveal + VIEW_CALL_RECORDING audit as the raw audio
+    #: — the scrubbed audio still carries the patient's voice.
+    scrubbed_recording_url: str | None = None
 
 
 class PhoneRevealResponse(BaseModel):
@@ -485,7 +489,7 @@ def _custom_field_response(defn, val, *, reveal: bool = False) -> CustomFieldVal
 # ── List calls ────────────────────────────────────────────────────────────────
 
 
-@router.get("", response_model=CallsListResponse)
+@router.post("", response_model=CallsListResponse)
 @limiter.limit(RATE_READ)
 async def list_calls(
     request: Request,
@@ -499,8 +503,10 @@ async def list_calls(
     # Human workflow status filter (any of): ?status_ids=<uuid>&status_ids=<uuid>
     status_ids: list[str] = Query(default=[]),
     direction: str | None = Query(None),
-    search: str | None = Query(
+    # HIPAA H-1: a contact name is an identifier — request body, not the URL.
+    search: str | None = Body(
         None,
+        embed=True,
         max_length=64,
         pattern=r"^[^%_]*$",
         description="Filter by contact name (partial, case-insensitive). Wildcards not allowed.",
@@ -710,7 +716,9 @@ async def get_call(
             transcript_available=bool(call.transcript_with_tool_calls_encrypted),
             recording_available=bool(call.recording_url),
             scrubbed_transcript=transcript_turns,
-            scrubbed_recording_url=getattr(call, "scrubbed_recording_url", None),
+            # Not served inline (HIPAA audit M-4): the scrubbed audio URL is now
+            # returned only by POST /{call_id}/reveal/recording, which audits it.
+            scrubbed_recording_url=None,
             transcript_redacted=not unredacted,
             recording_url=inline_recording,
             custom_fields=custom_fields,
@@ -807,7 +815,9 @@ async def reveal_recording(
                 else None
             )
             return RecordingRevealResponse(
-                call_id=call.id, recording_url=signed_recording_url
+                call_id=call.id,
+                recording_url=signed_recording_url,
+                scrubbed_recording_url=getattr(call, "scrubbed_recording_url", None),
             )
 
 

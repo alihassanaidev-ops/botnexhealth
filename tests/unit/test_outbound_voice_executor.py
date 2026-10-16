@@ -992,7 +992,9 @@ def test_recall_call_sends_only_the_minimum_patient_fields():
         assert withheld not in dv.values()
 
 
-def test_non_recall_call_keeps_its_full_merge_context():
+def test_non_recall_call_sends_only_allowlisted_fields():
+    """HIPAA audit M-2: a campaign dial sends the script what it needs, not the
+    whole merge context. Anything outside the allowlist stays server-side."""
     contact = _make_contact()
     contact.email = "jane@example.com"
     contact.date_of_birth = "2015-03-02"
@@ -1001,5 +1003,10 @@ def test_non_recall_call_keeps_its_full_merge_context():
         asyncio.run(executor.execute(_make_run(), _make_node(), {}))
 
     dv = call_mock.call_args.kwargs["dynamic_variables"]
-    assert dv["patient_last_name"] == "Doe"
+    # Fields the script needs are present...
     assert "appointment_date" in dv
+    assert dv["patient_first_name"] == "Jane"
+    # ...and fields outside the allowlist are never sent to the vendor.
+    assert "patient_last_name" not in dv
+    for withheld in ("Doe", "jane@example.com", "2015-03-02"):
+        assert withheld not in dv.values()
