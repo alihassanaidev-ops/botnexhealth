@@ -2,6 +2,7 @@ import api from "@/lib/api"
 import type {
     AutomationWorkflow,
     CampaignAnalytics,
+    CampaignRevenue,
     CampaignSplitAnalytics,
     AutomationWorkflowRun,
     CampaignAudienceDefinition,
@@ -137,6 +138,28 @@ export async function listCampaignRuns(
 export async function getCampaignOverview(workflowId: string): Promise<CampaignOverview> {
     const { data } = await api.get<CampaignOverview>(
         `/automation/workflows/${workflowId}/overview`,
+    )
+    return data
+}
+
+export interface CampaignAnalyticsRollup {
+    start_date: string
+    end_date: string
+    campaigns: CampaignAnalytics[]
+    totals: CampaignRevenue | null
+}
+
+export async function getCampaignRevenueRollup(
+    locationId: string | null | undefined,
+    range?: { startDate?: string; endDate?: string },
+): Promise<CampaignAnalyticsRollup> {
+    const params = new URLSearchParams()
+    if (range?.startDate) params.set("start_date", range.startDate)
+    if (range?.endDate) params.set("end_date", range.endDate)
+    if (locationId) params.set("location_id", locationId)
+    const q = params.toString() ? `?${params.toString()}` : ""
+    const { data } = await api.get<CampaignAnalyticsRollup>(
+        `/automation/campaign-analytics${q}`,
     )
     return data
 }

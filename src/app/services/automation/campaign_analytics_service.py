@@ -1131,6 +1131,7 @@ class CampaignAnalyticsService:
         start_date: date,
         end_date: date,
         limit: int,
+        location_id: str | None = None,
     ) -> list[CampaignAnalytics]:
         sum_columns = [
             func.coalesce(func.sum(getattr(CampaignMetricsDaily, column)), 0).label(
@@ -1138,6 +1139,16 @@ class CampaignAnalyticsService:
             )
             for column in ROLLUP_METRIC_COLUMNS
         ]
+        filters = [
+            CampaignMetricsDaily.institution_id == institution_id,
+            CampaignMetricsDaily.metric_date >= start_date,
+            CampaignMetricsDaily.metric_date <= end_date,
+        ]
+        # A location dashboard's headline counts that clinic's own campaigns;
+        # institution-wide campaigns are reported at the institution, not
+        # attributed to one clinic.
+        if location_id:
+            filters.append(AutomationWorkflow.location_id == location_id)
         rows = (
             await self.session.execute(
                 select(
@@ -1149,11 +1160,7 @@ class CampaignAnalyticsService:
                     CampaignMetricsDaily,
                     CampaignMetricsDaily.workflow_id == AutomationWorkflow.id,
                 )
-                .where(
-                    CampaignMetricsDaily.institution_id == institution_id,
-                    CampaignMetricsDaily.metric_date >= start_date,
-                    CampaignMetricsDaily.metric_date <= end_date,
-                )
+                .where(*filters)
                 .group_by(AutomationWorkflow.id)
                 .order_by(
                     func.coalesce(func.sum(CampaignMetricsDaily.total_cost), 0).desc()

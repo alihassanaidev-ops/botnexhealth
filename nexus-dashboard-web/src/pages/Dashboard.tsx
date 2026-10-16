@@ -38,6 +38,8 @@ import type { MonthlyMetricPoint } from "@/lib/dashboard-api"
 import { TrendChart } from "@/components/dashboard/TrendChart"
 import { ConnectorHealthBanner } from "@/components/dashboard/ConnectorHealthBanner"
 import { calculateLocationROI } from "@/lib/institution-portal-api"
+import { getCampaignRevenueRollup } from "@/lib/automation-api"
+import type { CampaignRevenue } from "@/types"
 import { resolveCallback } from "@/lib/calls-api"
 import { STATUS_OPTIONS } from "@/lib/constants"
 import { DateRangePicker } from "@/components/dashboard/DateRangePicker"
@@ -445,6 +447,7 @@ export default function Dashboard() {
     const [loading, setLoading] = useState(true)
     const [trendPoints, setTrendPoints] = useState<MonthlyMetricPoint[]>([])
     const [value, setValue] = useState<DashboardValue | null>(null)
+    const [campaignRevenue, setCampaignRevenue] = useState<CampaignRevenue | null>(null)
 
     const [range, setRange] = useState<DateRangeValue>(() => lastNDaysRange(7))
 
@@ -492,6 +495,19 @@ export default function Dashboard() {
                 })
             } catch {
                 setValue(null)
+            }
+
+            // Campaign-attributed revenue for this clinic, same window. Kept
+            // separate from the ROI estimate above and labelled so the two do
+            // not read as conflicting numbers.
+            try {
+                const rollup = await getCampaignRevenueRollup(
+                    selectedLocation.id,
+                    roiWindow,
+                )
+                setCampaignRevenue(rollup.totals)
+            } catch {
+                setCampaignRevenue(null)
             }
 
         } catch (error: unknown) {
@@ -596,6 +612,16 @@ export default function Dashboard() {
                         <GlassCard label="Revenue Generated" value={value.revenue} icon={DollarSign} accentColor="emerald" glowRgb="16,185,129" formatValue={formatMoney} loading={loading} />
                         <GlassCard label="Staff Cost Saved" value={value.staffCostSaved ?? 0} icon={Clock} accentColor="sky" glowRgb="14,165,233" formatValue={value.staffCostSaved === null ? () => "—" : formatMoney} loading={loading} />
                         <GlassCard label="Net Value" value={value.netValue} icon={TrendingUp} accentColor="amber" glowRgb="245,158,11" formatValue={formatMoney} loading={loading} />
+                    </div>
+                )}
+
+                {/* Campaign-attributed revenue, separate from the ROI estimate
+                    above. Labelled "campaign" so the two revenue figures are
+                    not read as one. Shown only once a visit value is set. */}
+                {campaignRevenue?.configured && (
+                    <div className="grid gap-4 md:grid-cols-2">
+                        <GlassCard label="Campaign Revenue" value={campaignRevenue.total} icon={DollarSign} accentColor="emerald" glowRgb="16,185,129" formatValue={formatMoney} loading={loading} />
+                        <GlassCard label="Campaign ROI" value={campaignRevenue.roi} icon={TrendingUp} accentColor="amber" glowRgb="245,158,11" formatValue={formatMoney} loading={loading} />
                     </div>
                 )}
 
