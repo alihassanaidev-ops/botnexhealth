@@ -2021,11 +2021,10 @@ class LocationROICalculationResponse(BaseModel):
 
 #: Inputs a location inherits from its institution when it has none of its own.
 #: Subscription cost is absent on purpose — see _location_subscription_cost.
-_LOCATION_ROI_FIELDS = (
-    "avg_appointment_value",
-    "avg_new_patient_value",
-    "staff_hourly_rate",
-    "avg_call_duration_minutes",
+# Re-exported for callers/tests that referenced the field tuple here; the
+# source of truth now lives with the resolver so ROI and revenue agree.
+from src.app.services.roi_values import (  # noqa: E402,F401
+    LOCATION_ROI_FIELDS as _LOCATION_ROI_FIELDS,
 )
 
 
@@ -2079,24 +2078,12 @@ def _resolved_location_roi(
 ) -> tuple[dict[str, float | None], str] | None:
     """This location's inputs and where they came from, or None if unset.
 
-    Falls through to the institution only as a whole: mixing a location's
-    appointment value with the institution's hourly rate would produce a figure
-    that is neither, and no caller could tell which parts were which.
+    Delegates to the shared resolver so the ROI tile and per-campaign revenue
+    price a visit identically.
     """
-    if isinstance(location.roi_config, dict) and location.roi_config:
-        raw, source = location.roi_config, "location"
-    elif isinstance(institution.roi_config, dict) and institution.roi_config:
-        raw, source = institution.roi_config, "institution"
-    else:
-        return None
-    values: dict[str, float | None] = {
-        key: float(raw.get(key) or 0.0) for key in _LOCATION_ROI_FIELDS
-    }
-    # Distinguish "no rate configured" from "a rate of zero": the first makes
-    # the staff saving unknown, the second makes it genuinely nil.
-    rate = raw.get("staff_hourly_rate")
-    values["staff_hourly_rate"] = None if rate is None else float(rate)
-    return values, source
+    from src.app.services.roi_values import resolved_roi_values
+
+    return resolved_roi_values(location, institution)
 
 
 async def _location_for_roi(session, loc_slug: str, current_user: User):
